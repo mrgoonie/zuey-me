@@ -7,7 +7,7 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "zuey_me_db"
-database_id = "zuey-me-prod-d1"
+database_id = "b261c16b-0eed-4af6-82e5-4e24d42b972c"
 
 # Environment variables
 [vars]
