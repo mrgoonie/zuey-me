@@ -1,0 +1,20 @@
+{
+  "name": "zuey-cli",
+  "version": "1.0.0",
+  "description": "Command-line and Agent interface to manage Duy Nguyen (/zuey/) linktree profile, links, layout, and themes",
+  "main": "bin/zuey.js",
+  "bin": {
+    "zuey": "bin/zuey.js"
+  },
+  "type": "module",
+  "keywords": [
+    "zuey",
+    "linktree",
+    "cli",
+    "mcp",
+    "agentkit",
+    "profile-manager"
+  ],
+  "author": "Duy Nguyen <hi@zuey.me>",
+  "license": "MIT"
+}

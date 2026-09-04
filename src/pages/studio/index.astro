@@ -1,0 +1,42 @@
+---
+import '../../styles/global.css';
+import { StudioApp } from '../../components/studio/StudioApp';
+import { getProfile, getLinks, listApiKeys } from '../../db/store';
+import type { D1DatabaseLike } from '../../db/store';
+
+const runtime = (Astro.locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
+const d1 = runtime?.env?.DB;
+
+const profile = await getProfile(d1);
+const links = await getLinks(d1);
+const keys = await listApiKeys(d1);
+
+// Check session cookie
+const cookie = Astro.request.headers.get('cookie') || '';
+const isAuthenticated = cookie.includes('zuey_session=authenticated');
+---
+
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zuey.me — Page Builder Studio</title>
+    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..900&family=Plus+Jakarta+Sans:wght@300..800&family=JetBrains+Mono:wght@400..700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-stone-950 text-stone-100 min-h-screen antialiased selection:bg-amber-400 selection:text-stone-950">
+    <StudioApp
+      client:load
+      initialProfile={profile}
+      initialLinks={links}
+      initialKeys={keys}
+      isAuthenticated={isAuthenticated}
+    />
+  </body>
+</html>

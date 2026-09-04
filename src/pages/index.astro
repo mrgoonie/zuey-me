@@ -1,0 +1,25 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { ProfileView } from '../components/ProfileView';
+import { getProfile, getLinks } from '../db/store';
+import type { D1DatabaseLike } from '../db/store';
+
+// Retrieve D1 database if running on Cloudflare Pages
+const runtime = (Astro.locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
+const d1 = runtime?.env?.DB;
+
+const profile = await getProfile(d1);
+const links = await getLinks(d1);
+---
+
+<Layout
+  title={`${profile.name} — Profile & Links`}
+  description={profile.intro_en}
+  image="https://zuey.me/api/og.png"
+>
+  <ProfileView
+    client:load
+    initialProfile={profile}
+    initialLinks={links}
+  />
+</Layout>

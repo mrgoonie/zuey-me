@@ -1,0 +1,16 @@
+name = "zuey-me"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+# Cloudflare D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "zuey_me_db"
+database_id = "zuey-me-prod-d1"
+
+# Environment variables
+[vars]
+PUBLIC_SITE_URL = "https://zuey.me"
+PUBLIC_POSTHOG_KEY = "phc_mock_or_real_key"
+PUBLIC_POSTHOG_HOST = "https://us.i.posthog.com"

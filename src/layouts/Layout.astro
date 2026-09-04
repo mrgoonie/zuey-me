@@ -1,0 +1,83 @@
+---
+import '../styles/global.css';
+interface Props {
+  title?: string;
+  description?: string;
+  image?: string;
+  url?: string;
+  lang?: string;
+}
+
+const {
+  title = "Duy Nguyen /zuey/ — Official Profile",
+  description = '"F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP & XINCHAO Live Music. Founder of "Build in Public VN" Community.',
+  image = "https://zuey.me/api/og.png",
+  url = "https://zuey.me",
+  lang = "en",
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang={lang} class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+    <link rel="canonical" href={url} />
+
+    <!-- SEO Meta Tags -->
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="author" content="Duy Nguyen /zuey/" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={url} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={image} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Duy Nguyen /zuey/ Profile Banner" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@goon_nguyen" />
+    <meta name="twitter:creator" content="@goon_nguyen" />
+    <meta name="twitter:url" content={url} />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={image} />
+
+    <!-- LLM & GEO Friendly Links -->
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+    <link rel="alternate" type="text/markdown" href="/index.md" title="Markdown representation" />
+
+    <!-- Fonts: Fraunces & Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- PostHog Analytics Client snippet -->
+    <script is:inline>
+      !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getLoadedAmplitudes".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+      try {
+        window.posthog.init('phc_zuey_me_analytics', {
+          api_host: 'https://us.i.posthog.com',
+          person_profiles: 'identified_only',
+          capture_pageview: true,
+          capture_pageleave: true
+        });
+      } catch (err) {
+        console.debug('PostHog initialization bypassed in local/test');
+      }
+    </script>
+  </head>
+  <body class="bg-[#F5EFEB] min-h-screen text-stone-900 selection:bg-amber-200">
+    <slot />
+  </body>
+</html>

@@ -1,0 +1,41 @@
+---
+// Scalar API Reference documentation page
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zuey.me — API Documentation (Scalar)</title>
+    <meta name="description" content="Interactive API documentation for Zuey.me Linktree and AI management APIs." />
+    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #0f172a;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Scalar API Reference CDN Container -->
+    <script
+      is:inline
+      id="api-reference"
+      data-url="/api/openapi.json"
+      data-configuration={JSON.stringify({
+        theme: 'purple',
+        layout: 'modern',
+        hideModels: false,
+        showSidebar: true,
+        searchHotKey: 'k',
+        metaData: {
+          title: 'Zuey.me API Reference',
+          description: 'Programmatic Linktree & Agent Management for Duy Nguyen',
+        },
+      })}
+      src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"
+    ></script>
+  </body>
+</html>
