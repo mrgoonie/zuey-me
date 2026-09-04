@@ -30,8 +30,13 @@ jobs:
       - name: Build Application
         run: bun run build
 
+      - name: Cloudflare Deployment Status Notice
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.CLOUDFLARE_API_TOKEN == ''
+        run: |
+          echo "::notice title=Cloudflare Deployment::CLOUDFLARE_API_TOKEN secret is not yet set in repository secrets. Tests & build passed cleanly. Once secrets are added, push to main will automatically deploy to Cloudflare Pages."
+
       - name: Deploy to Cloudflare Pages (Production)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.CLOUDFLARE_API_TOKEN != ''
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
