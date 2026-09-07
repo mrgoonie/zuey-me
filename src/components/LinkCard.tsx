@@ -60,7 +60,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
   };
 
   return (
-    <div className={`relative group w-full my-3 ${showMenu ? 'z-40' : 'z-0'}`}>
+    <div className={`relative group w-full my-3 ${showMenu ? 'z-50' : 'z-0'}`}>
       {/* Click-outside backdrop */}
       {showMenu && (
         <div
@@ -72,38 +72,43 @@ export const LinkCard: React.FC<LinkCardProps> = ({
           }}
         />
       )}
-      <a
-        href={item.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={handleCardClick}
-        className="flex items-center w-full min-h-[64px] py-2.5 px-3.5 sm:px-4 bg-white/95 hover:bg-white text-stone-900 rounded-full border border-stone-300/80 shadow-card hover:shadow-card-hover transition-all duration-200 transform hover:-translate-y-0.5 active:translate-y-0"
-      >
-        {/* Left Icon (42x42px circle) */}
-        <div className="flex-shrink-0 w-11 h-11 rounded-full overflow-hidden flex items-center justify-center bg-stone-100 border border-stone-200 shadow-xs">
-          {item.icon ? (
-            <BrandIcon name={item.icon} className="w-7 h-7" />
-          ) : (
-            <span className="font-bold text-xs text-stone-600">
-              {title.substring(0, 2).toUpperCase()}
-            </span>
-          )}
-        </div>
 
-        {/* Center Content */}
-        <div className="flex-1 min-w-0 mx-3.5 text-center sm:text-left">
-          <h4 className="font-semibold text-sm sm:text-[15px] leading-snug tracking-tight text-stone-900 group-hover:text-black line-clamp-2">
-            {title}
-          </h4>
-          {subtitle && (
-            <p className="text-xs text-stone-500 font-normal leading-tight truncate mt-0.5 hidden sm:block">
-              {subtitle}
-            </p>
-          )}
-        </div>
+      {/* Pill Card Container */}
+      <div className="flex items-center w-full min-h-[64px] py-2.5 px-3.5 sm:px-4 bg-white/95 hover:bg-white text-stone-900 rounded-full border border-stone-300/80 shadow-card hover:shadow-card-hover transition-all duration-200 transform hover:-translate-y-0.5 active:translate-y-0">
+        {/* Main Clickable Area (Anchor) */}
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleCardClick}
+          className="flex items-center flex-1 min-w-0"
+        >
+          {/* Left Icon (42x42px circle) */}
+          <div className="flex-shrink-0 w-11 h-11 rounded-full overflow-hidden flex items-center justify-center bg-stone-100 border border-stone-200 shadow-xs">
+            {item.icon ? (
+              <BrandIcon name={item.icon} className="w-7 h-7" />
+            ) : (
+              <span className="font-bold text-xs text-stone-600">
+                {title.substring(0, 2).toUpperCase()}
+              </span>
+            )}
+          </div>
 
-        {/* Right 3-dots Menu Button */}
-        <div className="flex-shrink-0 relative">
+          {/* Center Content */}
+          <div className="flex-1 min-w-0 mx-3.5 text-center sm:text-left">
+            <h4 className="font-semibold text-sm sm:text-[15px] leading-snug tracking-tight text-stone-900 group-hover:text-black line-clamp-2">
+              {title}
+            </h4>
+            {subtitle && (
+              <p className="text-xs text-stone-500 font-normal leading-tight truncate mt-0.5 hidden sm:block">
+                {subtitle}
+              </p>
+            )}
+          </div>
+        </a>
+
+        {/* Right 3-dots Menu Button (Sibling to Anchor, NOT nested inside!) */}
+        <div className="flex-shrink-0 relative z-50">
           <button
             type="button"
             onClick={(e) => {
@@ -151,7 +156,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
             </div>
           )}
         </div>
-      </a>
+      </div>
     </div>
   );
 };
