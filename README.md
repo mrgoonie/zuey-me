@@ -2,7 +2,7 @@
 
 Personal profile, Page Builder Studio, REST API, MCP Server, and AI Agent Skill for **Duy Nguyen (/zuey/)**.
 
-- **Deployed URL**: [https://zuey-me.pages.dev](https://zuey-me.pages.dev)
+- **Deployed URL**: [https://zuey.me](https://zuey.me)
 - **Target Domain**: `zuey.me` (attached to Cloudflare Pages; DNS managed on Cloudflare)
 
 ---
