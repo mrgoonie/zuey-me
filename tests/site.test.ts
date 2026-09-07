@@ -48,6 +48,11 @@ describe('Zuey.me Data Consistency', () => {
     expect(yt).toBeDefined();
     expect(yt?.url).toBe('https://youtube.com/@imzuey');
   });
+  it('should contain updated WhatsApp link to @imzuey', () => {
+    const wa = initialSocials.find(s => s.platform === 'whatsapp');
+    expect(wa).toBeDefined();
+    expect(wa?.url).toBe('https://wa.me/imzuey');
+  });
 
   it('should contain all required blog links', () => {
     const blogs = initialLinks.filter(l => l.section === 'blogs');

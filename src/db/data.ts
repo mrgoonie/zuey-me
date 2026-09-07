@@ -15,6 +15,7 @@ export const initialSocials: SocialLink[] = [
   { id: 'ig', platform: 'instagram', url: 'https://www.instagram.com/imzuey', label: 'Instagram' },
   { id: 'tiktok', platform: 'tiktok', url: 'https://www.tiktok.com/@mrgoonvn', label: 'TikTok' },
   { id: 'threads', platform: 'threads', url: 'https://www.threads.com/@imzuey', label: 'Threads' },
+  { id: 'whatsapp', platform: 'whatsapp', url: 'https://wa.me/imzuey', label: 'WhatsApp (@imzuey)' },
   { id: 'youtube', platform: 'youtube', url: 'https://youtube.com/@imzuey', label: 'YouTube' },
   { id: 'fb', platform: 'facebook', url: 'https://fb.com/mrgoonie', label: 'Facebook' },
   { id: 'x', platform: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },

@@ -24,6 +24,7 @@ Official profile, links, ventures, products, and developer APIs for Duy Nguyen (
 - Facebook: https://fb.com/mrgoonie
 - Instagram: https://www.instagram.com/imzuey
 - Threads: https://www.threads.com/@imzuey
+- WhatsApp: https://wa.me/imzuey
 - YouTube: https://youtube.com/@imzuey
 
 ## Blogs

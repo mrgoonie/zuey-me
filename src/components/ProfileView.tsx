@@ -53,7 +53,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const socialLinks = [
     { name: 'ig', url: 'https://www.instagram.com/imzuey', label: 'Instagram' },
     { name: 'tiktok', url: 'https://www.tiktok.com/@mrgoonvn', label: 'TikTok' },
-    { name: 'whatsapp', url: 'https://wa.me/84900000000', label: 'WhatsApp' },
+    { name: 'whatsapp', url: 'https://wa.me/imzuey', label: 'WhatsApp (@imzuey)' },
     { name: 'youtube', url: 'https://youtube.com/@imzuey', label: 'YouTube' },
     { name: 'fb', url: 'https://fb.com/mrgoonie', label: 'Facebook' },
     { name: 'threads', url: 'https://www.threads.com/@imzuey', label: 'Threads' },
