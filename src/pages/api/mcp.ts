@@ -9,7 +9,6 @@ import {
   reorderLinks,
 } from '../../db/store';
 import { authenticateRequest } from '../../lib/auth';
-import type { D1DatabaseLike } from '../../db/store';
 
 interface McpTool {
   name: string;
@@ -146,8 +145,7 @@ const MCP_TOOLS: McpTool[] = [
 ];
 
 export const POST: APIRoute = async ({ request, locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
+  const d1 = locals.runtime?.env?.DB;
 
   let body: Record<string, unknown>;
   try {
@@ -205,7 +203,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const toolName = params.name;
     const args = params.arguments || {};
 
-    // Read-only tools can be called publicly or with key; mutations require auth
     const isMutation = ['update_profile', 'create_link', 'update_link', 'delete_link', 'reorder_links', 'set_theme'].includes(toolName || '');
 
     if (isMutation) {
@@ -318,7 +315,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
     }
   }
 
-  // Fallback for unknown method
   return new Response(JSON.stringify({
     jsonrpc: '2.0',
     id,

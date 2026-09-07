@@ -1,12 +1,9 @@
 import type { APIRoute } from 'astro';
 import { listApiKeys, createApiKey } from '../../../../db/store';
 import { authenticateRequest } from '../../../../lib/auth';
-import type { D1DatabaseLike } from '../../../../db/store';
 
 export const GET: APIRoute = async ({ request, locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
-
+  const d1 = locals.runtime?.env?.DB;
   const auth = await authenticateRequest(request, d1);
   if (!auth.authenticated) {
     return new Response(JSON.stringify({ success: false, error: auth.error }), {
@@ -22,9 +19,7 @@ export const GET: APIRoute = async ({ request, locals }) => {
 };
 
 export const POST: APIRoute = async ({ request, locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
-
+  const d1 = locals.runtime?.env?.DB;
   const auth = await authenticateRequest(request, d1);
   if (!auth.authenticated) {
     return new Response(JSON.stringify({ success: false, error: auth.error }), {
@@ -42,7 +37,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     return new Response(JSON.stringify({
       success: true,
       data: {
-        key: result.key, // Secret token returned once upon creation
+        key: result.key,
         record: result.record,
       }
     }), {

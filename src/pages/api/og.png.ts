@@ -1,10 +1,8 @@
 import type { APIRoute } from 'astro';
 import { getProfile } from '../../db/store';
-import type { D1DatabaseLike } from '../../db/store';
 
 export const GET: APIRoute = async ({ locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
+  const d1 = locals.runtime?.env?.DB;
   const profile = await getProfile(d1);
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">

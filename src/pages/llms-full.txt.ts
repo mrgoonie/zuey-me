@@ -1,11 +1,8 @@
 import type { APIRoute } from 'astro';
 import { getProfile, getLinks } from '../db/store';
-import type { D1DatabaseLike } from '../db/store';
 
 export const GET: APIRoute = async ({ locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
-
+  const d1 = locals.runtime?.env?.DB;
   const profile = await getProfile(d1);
   const links = await getLinks(d1);
 

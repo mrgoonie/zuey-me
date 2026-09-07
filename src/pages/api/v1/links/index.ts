@@ -1,12 +1,9 @@
 import type { APIRoute } from 'astro';
 import { getLinks, createLink } from '../../../../db/store';
 import { authenticateRequest } from '../../../../lib/auth';
-import type { D1DatabaseLike } from '../../../../db/store';
 
 export const GET: APIRoute = async ({ locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
-
+  const d1 = locals.runtime?.env?.DB;
   const links = await getLinks(d1);
   return new Response(JSON.stringify({ success: true, data: links }), {
     headers: { 'Content-Type': 'application/json' },
@@ -14,9 +11,7 @@ export const GET: APIRoute = async ({ locals }) => {
 };
 
 export const POST: APIRoute = async ({ request, locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
-
+  const d1 = locals.runtime?.env?.DB;
   const auth = await authenticateRequest(request, d1);
   if (!auth.authenticated) {
     return new Response(JSON.stringify({ success: false, error: auth.error }), {

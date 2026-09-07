@@ -1,10 +1,8 @@
 import type { APIRoute } from 'astro';
 import { verifyApiKey } from '../../../db/store';
-import type { D1DatabaseLike } from '../../../db/store';
 
 export const POST: APIRoute = async ({ request, locals }) => {
-  const runtime = (locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime;
-  const d1 = runtime?.env?.DB;
+  const d1 = locals.runtime?.env?.DB;
 
   try {
     const body = await request.json();
