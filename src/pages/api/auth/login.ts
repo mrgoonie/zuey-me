@@ -15,16 +15,21 @@ export const POST: APIRoute = async ({ request, locals }) => {
       });
     }
 
-    // Verify token against database / store
-    const isValid = await verifyApiKey(token, d1);
-    if (!isValid) {
+    // Check optional env-backed admin master token (break-glass)
+    const adminMasterToken = locals.runtime?.env?.ADMIN_MASTER_TOKEN || process.env.ADMIN_MASTER_TOKEN;
+    const isMasterToken = Boolean(adminMasterToken && token === adminMasterToken);
+
+    // Check database API keys
+    const isValidApiKey = await verifyApiKey(token, d1);
+
+    if (!isMasterToken && !isValidApiKey) {
       return new Response(JSON.stringify({ success: false, error: 'Invalid or revoked API key' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-    const sessionToken = await createSession('admin@zuey.me', d1);
+    const sessionToken = await createSession('owner@zuey.me', d1);
     const response = new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' },
     });

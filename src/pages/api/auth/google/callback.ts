@@ -58,8 +58,8 @@ export const GET: APIRoute = async ({ request, redirect, locals }) => {
     const userData = await userRes.json() as { email?: string; verified_email?: boolean };
     const email = (userData.email || '').toLowerCase();
 
-    // 3. Strict Identity Verification: must be on allowlist
-    const isAuthorized = Boolean(ALLOWED_EMAILS[email]);
+    // 3. Strict Identity Verification: must be on allowlist and email verified by Google
+    const isAuthorized = Boolean(ALLOWED_EMAILS[email]) && userData.verified_email === true;
     if (!isAuthorized) {
       console.warn(`Unauthorized Google login attempt: ${email}`);
       return redirect('/studio?error=unauthorized_google_account');

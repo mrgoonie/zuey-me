@@ -56,11 +56,16 @@ export const StudioApp: React.FC<StudioAppProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
+    const trimmed = loginToken.trim();
+    if (!trimmed) {
+      setLoginError('Please enter an API key or master token.');
+      return;
+    }
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: loginToken || 'zuey_master_2026' }),
+        body: JSON.stringify({ token: trimmed }),
       });
       const data = await res.json() as { success?: boolean; error?: string };
       if (data.success) {
@@ -268,6 +273,9 @@ export const StudioApp: React.FC<StudioAppProps> = ({
               onChange={(e) => setLoginToken(e.target.value)}
               className="w-full px-4 py-2.5 bg-stone-900 border border-stone-700 rounded-xl text-xs font-mono text-white placeholder-stone-500 focus:outline-none focus:border-amber-400"
             />
+            {loginError && (
+              <p className="text-xs text-rose-400 font-medium text-center">{loginError}</p>
+            )}
             <button
               type="submit"
               className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-stone-950 font-bold text-xs rounded-xl transition-all shadow-md active:scale-98"
