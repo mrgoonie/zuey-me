@@ -1,17 +1,21 @@
 ---
 import '../../styles/global.css';
 import { StudioApp } from '../../components/studio/StudioApp';
-import { getProfile, getLinks, listApiKeys } from '../../db/store';
+import { getProfile, getLinks, listApiKeys, verifySession } from '../../db/store';
+import type { ApiKey } from '../../db/types';
 
 const d1 = Astro.locals.runtime?.env?.DB;
 
+// 1. Check session cookie first
+const cookie = Astro.request.headers.get('cookie') || '';
+const match = cookie.match(/(?:^|;\s*)zuey_session=([^;]+)/);
+const sessionToken = match ? decodeURIComponent(match[1]) : null;
+const isAuthenticated = sessionToken ? await verifySession(sessionToken, d1) : false;
+
+// 2. Gate sensitive keys behind authentication
 const profile = await getProfile(d1);
 const links = await getLinks(d1);
-const keys = await listApiKeys(d1);
-
-// Check session cookie
-const cookie = Astro.request.headers.get('cookie') || '';
-const isAuthenticated = cookie.includes('zuey_session=authenticated');
+const keys: ApiKey[] = isAuthenticated ? await listApiKeys(d1) : [];
 ---
 
 <!doctype html>

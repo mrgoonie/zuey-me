@@ -1,10 +1,27 @@
-import { verifyApiKey } from '../db/store';
+import { verifyApiKey, verifySession } from '../db/store';
 import type { D1DatabaseLike } from '../db/store';
+
+function extractSessionCookie(cookieHeader: string): string | null {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(/(?:^|;\s*)zuey_session=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 export async function authenticateRequest(
   request: Request,
   d1?: D1DatabaseLike
 ): Promise<{ authenticated: boolean; error?: string }> {
+  // 1. Check studio session cookie
+  const cookieHeader = request.headers.get('cookie') || '';
+  const sessionToken = extractSessionCookie(cookieHeader);
+  if (sessionToken) {
+    const isSessionValid = await verifySession(sessionToken, d1);
+    if (isSessionValid) {
+      return { authenticated: true };
+    }
+  }
+
+  // 2. Check API key Bearer or X-API-Key
   const authHeader = request.headers.get('authorization');
   const apiKeyHeader = request.headers.get('x-api-key');
 
@@ -15,14 +32,8 @@ export async function authenticateRequest(
     token = apiKeyHeader.trim();
   }
 
-  // Also check studio session cookie
-  const cookie = request.headers.get('cookie') || '';
-  if (cookie.includes('zuey_session=authenticated')) {
-    return { authenticated: true };
-  }
-
   if (!token) {
-    return { authenticated: false, error: 'Missing Authorization header or X-API-Key' };
+    return { authenticated: false, error: 'Unauthorized: missing or invalid session/API key' };
   }
 
   const isValid = await verifyApiKey(token, d1);

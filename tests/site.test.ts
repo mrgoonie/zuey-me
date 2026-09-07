@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -12,6 +12,9 @@ import {
   createApiKey,
   verifyApiKey,
   revokeApiKey,
+  createSession,
+  verifySession,
+  destroySession,
   hashString,
 } from '../src/db/store';
 import { initialProfile, initialLinks, initialSocials } from '../src/db/data';
@@ -48,6 +51,7 @@ describe('Zuey.me Data Consistency', () => {
     expect(yt).toBeDefined();
     expect(yt?.url).toBe('https://youtube.com/@imzuey');
   });
+
   it('should contain updated WhatsApp link to @imzuey', () => {
     const wa = initialSocials.find(s => s.platform === 'whatsapp');
     expect(wa).toBeDefined();
@@ -129,7 +133,7 @@ describe('Zuey.me Store CRUD & Operations', () => {
     expect(success).toBe(true);
   });
 
-  it('should generate and verify API keys', async () => {
+  it('should generate and verify API keys without hardcoded shortcuts', async () => {
     const { key, record } = await createApiKey('Test CI Key');
     expect(key).toBeDefined();
     expect(record.name).toBe('Test CI Key');
@@ -140,8 +144,27 @@ describe('Zuey.me Store CRUD & Operations', () => {
     const isInvalid = await verifyApiKey('invalid_key_123');
     expect(isInvalid).toBe(false);
 
+    // Hardcoded demo keys should be REJECTED
+    expect(await verifyApiKey('zuey_live_demo_key')).toBe(false);
+    expect(await verifyApiKey('zuey_secret_admin_token')).toBe(false);
+
     const revoked = await revokeApiKey(record.id);
     expect(revoked).toBe(true);
+  });
+
+  it('should create, verify, and destroy session tokens', async () => {
+    const sessionToken = await createSession('owner@zuey.me');
+    expect(sessionToken.startsWith('zuey_sess_')).toBe(true);
+
+    const isValid = await verifySession(sessionToken);
+    expect(isValid).toBe(true);
+
+    const isFakeValid = await verifySession('zuey_sess_fake123');
+    expect(isFakeValid).toBe(false);
+
+    await destroySession(sessionToken);
+    const isDestroyedValid = await verifySession(sessionToken);
+    expect(isDestroyedValid).toBe(false);
   });
 
   it('should hash strings consistently with SHA-256', async () => {
@@ -153,6 +176,13 @@ describe('Zuey.me Store CRUD & Operations', () => {
 });
 
 describe('Zuey.me API Route Handlers', () => {
+  let authHeaders: { Authorization: string };
+
+  beforeAll(async () => {
+    const { key } = await createApiKey('Integration Test Runner');
+    authHeaders = { Authorization: `Bearer ${key}` };
+  });
+
   const mockContext = (options: { method?: string; body?: unknown; headers?: Record<string, string>; params?: Record<string, string> } = {}) => {
     const { method = 'GET', body, headers = {}, params = {} } = options;
     const reqHeaders = new Headers(headers);
@@ -184,18 +214,35 @@ describe('Zuey.me API Route Handlers', () => {
     expect(data.data.name).toBe('Duy Nguyen /zuey/');
   });
 
-  it('PUT /api/v1/profile should enforce auth and update', async () => {
+  it('PUT /api/v1/profile should enforce auth and accept session or key', async () => {
     // Without auth -> 401
     const unauth = await putProfileApi(mockContext({ method: 'PUT', body: { name: 'New Name' } }));
     expect(unauth.status).toBe(401);
 
-    // With auth -> 200
+    // With valid API key -> 200
     const auth = await putProfileApi(mockContext({
       method: 'PUT',
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { name: 'Duy Nguyen /zuey/' },
     }));
     expect(auth.status).toBe(200);
+
+    // With valid session cookie -> 200
+    const sessionToken = await createSession('owner@zuey.me');
+    const sessionAuth = await putProfileApi(mockContext({
+      method: 'PUT',
+      headers: { Cookie: `zuey_session=${encodeURIComponent(sessionToken)}` },
+      body: { name: 'Duy Nguyen /zuey/' },
+    }));
+    expect(sessionAuth.status).toBe(200);
+
+    // With forged legacy cookie -> 401
+    const forgedAuth = await putProfileApi(mockContext({
+      method: 'PUT',
+      headers: { Cookie: 'zuey_session=authenticated' },
+      body: { name: 'Forged' },
+    }));
+    expect(forgedAuth.status).toBe(401);
   });
 
   it('GET and PUT /api/v1/theme should work correctly', async () => {
@@ -206,7 +253,7 @@ describe('Zuey.me API Route Handlers', () => {
 
     const putRes = await putThemeApi(mockContext({
       method: 'PUT',
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { theme: 'dark' },
     }));
     expect(putRes.status).toBe(200);
@@ -214,7 +261,7 @@ describe('Zuey.me API Route Handlers', () => {
     // restore
     await putThemeApi(mockContext({
       method: 'PUT',
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { theme: 'ivory' },
     }));
   });
@@ -229,7 +276,7 @@ describe('Zuey.me API Route Handlers', () => {
     // POST create link
     const createRes = await postLinksApi(mockContext({
       method: 'POST',
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { section: 'products', title_en: 'Route Test Link', url: 'https://test.me' },
     }));
     expect(createRes.status).toBe(201);
@@ -239,7 +286,7 @@ describe('Zuey.me API Route Handlers', () => {
     const updateRes = await putLinkApi(mockContext({
       method: 'PUT',
       params: { id: createdLink.id },
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { title_en: 'Route Test Link Renamed' },
     }));
     expect(updateRes.status).toBe(200);
@@ -247,7 +294,7 @@ describe('Zuey.me API Route Handlers', () => {
     // POST reorder links
     const reorderRes = await reorderLinksApi(mockContext({
       method: 'POST',
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { order: [createdLink.id, links[0].id] },
     }));
     expect(reorderRes.status).toBe(200);
@@ -256,7 +303,7 @@ describe('Zuey.me API Route Handlers', () => {
     const deleteRes = await deleteLinkApi(mockContext({
       method: 'DELETE',
       params: { id: createdLink.id },
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
     }));
     expect(deleteRes.status).toBe(200);
   });
@@ -264,14 +311,14 @@ describe('Zuey.me API Route Handlers', () => {
   it('API Keys handlers should list, create, and revoke', async () => {
     // List keys
     const listRes = await getKeysApi(mockContext({
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
     }));
     expect(listRes.status).toBe(200);
 
     // Create key
     const createRes = await postKeysApi(mockContext({
       method: 'POST',
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
       body: { name: 'Integration Test Key' },
     }));
     expect(createRes.status).toBe(201);
@@ -282,7 +329,7 @@ describe('Zuey.me API Route Handlers', () => {
     const deleteRes = await deleteKeyApi(mockContext({
       method: 'DELETE',
       params: { id: newKey.record.id },
-      headers: { Authorization: 'Bearer zuey_live_demo_key' },
+      headers: authHeaders,
     }));
     expect(deleteRes.status).toBe(200);
   });
@@ -334,7 +381,7 @@ describe('Zuey.me API Route Handlers', () => {
     const ogPath = path.resolve('public/og.png');
     expect(fs.existsSync(ogPath)).toBe(true);
     const stat = fs.statSync(ogPath);
-    expect(stat.size).toBeGreaterThan(100000); // 250KB real raster PNG
+    expect(stat.size).toBeGreaterThan(100000);
   });
 });
 

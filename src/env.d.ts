@@ -10,6 +10,10 @@ declare global {
           PUBLIC_SITE_URL?: string;
           PUBLIC_POSTHOG_KEY?: string;
           PUBLIC_POSTHOG_HOST?: string;
+          GITHUB_CLIENT_ID?: string;
+          GITHUB_CLIENT_SECRET?: string;
+          GOOGLE_CLIENT_ID?: string;
+          GOOGLE_CLIENT_SECRET?: string;
         };
       };
     }

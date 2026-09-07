@@ -14,16 +14,7 @@ export interface D1DatabaseLike {
 // In-memory fallback for local dev / tests when Cloudflare D1 is not present
 let memoryProfile: Profile = { ...initialProfile };
 let memoryLinks: LinkItem[] = [...initialLinks];
-let memoryApiKeys: ApiKey[] = [
-  {
-    id: 'key-demo',
-    key_hash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8', // sha256('zuey_live_demo_key')
-    key_prefix: 'zuey_live_demo...',
-    name: 'Default Admin Key',
-    role: 'admin',
-    created_at: new Date().toISOString(),
-  }
-];
+let memoryApiKeys: ApiKey[] = [];
 
 export async function hashString(str: string): Promise<string> {
   const msgUint8 = new TextEncoder().encode(str);
@@ -284,8 +275,6 @@ export async function createApiKey(name: string, role: 'admin' | 'read' = 'admin
 
 export async function verifyApiKey(token: string, d1?: D1DatabaseLike): Promise<boolean> {
   if (!token) return false;
-  // Test/default key shortcut
-  if (token === 'zuey_live_demo_key' || token === 'zuey_secret_admin_token') return true;
   const hash = await hashString(token);
 
   if (d1) {
@@ -318,4 +307,88 @@ export async function revokeApiKey(id: string, d1?: D1DatabaseLike): Promise<boo
   const len = memoryApiKeys.length;
   memoryApiKeys = memoryApiKeys.filter(k => k.id !== id);
   return memoryApiKeys.length < len;
+}
+
+interface SessionRecord {
+  id: string;
+  token_hash: string;
+  user_email: string;
+  created_at: string;
+  expires_at: string;
+}
+
+let memorySessions: SessionRecord[] = [];
+
+export async function createSession(user_email: string, d1?: D1DatabaseLike): Promise<string> {
+  const rawToken = 'zuey_sess_' + crypto.randomUUID().replace(/-/g, '') + Math.random().toString(36).substring(2);
+  const hash = await hashString(rawToken);
+  const id = 'sess-' + Math.random().toString(36).substring(2, 9);
+  const now = new Date();
+  const expires = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const record: SessionRecord = {
+    id,
+    token_hash: hash,
+    user_email,
+    created_at: now.toISOString(),
+    expires_at: expires,
+  };
+
+  if (d1) {
+    try {
+      await d1.prepare(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          user_email TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          expires_at TIMESTAMP NOT NULL
+        )
+      `).run();
+      await d1.prepare(`
+        INSERT INTO sessions (id, token_hash, user_email, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(id, hash, user_email, record.created_at, expires).run();
+    } catch (e) {
+      console.warn('D1 createSession fallback:', e);
+    }
+  }
+
+  memorySessions.push(record);
+  return rawToken;
+}
+
+export async function verifySession(token: string, d1?: D1DatabaseLike): Promise<boolean> {
+  if (!token || !token.startsWith('zuey_sess_')) return false;
+  const hash = await hashString(token);
+  const now = new Date().toISOString();
+
+  if (d1) {
+    try {
+      const res = await d1.prepare('SELECT id FROM sessions WHERE token_hash = ? AND expires_at > ?')
+        .bind(hash, now)
+        .first<{ id: string }>();
+      if (res) return true;
+    } catch (e) {
+      console.warn('D1 verifySession fallback:', e);
+    }
+  }
+
+  const mem = memorySessions.find(s => s.token_hash === hash && s.expires_at > now);
+  return Boolean(mem);
+}
+
+export async function destroySession(token: string, d1?: D1DatabaseLike): Promise<void> {
+  if (!token) return;
+  const hash = await hashString(token);
+
+  if (d1) {
+    try {
+      await d1.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(hash).run();
+    } catch (e) {
+      console.warn('D1 destroySession fallback:', e);
+    }
+  }
+
+  memorySessions = memorySessions.filter(s => s.token_hash !== hash);
 }
