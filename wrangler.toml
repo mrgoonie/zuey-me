@@ -12,5 +12,5 @@ database_id = "b261c16b-0eed-4af6-82e5-4e24d42b972c"
 # Environment variables
 [vars]
 PUBLIC_SITE_URL = "https://zuey.me"
-PUBLIC_POSTHOG_KEY = "phc_mock_or_real_key"
+PUBLIC_POSTHOG_KEY = "phc_zTPJwFiZZekHoxSj5PRg8ey4Ja7sKL7GXEGxjSKtZMPk"
 PUBLIC_POSTHOG_HOST = "https://us.i.posthog.com"
