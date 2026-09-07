@@ -11,7 +11,7 @@ export const GET: APIRoute = async ({ locals }) => {
   const products = links.filter(l => l.section === 'products');
 
   const content = `# ${profile.name} (${profile.handle})
-> "F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP & XINCHAO Live Music. Founder of "Build in Public VN" Community.
+> "F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP, XINCHAO Live Music, AgentKit & NextLevelBuilder. Founder of "Build in Public VN" Community.
 
 Official profile, links, ventures, products, and developer APIs for Duy Nguyen (/zuey/).
 
@@ -24,7 +24,7 @@ Official profile, links, ventures, products, and developer APIs for Duy Nguyen (
 - Facebook: https://fb.com/mrgoonie
 - Instagram: https://www.instagram.com/imzuey
 - Threads: https://www.threads.com/@imzuey
-- YouTube: https://www.youtube.com/@goonnguyen
+- YouTube: https://youtube.com/@imzuey
 
 ## Blogs
 ${blogs.map(b => `- [${b.title_en}](${b.url}): ${b.subtitle_en || 'Newsletter'}`).join('\n')}

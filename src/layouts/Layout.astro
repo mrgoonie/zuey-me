@@ -10,8 +10,8 @@ interface Props {
 
 const {
   title = "Duy Nguyen /zuey/ — Official Profile",
-  description = '"F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP & XINCHAO Live Music. Founder of "Build in Public VN" Community.',
-  image = "https://zuey.me/api/og.png",
+  description = '"F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP, XINCHAO Live Music, AgentKit & NextLevelBuilder. Founder of "Build in Public VN" Community.',
+  image = "https://zuey.me/og.png",
   url = "https://zuey.me",
   lang = "en",
 } = Astro.props;
@@ -37,6 +37,8 @@ const {
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:image" content={image} />
+    <meta property="og:image:secure_url" content={image} />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Duy Nguyen /zuey/ Profile Banner" />

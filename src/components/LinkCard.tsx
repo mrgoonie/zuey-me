@@ -60,7 +60,18 @@ export const LinkCard: React.FC<LinkCardProps> = ({
   };
 
   return (
-    <div className="relative group w-full my-3">
+    <div className={`relative group w-full my-3 ${showMenu ? 'z-40' : 'z-0'}`}>
+      {/* Click-outside backdrop */}
+      {showMenu && (
+        <div
+          className="fixed inset-0 z-40 bg-transparent"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setShowMenu(false);
+          }}
+        />
+      )}
       <a
         href={item.url}
         target="_blank"
@@ -109,7 +120,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
           {/* Dropdown Menu */}
           {showMenu && (
             <div
-              className="absolute right-0 top-10 w-44 bg-white rounded-2xl shadow-xl border border-stone-200 py-1.5 z-30 animate-scaleUp text-left"
+              className="absolute right-0 top-10 w-44 bg-white rounded-2xl shadow-xl border border-stone-200 py-1.5 z-50 animate-scaleUp text-left"
               onClick={(e) => e.stopPropagation()}
             >
               <button

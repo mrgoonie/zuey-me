@@ -6,8 +6,8 @@ export const initialProfile: Profile = {
   handle: '@goonnguyen',
   email: 'hi@zuey.me',
   avatar_url: 'https://cdn.zuey.me/avatar.png',
-  intro_en: '"F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP & XINCHAO Live Music. Founder of "Build in Public VN" Community (Facebook).',
-  intro_vi: 'Chuyên gia "F*ck Around & Find Out" 😎 CTO/Đồng sáng lập@TOPGROUP, DIGITOP & XINCHAO Live Music. Nhà sáng lập cộng đồng "Build in Public VN" (Facebook).',
+  intro_en: '"F*ck Around & Find Out" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP, XINCHAO Live Music, AgentKit & NextLevelBuilder. Founder of "Build in Public VN" Community (Facebook).',
+  intro_vi: 'Chuyên gia "F*ck Around & Find Out" 😎 CTO/Đồng sáng lập@TOPGROUP, DIGITOP, XINCHAO Live Music, AgentKit & NextLevelBuilder. Nhà sáng lập cộng đồng "Build in Public VN" (Facebook).',
   theme: 'ivory',
 };
 
@@ -15,7 +15,7 @@ export const initialSocials: SocialLink[] = [
   { id: 'ig', platform: 'instagram', url: 'https://www.instagram.com/imzuey', label: 'Instagram' },
   { id: 'tiktok', platform: 'tiktok', url: 'https://www.tiktok.com/@mrgoonvn', label: 'TikTok' },
   { id: 'threads', platform: 'threads', url: 'https://www.threads.com/@imzuey', label: 'Threads' },
-  { id: 'youtube', platform: 'youtube', url: 'https://www.youtube.com/@goonnguyen', label: 'YouTube' },
+  { id: 'youtube', platform: 'youtube', url: 'https://youtube.com/@imzuey', label: 'YouTube' },
   { id: 'fb', platform: 'facebook', url: 'https://fb.com/mrgoonie', label: 'Facebook' },
   { id: 'x', platform: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },
   { id: 'email', platform: 'email', url: 'mailto:hi@zuey.me', label: 'Email' },

@@ -59,8 +59,8 @@ curl -X PUT https://zuey.me/api/v1/profile \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Duy Nguyen /zuey/",
-    "intro_en": "\"F*ck Around & Find Out\" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP & XINCHAO Live Music. Founder of \"Build in Public VN\" Community.",
-    "intro_vi": "Chuyên gia \"F*ck Around & Find Out\" 😎 CTO/Đồng sáng lập@TOPGROUP, DIGITOP & XINCHAO Live Music. Nhà sáng lập cộng đồng \"Build in Public VN\"."
+    "intro_en": "\"F*ck Around & Find Out\" Specialist 😎 CTO/Co-founder@TOPGROUP, DIGITOP, XINCHAO Live Music, AgentKit & NextLevelBuilder. Founder of \"Build in Public VN\" Community.",
+    "intro_vi": "Chuyên gia \"F*ck Around & Find Out\" 😎 CTO/Đồng sáng lập@TOPGROUP, DIGITOP, XINCHAO Live Music, AgentKit & NextLevelBuilder. Nhà sáng lập cộng đồng \"Build in Public VN\"."
   }'
 ```
 

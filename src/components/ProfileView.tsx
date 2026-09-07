@@ -54,7 +54,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     { name: 'ig', url: 'https://www.instagram.com/imzuey', label: 'Instagram' },
     { name: 'tiktok', url: 'https://www.tiktok.com/@mrgoonvn', label: 'TikTok' },
     { name: 'whatsapp', url: 'https://wa.me/84900000000', label: 'WhatsApp' },
-    { name: 'youtube', url: 'https://www.youtube.com/@goonnguyen', label: 'YouTube' },
+    { name: 'youtube', url: 'https://youtube.com/@imzuey', label: 'YouTube' },
     { name: 'fb', url: 'https://fb.com/mrgoonie', label: 'Facebook' },
     { name: 'threads', url: 'https://www.threads.com/@imzuey', label: 'Threads' },
     { name: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },
