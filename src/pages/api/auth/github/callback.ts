@@ -12,34 +12,50 @@ export const GET: APIRoute = async ({ request, redirect, locals }) => {
   const code = url.searchParams.get('code');
 
   if (!code) {
-    return redirect('/studio?error=missing_code');
+    const error = url.searchParams.get('error') || 'missing_code';
+    const desc = url.searchParams.get('error_description') || '';
+    return redirect(`/studio?error=${encodeURIComponent(error)}&error_description=${encodeURIComponent(desc)}`);
   }
 
-  const clientId = locals.runtime?.env?.GITHUB_CLIENT_ID || process.env.GITHUB_CLIENT_ID;
-  const clientSecret = locals.runtime?.env?.GITHUB_CLIENT_SECRET || process.env.GITHUB_CLIENT_SECRET;
+  const rawClientId = locals.runtime?.env?.GITHUB_CLIENT_ID || process.env.GITHUB_CLIENT_ID || '';
+  const rawClientSecret = locals.runtime?.env?.GITHUB_CLIENT_SECRET || process.env.GITHUB_CLIENT_SECRET || '';
+  const clientId = rawClientId.trim();
+  const clientSecret = rawClientSecret.trim();
 
   if (!clientId || !clientSecret) {
     return redirect('/studio?error=github_oauth_not_configured');
   }
 
   try {
-    // 1. Exchange code for access token
+    const redirectUri = `${url.origin}/api/auth/github/callback`;
+
+    // 1. Exchange code for access token with User-Agent and matching redirect_uri
     const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        'User-Agent': 'zuey-me-auth',
       },
       body: JSON.stringify({
         client_id: clientId,
         client_secret: clientSecret,
-        code,
+        code: code.trim(),
+        redirect_uri: redirectUri,
       }),
     });
 
-    const tokenData = await tokenRes.json() as { access_token?: string; error?: string };
+    const tokenData = await tokenRes.json() as {
+      access_token?: string;
+      error?: string;
+      error_description?: string;
+    };
+
     if (!tokenData.access_token) {
-      return redirect('/studio?error=token_exchange_failed');
+      const errCode = encodeURIComponent(tokenData.error || 'token_exchange_failed');
+      const errDesc = encodeURIComponent(tokenData.error_description || '');
+      console.error(`GitHub OAuth token error: ${tokenData.error} - ${tokenData.error_description}`);
+      return redirect(`/studio?error=${errCode}&error_description=${errDesc}`);
     }
 
     // 2. Fetch authenticated GitHub user

@@ -2,7 +2,8 @@ import type { APIRoute } from 'astro';
 
 export const GET: APIRoute = async ({ request, redirect, locals }) => {
   const url = new URL(request.url);
-  const clientId = locals.runtime?.env?.GITHUB_CLIENT_ID || process.env.GITHUB_CLIENT_ID;
+  const rawClientId = locals.runtime?.env?.GITHUB_CLIENT_ID || process.env.GITHUB_CLIENT_ID || '';
+  const clientId = rawClientId.trim();
 
   if (!clientId) {
     return redirect('/studio?error=github_oauth_not_configured');

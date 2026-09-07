@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   User,
   Link as LinkIcon,
@@ -51,6 +51,18 @@ export const StudioApp: React.FC<StudioAppProps> = ({
 
   // Mobile preview toggle
   const [showPreviewMobile, setShowPreviewMobile] = useState(false);
+  // Read OAuth redirect errors from URL
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlErr = params.get('error');
+      const urlDesc = params.get('error_description');
+      if (urlErr) {
+        setLoginError(urlDesc ? `${urlErr}: ${urlDesc}` : urlErr);
+      }
+    }
+  }, []);
+
 
   // Handle Login
   const handleLogin = async (e: React.FormEvent) => {
