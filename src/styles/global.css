@@ -14,6 +14,25 @@
   }
 }
 
+/* Ambient Background Tiled Texture & Vignette Overlay */
+.bg-tile-overlay {
+  background-image: 
+    radial-gradient(ellipse at center, rgba(18, 15, 13, 0.4) 0%, rgba(10, 8, 7, 0.85) 100%),
+    radial-gradient(rgba(255, 255, 255, 0.14) 1.2px, transparent 1.2px),
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 100% 100%, 18px 18px, 18px 18px, 18px 18px;
+  background-repeat: no-repeat, repeat, repeat, repeat;
+}
+
+/* Floating Card Shadow matching sample 01 */
+.shadow-floating-card {
+  box-shadow: 
+    0 25px 60px -15px rgba(0, 0, 0, 0.45),
+    0 10px 25px -10px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

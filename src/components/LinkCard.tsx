@@ -95,7 +95,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
           </div>
 
           {/* Center Content */}
-          <div className="flex-1 min-w-0 mx-3.5 text-center sm:text-left">
+          <div className="flex-1 min-w-0 mx-3 sm:mx-3.5 text-left">
             <h4 className="font-semibold text-sm sm:text-[15px] leading-snug tracking-tight text-stone-900 group-hover:text-black line-clamp-2">
               {title}
             </h4>

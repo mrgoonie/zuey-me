@@ -61,13 +61,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   ];
 
   return (
-    <main className="min-h-screen w-full bg-[#F5EFEB] text-stone-900 font-sans antialiased flex flex-col items-center px-4 py-6 sm:py-10 selection:bg-amber-200">
-      {/* Centered Mobile/Tablet Column Container */}
-      <div className="w-full max-w-[620px] flex flex-col items-center relative">
+    <main className="relative min-h-screen w-full flex flex-col items-center justify-start py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6 z-10 selection:bg-amber-200">
+      {/* Floating Center Card with Rounded Frame and Drop Shadow (Matching sample 01) */}
+      <div className="w-full max-w-[540px] sm:max-w-[580px] bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] md:rounded-[40px] border border-stone-200/90 shadow-floating-card px-3.5 py-6 sm:px-6 sm:py-8 md:p-8 flex flex-col items-center relative transition-all duration-300">
 
         {/* Top Header Bar with Starburst Icon and Controls */}
-        <header className="w-full flex items-center justify-between px-2 mb-6">
-          <div className="flex items-center gap-2">
+        <header className="w-full flex items-center justify-between px-1 sm:px-2 mb-6 sm:mb-8">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               onClick={() => setIsShareOpen(true)}
               className="w-10 h-10 rounded-full bg-white/80 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-800 transition-all hover:scale-105 active:scale-95"
@@ -77,7 +77,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </button>
             <a
               href="/studio"
-              className="px-2.5 py-1 text-[11px] font-semibold text-stone-500 hover:text-stone-900 bg-stone-200/50 hover:bg-stone-200/80 rounded-full border border-stone-300/50 transition-colors flex items-center gap-1"
+              className="px-2 sm:px-2.5 py-1 text-[11px] font-semibold text-stone-600 hover:text-stone-900 bg-stone-200/60 hover:bg-stone-200 rounded-full border border-stone-300/60 transition-colors flex items-center gap-1"
               title="Page Builder Studio"
             >
               <Settings className="w-3 h-3" />
@@ -85,12 +85,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </a>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <LanguageSwitch currentLang={lang} onChange={handleLangChange} />
 
             <button
               onClick={() => setIsQrOpen(true)}
-              className="w-10 h-10 rounded-full bg-white/80 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-700 hover:text-stone-900 transition-all hover:scale-105 active:scale-95"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/90 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-700 hover:text-stone-900 transition-all hover:scale-105 active:scale-95"
               aria-label="QR Code"
               title={lang === 'vi' ? 'Hiển thị mã QR' : 'Show QR Code'}
             >
@@ -99,7 +99,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
             <button
               onClick={() => setIsShareOpen(true)}
-              className="w-10 h-10 rounded-full bg-white/80 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-700 hover:text-stone-900 transition-all hover:scale-105 active:scale-95"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/90 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-700 hover:text-stone-900 transition-all hover:scale-105 active:scale-95"
               aria-label="Share profile"
               title={lang === 'vi' ? 'Chia sẻ profile' : 'Share Profile'}
             >
@@ -133,19 +133,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </p>
 
           {/* Social Icons Row */}
-          <nav className="flex items-center justify-center gap-3 sm:gap-4 mt-5 flex-wrap" aria-label="Social links">
+          <nav className="flex items-center justify-center gap-1.5 sm:gap-3 md:gap-3.5 mt-5 flex-wrap max-w-full" aria-label="Social links">
             {socialLinks.map((item) => (
               <a
                 key={item.name}
                 href={item.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-9 h-9 rounded-full flex items-center justify-center text-stone-700 hover:text-black hover:scale-110 active:scale-95 transition-all duration-150"
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-stone-700 hover:text-black hover:scale-110 active:scale-95 transition-all duration-150"
                 aria-label={item.label}
                 title={item.label}
                 onClick={() => trackEvent('social_clicked', { platform: item.name })}
               >
-                <BrandIcon name={item.name} className="w-5 h-5" />
+                <BrandIcon name={item.name} className="w-4 h-4 sm:w-5 sm:h-5" />
               </a>
             ))}
           </nav>
@@ -197,8 +197,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
 
         {/* Bottom Floating Pill & Footer */}
-        <footer className="w-full mt-12 pb-10 flex flex-col items-center text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/90 backdrop-blur-md rounded-full border border-stone-300/80 shadow-card text-xs text-stone-700">
+        <footer className="w-full mt-10 sm:mt-12 pb-2 flex flex-col items-center text-center">
+          <div className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3.5 sm:px-4 py-2 bg-white/90 backdrop-blur-md rounded-full border border-stone-300/80 shadow-card text-xs text-stone-700 max-w-full">
             <span className="font-serif font-bold text-stone-900">zuey.me</span>
             <span className="text-stone-300">•</span>
             <span className="text-stone-500 font-mono text-[11px]">{initialProfile.email}</span>
