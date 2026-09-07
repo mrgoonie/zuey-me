@@ -28,6 +28,7 @@ const secretsToSet = [
   'GITHUB_CLIENT_SECRET',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
+  'ADMIN_MASTER_TOKEN',
 ];
 
 for (const secretName of secretsToSet) {
