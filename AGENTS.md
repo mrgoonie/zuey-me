@@ -14,7 +14,7 @@ Process memory for AI agents collaborating on `zuey-me`.
 
 1. **Web Standards Only**: Use `fetch`, `crypto.subtle`, `Response`, `Request`, `URL`. Never use Node CJS-only builtins (`fs`, `child_process`, `crypto`) in files bundled for the edge (`src/pages/**`, `src/components/**`).
 2. **CJS Imports**: Libraries using CommonJS (like `qrcode`) must be loaded dynamically inside client-only hooks (`useEffect`) or kept out of `ssr.noExternal`.
-3. **Database Access**: Access Cloudflare D1 via `(Astro.locals as any).runtime?.env?.DB` typed through `D1DatabaseLike` in `src/db/store.ts`. Always maintain in-memory fallback for local tests.
+3. **Database Access**: Access Cloudflare D1 via typed runtime `(locals as { runtime?: { env?: { DB?: D1DatabaseLike } } })?.runtime?.env?.DB` using `D1DatabaseLike` from `src/db/store.ts`. Always maintain in-memory fallback for local tests.
 
 ## TypeScript Standards
 
