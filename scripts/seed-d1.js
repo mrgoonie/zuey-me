@@ -35,5 +35,5 @@ for (const link of initialLinks) {
   sql += `) ON CONFLICT(id) DO NOTHING;\n\n`;
 }
 
-fs.writeFileSync('migrations/0002_seed.sql', sql, 'utf8');
-console.log('✓ Generated migrations/0002_seed.sql');
+fs.writeFileSync('scripts/seed.sql', sql, 'utf8');
+console.log('✓ Generated scripts/seed.sql');
