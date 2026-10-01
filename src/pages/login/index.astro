@@ -1,0 +1,25 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { LoginForm } from '../../components/members/MemberAuth';
+import { safeNextPath } from '../../lib/members/runtime';
+import { resolveMemberSession } from '../../lib/members/session';
+
+const runtimeEnv = Astro.locals.runtime?.env ?? {};
+const next = safeNextPath(Astro.url.searchParams.get('next'));
+const rawError = Astro.url.searchParams.get('error');
+const error = rawError && /^[a-z_]{1,40}$/.test(rawError) ? rawError : null;
+
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+// Already signed in: go straight to the destination.
+const current = await resolveMemberSession(Astro.request, runtimeEnv.DB).catch(() => null);
+if (current && !error) return Astro.redirect(next, 302);
+---
+
+<Layout title="Đăng nhập — Zuey" description="Đăng nhập Zuey bằng liên kết email, Google hoặc GitHub." url="https://zuey.me/login" lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-4 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <LoginForm client:load next={next} error={error} />
+    <a href="/pricing" class="text-xs font-semibold text-stone-200 hover:text-white underline">Xem các gói thành viên</a>
+  </main>
+</Layout>

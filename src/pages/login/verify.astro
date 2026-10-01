@@ -1,0 +1,15 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { TokenConfirm } from '../../components/members/MemberAuth';
+
+// The token is read client-side and only consumed after an explicit click (POST).
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+---
+
+<Layout title="Xác nhận đăng nhập — Zuey" description="Hoàn tất đăng nhập Zuey." url="https://zuey.me/login/verify" lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <TokenConfirm client:load mode="magic_link" />
+  </main>
+</Layout>

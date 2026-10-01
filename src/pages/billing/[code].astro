@@ -1,0 +1,19 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { BillingStatus } from '../../components/members/BillingStatus';
+
+// Ownership is enforced by GET /api/v1/billing/orders/{code}; the page itself holds no order data.
+const raw = Astro.params.code ?? '';
+const code = /^[A-Za-z0-9]{4,32}$/.test(raw) ? raw.toUpperCase() : '';
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+if (!code) return Astro.redirect('/pricing', 302);
+---
+
+<Layout title={`Thanh toán ${code} — Zuey`} description="Trạng thái thanh toán gói thành viên Zuey." url={`https://zuey.me/billing/${code}`} lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-4 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <BillingStatus client:load code={code} />
+    <a href="/account#billing" class="text-xs font-semibold text-stone-200 hover:text-white underline">Tài khoản của tôi</a>
+  </main>
+</Layout>
