@@ -1,0 +1,539 @@
+{
+  "version": 1,
+  "image": {
+    "webp": "zuey-mascot.webp",
+    "png": "zuey-mascot.png",
+    "width": 1024,
+    "height": 1024,
+    "webpBytes": 194716,
+    "pngBytes": 848614
+  },
+  "cell": {
+    "width": 256,
+    "height": 256,
+    "columns": 4,
+    "rows": 4
+  },
+  "pivot": {
+    "x": 128,
+    "y": 244
+  },
+  "baseline": 244,
+  "facing": {
+    "walk": "right"
+  },
+  "frames": {
+    "idle-0": {
+      "x": 0,
+      "y": 0,
+      "w": 256,
+      "h": 256
+    },
+    "idle-blink": {
+      "x": 256,
+      "y": 0,
+      "w": 256,
+      "h": 256
+    },
+    "idle-breathe": {
+      "x": 512,
+      "y": 0,
+      "w": 256,
+      "h": 256
+    },
+    "idle-1": {
+      "x": 768,
+      "y": 0,
+      "w": 256,
+      "h": 256
+    },
+    "walk-0": {
+      "x": 0,
+      "y": 256,
+      "w": 256,
+      "h": 256
+    },
+    "walk-1": {
+      "x": 256,
+      "y": 256,
+      "w": 256,
+      "h": 256
+    },
+    "walk-2": {
+      "x": 512,
+      "y": 256,
+      "w": 256,
+      "h": 256
+    },
+    "walk-3": {
+      "x": 768,
+      "y": 256,
+      "w": 256,
+      "h": 256
+    },
+    "wave-0": {
+      "x": 0,
+      "y": 512,
+      "w": 256,
+      "h": 256
+    },
+    "wave-1": {
+      "x": 256,
+      "y": 512,
+      "w": 256,
+      "h": 256
+    },
+    "wave-2": {
+      "x": 512,
+      "y": 512,
+      "w": 256,
+      "h": 256
+    },
+    "wave-3": {
+      "x": 768,
+      "y": 512,
+      "w": 256,
+      "h": 256
+    },
+    "thinking": {
+      "x": 0,
+      "y": 768,
+      "w": 256,
+      "h": 256
+    },
+    "happy": {
+      "x": 256,
+      "y": 768,
+      "w": 256,
+      "h": 256
+    },
+    "surprised": {
+      "x": 512,
+      "y": 768,
+      "w": 256,
+      "h": 256
+    },
+    "talking": {
+      "x": 768,
+      "y": 768,
+      "w": 256,
+      "h": 256
+    }
+  },
+  "animations": {
+    "idle": {
+      "loop": true,
+      "fps": 1.2,
+      "frames": [
+        {
+          "name": "idle-0",
+          "x": 0,
+          "y": 0,
+          "w": 256,
+          "h": 256,
+          "durationMs": 1400
+        },
+        {
+          "name": "idle-blink",
+          "x": 256,
+          "y": 0,
+          "w": 256,
+          "h": 256,
+          "durationMs": 140
+        },
+        {
+          "name": "idle-breathe",
+          "x": 512,
+          "y": 0,
+          "w": 256,
+          "h": 256,
+          "durationMs": 700
+        },
+        {
+          "name": "idle-1",
+          "x": 768,
+          "y": 0,
+          "w": 256,
+          "h": 256,
+          "durationMs": 1100
+        }
+      ],
+      "reducedMotionFrame": "idle-0"
+    },
+    "walk": {
+      "loop": true,
+      "fps": 8.0,
+      "frames": [
+        {
+          "name": "walk-0",
+          "x": 0,
+          "y": 256,
+          "w": 256,
+          "h": 256,
+          "durationMs": 125
+        },
+        {
+          "name": "walk-1",
+          "x": 256,
+          "y": 256,
+          "w": 256,
+          "h": 256,
+          "durationMs": 125
+        },
+        {
+          "name": "walk-2",
+          "x": 512,
+          "y": 256,
+          "w": 256,
+          "h": 256,
+          "durationMs": 125
+        },
+        {
+          "name": "walk-3",
+          "x": 768,
+          "y": 256,
+          "w": 256,
+          "h": 256,
+          "durationMs": 125
+        }
+      ],
+      "reducedMotionFrame": "walk-0"
+    },
+    "wave": {
+      "loop": false,
+      "fps": 4.69,
+      "frames": [
+        {
+          "name": "wave-0",
+          "x": 0,
+          "y": 512,
+          "w": 256,
+          "h": 256,
+          "durationMs": 120
+        },
+        {
+          "name": "wave-1",
+          "x": 256,
+          "y": 512,
+          "w": 256,
+          "h": 256,
+          "durationMs": 160
+        },
+        {
+          "name": "wave-2",
+          "x": 512,
+          "y": 512,
+          "w": 256,
+          "h": 256,
+          "durationMs": 320
+        },
+        {
+          "name": "wave-1",
+          "x": 256,
+          "y": 512,
+          "w": 256,
+          "h": 256,
+          "durationMs": 160
+        },
+        {
+          "name": "wave-2",
+          "x": 512,
+          "y": 512,
+          "w": 256,
+          "h": 256,
+          "durationMs": 320
+        },
+        {
+          "name": "wave-3",
+          "x": 768,
+          "y": 512,
+          "w": 256,
+          "h": 256,
+          "durationMs": 200
+        }
+      ],
+      "reducedMotionFrame": "wave-0"
+    },
+    "talk": {
+      "loop": true,
+      "fps": 6.25,
+      "frames": [
+        {
+          "name": "talking",
+          "x": 768,
+          "y": 768,
+          "w": 256,
+          "h": 256,
+          "durationMs": 180
+        },
+        {
+          "name": "idle-0",
+          "x": 0,
+          "y": 0,
+          "w": 256,
+          "h": 256,
+          "durationMs": 140
+        }
+      ],
+      "reducedMotionFrame": "talking"
+    },
+    "thinking": {
+      "loop": false,
+      "fps": 0.83,
+      "frames": [
+        {
+          "name": "thinking",
+          "x": 0,
+          "y": 768,
+          "w": 256,
+          "h": 256,
+          "durationMs": 1200
+        }
+      ],
+      "reducedMotionFrame": "thinking"
+    },
+    "happy": {
+      "loop": false,
+      "fps": 0.83,
+      "frames": [
+        {
+          "name": "happy",
+          "x": 256,
+          "y": 768,
+          "w": 256,
+          "h": 256,
+          "durationMs": 1200
+        }
+      ],
+      "reducedMotionFrame": "happy"
+    },
+    "surprised": {
+      "loop": false,
+      "fps": 0.83,
+      "frames": [
+        {
+          "name": "surprised",
+          "x": 512,
+          "y": 768,
+          "w": 256,
+          "h": 256,
+          "durationMs": 1200
+        }
+      ],
+      "reducedMotionFrame": "surprised"
+    }
+  },
+  "expressions": {
+    "idle": "idle",
+    "walking": "walk",
+    "wave": "wave",
+    "talking": "talk",
+    "thinking": "thinking",
+    "happy": "happy",
+    "surprised": "surprised"
+  },
+  "build": {
+    "script": "scripts/build-mascot-atlas.py",
+    "source": "codex-spritesheet.png",
+    "sourceSha256": "2f98949a7c1cca4e9b31a080d2758de3cbc634d31b71f3a9eeb8c0f0fd410271",
+    "sourceSize": [
+      1254,
+      1254
+    ],
+    "background": "chroma-key rgb(4,249,5)",
+    "scale": 0.84011,
+    "rowFactors": {
+      "0": 1.0,
+      "1": 1.0,
+      "2": 1.00353,
+      "3": 0.97094
+    }
+  },
+  "qa": {
+    "baselineMaxDeviationPx": 0,
+    "pivotXMaxDeviationPx": 1.44,
+    "characterHeightPx": {
+      "min": 232,
+      "max": 239
+    },
+    "tolerancePx": 2,
+    "frames": {
+      "idle-0": {
+        "bbox": [
+          68,
+          6,
+          119,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 126.87,
+        "touchesEdge": false
+      },
+      "idle-blink": {
+        "bbox": [
+          68,
+          6,
+          121,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.19,
+        "touchesEdge": false
+      },
+      "idle-breathe": {
+        "bbox": [
+          68,
+          6,
+          120,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.71,
+        "touchesEdge": false
+      },
+      "idle-1": {
+        "bbox": [
+          68,
+          6,
+          119,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.28,
+        "touchesEdge": false
+      },
+      "walk-0": {
+        "bbox": [
+          68,
+          11,
+          127,
+          234
+        ],
+        "baseline": 244,
+        "pivotX": 128.0,
+        "touchesEdge": false
+      },
+      "walk-1": {
+        "bbox": [
+          68,
+          13,
+          123,
+          232
+        ],
+        "baseline": 244,
+        "pivotX": 126.62,
+        "touchesEdge": false
+      },
+      "walk-2": {
+        "bbox": [
+          68,
+          11,
+          127,
+          234
+        ],
+        "baseline": 244,
+        "pivotX": 127.8,
+        "touchesEdge": false
+      },
+      "walk-3": {
+        "bbox": [
+          65,
+          12,
+          123,
+          233
+        ],
+        "baseline": 244,
+        "pivotX": 126.56,
+        "touchesEdge": false
+      },
+      "wave-0": {
+        "bbox": [
+          68,
+          6,
+          121,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.63,
+        "touchesEdge": false
+      },
+      "wave-1": {
+        "bbox": [
+          48,
+          6,
+          141,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.32,
+        "touchesEdge": false
+      },
+      "wave-2": {
+        "bbox": [
+          49,
+          6,
+          142,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 128.17,
+        "touchesEdge": false
+      },
+      "wave-3": {
+        "bbox": [
+          54,
+          6,
+          135,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.86,
+        "touchesEdge": false
+      },
+      "thinking": {
+        "bbox": [
+          59,
+          6,
+          122,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.76,
+        "touchesEdge": false
+      },
+      "happy": {
+        "bbox": [
+          64,
+          7,
+          122,
+          238
+        ],
+        "baseline": 244,
+        "pivotX": 128.07,
+        "touchesEdge": false
+      },
+      "surprised": {
+        "bbox": [
+          50,
+          6,
+          161,
+          239
+        ],
+        "baseline": 244,
+        "pivotX": 127.5,
+        "touchesEdge": false
+      },
+      "talking": {
+        "bbox": [
+          66,
+          7,
+          155,
+          238
+        ],
+        "baseline": 244,
+        "pivotX": 127.55,
+        "touchesEdge": false
+      }
+    }
+  }
+}
