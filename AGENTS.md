@@ -14,13 +14,22 @@ Process memory for AI agents collaborating on `zuey-me`.
 
 1. **Web Standards Only**: Use `fetch`, `crypto.subtle`, `Response`, `Request`, `URL`. Never use Node CJS-only builtins (`fs`, `child_process`, `crypto`) in files bundled for the edge (`src/pages/**`, `src/components/**`).
 2. **CJS Imports**: Libraries using CommonJS (like `qrcode`) must be loaded dynamically inside client-only hooks (`useEffect`) or kept out of `ssr.noExternal`.
-3. **Database Access**: Access Cloudflare D1 natively via `Astro.locals.runtime?.env?.DB` or `locals.runtime?.env?.DB` (typed via `src/env.d.ts` without any casting). Always maintain in-memory fallback for local tests.
+3. **Database Access**: Access Cloudflare D1 natively via `Astro.locals.runtime?.env?.DB` or `locals.runtime?.env?.DB` (typed via `src/env.d.ts` without any casting). Profile/links keep their in-memory fallback. Membership features (reads, workflows, booking, articles/surveys) intentionally have no in-memory fallback: they return an honest `503` without `DB`, and tests run them against real SQLite via `tests/helpers/d1.ts` (bun:sqlite + all migrations) so unique indexes are exercised.
+4. **Heavy client-only libraries** (`mermaid`, `chart.js`): import dynamically inside `useEffect` behind `if (import.meta.env.SSR) return;` so they stay out of the SSR worker bundle.
+5. **Local dev bindings**: `astro.config.mjs` uses `platformProxy.remoteBindings: false`, so the `AI` binding is not available locally; features depending on it must report `503` rather than crash.
 
 ## TypeScript Standards
 
 - Never use `: any` or `as any`. Use domain types, `unknown` with type guards (`in` / `typeof`), or schemas.
 - Never write unchecked inline casts for member access: `(val as { prop: string }).prop` is forbidden.
 - Use `import type` for type-only dependencies.
+
+## Feature Registration
+
+- New MCP tools: add a module to `src/lib/mcp/registry.ts`. New REST docs: add a fragment to `src/lib/openapi/registry.ts` (merged into `/api/openapi.json` and Scalar `/docs`).
+- Admin-only endpoints and tools must use `authenticateAdmin` (`src/lib/auth.ts`); read-only API keys must never mutate.
+- Errors use `src/lib/http.ts` (`AppError`, `jsonError`) with the `{ success: false, error: { code, message } }` envelope.
+- Secret names live in `.env.example`, README and `docs/env-setup.vi.md`; never values.
 
 ## Database & Migration Invariants
 
