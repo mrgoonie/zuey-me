@@ -1,0 +1,19 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { ReadsBrowser } from '../components/reads/ReadsBrowser';
+import { getLastSyncedAt, listReads, listReadSources, MAX_READS_LIMIT } from '../lib/reads/store';
+
+// Page views only read D1; AnyMD is called exclusively by the admin sync endpoint.
+const d1 = Astro.locals.runtime?.env?.DB;
+const { items } = await listReads(d1, { limit: MAX_READS_LIMIT });
+const sources = await listReadSources(d1);
+const lastSyncedAt = await getLastSyncedAt(d1);
+---
+
+<Layout
+  title="Zuey Reads — Duy Nguyen /zuey/"
+  description="Articles and videos Zuey has read and recommends, with short AI summaries and links to the originals."
+  url="https://zuey.me/reads"
+>
+  <ReadsBrowser client:load items={items} sources={sources} lastSyncedAt={lastSyncedAt} />
+</Layout>
