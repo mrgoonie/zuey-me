@@ -1,0 +1,54 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { BookingWidget } from '../components/booking/BookingWidget';
+---
+
+<Layout
+  title="Zuey for Business — Tư vấn 1:1 cho doanh nghiệp"
+  description="Buổi tư vấn một lần $1,999 (90 phút qua Google Meet) với Zuey. Toàn bộ $1,999 được trừ vào gói đồng hành 3–6 tháng nếu hai bên tiếp tục."
+  url="https://zuey.me/business"
+  lang="vi"
+>
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-6 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <section
+      class="w-full max-w-[640px] bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 shadow-floating-card px-4 py-7 sm:p-8 text-stone-900"
+      aria-labelledby="business-title"
+    >
+      <a href="/" class="text-xs font-semibold text-stone-600 hover:text-stone-900 underline-offset-2 hover:underline">← zuey.me</a>
+      <p class="mt-4 text-[11px] font-bold uppercase tracking-widest text-amber-700">Zuey for Business · Dành cho doanh nghiệp</p>
+      <h1 id="business-title" class="mt-2 text-2xl sm:text-3xl font-bold font-serif tracking-tight">
+        Một buổi tư vấn chuyên sâu cho bài toán công nghệ &amp; AI của doanh nghiệp bạn
+      </h1>
+      <p class="mt-3 text-sm leading-relaxed text-stone-800">
+        90 phút làm việc trực tiếp với Zuey qua Google Meet: chẩn đoán hiện trạng, chọn hướng đi, và rời buổi với các bước hành động cụ thể.
+      </p>
+
+      <dl class="mt-6 grid gap-3 sm:grid-cols-3">
+        <div class="rounded-2xl bg-white/80 border border-stone-200 p-4">
+          <dt class="text-xs font-semibold text-stone-600">Phí tư vấn một lần</dt>
+          <dd class="mt-1 text-2xl font-bold font-serif">$1,999</dd>
+        </div>
+        <div class="rounded-2xl bg-white/80 border border-stone-200 p-4">
+          <dt class="text-xs font-semibold text-stone-600">Thời lượng</dt>
+          <dd class="mt-1 text-lg font-bold">90 phút · Google Meet</dd>
+        </div>
+        <div class="rounded-2xl bg-white/80 border border-stone-200 p-4">
+          <dt class="text-xs font-semibold text-stone-600">Nếu đi tiếp</dt>
+          <dd class="mt-1 text-sm font-semibold">Trừ toàn bộ $1,999 vào gói đồng hành 3–6 tháng</dd>
+        </div>
+      </dl>
+
+      <ul class="mt-6 grid gap-2 text-sm text-stone-800 list-disc pl-5">
+        <li>Trước buổi: bạn gửi bối cảnh và câu hỏi ưu tiên khi đặt lịch.</li>
+        <li>Trong buổi: rà soát bài toán, phương án, rủi ro và thứ tự ưu tiên.</li>
+        <li>Sau buổi: nếu cần đồng hành dài hơn, Zuey đề xuất phạm vi riêng cho gói 3–6 tháng (báo giá theo phạm vi); toàn bộ $1,999 được trừ vào gói đó.</li>
+        <li>Được dời lịch một lần nếu báo trước ít nhất 48 giờ. Huỷ/hoàn tiền xử lý thủ công qua hi@zuey.me.</li>
+      </ul>
+      <p class="mt-4 text-xs text-stone-600" lang="en">
+        English: one-off 90-minute consultation for <strong>$1,999</strong> via Google Meet. If you continue, the full $1,999 is credited toward a separately scoped 3–6 month engagement.
+      </p>
+    </section>
+
+    <BookingWidget client:load />
+  </main>
+</Layout>

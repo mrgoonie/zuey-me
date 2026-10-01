@@ -1,0 +1,756 @@
+import type { D1DatabaseLike } from '../../db/store';
+import { hashString } from '../../db/store';
+import type { RuntimeEnv } from '../../env';
+import { authenticateAdmin } from '../auth';
+import { AppError } from '../http';
+import type { FetchLike } from '../integrations/google-calendar';
+import { createMeetEvent, rescheduleMeetEvent } from '../integrations/google-calendar';
+import { sendEmail } from '../integrations/resend';
+import {
+  CONSULTATION_PRICE_USD_CENTS,
+  createPolarCheckout,
+  missingPolarCheckoutConfig,
+} from '../payments/polar';
+import { buildSepayTransfer, missingSepayConfig, parseVndPrice } from '../payments/sepay';
+import type { SepayTransferInfo } from '../payments/sepay';
+import type { AvailabilityException, AvailabilityRule, Slot } from './availability';
+import {
+  DEFAULT_SLOT_MINUTES,
+  HOLD_MS,
+  RESCHEDULE_MIN_NOTICE_MS,
+  SLOT_HORIZON_DAYS,
+  generateSlots,
+} from './availability';
+import { buildIcs, utf8ToBase64 } from './ics';
+import { DEFAULT_TIMEZONE, isValidTimeZone, parseTimeOfDay } from './timezone';
+
+/** Injectable side effects so tests can control time and outbound HTTP. */
+export const bookingRuntime: { fetch: FetchLike; now: () => number } = {
+  fetch: (input, init) => fetch(input, init),
+  now: () => Date.now(),
+};
+
+export const ORGANIZER_EMAIL = 'hi@zuey.me';
+
+export type BookingStatus = 'held' | 'confirmed' | 'expired' | 'cancelled' | 'needs_attention';
+export type PaymentMethod = 'polar' | 'sepay';
+export const BOOKING_STATUSES: BookingStatus[] = ['held', 'confirmed', 'expired', 'cancelled', 'needs_attention'];
+
+export interface BookingRow {
+  id: string;
+  code: string;
+  slot_start: string;
+  slot_end: string;
+  duration_min: number;
+  status: BookingStatus;
+  hold_expires_at: string;
+  guest_name: string;
+  guest_email: string;
+  company: string | null;
+  notes: string | null;
+  guest_timezone: string | null;
+  payment_method: PaymentMethod;
+  amount_expected: number | null;
+  currency: string | null;
+  amount_paid: number | null;
+  payment_ref: string | null;
+  manage_token_hash: string;
+  reschedule_count: number;
+  meet_url: string | null;
+  calendar_event_id: string | null;
+  meet_status: string | null;
+  meet_error: string | null;
+  email_status: string | null;
+  email_error: string | null;
+  attention_reason: string | null;
+  admin_note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AdminBookingView = Omit<BookingRow, 'manage_token_hash'>;
+
+export interface GuestBookingView {
+  id: string;
+  code: string;
+  status: BookingStatus;
+  slot_start: string;
+  slot_end: string;
+  duration_min: number;
+  hold_expires_at: string;
+  guest_name: string;
+  guest_email: string;
+  guest_timezone: string | null;
+  payment_method: PaymentMethod;
+  amount_expected: number | null;
+  currency: string | null;
+  meet_url: string | null;
+  reschedule_count: number;
+  can_reschedule: boolean;
+  reschedule_blocked_reason: string | null;
+  sepay: SepayTransferInfo | null;
+}
+
+// ---------------------------------------------------------------------------
+// Infrastructure helpers
+// ---------------------------------------------------------------------------
+
+export function requireDb(env: RuntimeEnv): D1DatabaseLike {
+  if (!env.DB) throw new AppError(503, 'database_unavailable', 'Booking requires the D1 database binding (DB)');
+  return env.DB;
+}
+
+export async function requireAdmin(request: Request, d1: D1DatabaseLike): Promise<void> {
+  const auth = await authenticateAdmin(request, d1);
+  if (!auth.authenticated) {
+    throw new AppError(auth.role ? 403 : 401, auth.role ? 'forbidden' : 'unauthorized', auth.error ?? 'Unauthorized');
+  }
+}
+
+export function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed/i.test(err.message);
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
+function randomCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(bytes, b => alphabet[b % alphabet.length]).join('');
+}
+
+function randomToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function siteUrl(env: RuntimeEnv): string {
+  return (env.PUBLIC_SITE_URL || 'https://zuey.me').replace(/\/+$/, '');
+}
+
+// ---------------------------------------------------------------------------
+// Availability
+// ---------------------------------------------------------------------------
+
+export interface AvailabilityConfig {
+  rules: AvailabilityRule[];
+  exceptions: AvailabilityException[];
+}
+
+export async function getAvailability(d1: D1DatabaseLike): Promise<AvailabilityConfig> {
+  const rules = await d1.prepare(
+    'SELECT id, weekday, start_time, end_time, timezone, slot_minutes FROM availability_rules ORDER BY weekday, start_time'
+  ).all<AvailabilityRule>();
+  const exceptions = await d1.prepare(
+    'SELECT id, start_at, end_at, reason FROM availability_exceptions ORDER BY start_at'
+  ).all<AvailabilityException>();
+  return { rules: rules.results ?? [], exceptions: exceptions.results ?? [] };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Validates an availability payload from an untrusted caller. */
+export function parseAvailabilityInput(body: Record<string, unknown>): AvailabilityConfig {
+  const rulesRaw = body.rules;
+  const exceptionsRaw = body.exceptions ?? [];
+  if (!Array.isArray(rulesRaw) || !Array.isArray(exceptionsRaw)) {
+    throw new AppError(400, 'invalid_availability', '`rules` and `exceptions` must be arrays');
+  }
+  if (rulesRaw.length > 100 || exceptionsRaw.length > 500) {
+    throw new AppError(400, 'invalid_availability', 'Too many rules or exceptions');
+  }
+  const rules = rulesRaw.map((r, i): AvailabilityRule => {
+    if (!isRecord(r)) throw new AppError(400, 'invalid_availability', `rules[${i}] must be an object`);
+    const weekday = r.weekday;
+    const start = typeof r.start_time === 'string' ? r.start_time : '';
+    const end = typeof r.end_time === 'string' ? r.end_time : '';
+    const tz = typeof r.timezone === 'string' && r.timezone ? r.timezone : DEFAULT_TIMEZONE;
+    const slot = r.slot_minutes === undefined ? DEFAULT_SLOT_MINUTES : r.slot_minutes;
+    const startMin = parseTimeOfDay(start);
+    const endMin = parseTimeOfDay(end);
+    if (typeof weekday !== 'number' || !Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+      throw new AppError(400, 'invalid_availability', `rules[${i}].weekday must be an integer 0-6`);
+    }
+    if (startMin === null || endMin === null || endMin <= startMin) {
+      throw new AppError(400, 'invalid_availability', `rules[${i}] needs HH:MM start_time before end_time`);
+    }
+    if (!isValidTimeZone(tz)) throw new AppError(400, 'invalid_availability', `rules[${i}].timezone is not a valid IANA zone`);
+    if (typeof slot !== 'number' || !Number.isInteger(slot) || slot < 15 || slot > 480) {
+      throw new AppError(400, 'invalid_availability', `rules[${i}].slot_minutes must be an integer 15-480`);
+    }
+    return { weekday, start_time: start, end_time: end, timezone: tz, slot_minutes: slot };
+  });
+  const exceptions = exceptionsRaw.map((e, i): AvailabilityException => {
+    if (!isRecord(e)) throw new AppError(400, 'invalid_availability', `exceptions[${i}] must be an object`);
+    const s = typeof e.start_at === 'string' ? Date.parse(e.start_at) : NaN;
+    const en = typeof e.end_at === 'string' ? Date.parse(e.end_at) : NaN;
+    if (Number.isNaN(s) || Number.isNaN(en) || en <= s) {
+      throw new AppError(400, 'invalid_availability', `exceptions[${i}] needs ISO start_at before end_at`);
+    }
+    const reason = typeof e.reason === 'string' ? e.reason.slice(0, 200) : null;
+    return { start_at: iso(s), end_at: iso(en), reason };
+  });
+  return { rules, exceptions };
+}
+
+export async function setAvailability(d1: D1DatabaseLike, config: AvailabilityConfig): Promise<AvailabilityConfig> {
+  await d1.prepare('DELETE FROM availability_rules').run();
+  for (const r of config.rules) {
+    await d1.prepare(
+      'INSERT INTO availability_rules (weekday, start_time, end_time, timezone, slot_minutes) VALUES (?, ?, ?, ?, ?)'
+    ).bind(r.weekday, r.start_time, r.end_time, r.timezone, r.slot_minutes).run();
+  }
+  await d1.prepare('DELETE FROM availability_exceptions').run();
+  for (const e of config.exceptions) {
+    await d1.prepare('INSERT INTO availability_exceptions (start_at, end_at, reason) VALUES (?, ?, ?)')
+      .bind(e.start_at, e.end_at, e.reason ?? null).run();
+  }
+  return getAvailability(d1);
+}
+
+async function occupiedSlots(d1: D1DatabaseLike, nowIso: string): Promise<Set<string>> {
+  const res = await d1.prepare(
+    `SELECT slot_start FROM bookings
+     WHERE status IN ('confirmed', 'needs_attention') OR (status = 'held' AND hold_expires_at >= ?)`
+  ).bind(nowIso).all<{ slot_start: string }>();
+  return new Set((res.results ?? []).map(r => r.slot_start));
+}
+
+export async function listSlots(d1: D1DatabaseLike, opts: { from?: number; days?: number } = {}): Promise<Slot[]> {
+  const now = bookingRuntime.now();
+  const config = await getAvailability(d1);
+  const taken = await occupiedSlots(d1, iso(now));
+  return generateSlots({ ...config, taken, now, from: opts.from, days: opts.days ?? SLOT_HORIZON_DAYS });
+}
+
+/** Finds a rule-generated slot (ignoring occupancy) that starts at `startIso`. */
+async function findRuleSlot(d1: D1DatabaseLike, startIso: string, minLeadMs?: number): Promise<Slot | null> {
+  const now = bookingRuntime.now();
+  const config = await getAvailability(d1);
+  const slots = generateSlots({ ...config, taken: new Set(), now, minLeadMs });
+  return slots.find(s => s.start === startIso) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Holds
+// ---------------------------------------------------------------------------
+
+export interface HoldInput {
+  slot_start: string;
+  name: string;
+  email: string;
+  company: string | null;
+  notes: string | null;
+  timezone: string | null;
+  payment_method: PaymentMethod;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function parseHoldInput(body: Record<string, unknown>): HoldInput {
+  const str = (k: string): string => (typeof body[k] === 'string' ? String(body[k]).trim() : '');
+  const slotMs = Date.parse(str('slot_start'));
+  if (Number.isNaN(slotMs)) throw new AppError(400, 'invalid_slot', '`slot_start` must be an ISO date-time');
+  const name = str('name');
+  if (!name || name.length > 120) throw new AppError(400, 'invalid_name', '`name` is required (max 120 characters)');
+  const email = str('email').toLowerCase();
+  if (!EMAIL_RE.test(email) || email.length > 254) throw new AppError(400, 'invalid_email', 'A valid `email` is required');
+  const company = str('company');
+  if (company.length > 160) throw new AppError(400, 'invalid_company', '`company` max 160 characters');
+  const notes = str('notes');
+  if (notes.length > 2000) throw new AppError(400, 'invalid_notes', '`notes` max 2000 characters');
+  const method = str('payment_method');
+  if (method !== 'polar' && method !== 'sepay') {
+    throw new AppError(400, 'invalid_payment_method', '`payment_method` must be "polar" or "sepay"');
+  }
+  const tz = str('timezone');
+  return {
+    slot_start: iso(slotMs),
+    name,
+    email,
+    company: company || null,
+    notes: notes || null,
+    timezone: tz && isValidTimeZone(tz) ? tz : null,
+    payment_method: method,
+  };
+}
+
+export function assertPaymentConfigured(env: RuntimeEnv, method: PaymentMethod): void {
+  const missing = method === 'polar' ? missingPolarCheckoutConfig(env) : missingSepayConfig(env);
+  if (missing.length > 0) {
+    throw new AppError(503, 'payment_unconfigured', `${method === 'polar' ? 'Polar' : 'SePay'} payments are not configured: missing ${missing.join(', ')}`, { missing });
+  }
+}
+
+/** Expires stale holds for a slot so the partial unique index frees it (lazy expiry). */
+async function expireStaleHolds(d1: D1DatabaseLike, nowIso: string, slotStart?: string): Promise<void> {
+  if (slotStart) {
+    await d1.prepare(
+      "UPDATE bookings SET status = 'expired', updated_at = ? WHERE status = 'held' AND hold_expires_at < ? AND slot_start = ?"
+    ).bind(nowIso, nowIso, slotStart).run();
+  } else {
+    await d1.prepare("UPDATE bookings SET status = 'expired', updated_at = ? WHERE status = 'held' AND hold_expires_at < ?")
+      .bind(nowIso, nowIso).run();
+  }
+}
+
+export async function createHold(
+  d1: D1DatabaseLike, env: RuntimeEnv, input: HoldInput
+): Promise<{ booking: GuestBookingView; manage_token: string; manage_url: string }> {
+  assertPaymentConfigured(env, input.payment_method);
+  const slot = await findRuleSlot(d1, input.slot_start);
+  if (!slot) throw new AppError(409, 'slot_unavailable', 'This time is not an open consultation slot');
+
+  const now = bookingRuntime.now();
+  const nowIso = iso(now);
+  await expireStaleHolds(d1, nowIso, slot.start);
+  const attention = await d1.prepare("SELECT id FROM bookings WHERE slot_start = ? AND status = 'needs_attention' LIMIT 1")
+    .bind(slot.start).first<{ id: string }>();
+  if (attention) throw new AppError(409, 'slot_taken', 'This slot was just taken. Please choose another time.');
+
+  const token = randomToken();
+  const tokenHash = await hashString(token);
+  const id = `bk_${crypto.randomUUID().replace(/-/g, '')}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const code = randomCode();
+    try {
+      await d1.prepare(
+        `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email,
+          company, notes, guest_timezone, payment_method, manage_token_hash, reschedule_count, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+      ).bind(
+        id, code, slot.start, slot.end, slot.duration_min, iso(now + HOLD_MS), input.name, input.email,
+        input.company, input.notes, input.timezone, input.payment_method, tokenHash, nowIso, nowIso
+      ).run();
+      const row = await getBookingRow(d1, id);
+      if (!row) throw new Error('Inserted booking not found');
+      return {
+        booking: toGuestView(row, env, now),
+        manage_token: token,
+        manage_url: `${siteUrl(env)}/booking/${id}?token=${encodeURIComponent(token)}`,
+      };
+    } catch (err) {
+      if (isUniqueViolation(err) && err instanceof Error && /bookings\.code/.test(err.message)) continue;
+      if (isUniqueViolation(err)) throw new AppError(409, 'slot_taken', 'This slot was just taken. Please choose another time.');
+      throw err;
+    }
+  }
+  throw new AppError(500, 'code_generation_failed', 'Could not allocate a booking code');
+}
+
+// ---------------------------------------------------------------------------
+// Reads and views
+// ---------------------------------------------------------------------------
+
+export async function getBookingRow(d1: D1DatabaseLike, id: string): Promise<BookingRow | null> {
+  return d1.prepare('SELECT * FROM bookings WHERE id = ?').bind(id).first<BookingRow>();
+}
+
+/** Loads a booking and checks the guest manage token; 404 for both unknown id and bad token. */
+export async function getBookingForGuest(d1: D1DatabaseLike, id: string, token: string | null | undefined): Promise<BookingRow> {
+  const row = await getBookingRow(d1, id);
+  if (!row || !token || (await hashString(token)) !== row.manage_token_hash) {
+    throw new AppError(404, 'booking_not_found', 'Booking not found or manage link invalid');
+  }
+  return row;
+}
+
+function rescheduleBlockedReason(row: BookingRow, now: number): string | null {
+  if (row.status !== 'confirmed') return 'not_confirmed';
+  if (row.reschedule_count >= 1) return 'already_rescheduled';
+  if (Date.parse(row.slot_start) - now < RESCHEDULE_MIN_NOTICE_MS) return 'too_close_to_start';
+  return null;
+}
+
+export function toGuestView(row: BookingRow, env: RuntimeEnv, now: number): GuestBookingView {
+  const blocked = rescheduleBlockedReason(row, now);
+  const effectiveStatus: BookingStatus = row.status === 'held' && row.hold_expires_at < iso(now) ? 'expired' : row.status;
+  let sepay: SepayTransferInfo | null = null;
+  if (effectiveStatus === 'held' && row.payment_method === 'sepay' && missingSepayConfig(env).length === 0) {
+    sepay = buildSepayTransfer(env, row.code);
+  }
+  return {
+    id: row.id,
+    code: row.code,
+    status: effectiveStatus,
+    slot_start: row.slot_start,
+    slot_end: row.slot_end,
+    duration_min: row.duration_min,
+    hold_expires_at: row.hold_expires_at,
+    guest_name: row.guest_name,
+    guest_email: row.guest_email,
+    guest_timezone: row.guest_timezone,
+    payment_method: row.payment_method,
+    amount_expected: row.amount_expected,
+    currency: row.currency,
+    meet_url: row.status === 'confirmed' ? row.meet_url : null,
+    reschedule_count: row.reschedule_count,
+    can_reschedule: blocked === null,
+    reschedule_blocked_reason: blocked,
+    sepay,
+  };
+}
+
+export function toAdminView(row: BookingRow): AdminBookingView {
+  const { manage_token_hash: _hidden, ...rest } = row;
+  return rest;
+}
+
+export interface BookingListFilter {
+  status?: BookingStatus;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+export async function listBookings(d1: D1DatabaseLike, filter: BookingListFilter = {}): Promise<AdminBookingView[]> {
+  await expireStaleHolds(d1, iso(bookingRuntime.now()));
+  const where: string[] = [];
+  const binds: unknown[] = [];
+  if (filter.status) { where.push('status = ?'); binds.push(filter.status); }
+  if (filter.from) { where.push('slot_start >= ?'); binds.push(filter.from); }
+  if (filter.to) { where.push('slot_start < ?'); binds.push(filter.to); }
+  const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
+  const sql = `SELECT * FROM bookings ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY slot_start DESC LIMIT ${limit}`;
+  const res = await d1.prepare(sql).bind(...binds).all<BookingRow>();
+  return (res.results ?? []).map(toAdminView);
+}
+
+// ---------------------------------------------------------------------------
+// Checkout
+// ---------------------------------------------------------------------------
+
+export type CheckoutResult = { provider: 'polar'; url: string; checkout_id: string; expires_at: string } | (SepayTransferInfo & { expires_at: string });
+
+export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null): Promise<CheckoutResult> {
+  const row = await getBookingForGuest(d1, id, token);
+  const now = bookingRuntime.now();
+  if (row.status !== 'held' || row.hold_expires_at < iso(now)) {
+    throw new AppError(409, 'hold_not_active', 'This hold is no longer active. Please choose a slot again.', { status: row.status });
+  }
+  assertPaymentConfigured(env, row.payment_method);
+  if (row.payment_method === 'polar') {
+    const checkout = await createPolarCheckout(env, {
+      bookingId: row.id,
+      customerEmail: row.guest_email,
+      successUrl: `${siteUrl(env)}/booking/${row.id}?token=${encodeURIComponent(token ?? '')}`,
+    }, bookingRuntime.fetch);
+    await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, payment_ref = ?, updated_at = ? WHERE id = ?')
+      .bind(CONSULTATION_PRICE_USD_CENTS, 'USD', checkout.id, iso(now), row.id).run();
+    return { provider: 'polar', url: checkout.url, checkout_id: checkout.id, expires_at: row.hold_expires_at };
+  }
+  const transfer = buildSepayTransfer(env, row.code);
+  await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, updated_at = ? WHERE id = ?')
+    .bind(transfer.amount, 'VND', iso(now), row.id).run();
+  return { ...transfer, expires_at: row.hold_expires_at };
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+export interface PaymentNotice {
+  provider: PaymentMethod;
+  eventId: string;
+  rawType: string;
+  amount: number;
+  currency: string;
+  paymentRef: string | null;
+  /** Locates the booking; returns null when it cannot be matched. */
+  bookingId: string | null;
+  bookingCode?: string | null;
+  checkoutId?: string | null;
+}
+
+export type PaymentOutcome =
+  | 'duplicate_event'
+  | 'unmatched'
+  | 'already_confirmed'
+  | 'confirmed'
+  | 'needs_attention';
+
+function expectedAmount(row: BookingRow, env: RuntimeEnv): { amount: number | null; currency: string } {
+  if (row.payment_method === 'polar') return { amount: row.amount_expected ?? CONSULTATION_PRICE_USD_CENTS, currency: 'USD' };
+  return { amount: row.amount_expected ?? parseVndPrice(env), currency: 'VND' };
+}
+
+async function findBookingForPayment(d1: D1DatabaseLike, n: PaymentNotice): Promise<BookingRow | null> {
+  if (n.bookingId) {
+    const row = await getBookingRow(d1, n.bookingId);
+    if (row) return row;
+  }
+  if (n.bookingCode) {
+    const row = await d1.prepare('SELECT * FROM bookings WHERE code = ?').bind(n.bookingCode).first<BookingRow>();
+    if (row) return row;
+  }
+  if (n.checkoutId) {
+    return d1.prepare('SELECT * FROM bookings WHERE payment_ref = ?').bind(n.checkoutId).first<BookingRow>();
+  }
+  return null;
+}
+
+async function markAttention(d1: D1DatabaseLike, row: BookingRow, reason: string, n: PaymentNotice, nowIso: string): Promise<void> {
+  await d1.prepare(
+    `UPDATE bookings SET status = 'needs_attention', attention_reason = ?, amount_paid = ?, payment_ref = COALESCE(?, payment_ref), updated_at = ?
+     WHERE id = ? AND status <> 'confirmed'`
+  ).bind(reason, n.amount, n.paymentRef, nowIso, row.id).run();
+}
+
+/**
+ * Applies a verified payment notification. Records the provider event first (idempotency gate),
+ * then confirms only an active hold paid in full; everything else is flagged for the admin.
+ */
+export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: PaymentNotice): Promise<{ outcome: PaymentOutcome; booking_id: string | null }> {
+  const now = bookingRuntime.now();
+  const nowIso = iso(now);
+  const row = await findBookingForPayment(d1, n);
+  try {
+    await d1.prepare(
+      'INSERT INTO payment_events (provider, event_id, booking_id, amount, currency, raw_type, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(n.provider, n.eventId, row?.id ?? null, n.amount, n.currency, n.rawType, nowIso).run();
+  } catch (err) {
+    if (isUniqueViolation(err)) return { outcome: 'duplicate_event', booking_id: row?.id ?? null };
+    throw err;
+  }
+
+  try {
+    if (!row) return { outcome: 'unmatched', booking_id: null };
+    if (row.status === 'confirmed') return { outcome: 'already_confirmed', booking_id: row.id };
+
+    const expected = expectedAmount(row, env);
+    const sufficient = expected.amount !== null && n.currency.toUpperCase() === expected.currency && n.amount >= expected.amount
+      && n.provider === row.payment_method;
+    if (!sufficient) {
+      await markAttention(d1, row, 'amount_mismatch', n, nowIso);
+      return { outcome: 'needs_attention', booking_id: row.id };
+    }
+
+    let changes = 0;
+    try {
+      const res = await d1.prepare(
+        `UPDATE bookings SET status = 'confirmed', amount_paid = ?, payment_ref = COALESCE(?, payment_ref), attention_reason = NULL, updated_at = ?
+         WHERE id = ? AND status = 'held' AND hold_expires_at >= ?`
+      ).bind(n.amount, n.paymentRef, nowIso, row.id, nowIso).run();
+      changes = res.meta?.changes ?? 0;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+    }
+    if (changes === 1) {
+      const confirmed = await getBookingRow(d1, row.id);
+      if (confirmed) await fulfilBooking(d1, env, confirmed, 'confirmed');
+      return { outcome: 'confirmed', booking_id: row.id };
+    }
+    const current = await getBookingRow(d1, row.id);
+    if (current?.status === 'confirmed') return { outcome: 'already_confirmed', booking_id: row.id };
+    await markAttention(d1, row, 'late_payment', n, nowIso);
+    return { outcome: 'needs_attention', booking_id: row.id };
+  } catch (err) {
+    // Release the idempotency record so the provider's retry can be processed.
+    await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind(n.provider, n.eventId).run().catch(() => undefined);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fulfilment: Google Calendar + Resend
+// ---------------------------------------------------------------------------
+
+function formatForGuest(isoValue: string, timeZone: string | null): string {
+  const tz = timeZone && isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIMEZONE;
+  return `${new Intl.DateTimeFormat('vi-VN', { timeZone: tz, dateStyle: 'full', timeStyle: 'short' }).format(new Date(isoValue))} (${tz})`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
+}
+
+/** Creates/moves the Meet event and emails the guest an invite; records honest per-channel status. */
+export async function fulfilBooking(
+  d1: D1DatabaseLike, env: RuntimeEnv, row: BookingRow, kind: 'confirmed' | 'rescheduled'
+): Promise<BookingRow> {
+  const fetchImpl = bookingRuntime.fetch;
+  const summary = `Zuey for Business — Consultation (${row.guest_name})`;
+  const baseDescription = [
+    'Zuey for Business: 90-minute one-off consultation.',
+    `Booking code: ${row.code}`,
+    row.company ? `Company: ${row.company}` : '',
+    row.notes ? `Notes: ${row.notes}` : '',
+  ].filter(Boolean).join('\n');
+
+  let meetStatus = row.meet_status;
+  let meetError: string | null = row.meet_error;
+  let meetUrl = row.meet_url;
+  let eventId = row.calendar_event_id;
+  if (kind === 'rescheduled' && eventId) {
+    const r = await rescheduleMeetEvent(env, eventId, row.slot_start, row.slot_end, fetchImpl);
+    meetStatus = r.status;
+    meetError = r.error ?? null;
+    meetUrl = r.meetUrl ?? meetUrl;
+  } else {
+    const r = await createMeetEvent(env, {
+      requestId: `${row.id}-${row.reschedule_count}`,
+      summary,
+      description: baseDescription,
+      start: row.slot_start,
+      end: row.slot_end,
+      attendeeEmail: row.guest_email,
+      attendeeName: row.guest_name,
+    }, fetchImpl);
+    meetStatus = r.status;
+    meetError = r.error ?? null;
+    meetUrl = r.meetUrl ?? null;
+    eventId = r.eventId ?? null;
+  }
+
+  const when = formatForGuest(row.slot_start, row.guest_timezone);
+  const meetLine = meetUrl ? `Google Meet: ${meetUrl}` : 'Link Google Meet sẽ được Zuey gửi riêng trước buổi tư vấn.';
+  const ics = buildIcs({
+    uid: `${row.id}@zuey.me`,
+    start: row.slot_start,
+    end: row.slot_end,
+    summary,
+    description: `${baseDescription}\n${meetLine}`,
+    location: meetUrl,
+    organizerEmail: ORGANIZER_EMAIL,
+    organizerName: 'Zuey',
+    attendeeEmail: row.guest_email,
+    attendeeName: row.guest_name,
+    sequence: row.reschedule_count,
+    stamp: iso(bookingRuntime.now()),
+  });
+  const heading = kind === 'confirmed' ? 'Buổi tư vấn của bạn đã được xác nhận' : 'Buổi tư vấn của bạn đã được dời lịch';
+  const text = [
+    `Chào ${row.guest_name},`,
+    '',
+    `${heading}.`,
+    `Thời gian: ${when}`,
+    meetLine,
+    `Mã đặt lịch: ${row.code}`,
+    '',
+    'Dùng đường link quản lý bạn nhận được khi đặt lịch để xem trạng thái hoặc dời lịch (một lần, trước ít nhất 48 giờ).',
+    '',
+    'Zuey',
+  ].join('\n');
+  const html = `<p>Chào ${escapeHtml(row.guest_name)},</p><p><strong>${heading}.</strong></p>`
+    + `<p>Thời gian: ${escapeHtml(when)}<br/>${meetUrl ? `Google Meet: <a href="${escapeHtml(meetUrl)}">${escapeHtml(meetUrl)}</a>` : escapeHtml(meetLine)}<br/>Mã đặt lịch: ${escapeHtml(row.code)}</p>`
+    + '<p>Dùng đường link quản lý bạn nhận được khi đặt lịch để xem trạng thái hoặc dời lịch (một lần, trước ít nhất 48 giờ).</p><p>Zuey</p>';
+  const email = await sendEmail(env, {
+    to: row.guest_email,
+    subject: `${heading} — Zuey for Business`,
+    text,
+    html,
+    attachments: [{ filename: 'invite.ics', content: utf8ToBase64(ics), content_type: 'text/calendar; charset=utf-8; method=REQUEST' }],
+  }, fetchImpl);
+
+  await d1.prepare(
+    `UPDATE bookings SET meet_status = ?, meet_error = ?, meet_url = ?, calendar_event_id = ?, email_status = ?, email_error = ?, updated_at = ?
+     WHERE id = ?`
+  ).bind(meetStatus, meetError, meetUrl, eventId, email.status, email.error ?? null, iso(bookingRuntime.now()), row.id).run();
+  return (await getBookingRow(d1, row.id)) ?? row;
+}
+
+// ---------------------------------------------------------------------------
+// Reschedule (guest, once) and admin actions
+// ---------------------------------------------------------------------------
+
+export async function rescheduleBooking(
+  d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null, newStartRaw: string
+): Promise<GuestBookingView> {
+  const row = await getBookingForGuest(d1, id, token);
+  const now = bookingRuntime.now();
+  const blocked = rescheduleBlockedReason(row, now);
+  if (blocked) {
+    throw new AppError(409, 'reschedule_not_allowed', {
+      not_confirmed: 'Only confirmed bookings can be rescheduled',
+      already_rescheduled: 'This booking has already been rescheduled once',
+      too_close_to_start: 'Rescheduling closes 48 hours before the session',
+    }[blocked] ?? 'Reschedule not allowed', { reason: blocked });
+  }
+  const newMs = Date.parse(newStartRaw);
+  if (Number.isNaN(newMs)) throw new AppError(400, 'invalid_slot', '`slot_start` must be an ISO date-time');
+  if (newMs - now < RESCHEDULE_MIN_NOTICE_MS) {
+    throw new AppError(409, 'reschedule_not_allowed', 'The new time must be at least 48 hours away', { reason: 'new_slot_too_soon' });
+  }
+  const newIso = iso(newMs);
+  if (newIso === row.slot_start) throw new AppError(400, 'invalid_slot', 'Choose a different time');
+  const slot = await findRuleSlot(d1, newIso, RESCHEDULE_MIN_NOTICE_MS);
+  if (!slot) throw new AppError(409, 'slot_unavailable', 'This time is not an open consultation slot');
+  await expireStaleHolds(d1, iso(now), slot.start);
+  const occupied = await occupiedSlots(d1, iso(now));
+  if (occupied.has(slot.start)) throw new AppError(409, 'slot_taken', 'This slot was just taken. Please choose another time.');
+
+  let changes = 0;
+  try {
+    const res = await d1.prepare(
+      `UPDATE bookings SET slot_start = ?, slot_end = ?, duration_min = ?, reschedule_count = reschedule_count + 1, updated_at = ?
+       WHERE id = ? AND status = 'confirmed' AND reschedule_count < 1 AND slot_start = ?`
+    ).bind(slot.start, slot.end, slot.duration_min, iso(now), row.id, row.slot_start).run();
+    changes = res.meta?.changes ?? 0;
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new AppError(409, 'slot_taken', 'This slot was just taken. Please choose another time.');
+    throw err;
+  }
+  if (changes !== 1) throw new AppError(409, 'reschedule_not_allowed', 'Booking changed concurrently; reload and try again');
+  const updated = await getBookingRow(d1, row.id);
+  if (!updated) throw new AppError(404, 'booking_not_found', 'Booking not found');
+  const fulfilled = await fulfilBooking(d1, env, updated, 'rescheduled');
+  return toGuestView(fulfilled, env, bookingRuntime.now());
+}
+
+export type AdminAction = 'cancel' | 'resolve' | 'mark_attention' | 'note';
+export const ADMIN_ACTIONS: AdminAction[] = ['cancel', 'resolve', 'mark_attention', 'note'];
+
+/**
+ * Admin-only state changes. `cancel` never refunds automatically; `resolve` confirms a booking
+ * whose payment the admin verified manually (still guarded by the active-slot unique index).
+ */
+export async function adminUpdateBooking(
+  d1: D1DatabaseLike, env: RuntimeEnv, id: string, action: AdminAction, note: string | null
+): Promise<AdminBookingView> {
+  const row = await getBookingRow(d1, id);
+  if (!row) throw new AppError(404, 'booking_not_found', 'Booking not found');
+  const nowIso = iso(bookingRuntime.now());
+  const noteValue = note ? note.slice(0, 2000) : row.admin_note;
+  if (action === 'note') {
+    await d1.prepare('UPDATE bookings SET admin_note = ?, updated_at = ? WHERE id = ?').bind(noteValue, nowIso, id).run();
+  } else if (action === 'cancel') {
+    await d1.prepare("UPDATE bookings SET status = 'cancelled', admin_note = ?, updated_at = ? WHERE id = ?").bind(noteValue, nowIso, id).run();
+  } else if (action === 'mark_attention') {
+    await d1.prepare("UPDATE bookings SET status = 'needs_attention', attention_reason = COALESCE(attention_reason, 'admin'), admin_note = ?, updated_at = ? WHERE id = ? AND status <> 'cancelled'")
+      .bind(noteValue, nowIso, id).run();
+  } else {
+    if (row.status === 'confirmed') throw new AppError(409, 'already_confirmed', 'Booking is already confirmed');
+    try {
+      await d1.prepare("UPDATE bookings SET status = 'confirmed', attention_reason = NULL, admin_note = ?, updated_at = ? WHERE id = ?")
+        .bind(noteValue, nowIso, id).run();
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new AppError(409, 'slot_taken', 'Another active booking holds this slot; cancel or move it first');
+      throw err;
+    }
+    const confirmed = await getBookingRow(d1, id);
+    if (confirmed && confirmed.meet_status !== 'sent') await fulfilBooking(d1, env, confirmed, 'confirmed');
+  }
+  const updated = await getBookingRow(d1, id);
+  if (!updated) throw new AppError(404, 'booking_not_found', 'Booking not found');
+  return toAdminView(updated);
+}
+
+export function parseAdminAction(value: unknown): AdminAction {
+  const found = ADMIN_ACTIONS.find(a => a === value);
+  if (!found) throw new AppError(400, 'invalid_action', `action must be one of ${ADMIN_ACTIONS.join(', ')}`);
+  return found;
+}
+
+export function parseStatusFilter(value: string | null | undefined): BookingStatus | undefined {
+  if (!value) return undefined;
+  const found = BOOKING_STATUSES.find(s => s === value);
+  if (!found) throw new AppError(400, 'invalid_status', `status must be one of ${BOOKING_STATUSES.join(', ')}`);
+  return found;
+}
+
