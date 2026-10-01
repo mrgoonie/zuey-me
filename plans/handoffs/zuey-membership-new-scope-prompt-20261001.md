@@ -89,7 +89,7 @@ Cal.com/Calendly, hiển thị toàn bộ library AnyMD, tự publish workflow, 
 
 ## Ràng buộc
 
-- Secrets chỉ đặt trong env hoặc secret storage, không commit `.env`.
+- Secrets chỉ đặt trong env, `.env` hoặc secret storage, không commit `.env`.
 - Giữ nguyên giá và scope của handoff.
 - Mọi kiểm tra quyền thực hiện ở server.
 - Commit theo conventional commits, không nhắc tới AI.
@@ -97,9 +97,13 @@ Cal.com/Calendly, hiển thị toàn bộ library AnyMD, tự publish workflow, 
 
 ## Chỉ dừng lại hỏi khi
 
-- Cần chạy migration remote, deploy hoặc giao dịch thanh toán thật.
-- AnyMD không lọc được theo tag và phải đổi cơ chế.
-- Gặp một trong 3 quyết định còn mở mà chưa có câu trả lời.
-- Gặp lỗi không giải thích được.
+AnyMD không lọc được theo tag và phải đổi cơ chế. Mọi việc khác, kể cả 3 quyết định còn mở ở trên, tự quyết theo phương án đề xuất và làm tiếp đến hết.
 
-Mọi việc khác tự quyết và làm tiếp đến hết.
+## Trước khi dừng
+
+Dùng skill `ak-docs` để cập nhật tài liệu nội bộ và các file agent context (AGENTS.md, CLAUDE.md) dựa trên những gì học được hoặc những chỗ gặp khó khăn, nếu có.
+
+## Khi xong việc
+
+1. Dùng skill `ak-sumup` để tóm tắt kết quả.
+2. Viết hướng dẫn từng bước setup biến môi trường: tên biến, lấy giá trị ở đâu, đặt vào `.env` local và Cloudflare secret thế nào. Không ghi giá trị thật.
