@@ -1,24 +1,48 @@
 /// <reference path="../.astro/types.d.ts" />
 import type { D1DatabaseLike } from './db/store';
 
+/** Minimal shape of the Cloudflare Workers AI binding used by this app. */
+export interface WorkersAiLike {
+  run(model: string, input: Record<string, unknown>): Promise<unknown>;
+}
+
+export interface RuntimeEnv {
+  DB?: D1DatabaseLike;
+  AI?: WorkersAiLike;
+  PUBLIC_SITE_URL?: string;
+  PUBLIC_POSTHOG_KEY?: string;
+  PUBLIC_POSTHOG_HOST?: string;
+  ADMIN_MASTER_TOKEN?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  // Zuey Reads
+  ANYMD_API_KEY?: string;
+  READS_SUMMARY_MODEL?: string;
+  // Booking, payments, email
+  GOOGLE_CALENDAR_REFRESH_TOKEN?: string;
+  GOOGLE_CALENDAR_ID?: string;
+  POLAR_ACCESS_TOKEN?: string;
+  POLAR_WEBHOOK_SECRET?: string;
+  POLAR_CONSULTATION_PRODUCT_ID?: string;
+  POLAR_API_BASE?: string;
+  SEPAY_WEBHOOK_API_KEY?: string;
+  SEPAY_BANK_ACCOUNT?: string;
+  SEPAY_BANK_CODE?: string;
+  CONSULTATION_PRICE_VND?: string;
+  RESEND_API_KEY?: string;
+  RESEND_FROM?: string;
+  // Rich blocks
+  SURVEY_HASH_SALT?: string;
+}
+
 declare global {
   namespace App {
     interface Locals {
       runtime?: {
-        env?: {
-          DB?: D1DatabaseLike;
-          PUBLIC_SITE_URL?: string;
-          PUBLIC_POSTHOG_KEY?: string;
-          PUBLIC_POSTHOG_HOST?: string;
-          ADMIN_MASTER_TOKEN?: string;
-          GITHUB_CLIENT_ID?: string;
-          GITHUB_CLIENT_SECRET?: string;
-          GOOGLE_CLIENT_ID?: string;
-          GOOGLE_CLIENT_SECRET?: string;
-        };
+        env?: RuntimeEnv;
       };
     }
   }
 }
-
-export {};

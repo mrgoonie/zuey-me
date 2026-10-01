@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { OPENAPI_FRAGMENTS } from '../../lib/openapi/registry';
 
 export const GET: APIRoute = async () => {
   const spec = {
@@ -39,6 +40,21 @@ export const GET: APIRoute = async () => {
         }
       },
       schemas: {
+        Error: {
+          type: 'object',
+          required: ['success', 'error'],
+          properties: {
+            success: { type: 'boolean', const: false },
+            error: {
+              type: 'object',
+              required: ['code', 'message'],
+              properties: {
+                code: { type: 'string', description: 'Stable machine-readable error code' },
+                message: { type: 'string' },
+              },
+            },
+          },
+        },
         Profile: {
           type: 'object',
           properties: {
@@ -255,7 +271,17 @@ export const GET: APIRoute = async () => {
     }
   };
 
-  return new Response(JSON.stringify(spec, null, 2), {
+  const merged = {
+    ...spec,
+    tags: OPENAPI_FRAGMENTS.map(f => f.tag),
+    components: {
+      ...spec.components,
+      schemas: Object.assign({}, spec.components.schemas, ...OPENAPI_FRAGMENTS.map(f => f.schemas)),
+    },
+    paths: Object.assign({}, spec.paths, ...OPENAPI_FRAGMENTS.map(f => f.paths)),
+  };
+
+  return new Response(JSON.stringify(merged, null, 2), {
     headers: {
       'Content-Type': 'application/json',
       'Cache-Control': 'public, max-age=3600',

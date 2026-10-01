@@ -8,17 +8,10 @@ import {
   deleteLink,
   reorderLinks,
 } from '../../db/store';
-import { authenticateRequest } from '../../lib/auth';
-
-interface McpTool {
-  name: string;
-  description: string;
-  inputSchema: {
-    type: string;
-    properties: Record<string, unknown>;
-    required?: string[];
-  };
-}
+import { authenticateAdmin } from '../../lib/auth';
+import { AppError } from '../../lib/http';
+import { MCP_FEATURE_MODULES } from '../../lib/mcp/registry';
+import type { McpContext, McpTool } from '../../lib/mcp/types';
 
 const MCP_TOOLS: McpTool[] = [
   {
@@ -190,7 +183,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       jsonrpc: '2.0',
       id,
       result: {
-        tools: MCP_TOOLS,
+        tools: [...MCP_TOOLS, ...MCP_FEATURE_MODULES.flatMap(m => m.tools)],
       },
     }), {
       headers: { 'Content-Type': 'application/json' },
@@ -203,10 +196,52 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const toolName = params.name;
     const args = params.arguments || {};
 
+    const featureModule = MCP_FEATURE_MODULES.find(m => m.tools.some(t => t.name === toolName));
+    if (featureModule && toolName) {
+      const env = locals.runtime?.env || {};
+      const ctx: McpContext = {
+        request,
+        env,
+        d1,
+        async requireAdmin() {
+          const auth = await authenticateAdmin(request, d1);
+          if (!auth.authenticated) {
+            throw new AppError(auth.role ? 403 : 401, auth.role ? 'forbidden' : 'unauthorized', auth.error || 'Unauthorized');
+          }
+        },
+        async isAdmin() {
+          return (await authenticateAdmin(request, d1)).authenticated;
+        },
+      };
+      try {
+        const data = await featureModule.call(toolName, args, ctx);
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          result: { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] },
+        }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        const appErr = err instanceof AppError ? err : null;
+        if (!appErr) console.error('MCP tool error:', toolName, err instanceof Error ? err.message : 'unknown');
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: appErr && (appErr.status === 401 || appErr.status === 403) ? -32001 : -32000,
+            message: appErr ? appErr.message : 'Internal error',
+            data: appErr ? { code: appErr.code, status: appErr.status, ...appErr.extra } : { code: 'internal_error' },
+          },
+        }), {
+          status: appErr ? appErr.status : 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     const isMutation = ['update_profile', 'create_link', 'update_link', 'delete_link', 'reorder_links', 'set_theme'].includes(toolName || '');
 
     if (isMutation) {
-      const auth = await authenticateRequest(request, d1);
+      const auth = await authenticateAdmin(request, d1);
       if (!auth.authenticated) {
         return new Response(JSON.stringify({
           jsonrpc: '2.0',
