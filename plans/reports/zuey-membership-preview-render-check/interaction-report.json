@@ -1,0 +1,34 @@
+[
+  {
+    "name": "Full content member state",
+    "pass": true
+  },
+  {
+    "name": "Free paywall state",
+    "pass": true
+  },
+  {
+    "name": "Interactive slider",
+    "pass": true
+  },
+  {
+    "name": "Search empty state",
+    "pass": true
+  },
+  {
+    "name": "Category filtering",
+    "pass": true
+  },
+  {
+    "name": "Mobile AI navigation",
+    "pass": true
+  },
+  {
+    "name": "MCP explanation",
+    "pass": true
+  },
+  {
+    "name": "Zero external network requests",
+    "pass": true
+  }
+]

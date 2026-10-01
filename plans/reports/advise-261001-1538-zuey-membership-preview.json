@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Proposed Zuey membership system",
+    "subtitle": "Hypothetical end state; no integration is live in this preview",
+    "visual_preset": "editorial",
+    "theme": "light",
+    "animation": "none"
+  },
+  "components": [
+    {
+      "id": "web",
+      "label": "Website + Studio",
+      "role": "frontend",
+      "layer": 0,
+      "description": "Profile, AI, Knowledges, block editor"
+    },
+    {
+      "id": "mcp",
+      "label": "/mcp",
+      "role": "gateway",
+      "layer": 0,
+      "description": "Admin and subscriber tools, checkout"
+    },
+    {
+      "id": "policy",
+      "label": "Identity + membership",
+      "role": "auth",
+      "layer": 1,
+      "description": "Shared entitlements, quotas, audit"
+    },
+    {
+      "id": "content",
+      "label": "Articles + media",
+      "role": "database",
+      "layer": 2,
+      "description": "D1 source of truth, R2 media, 5 locales"
+    },
+    {
+      "id": "search",
+      "label": "Knowledge retrieval",
+      "role": "backend",
+      "layer": 2,
+      "description": "FTS5/BM25 + vectors + evaluated Jev ranking"
+    },
+    {
+      "id": "chat",
+      "label": "Dewee zuey-ai",
+      "role": "external",
+      "layer": 2,
+      "description": "Private user identity, memory and streamed replies"
+    },
+    {
+      "id": "blocks",
+      "label": "Interactive sandbox",
+      "role": "frontend",
+      "layer": 2,
+      "description": "Approved code with authenticated API proxy"
+    },
+    {
+      "id": "billing",
+      "label": "Polar / SePay",
+      "role": "external",
+      "layer": 2,
+      "description": "Recurring USD / prepaid VND"
+    },
+    {
+      "id": "fulfil",
+      "label": "Email + Telegram",
+      "role": "worker",
+      "layer": 3,
+      "description": "Resend receipt, membership bot"
+    }
+  ],
+  "connections": [
+    {
+      "from": "web",
+      "to": "policy",
+      "label": "Session",
+      "kind": "sync"
+    },
+    {
+      "from": "mcp",
+      "to": "policy",
+      "label": "Scoped credential",
+      "kind": "sync"
+    },
+    {
+      "from": "policy",
+      "to": "content",
+      "label": "Read / edit by role",
+      "kind": "sync"
+    },
+    {
+      "from": "policy",
+      "to": "search",
+      "label": "Retrieval access",
+      "kind": "sync"
+    },
+    {
+      "from": "policy",
+      "to": "chat",
+      "label": "AI + budget",
+      "kind": "sync"
+    },
+    {
+      "from": "policy",
+      "to": "blocks",
+      "label": "Block access",
+      "kind": "sync"
+    },
+    {
+      "from": "policy",
+      "to": "billing",
+      "label": "Create checkout",
+      "kind": "sync"
+    },
+    {
+      "from": "billing",
+      "to": "policy",
+      "label": "Verified payment event",
+      "kind": "async"
+    },
+    {
+      "from": "policy",
+      "to": "fulfil",
+      "label": "Grant / revoke",
+      "kind": "sync"
+    },
+    {
+      "from": "search",
+      "to": "content",
+      "label": "Published revision",
+      "kind": "sync"
+    }
+  ]
+}

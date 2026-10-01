@@ -1,0 +1,812 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Zuey membership user API — proposed preview subset",
+    "version": "0.0.0-preview",
+    "description": "Not the deployed OpenAPI. Merge and validate against real /api/openapi.json before launch."
+  },
+  "servers": [
+    {
+      "url": "https://zuey.me"
+    }
+  ],
+  "paths": {
+    "/api/v1/articles/search": {
+      "get": {
+        "summary": "Free: metadata + preview. Knowledges: nguồn được cấp quyền. AI-only: không lấy nguyên bài trả phí.",
+        "operationId": "search_knowledge",
+        "security": [
+          {
+            "userKey": []
+          }
+        ],
+        "x-required-scope": "knowledge:search",
+        "x-preview-only": true,
+        "description": "query: string (1–300), locale: vi|en|zh|ko|ja, labels?: string[], label_match?: all|any",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "vi",
+                "en",
+                "zh",
+                "ko",
+                "ja"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proposed success; match full domain schema to implementation before launch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "enum": [
+                              "preview",
+                              "full"
+                            ]
+                          },
+                          "locale": {
+                            "type": "string"
+                          },
+                          "labels": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate/budget limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until retry"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/articles/{article_id}": {
+      "get": {
+        "summary": "Đọc nguyên bài cần Knowledges, Kết hợp hoặc Cộng đồng.",
+        "operationId": "read_article",
+        "security": [
+          {
+            "userKey": []
+          }
+        ],
+        "x-required-scope": "knowledge:read",
+        "x-preview-only": true,
+        "description": "article_id: string, locale: vi|en|zh|ko|ja; full content cần Knowledges, Kết hợp hoặc Cộng đồng",
+        "parameters": [
+          {
+            "name": "article_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "vi",
+                "en",
+                "zh",
+                "ko",
+                "ja"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proposed success; match full domain schema to implementation before launch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate/budget limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until retry"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/messages": {
+      "post": {
+        "summary": "Cần Zuey AI, Kết hợp hoặc Cộng đồng. Cùng quota/budget với chat trên web.",
+        "operationId": "ask_zuey",
+        "security": [
+          {
+            "userKey": []
+          }
+        ],
+        "x-required-scope": "knowledge:ask",
+        "x-preview-only": true,
+        "description": "message: string (1–300 trong demo), session_id?: own session; trả lời + citations + usage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message"
+                ],
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "vi",
+                      "en",
+                      "zh",
+                      "ko",
+                      "ja"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Proposed success; match full domain schema to implementation before launch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate/budget limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until retry"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/checkouts": {
+      "post": {
+        "summary": "Tạo checkout cần xác thực. Chưa thanh toán và chưa cấp quyền; chỉ webhook đã xác minh mới thay gói.",
+        "operationId": "create_checkout",
+        "security": [
+          {
+            "userKey": []
+          }
+        ],
+        "x-required-scope": "checkout:create",
+        "x-preview-only": true,
+        "description": "plan_id: knowledge|ai|combo|community, provider: polar|sepay; giá do server lấy, không nhận giá client",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "plan_id",
+                  "provider"
+                ],
+                "properties": {
+                  "plan_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "enum": [
+                      "knowledge",
+                      "ai",
+                      "combo",
+                      "community"
+                    ]
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "vi",
+                      "en",
+                      "zh",
+                      "ko",
+                      "ja"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "polar",
+                      "sepay"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Proposed success; match full domain schema to implementation before launch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate/budget limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "retry_after_seconds": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until retry"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "userKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "User-owned scoped key; always enforce current membership. OAuth server discovery remains a separate /mcp contract."
+      }
+    }
+  }
+}
