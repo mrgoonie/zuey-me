@@ -1,0 +1,73 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { BlockRenderer } from '../../components/blocks/BlockRenderer';
+import { getArticleView, resolveViewer } from '../../lib/blocks/articles';
+
+const d1 = Astro.locals.runtime?.env?.DB;
+const slug = Astro.params.slug ?? '';
+const viewer = await resolveViewer(Astro.request, d1);
+// Draft preview is honoured only for admin sessions; everyone else gets the published version.
+const preview = Astro.url.searchParams.get('preview') === '1' && viewer.isAdmin;
+const view = await getArticleView(d1, slug, viewer, { draft: preview });
+
+Astro.response.headers.set('Cache-Control', viewer.isAdmin ? 'private, no-store' : 'public, max-age=300');
+Astro.response.headers.set('Vary', 'Cookie');
+if (!view) Astro.response.status = 404;
+
+const siteUrl = Astro.url.origin;
+const published = view?.published_at ? new Date(view.published_at) : null;
+const dateText = published
+  ? published.toLocaleDateString(view?.locale === 'en' ? 'en-US' : 'vi-VN', { timeZone: 'Asia/Saigon', year: 'numeric', month: 'long', day: 'numeric' })
+  : '';
+---
+
+<Layout
+  title={view ? `${view.title} — Zuey` : 'Không tìm thấy bài viết — Zuey'}
+  description={view?.excerpt || 'Bài viết từ Duy Nguyen /zuey/'}
+  url={`${siteUrl}/articles/${slug}`}
+  lang={view?.locale ?? 'vi'}
+>
+  <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6">
+    <article class="w-full max-w-[860px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12">
+      <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap gap-3 justify-between">
+        <a href="/articles" class="hover:text-stone-900">← Bài viết</a>
+        {view && <a href={`/articles/${view.slug}.md`} class="hover:text-stone-900">Markdown</a>}
+      </nav>
+
+      {view ? (
+        <>
+          {view.preview && (
+            <p class="mb-4 rounded-xl bg-amber-100 border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-900" role="status">
+              Bản xem trước bản nháp (revision {view.revision}) — chỉ quản trị viên thấy.
+            </p>
+          )}
+          <header class="mb-7">
+            <div class="flex flex-wrap gap-2 mb-3 text-[11px] font-bold uppercase tracking-wider">
+              {view.access === 'knowledges' && <span class="rounded-full bg-stone-900 text-amber-300 px-2.5 py-1">Knowledges</span>}
+              {view.tags.map(tag => <span class="rounded-full bg-white/70 border border-stone-200 text-stone-600 px-2.5 py-1">#{tag}</span>)}
+            </div>
+            <h1 class="font-serif text-3xl sm:text-4xl md:text-5xl font-extrabold leading-tight text-stone-950 break-words">{view.title}</h1>
+            {view.excerpt && <p class="mt-3 text-stone-600 text-base sm:text-lg">{view.excerpt}</p>}
+            {dateText && <p class="mt-3 text-xs text-stone-500">{dateText}</p>}
+          </header>
+
+          <BlockRenderer client:load doc={view.document} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
+
+          {view.truncated && (
+            <section class="zb-locked" aria-labelledby="locked-title">
+              <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">Phần còn lại dành cho thành viên Knowledges</p>
+              <p class="mt-2 text-sm text-stone-600">Bạn đang đọc khoảng một phần ba đầu bài. Gói Knowledges mở toàn bộ bài viết trả phí.</p>
+              <a href="/" class="mt-4 inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">Tìm hiểu gói Knowledges</a>
+            </section>
+          )}
+        </>
+      ) : (
+        <div class="py-16 text-center">
+          <h1 class="font-serif text-3xl font-bold text-stone-900">Không tìm thấy bài viết</h1>
+          <p class="mt-3 text-stone-600">Bài viết không tồn tại hoặc chưa được xuất bản.</p>
+          <a href="/articles" class="mt-6 inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold">Xem tất cả bài viết</a>
+        </div>
+      )}
+    </article>
+  </main>
+</Layout>

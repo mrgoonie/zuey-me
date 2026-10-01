@@ -1,0 +1,41 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { listArticles } from '../../lib/blocks/articles';
+
+const d1 = Astro.locals.runtime?.env?.DB;
+const articles = await listArticles(d1);
+Astro.response.headers.set('Cache-Control', 'public, max-age=300');
+
+const fmt = (iso: string | null, locale: string) =>
+  iso ? new Date(iso).toLocaleDateString(locale === 'en' ? 'en-US' : 'vi-VN', { timeZone: 'Asia/Saigon', year: 'numeric', month: 'short', day: 'numeric' }) : '';
+---
+
+<Layout title="Bài viết — Duy Nguyen /zuey/" description="Ghi chép, biểu đồ và khảo sát của Duy Nguyen /zuey/" url={`${Astro.url.origin}/articles`} lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6">
+    <section class="w-full max-w-[760px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9">
+      <nav class="text-xs font-semibold text-stone-500 mb-5"><a href="/" class="hover:text-stone-900">← zuey.me</a></nav>
+      <h1 class="font-serif text-3xl sm:text-4xl font-extrabold text-stone-950">Bài viết</h1>
+      <p class="mt-2 text-stone-600">Ghi chép, biểu đồ, sơ đồ và khảo sát.</p>
+
+      {articles.length === 0 ? (
+        <p class="mt-10 text-center text-stone-500">Chưa có bài viết nào được xuất bản.</p>
+      ) : (
+        <ul class="mt-8 flex flex-col gap-3">
+          {articles.map(a => (
+            <li>
+              <a href={`/articles/${a.slug}`} class="block rounded-2xl bg-white/70 border border-stone-200 px-4 py-4 sm:px-5 hover:bg-white hover:shadow-card-hover transition-all">
+                <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-stone-500">
+                  <span>{fmt(a.published_at, a.locale)}</span>
+                  {a.access === 'knowledges' && <span class="rounded-full bg-stone-900 text-amber-300 px-2 py-0.5">Knowledges</span>}
+                  {a.tags.slice(0, 4).map(t => <span class="text-stone-400">#{t}</span>)}
+                </div>
+                <h2 class="mt-1.5 font-serif text-xl font-bold text-stone-900 break-words">{a.title}</h2>
+                {a.excerpt && <p class="mt-1 text-sm text-stone-600 line-clamp-2">{a.excerpt}</p>}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  </main>
+</Layout>
