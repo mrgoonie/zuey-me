@@ -36,7 +36,7 @@ export function createTestD1(): D1DatabaseLike & { raw: Database } {
   const db = new Database(':memory:');
   const dir = path.join(import.meta.dir, '..', '..', 'migrations');
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()) {
-    db.exec(fs.readFileSync(path.join(dir, file), 'utf8'));
+    db.run(fs.readFileSync(path.join(dir, file), 'utf8'));
   }
   return {
     raw: db,

@@ -60,6 +60,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     { name: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },
   ];
 
+  const exploreLinks = [
+    { href: '/articles', en: 'Articles', vi: 'Bài viết', descEn: 'Notes, charts and surveys', descVi: 'Ghi chép, biểu đồ, khảo sát' },
+    { href: '/reads', en: 'Zuey Reads', vi: 'Zuey đang đọc', descEn: 'What I am reading, summarized', descVi: 'Tóm tắt những gì mình đọc' },
+    { href: '/workflows', en: 'AI Workflows', vi: 'Workflow AI', descEn: 'How I work with AI', descVi: 'Cách mình làm việc với AI' },
+    { href: '/business', en: 'For Business', vi: 'Cho doanh nghiệp', descEn: '1:1 consultation · $1,999', descVi: 'Tư vấn 1:1 · $1,999' },
+  ];
+
   return (
     <main className="relative min-h-screen w-full flex flex-col items-center justify-start py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6 z-10 selection:bg-amber-200">
       {/* Floating Center Card with Rounded Frame and Drop Shadow (Matching sample 01) */}
@@ -153,6 +160,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
         {/* Sections & Link Cards */}
         <div className="w-full mt-8 space-y-8">
+          {/* 0. Explore: articles, reads, workflows, business booking */}
+          <nav aria-label={lang === 'vi' ? 'Khám phá' : 'Explore'} className="w-full">
+            <ul className="grid grid-cols-2 gap-2">
+              {exploreLinks.map((item) => (
+                <li key={item.href} className="min-w-0">
+                  <a
+                    href={item.href}
+                    className="group h-full flex flex-col gap-0.5 rounded-2xl border border-stone-300/80 bg-white/80 hover:bg-white px-3 py-2.5 shadow-card hover:shadow-card-hover transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500"
+                    onClick={() => trackEvent('explore_clicked', { target: item.href })}
+                  >
+                    <span className="text-[13px] sm:text-sm font-bold text-stone-900 font-serif leading-tight">{lang === 'vi' ? item.vi : item.en}</span>
+                    <span className="text-[11px] text-stone-600 leading-snug">{lang === 'vi' ? item.descVi : item.descEn}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+
           {/* 1. Blogs Section */}
           {blogs.length > 0 && (
             <section className="w-full">

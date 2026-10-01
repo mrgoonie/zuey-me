@@ -15,7 +15,15 @@ import {
   Eye,
   Copy,
   Sparkles,
+  FileText,
+  BookOpen,
+  Workflow,
+  CalendarDays,
 } from 'lucide-react';
+import { ArticlesPanel } from './ArticleEditor';
+import { ReadsPanel } from './ReadsPanel';
+import { WorkflowsPanel } from './WorkflowsPanel';
+import { BookingPanel } from './BookingPanel';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
 
 interface StudioAppProps {
@@ -25,6 +33,8 @@ interface StudioAppProps {
   isAuthenticated: boolean;
 }
 
+type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'workflows' | 'booking';
+
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
   initialLinks,
@@ -32,7 +42,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
   isAuthenticated: initialAuth,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(initialAuth);
-  const [activeTab, setActiveTab] = useState<'profile' | 'links' | 'theme' | 'keys'>('profile');
+  const [activeTab, setActiveTab] = useState<StudioTab>('profile');
   const [profile, setProfile] = useState<Profile>(initialProfile);
   const [links, setLinks] = useState<LinkItem[]>(initialLinks);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>(initialKeys);
@@ -65,7 +75,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
 
 
   // Handle Login
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setLoginError('');
     const trimmed = loginToken.trim();
@@ -116,7 +126,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
   };
 
   // Save / Update Link
-  const handleSaveLink = async (e: React.FormEvent) => {
+  const handleSaveLink = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!editingLink || !editingLink.title_en || !editingLink.url || !editingLink.section) return;
 
@@ -304,6 +314,8 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     );
   }
 
+  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'workflows' || activeTab === 'booking';
+
   // Filtered links for Links tab
   const filteredLinks = filterSection === 'all'
     ? links
@@ -312,7 +324,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 flex flex-col font-sans">
       {/* Studio Top Navigation Bar */}
-      <header className="h-16 border-b border-stone-800 bg-stone-900/60 backdrop-blur-md px-4 sm:px-8 flex items-center justify-between sticky top-0 z-30">
+      <header className="min-h-16 py-2 flex-wrap gap-y-2 gap-x-3 border-b border-stone-800 bg-stone-900/60 backdrop-blur-md px-4 sm:px-8 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">
           <span className="w-8 h-8 rounded-lg bg-amber-400 text-stone-950 font-black flex items-center justify-center text-base">
             ✱
@@ -327,36 +339,28 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           </div>
         </div>
 
-        {/* Tab Buttons */}
-        <nav className="hidden md:flex items-center gap-1 bg-stone-950/80 p-1 rounded-xl border border-stone-800 text-xs">
-          <button
-            onClick={() => setActiveTab('profile')}
-            className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all ${activeTab === 'profile' ? 'bg-amber-400 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'}`}
-          >
-            <User className="w-3.5 h-3.5" />
-            Profile
-          </button>
-          <button
-            onClick={() => setActiveTab('links')}
-            className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all ${activeTab === 'links' ? 'bg-amber-400 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'}`}
-          >
-            <LinkIcon className="w-3.5 h-3.5" />
-            Links ({links.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('theme')}
-            className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all ${activeTab === 'theme' ? 'bg-amber-400 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'}`}
-          >
-            <Palette className="w-3.5 h-3.5" />
-            Theme
-          </button>
-          <button
-            onClick={() => setActiveTab('keys')}
-            className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all ${activeTab === 'keys' ? 'bg-amber-400 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'}`}
-          >
-            <Key className="w-3.5 h-3.5" />
-            API & Agents
-          </button>
+        {/* Tab Buttons (horizontally scrollable on small screens) */}
+        <nav aria-label="Studio sections" className="order-last w-full md:order-none md:w-auto flex items-center gap-1 bg-stone-950/80 p-1 rounded-xl border border-stone-800 text-xs overflow-x-auto">
+          {([
+            { id: 'profile', label: 'Profile', icon: User },
+            { id: 'links', label: `Links (${links.length})`, icon: LinkIcon },
+            { id: 'theme', label: 'Theme', icon: Palette },
+            { id: 'articles', label: 'Articles', icon: FileText },
+            { id: 'reads', label: 'Reads', icon: BookOpen },
+            { id: 'workflows', label: 'Workflows', icon: Workflow },
+            { id: 'booking', label: 'Booking', icon: CalendarDays },
+            { id: 'keys', label: 'API & Agents', icon: Key },
+          ] satisfies { id: StudioTab; label: string; icon: typeof User }[]).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              aria-current={activeTab === id ? 'page' : undefined}
+              className={`shrink-0 px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all ${activeTab === id ? 'bg-amber-400 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'}`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          ))}
         </nav>
 
         {/* Right Actions */}
@@ -392,7 +396,12 @@ export const StudioApp: React.FC<StudioAppProps> = ({
       {/* Main Studio Workspace with Side-by-Side Live Preview */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Editor Panel */}
-        <div className="flex-1 p-4 sm:p-8 overflow-y-auto max-w-3xl mx-auto w-full">
+        <div className={`flex-1 p-4 sm:p-8 overflow-y-auto mx-auto w-full min-w-0 ${isFeatureTab ? 'max-w-6xl' : 'max-w-3xl'}`}>
+          {activeTab === 'articles' && <ArticlesPanel />}
+          {activeTab === 'reads' && <ReadsPanel />}
+          {activeTab === 'workflows' && <WorkflowsPanel />}
+          {activeTab === 'booking' && <BookingPanel />}
+
           {saveStatus && (
             <div className="mb-6 p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
               <Check className="w-4 h-4 text-amber-400" />
@@ -701,7 +710,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
         </div>
 
         {/* Right Phone Mockup Preview (Hidden on small screens unless toggled) */}
-        <aside className={`w-[400px] border-l border-stone-800 bg-stone-900/30 p-6 flex flex-col items-center justify-center flex-shrink-0 ${showPreviewMobile ? 'fixed inset-0 z-40 bg-stone-950 w-full' : 'hidden lg:flex'}`}>
+        <aside className={`w-[400px] border-l border-stone-800 bg-stone-900/30 p-6 flex flex-col items-center justify-center flex-shrink-0 ${showPreviewMobile ? 'fixed inset-0 z-40 bg-stone-950 w-full' : (isFeatureTab ? 'hidden' : 'hidden lg:flex')}`}>
           {showPreviewMobile && (
             <button
               onClick={() => setShowPreviewMobile(false)}
