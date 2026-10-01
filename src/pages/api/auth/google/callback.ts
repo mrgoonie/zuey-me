@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createSession } from '../../../../db/store';
+import { handleMemberOAuthCallback, isMemberOAuthCallback } from '../../../../lib/members/oauth';
 
 const ALLOWED_EMAILS: Record<string, true> = {
   'hi@zuey.me': true,
@@ -7,6 +8,8 @@ const ALLOWED_EMAILS: Record<string, true> = {
 };
 
 export const GET: APIRoute = async ({ request, redirect, locals }) => {
+  // Member sign-in shares this registered callback; its state cookie routes it away from the Studio flow.
+  if (isMemberOAuthCallback(request, 'google')) return handleMemberOAuthCallback(request, locals.runtime?.env ?? {}, 'google');
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
 

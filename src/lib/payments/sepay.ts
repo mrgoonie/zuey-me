@@ -2,6 +2,9 @@ import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 
 export const SEPAY_CODE_PREFIX = 'ZBK';
+/** Membership billing orders: the full order code (e.g. ZSB7K2M9QXA) is the transfer content. */
+export const SEPAY_BILLING_PREFIX = 'ZSB';
+const CODE_BODY = '[A-Z0-9]{8}';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -14,12 +17,18 @@ export function parseVndPrice(env: RuntimeEnv): number | null {
   return n > 0 && Number.isSafeInteger(n) ? n : null;
 }
 
-export function missingSepayConfig(env: RuntimeEnv): string[] {
+/** Bank details and webhook key required for any SePay transfer to be shown and confirmed. */
+export function missingSepayBankConfig(env: RuntimeEnv): string[] {
   const missing: string[] = [];
   if (!env.SEPAY_BANK_ACCOUNT) missing.push('SEPAY_BANK_ACCOUNT');
   if (!env.SEPAY_BANK_CODE) missing.push('SEPAY_BANK_CODE');
-  if (parseVndPrice(env) === null) missing.push('CONSULTATION_PRICE_VND');
   if (!env.SEPAY_WEBHOOK_API_KEY) missing.push('SEPAY_WEBHOOK_API_KEY');
+  return missing;
+}
+
+export function missingSepayConfig(env: RuntimeEnv): string[] {
+  const missing = missingSepayBankConfig(env);
+  if (parseVndPrice(env) === null) missing.push('CONSULTATION_PRICE_VND');
   return missing;
 }
 
@@ -37,14 +46,8 @@ export function transferContent(code: string): string {
   return `${SEPAY_CODE_PREFIX}${code}`;
 }
 
-/** Builds VietQR transfer instructions; no API call is made. */
-export function buildSepayTransfer(env: RuntimeEnv, code: string): SepayTransferInfo {
-  const missing = missingSepayConfig(env);
-  const amount = parseVndPrice(env);
-  if (missing.length > 0 || amount === null) {
-    throw new AppError(503, 'payment_unconfigured', `SePay bank transfer is not configured: missing ${missing.join(', ')}`, { missing });
-  }
-  const content = transferContent(code);
+/** VietQR transfer instructions for an amount and transfer content; no API call is made. */
+export function vietQrTransfer(env: RuntimeEnv, amount: number, content: string): SepayTransferInfo {
   const account = env.SEPAY_BANK_ACCOUNT ?? '';
   const bank = env.SEPAY_BANK_CODE ?? '';
   const qs = new URLSearchParams({ acc: account, bank, amount: String(amount), des: content });
@@ -57,6 +60,16 @@ export function buildSepayTransfer(env: RuntimeEnv, code: string): SepayTransfer
     transfer_content: content,
     qr_url: `https://qr.sepay.vn/img?${qs.toString()}`,
   };
+}
+
+/** Builds VietQR transfer instructions for a consultation booking; no API call is made. */
+export function buildSepayTransfer(env: RuntimeEnv, code: string): SepayTransferInfo {
+  const missing = missingSepayConfig(env);
+  const amount = parseVndPrice(env);
+  if (missing.length > 0 || amount === null) {
+    throw new AppError(503, 'payment_unconfigured', `SePay bank transfer is not configured: missing ${missing.join(', ')}`, { missing });
+  }
+  return vietQrTransfer(env, amount, transferContent(code));
 }
 
 /** Constant-time comparison of two secrets via SHA-256 digests. */
@@ -89,9 +102,17 @@ export interface SepayTransfer {
   content: string;
   referenceCode: string | null;
   bookingCode: string | null;
+  /** Full membership order code (ZSB + 8 characters) when the content carries one. */
+  billingCode: string | null;
 }
 
-/** Validates the SePay webhook payload shape and extracts the ZBK booking code. */
+/** Extracts a ZSB membership order code from free-form transfer content. */
+export function extractBillingCode(content: string): string | null {
+  const match = new RegExp(`${SEPAY_BILLING_PREFIX}(${CODE_BODY})`, 'i').exec(content);
+  return match ? `${SEPAY_BILLING_PREFIX}${match[1].toUpperCase()}` : null;
+}
+
+/** Validates the SePay webhook payload shape and extracts the ZBK booking / ZSB order codes. */
 export function parseSepayPayload(payload: unknown): SepayTransfer | null {
   if (!isRecord(payload)) return null;
   const id = typeof payload.id === 'number' || typeof payload.id === 'string' ? String(payload.id) : null;
@@ -99,7 +120,7 @@ export function parseSepayPayload(payload: unknown): SepayTransfer | null {
   const direction = payload.transferType === 'in' ? 'in' : payload.transferType === 'out' ? 'out' : null;
   if (!id || !direction || !Number.isFinite(amount)) return null;
   const content = typeof payload.content === 'string' ? payload.content : '';
-  const match = new RegExp(`${SEPAY_CODE_PREFIX}([A-Z0-9]{8})`, 'i').exec(content);
+  const match = new RegExp(`${SEPAY_CODE_PREFIX}(${CODE_BODY})`, 'i').exec(content);
   return {
     eventId: id,
     direction,
@@ -107,5 +128,6 @@ export function parseSepayPayload(payload: unknown): SepayTransfer | null {
     content,
     referenceCode: typeof payload.referenceCode === 'string' ? payload.referenceCode : null,
     bookingCode: match ? match[1].toUpperCase() : null,
+    billingCode: extractBillingCode(content),
   };
 }

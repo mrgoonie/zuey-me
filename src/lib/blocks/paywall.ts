@@ -3,17 +3,25 @@ import { inlineToPlain } from './inline';
 
 export interface Viewer {
   isAdmin: boolean;
-  /** Membership entitlements such as 'knowledges'. Empty until subscriptions exist. */
+  /** Membership entitlements effective for article reads (e.g. 'read_full'), already narrowed by API-key scopes. */
   entitlements: string[];
+  /** True when the response depends on the caller's credentials (must not be stored by shared caches). */
+  personalized?: boolean;
 }
 
-export const KNOWLEDGES_ENTITLEMENT = 'knowledges';
+/** Entitlement granted by the Knowledges, Kết hợp and Cộng đồng plans. AI-only does not include it. */
+export const READ_FULL_ENTITLEMENT = 'read_full';
 
 export interface PaywallResult { doc: ArticleDocument; truncated: boolean }
 
-/** Whether the viewer may read paid ('knowledges') articles in full. */
+/** Whether the viewer may read paid ('knowledges' access) articles in full. */
 export function canReadFull(viewer: Viewer): boolean {
-  return viewer.isAdmin || viewer.entitlements.includes(KNOWLEDGES_ENTITLEMENT);
+  return viewer.isAdmin || viewer.entitlements.includes(READ_FULL_ENTITLEMENT);
+}
+
+/** Cache-Control for a reader response: anything credential-dependent is private. */
+export function readerCacheControl(viewer: Viewer): string {
+  return viewer.isAdmin || viewer.personalized ? 'private, no-store' : 'public, max-age=300';
 }
 
 /** Approximate reading weight of a block (characters of visible text, at least 1). */
