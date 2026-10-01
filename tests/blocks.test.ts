@@ -140,7 +140,7 @@ describe('paywall', () => {
     const big: ArticleDocument = { version: 1, blocks: [{ id: 'a', type: 'paragraph', text: 'x'.repeat(5000) }, ...doc.blocks] };
     expect(applyPaywall(big, 'knowledges', { isAdmin: false, entitlements: [] }).doc.blocks).toHaveLength(1);
     expect(applyPaywall(doc, 'knowledges', { isAdmin: true, entitlements: [] }).truncated).toBe(false);
-    expect(canReadFull({ isAdmin: false, entitlements: ['knowledges'] })).toBe(true);
+    expect(canReadFull({ isAdmin: false, entitlements: ['read_full'] })).toBe(true);
     expect(applyPaywall(doc, 'free', { isAdmin: false, entitlements: [] }).truncated).toBe(false);
   });
 });
@@ -256,7 +256,8 @@ describe('articles REST, Markdown and MCP', () => {
 
     const md = await (await call(mdApi, { params: { slug: 'paid' }, path: '/articles/paid.md' })).text();
     expect(md).toContain('Free intro paragraph one');
-    expect(md).toContain('Phần còn lại dành cho thành viên Knowledges');
+    expect(md).toContain('Phần còn lại dành cho thành viên có quyền đọc toàn bài');
+    expect(md).toContain('/pricing');
     for (const s of PAID_SECRETS) expect(md).not.toContain(s);
 
     const anonMcp = JSON.stringify(await articlesMcpModule.call('article_get', { slug: 'paid' }, mcpCtx(false)));

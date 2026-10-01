@@ -6,6 +6,9 @@ import { emptyDocument } from './schema';
 import { validateDocument } from './validate';
 import { applyPaywall } from './paywall';
 import type { Viewer } from './paywall';
+import type { RuntimeEnv } from '../../env';
+import type { Principal } from '../members/policy';
+import { resolvePrincipal, viewerFromPrincipal } from '../members/policy';
 
 export interface ArticleSummary {
   id: string;
@@ -153,9 +156,17 @@ export async function adminGuard(request: Request, d1?: D1DatabaseLike): Promise
     : jsonError(401, 'unauthorized', auth.error ?? 'Unauthorized');
 }
 
-export async function resolveViewer(request: Request, d1?: D1DatabaseLike): Promise<Viewer> {
-  const auth = await authenticateAdmin(request, d1);
-  return { isAdmin: auth.authenticated, entitlements: [] };
+/**
+ * Resolves who is reading. Every article surface (HTML page, .md, REST, MCP) goes through
+ * the central membership policy so full text is granted by exactly the same rule.
+ */
+export async function resolveReader(request: Request, d1?: D1DatabaseLike, env: RuntimeEnv = {}): Promise<{ viewer: Viewer; principal: Principal }> {
+  const principal = await resolvePrincipal(request, { ...env, DB: d1 ?? env.DB });
+  return { viewer: viewerFromPrincipal(principal), principal };
+}
+
+export async function resolveViewer(request: Request, d1?: D1DatabaseLike, env: RuntimeEnv = {}): Promise<Viewer> {
+  return (await resolveReader(request, d1, env)).viewer;
 }
 
 export async function listArticles(d1: D1DatabaseLike | undefined, opts: { includeDrafts?: boolean } = {}): Promise<ArticleSummary[]> {

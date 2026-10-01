@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import type { Principal } from '../members/policy';
 
 export interface McpTool {
   name: string;
@@ -19,6 +20,8 @@ export interface McpContext {
   requireAdmin(): Promise<void>;
   /** True when the caller is an admin (does not throw). */
   isAdmin(): Promise<boolean>;
+  /** The caller resolved by the central membership policy (memoised per request). */
+  principal?(): Promise<Principal>;
 }
 
 /** A feature module contributes tools and handles calls for the tool names it owns. */

@@ -2,16 +2,18 @@
 import Layout from '../../layouts/Layout.astro';
 import { BlockRenderer } from '../../components/blocks/BlockRenderer';
 import { getArticleView, resolveViewer } from '../../lib/blocks/articles';
+import { readerCacheControl } from '../../lib/blocks/paywall';
 
-const d1 = Astro.locals.runtime?.env?.DB;
+const runtimeEnv = Astro.locals.runtime?.env ?? {};
+const d1 = runtimeEnv.DB;
 const slug = Astro.params.slug ?? '';
-const viewer = await resolveViewer(Astro.request, d1);
+const viewer = await resolveViewer(Astro.request, d1, runtimeEnv);
 // Draft preview is honoured only for admin sessions; everyone else gets the published version.
 const preview = Astro.url.searchParams.get('preview') === '1' && viewer.isAdmin;
 const view = await getArticleView(d1, slug, viewer, { draft: preview });
 
-Astro.response.headers.set('Cache-Control', viewer.isAdmin ? 'private, no-store' : 'public, max-age=300');
-Astro.response.headers.set('Vary', 'Cookie');
+Astro.response.headers.set('Cache-Control', readerCacheControl(viewer));
+Astro.response.headers.set('Vary', 'Cookie, Authorization');
 if (!view) Astro.response.status = 404;
 
 const siteUrl = Astro.url.origin;
@@ -56,8 +58,11 @@ const dateText = published
           {view.truncated && (
             <section class="zb-locked" aria-labelledby="locked-title">
               <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">Phần còn lại dành cho thành viên Knowledges</p>
-              <p class="mt-2 text-sm text-stone-600">Bạn đang đọc khoảng một phần ba đầu bài. Gói Knowledges mở toàn bộ bài viết trả phí.</p>
-              <a href="/" class="mt-4 inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">Tìm hiểu gói Knowledges</a>
+              <p class="mt-2 text-sm text-stone-600">Bạn đang đọc khoảng một phần ba đầu bài. Các gói Knowledges, Kết hợp và Cộng đồng mở toàn bộ bài viết trả phí; gói Zuey AI chỉ đọc phần preview.</p>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <a href="/pricing" class="inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">Xem các gói</a>
+                <a href={`/login?next=${encodeURIComponent(`/articles/${view.slug}`)}`} class="inline-flex rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800 hover:bg-stone-50">Đăng nhập</a>
+              </div>
             </section>
           )}
         </>

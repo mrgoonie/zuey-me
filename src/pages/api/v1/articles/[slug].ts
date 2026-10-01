@@ -1,14 +1,18 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
 import {
-  adminGuard, deleteArticle, getArticleView, parseArticleInput, resolveViewer, toSummary, updateArticle,
+  adminGuard, deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, updateArticle,
 } from '../../../../lib/blocks/articles';
 
 /** Published article (paywalled for non-entitled viewers); admins may request ?draft=1. */
 export const GET: APIRoute = async ({ params, request, locals }) => {
-  const d1 = locals.runtime?.env?.DB;
+  const env = locals.runtime?.env ?? {};
+  const d1 = env.DB;
   try {
-    const viewer = await resolveViewer(request, d1);
+    const { viewer, principal } = await resolveReader(request, d1, env);
+    if (principal.credentialError) {
+      return jsonError(principal.credentialError.status, principal.credentialError.code, principal.credentialError.message);
+    }
     const draft = new URL(request.url).searchParams.get('draft') === '1';
     if (draft && !viewer.isAdmin) return jsonError(401, 'unauthorized', 'Draft access requires an admin session or key');
     const view = await getArticleView(d1, params.slug ?? '', viewer, { draft });

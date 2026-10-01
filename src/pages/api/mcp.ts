@@ -12,6 +12,8 @@ import { authenticateAdmin } from '../../lib/auth';
 import { AppError } from '../../lib/http';
 import { MCP_FEATURE_MODULES } from '../../lib/mcp/registry';
 import type { McpContext, McpTool } from '../../lib/mcp/types';
+import { resolvePrincipal } from '../../lib/members/policy';
+import type { Principal } from '../../lib/members/policy';
 
 const MCP_TOOLS: McpTool[] = [
   {
@@ -199,18 +201,23 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const featureModule = MCP_FEATURE_MODULES.find(m => m.tools.some(t => t.name === toolName));
     if (featureModule && toolName) {
       const env = locals.runtime?.env || {};
+      let principalPromise: Promise<Principal> | null = null;
       const ctx: McpContext = {
         request,
         env,
         d1,
+        principal() {
+          principalPromise ??= resolvePrincipal(request, { ...env, DB: d1 });
+          return principalPromise;
+        },
         async requireAdmin() {
-          const auth = await authenticateAdmin(request, d1);
+          const auth = await authenticateAdmin(request, d1, env);
           if (!auth.authenticated) {
             throw new AppError(auth.role ? 403 : 401, auth.role ? 'forbidden' : 'unauthorized', auth.error || 'Unauthorized');
           }
         },
         async isAdmin() {
-          return (await authenticateAdmin(request, d1)).authenticated;
+          return (await authenticateAdmin(request, d1, env)).authenticated;
         },
       };
       try {
@@ -241,7 +248,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const isMutation = ['update_profile', 'create_link', 'update_link', 'delete_link', 'reorder_links', 'set_theme'].includes(toolName || '');
 
     if (isMutation) {
-      const auth = await authenticateAdmin(request, d1);
+      const auth = await authenticateAdmin(request, d1, locals.runtime?.env);
       if (!auth.authenticated) {
         return new Response(JSON.stringify({
           jsonrpc: '2.0',

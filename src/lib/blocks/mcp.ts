@@ -1,4 +1,6 @@
-import type { McpToolModule } from '../mcp/types';
+import type { McpContext, McpToolModule } from '../mcp/types';
+import { viewerFromPrincipal } from '../members/policy';
+import type { Viewer } from './paywall';
 import { AppError, getString } from '../http';
 import {
   createArticle, deleteArticle, getArticleView, listArticles, parseArticleInput, publishArticle, toSummary, updateArticle,
@@ -15,6 +17,16 @@ const metaProps = {
   access: { type: 'string', enum: ['free', 'knowledges'] }, tags: { type: 'array', items: { type: 'string' } },
 };
 
+/** Same paywall decision as the HTML page, .md and REST: the central membership policy. */
+async function mcpViewer(ctx: McpContext): Promise<Viewer> {
+  if (!ctx.principal) return { isAdmin: await ctx.isAdmin(), entitlements: [] };
+  const principal = await ctx.principal();
+  if (principal.credentialError) {
+    throw new AppError(principal.credentialError.status, principal.credentialError.code, principal.credentialError.message);
+  }
+  return viewerFromPrincipal(principal);
+}
+
 function requireSlug(args: Record<string, unknown>, key = 'slug'): string {
   const slug = getString(args, key);
   if (!slug) throw new AppError(400, 'invalid_field', `${key} is required`);
@@ -27,7 +39,7 @@ export const articlesMcpModule: McpToolModule = {
     { name: 'article_list', description: 'List articles. Published only unless include_drafts (admin).', inputSchema: { type: 'object', properties: { include_drafts: { type: 'boolean' } } } },
     {
       name: 'article_get',
-      description: 'Get an article. Non-admins receive the published version with the paid remainder withheld. Admins may pass draft: true. format "markdown" returns Markdown.',
+      description: 'Get an article. Readers without the read_full entitlement (Knowledges, Kết hợp, Cộng đồng plans) receive the published version with the paid remainder withheld. Admins may pass draft: true. format "markdown" returns Markdown.',
       inputSchema: { type: 'object', properties: { ...slugProp, draft: { type: 'boolean' }, format: { type: 'string', enum: ['json', 'markdown'] } }, required: ['slug'] },
     },
     {
@@ -60,9 +72,9 @@ export const articlesMcpModule: McpToolModule = {
         return listArticles(d1, { includeDrafts });
       }
       case 'article_get': {
-        const isAdmin = await ctx.isAdmin();
-        if (args.draft === true && !isAdmin) throw new AppError(401, 'unauthorized', 'Draft access requires admin');
-        const view = await getArticleView(d1, requireSlug(args), { isAdmin, entitlements: [] }, { draft: args.draft === true });
+        const viewer = await mcpViewer(ctx);
+        if (args.draft === true && !viewer.isAdmin) throw new AppError(401, 'unauthorized', 'Draft access requires admin');
+        const view = await getArticleView(d1, requireSlug(args), viewer, { draft: args.draft === true });
         if (!view) throw new AppError(404, 'not_found', 'Article not found');
         if (args.format === 'markdown') {
           const origin = new URL(ctx.request.url).origin;
