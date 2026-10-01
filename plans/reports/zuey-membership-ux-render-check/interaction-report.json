@@ -1,0 +1,697 @@
+{
+  "results": [
+    {
+      "name": "Controls collapsed; no legacy locale/access dropdown",
+      "pass": true
+    },
+    {
+      "name": "15 branded thumbnail images load",
+      "pass": true
+    },
+    {
+      "name": "Global locale controls all five article sets",
+      "pass": true,
+      "detail": [
+        {
+          "locale": "vi",
+          "count": 3,
+          "label": "VI",
+          "root": "vi",
+          "greeting": "vi"
+        },
+        {
+          "locale": "en",
+          "count": 3,
+          "label": "EN",
+          "root": "en",
+          "greeting": "en"
+        },
+        {
+          "locale": "zh",
+          "count": 3,
+          "label": "ZH",
+          "root": "zh",
+          "greeting": "zh"
+        },
+        {
+          "locale": "ko",
+          "count": 3,
+          "label": "KO",
+          "root": "ko",
+          "greeting": "ko"
+        },
+        {
+          "locale": "ja",
+          "count": 3,
+          "label": "JA",
+          "root": "ja",
+          "greeting": "ja"
+        }
+      ]
+    },
+    {
+      "name": "Useful empty search state",
+      "pass": true
+    },
+    {
+      "name": "Escape closes tools and restores trigger focus",
+      "pass": true
+    },
+    {
+      "name": "Category and sort retain actual matching results",
+      "pass": true
+    },
+    {
+      "name": "Article activation moves focus to reader heading",
+      "pass": true
+    },
+    {
+      "name": "MCP disclosure links to controlled content",
+      "pass": true
+    },
+    {
+      "name": "Paid article and row read icons unlock together",
+      "pass": true
+    },
+    {
+      "name": "Detailed privacy dialog discloses admin access",
+      "pass": true
+    },
+    {
+      "name": "Policy Escape closes and restores focus",
+      "pass": true,
+      "detail": {
+        "open": false,
+        "active": "<button class=\"privacy-inline\" type=\"button\" data-open-policy=\"\"><svg class=\"icon\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" s"
+      }
+    },
+    {
+      "name": "Admin session demo queries all samples",
+      "pass": true
+    },
+    {
+      "name": "Companion supports keyboard movement",
+      "pass": true
+    },
+    {
+      "name": "Pointer dragging moves cutout through page",
+      "pass": true
+    },
+    {
+      "name": "Overhead interactive bubble remains in viewport",
+      "pass": true
+    },
+    {
+      "name": "Announcement identifies Duy, expression and safe text",
+      "pass": true
+    },
+    {
+      "name": "Dismissed announcement never replays on restore",
+      "pass": true
+    },
+    {
+      "name": "Announcement expires automatically",
+      "pass": true
+    },
+    {
+      "name": "Weather changes background and mascot expression",
+      "pass": true
+    },
+    {
+      "name": "Restore control stays in document flow",
+      "pass": true
+    },
+    {
+      "name": "Enterprise exact price and credit, requested embeds",
+      "pass": true
+    },
+    {
+      "name": "768px page reflows without horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "375px page reflows without horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "320px page reflows without horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "Reduced motion stops sprites and respects pause state",
+      "pass": true
+    },
+    {
+      "name": "Incoming announcement waits while visitor types",
+      "pass": true
+    },
+    {
+      "name": "Knowledge CTA opens pricing with matching plan",
+      "pass": true
+    },
+    {
+      "name": "Four pricing plans preserve price and never grant entitlement",
+      "pass": true,
+      "detail": [
+        {
+          "id": "knowledge",
+          "text": "Knowledges · $9/tháng",
+          "free": true
+        },
+        {
+          "id": "ai",
+          "text": "Zuey AI · $9/tháng",
+          "free": true
+        },
+        {
+          "id": "combo",
+          "text": "Kết hợp · $19/tháng",
+          "free": true
+        },
+        {
+          "id": "community",
+          "text": "Cộng đồng · $29/tháng",
+          "free": true
+        }
+      ]
+    },
+    {
+      "name": "Pricing Escape closes and returns CTA focus",
+      "pass": true
+    },
+    {
+      "name": "Markdown display contains only text and free preview",
+      "pass": true
+    },
+    {
+      "name": "Copy Markdown delivers actual entitled preview",
+      "pass": true,
+      "detail": {
+        "mode": "clipboard"
+      }
+    },
+    {
+      "name": "Copy Markdown URL uses .md with no credential/query",
+      "pass": true
+    },
+    {
+      "name": "AI destinations are official links with safe opener behavior",
+      "pass": true,
+      "detail": [
+        {
+          "name": "ChatGPT",
+          "url": "https://chatgpt.com/",
+          "rel": "noopener noreferrer"
+        },
+        {
+          "name": "Claude",
+          "url": "https://claude.ai/",
+          "rel": "noopener noreferrer"
+        },
+        {
+          "name": "Gemini",
+          "url": "https://gemini.google.com/",
+          "rel": "noopener noreferrer"
+        }
+      ]
+    },
+    {
+      "name": "AI prompt references public URL without paid content",
+      "pass": true
+    },
+    {
+      "name": "Knowledges export includes authorized full sample",
+      "pass": true
+    },
+    {
+      "name": "Share Escape closes and restores opener focus",
+      "pass": true
+    },
+    {
+      "name": "375px share dialog fits viewport",
+      "pass": true
+    },
+    {
+      "name": "375px pricing dialog fits viewport",
+      "pass": true
+    },
+    {
+      "name": "320px share dialog fits viewport",
+      "pass": true
+    },
+    {
+      "name": "320px pricing dialog fits viewport",
+      "pass": true
+    },
+    {
+      "name": "Denied clipboard shows selected manual-copy fallback",
+      "pass": true
+    },
+    {
+      "name": "GSAP runtime is embedded and current",
+      "pass": true
+    },
+    {
+      "name": "Cmd K opens palette and focuses searchable combobox",
+      "pass": true
+    },
+    {
+      "name": "Palette arrows and Enter open article search with focus",
+      "pass": true
+    },
+    {
+      "name": "Ctrl K works from input and search has useful empty state",
+      "pass": true
+    },
+    {
+      "name": "Accent insensitive command executes MCP OAuth view",
+      "pass": true
+    },
+    {
+      "name": "MCP denied clipboard exposes selected endpoint fallback",
+      "pass": true
+    },
+    {
+      "name": "MCP endpoint copies through real Clipboard API",
+      "pass": true
+    },
+    {
+      "name": "MCP Escape closes and restores palette trigger focus",
+      "pass": true
+    },
+    {
+      "name": "Palette action chat selects correct surface",
+      "pass": true
+    },
+    {
+      "name": "Palette action pricing selects correct surface",
+      "pass": true
+    },
+    {
+      "name": "Palette action subscribe selects correct surface",
+      "pass": true
+    },
+    {
+      "name": "Palette action account selects correct surface",
+      "pass": true
+    },
+    {
+      "name": "Palette action activity selects correct surface",
+      "pass": true
+    },
+    {
+      "name": "Palette Escape restores trigger focus",
+      "pass": true
+    },
+    {
+      "name": "Profile saves safe text in tab with honest persistence status",
+      "pass": true
+    },
+    {
+      "name": "User can disable and reset separate memory preference",
+      "pass": true
+    },
+    {
+      "name": "Real avatar upload decodes locally without request",
+      "pass": true
+    },
+    {
+      "name": "Uploaded avatar updates accessible wrapper name",
+      "pass": true
+    },
+    {
+      "name": "Avatar reset releases displayed image",
+      "pass": true
+    },
+    {
+      "name": "Own chat search opens only matching demo session",
+      "pass": true
+    },
+    {
+      "name": "Own chat exports Markdown file",
+      "pass": true
+    },
+    {
+      "name": "Deleting own demo session refreshes list and detail",
+      "pass": true
+    },
+    {
+      "name": "Account activity shows actual preview operations",
+      "pass": true
+    },
+    {
+      "name": "Subscription management opens real pricing demo, keeps Free",
+      "pass": true
+    },
+    {
+      "name": "768px account fits without horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "375px account fits without horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "320px account fits without horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "Account back restores homepage and opener focus",
+      "pass": true
+    },
+    {
+      "name": "Palette reports all nine actions and a scroll cue",
+      "pass": true
+    },
+    {
+      "name": "Mobile palette is accessible and bounded",
+      "pass": true
+    },
+    {
+      "name": "Mobile graph initially exposes latest days",
+      "pass": true,
+      "detail": {
+        "left": 331,
+        "scrollWidth": 583,
+        "clientWidth": 252
+      }
+    },
+    {
+      "name": "Graph has 84 dated cells with explicit event counts",
+      "pass": true
+    },
+    {
+      "name": "Graph day selection opens genuine public repo events",
+      "pass": true
+    },
+    {
+      "name": "Reduced motion leaves dialog content visible",
+      "pass": true
+    },
+    {
+      "name": "Autonomous mascot movement uses actual GSAP tween",
+      "pass": true
+    },
+    {
+      "name": "Typing cancels active mascot GSAP motion",
+      "pass": true
+    },
+    {
+      "name": "Label facet filters real matching sample metadata",
+      "pass": true
+    },
+    {
+      "name": "Label and category filters compose rather than override",
+      "pass": true
+    },
+    {
+      "name": "Reset clears taxonomy facet and restores locale list",
+      "pass": true
+    },
+    {
+      "name": "AI demo proposal opens interview without changing approved labels",
+      "pass": true
+    },
+    {
+      "name": "Fact proposal is blocked without source, claim scope and date",
+      "pass": true
+    },
+    {
+      "name": "Fact and outdated coexist in review with before/after evidence",
+      "pass": true
+    },
+    {
+      "name": "Review receives keyboard focus",
+      "pass": true
+    },
+    {
+      "name": "Review alone never updates visible article labels",
+      "pass": true
+    },
+    {
+      "name": "Changing interview answers invalidates previous approval",
+      "pass": true
+    },
+    {
+      "name": "Explicit admin demo approval updates labels and warns local-only",
+      "pass": true
+    },
+    {
+      "name": "Approved VI classification updates matching list without certifying other locales",
+      "pass": true
+    },
+    {
+      "name": "Markdown export carries approved public label metadata without private claim evidence",
+      "pass": true
+    },
+    {
+      "name": "Cancel proposal retains last approved classification",
+      "pass": true
+    },
+    {
+      "name": "Subsequent review compares old and new evidence/scope/date/reason",
+      "pass": true
+    },
+    {
+      "name": "1440px classification interview fits page",
+      "pass": true
+    },
+    {
+      "name": "375px classification interview fits page",
+      "pass": true
+    },
+    {
+      "name": "320px classification interview fits page",
+      "pass": true
+    },
+    {
+      "name": "Main MCP area discovers docs in user account with focus",
+      "pass": true
+    },
+    {
+      "name": "Anonymous sandbox requests return structured 401",
+      "pass": true
+    },
+    {
+      "name": "Key form rejects empty scope selection",
+      "pass": true
+    },
+    {
+      "name": "User key creation shows nonfunctional specimen once and only metadata in list",
+      "pass": true
+    },
+    {
+      "name": "User scopes never include admin and generation does not change Free account",
+      "pass": true
+    },
+    {
+      "name": "Specimen reveal and clipboard work without credential issuance",
+      "pass": true
+    },
+    {
+      "name": "Leaving key view clears one-time specimen from DOM",
+      "pass": true
+    },
+    {
+      "name": "Free key can search only preview metadata and records simulated last use",
+      "pass": true
+    },
+    {
+      "name": "Upgraded membership cannot bypass missing key scope",
+      "pass": true
+    },
+    {
+      "name": "Per-key action accessible names include key identity",
+      "pass": true
+    },
+    {
+      "name": "Dismiss destroys specimen and does not expose a reveal-again control in list",
+      "pass": true
+    },
+    {
+      "name": "Scoped read key cannot bypass Free membership",
+      "pass": true
+    },
+    {
+      "name": "Knowledges plus read scope permits sample full article",
+      "pass": true
+    },
+    {
+      "name": "Changing request context hides prior successful response",
+      "pass": true
+    },
+    {
+      "name": "AI-only key cannot read full paid article",
+      "pass": true
+    },
+    {
+      "name": "Knowledges-only key cannot run AI chat",
+      "pass": true
+    },
+    {
+      "name": "AI scope and AI plan return explicit sample answer and citations",
+      "pass": true
+    },
+    {
+      "name": "Quota exhaustion returns structured 429 and Retry-After",
+      "pass": true
+    },
+    {
+      "name": "Invalid checkout body returns structured validation error",
+      "pass": true
+    },
+    {
+      "name": "Checkout example does not pay or change membership",
+      "pass": true
+    },
+    {
+      "name": "CLI examples are explicitly proposed and use credential variable rather than value",
+      "pass": true
+    },
+    {
+      "name": "MCP examples supply tool arguments without credential",
+      "pass": true
+    },
+    {
+      "name": "Docs clipboard copies current request with placeholder only",
+      "pass": true
+    },
+    {
+      "name": "Proposed OpenAPI export is named distinctly from deployed spec",
+      "pass": true
+    },
+    {
+      "name": "OpenAPI download declares real parameter/request/error schemas without credential",
+      "pass": true
+    },
+    {
+      "name": "Docs denied clipboard offers selected placeholder-only manual fallback",
+      "pass": true
+    },
+    {
+      "name": "Changing example clears stale clipboard fallback",
+      "pass": true
+    },
+    {
+      "name": "Revocation confirmation names exact user key",
+      "pass": true
+    },
+    {
+      "name": "Cancel revocation keeps key active and restores trigger focus",
+      "pass": true
+    },
+    {
+      "name": "Rotation creates replacement while retaining old key until migration",
+      "pass": true
+    },
+    {
+      "name": "Targeted revoke leaves other keys active and hides specimen",
+      "pass": true
+    },
+    {
+      "name": "Revoked credential cannot invoke sandbox endpoint",
+      "pass": true
+    },
+    {
+      "name": "1440px user docs fit viewport",
+      "pass": true
+    },
+    {
+      "name": "1440px user key management fits viewport",
+      "pass": true
+    },
+    {
+      "name": "768px user docs fit viewport",
+      "pass": true
+    },
+    {
+      "name": "768px user key management fits viewport",
+      "pass": true
+    },
+    {
+      "name": "375px user docs fit viewport",
+      "pass": true
+    },
+    {
+      "name": "375px user key management fits viewport",
+      "pass": true
+    },
+    {
+      "name": "320px user docs fit viewport",
+      "pass": true
+    },
+    {
+      "name": "320px user key management fits viewport",
+      "pass": true
+    },
+    {
+      "name": "Command palette discovers key view with heading focus",
+      "pass": true
+    },
+    {
+      "name": "Free readers see public tags on article and all sample rows",
+      "pass": true
+    },
+    {
+      "name": "Tag editor deduplicates and publishes tags on sample reader/list",
+      "pass": true
+    },
+    {
+      "name": "Search finds public tag text without changing entitlement",
+      "pass": true
+    },
+    {
+      "name": "Invalid tag input is rejected without unsafe markup or metadata change",
+      "pass": true
+    },
+    {
+      "name": "Public Markdown contains tags while free reader remains preview-only",
+      "pass": true
+    },
+    {
+      "name": "Initial and offline interactions: zero external HTTP requests",
+      "pass": true,
+      "detail": [
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=1",
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=2",
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=3",
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=1"
+      ]
+    },
+    {
+      "name": "Real public GitHub refresh succeeds",
+      "pass": true,
+      "detail": "Dữ liệu public · cập nhật 10:24:12 1/10/2026 UTC · 300 events lấy về (2026-09-29 → 2026-10-01)."
+    },
+    {
+      "name": "Actual offline GitHub failure retains valid graph and gives retry status",
+      "pass": true,
+      "detail": {
+        "status": "Chưa cập nhật được: Failed to fetch Giữ dữ liệu lần cập nhật 17:24:12 1/10/2026.",
+        "disabled": false
+      }
+    },
+    {
+      "name": "Network is confined to intentionally refreshed public GitHub endpoint",
+      "pass": true,
+      "detail": [
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=1",
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=2",
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=3",
+        "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=1"
+      ]
+    },
+    {
+      "name": "No runtime exceptions",
+      "pass": true,
+      "detail": []
+    }
+  ],
+  "errors": [],
+  "requests": [
+    "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=1",
+    "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=2",
+    "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=3",
+    "https://api.github.com/users/mrgoonie/events/public?per_page=100&page=1"
+  ]
+}
