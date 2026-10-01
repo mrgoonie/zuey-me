@@ -37,6 +37,12 @@ export const GET: APIRoute = async () => {
           in: 'header',
           name: 'X-API-Key',
           description: 'Pass secret API key in `X-API-Key` header'
+        },
+        MemberSession: {
+          type: 'apiKey',
+          in: 'cookie',
+          name: 'zuey_member',
+          description: 'Member browser session (HttpOnly). Unsafe methods must be same-origin; member personal keys (`zk_...`) use BearerAuth instead.'
         }
       },
       schemas: {
