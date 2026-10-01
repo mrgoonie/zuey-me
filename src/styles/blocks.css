@@ -72,7 +72,8 @@
 .zb-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .zb-diagram-svg { overflow-x: auto; max-width: 100%; }
-.zb-diagram-svg svg { max-width: 100%; height: auto; }
+/* Keep Mermaid at its natural size so labels stay legible on phones; wide diagrams scroll inside the block. */
+.zb-diagram-svg svg { max-width: none !important; height: auto; display: block; margin-inline: auto; }
 .zb-note { font-size: 0.8rem; color: #78716c; }
 
 .zb-embed { border: 1px solid #e7e5e4; border-radius: 1rem; padding: 1rem; background: #fafaf9; }

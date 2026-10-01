@@ -17,7 +17,8 @@ export function DiagramBlock({ block }: { block: DiagramBlockData }) {
     if (import.meta.env.SSR) return;
     import('mermaid')
       .then(async ({ default: mermaid }) => {
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+        // useMaxWidth:false renders at natural size; .zb-diagram-svg scrolls wide diagrams instead of shrinking labels.
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', flowchart: { useMaxWidth: false }, sequence: { useMaxWidth: false }, gantt: { useMaxWidth: false } });
         renderCounter += 1;
         const renderId = `zbm-${block.id.replace(/[^A-Za-z0-9_-]/g, '')}-${renderCounter}`;
         const result = await mermaid.render(renderId, block.source);

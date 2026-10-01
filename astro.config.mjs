@@ -6,7 +6,9 @@ import tailwind from '@astrojs/tailwind';
 export default defineConfig({
   output: 'server',
   adapter: cloudflare({
-    imageService: 'passthrough'
+    imageService: 'passthrough',
+    // Local dev uses the local D1 state; remote-only bindings (Workers AI) stay unbound and fail honestly.
+    platformProxy: { enabled: true, remoteBindings: false },
   }),
   integrations: [
     react(),
