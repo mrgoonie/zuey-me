@@ -1,6 +1,14 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { BookingWidget } from '../components/booking/BookingWidget';
+import { missingPolarCheckoutConfig } from '../lib/payments/polar';
+import { missingSepayConfig } from '../lib/payments/sepay';
+
+// Only offer payment rails whose credentials are configured on the server.
+const runtimeEnv = Astro.locals.runtime?.env ?? {};
+const paymentMethods: ('sepay' | 'polar')[] = [];
+if (missingSepayConfig(runtimeEnv).length === 0) paymentMethods.push('sepay');
+if (missingPolarCheckoutConfig(runtimeEnv).length === 0) paymentMethods.push('polar');
 ---
 
 <Layout
@@ -49,6 +57,6 @@ import { BookingWidget } from '../components/booking/BookingWidget';
       </p>
     </section>
 
-    <BookingWidget client:load />
+    <BookingWidget client:load methods={paymentMethods} />
   </main>
 </Layout>

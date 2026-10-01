@@ -301,14 +301,19 @@ interface HoldState {
 
 const STEP_LABELS = ['Chọn giờ', 'Thông tin', 'Thanh toán', 'Xác nhận'];
 
-export function BookingWidget() {
+const METHOD_COPY: Record<Method, [string, string]> = {
+  sepay: ['Chuyển khoản VietQR (SePay)', 'Chuyển khoản VND, xác nhận tự động khi nhận tiền.'],
+  polar: ['Thẻ quốc tế (Polar)', 'Thanh toán USD qua trang Polar an toàn.'],
+};
+
+export function BookingWidget({ methods }: { methods: Method[] }) {
   const [step, setStep] = useState<Step>(1);
   const [tz, setTz] = useState('Asia/Ho_Chi_Minh');
   useEffect(() => setTz(browserTimeZone()), []);
   const { slots, loading, error: slotsError, reload } = useSlots();
   const [slot, setSlot] = useState<Slot | null>(null);
   const [form, setForm] = useState({ name: '', email: '', company: '', notes: '' });
-  const [method, setMethod] = useState<Method>('polar');
+  const [method, setMethod] = useState<Method>(methods[0] ?? 'sepay');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hold, setHold] = useState<HoldState | null>(null);
@@ -413,22 +418,30 @@ export function BookingWidget() {
 
       {step === 3 && (
         <div className="grid gap-3">
-          <fieldset className="grid gap-2">
-            <legend className="text-sm font-semibold mb-1">Phương thức thanh toán — $1,999</legend>
-            {([
-              ['polar', 'Thẻ quốc tế (Polar)', 'Thanh toán USD qua trang Polar an toàn.'],
-              ['sepay', 'Chuyển khoản VietQR (SePay)', 'Chuyển khoản VND, xác nhận tự động khi nhận tiền.'],
-            ] as const).map(([value, label, hint]) => (
-              <label key={value} className={`flex gap-3 items-start rounded-xl border p-3 cursor-pointer ${method === value ? 'border-stone-900 bg-white' : 'border-stone-300 bg-white/60'}`}>
-                <input type="radio" name="payment" value={value} checked={method === value} onChange={() => setMethod(value)} className="mt-1 accent-stone-900" />
-                <span className="min-w-0"><span className="block text-sm font-semibold">{label}</span><span className="block text-xs text-stone-600">{hint}</span></span>
-              </label>
-            ))}
-          </fieldset>
+          {methods.length === 0 ? (
+            <p className="rounded-xl bg-amber-50 border border-amber-200 text-sm p-3">
+              Thanh toán trực tuyến đang tạm đóng. Vui lòng email <a className="underline" href="mailto:hi@zuey.me">hi@zuey.me</a> để đặt lịch.
+            </p>
+          ) : methods.length === 1 ? (
+            <div className="rounded-xl border border-stone-900 bg-white p-3">
+              <p className="text-sm font-semibold">Thanh toán $1,999 — {METHOD_COPY[methods[0]][0]}</p>
+              <p className="text-xs text-stone-600">{METHOD_COPY[methods[0]][1]}</p>
+            </div>
+          ) : (
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-semibold mb-1">Phương thức thanh toán — $1,999</legend>
+              {methods.map(value => (
+                <label key={value} className={`flex gap-3 items-start rounded-xl border p-3 cursor-pointer ${method === value ? 'border-stone-900 bg-white' : 'border-stone-300 bg-white/60'}`}>
+                  <input type="radio" name="payment" value={value} checked={method === value} onChange={() => setMethod(value)} className="mt-1 accent-stone-900" />
+                  <span className="min-w-0"><span className="block text-sm font-semibold">{METHOD_COPY[value][0]}</span><span className="block text-xs text-stone-600">{METHOD_COPY[value][1]}</span></span>
+                </label>
+              ))}
+            </fieldset>
+          )}
           <p className="text-xs text-stone-600">Khi bấm “Giữ chỗ”, khung giờ được giữ cho bạn trong 15 phút để hoàn tất thanh toán. Lịch chỉ được xác nhận khi hệ thống nhận được thanh toán.</p>
           <div className="mt-2 flex flex-wrap justify-between gap-2">
             <button type="button" className={btnGhost} onClick={() => setStep(2)} disabled={busy}>Quay lại</button>
-            <button type="button" className={btnPrimary} onClick={submit} disabled={busy}>{busy ? 'Đang giữ chỗ…' : 'Giữ chỗ & thanh toán'}</button>
+            <button type="button" className={btnPrimary} onClick={submit} disabled={busy || methods.length === 0}>{busy ? 'Đang giữ chỗ…' : 'Giữ chỗ & thanh toán'}</button>
           </div>
         </div>
       )}
