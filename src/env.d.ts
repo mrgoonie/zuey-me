@@ -44,6 +44,10 @@ export interface RuntimeEnv {
   USD_VND_RATE?: string;
   /** SePay user API token for admin reconciliation of recent bank transactions. */
   SEPAY_API_TOKEN?: string;
+  // Zuey AI (Dewee gateway)
+  DEWEE_GATEWAY_URL?: string;
+  DEWEE_GATEWAY_TOKEN?: string;
+  DEWEE_AGENT_KEY?: string;
 }
 
 declare global {
