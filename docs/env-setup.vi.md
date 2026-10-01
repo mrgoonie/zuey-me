@@ -15,7 +15,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại với `0003_articles_and_surveys.sql`, `0004_workflows.sql` và `0005_booking_and_payments.sql`.
+Lặp lại với `0003_articles_and_surveys.sql`, `0004_workflows.sql`, `0005_booking_and_payments.sql` và `0006_members_and_billing.sql`.
 
 ## 1. Survey: `SURVEY_HASH_SALT`
 
@@ -65,7 +65,8 @@ Lặp lại với `0003_articles_and_surveys.sql`, `0004_workflows.sql` và `000
    - URL: `https://<domain>/api/webhooks/sepay`
    - Kiểu xác thực: **API Key**
 5. Lưu API key của webhook vào `SEPAY_WEBHOOK_API_KEY`. SePay sẽ gửi header `Authorization: Apikey <key>`.
-6. Nội dung chuyển khoản phải chứa mã `ZBK…`. Mã này hiển thị sẵn trên trang booking.
+6. Nội dung chuyển khoản phải chứa mã `ZBK…` (booking) hoặc `ZSB…` (gói thành viên). Mã hiển thị sẵn trên trang booking và trang `/billing/<mã>`.
+7. (Tuỳ chọn) Để admin đối soát giao dịch bị lỡ webhook qua `POST /api/v1/billing/reconcile`, tạo API token trong trang quản trị SePay và lưu vào `SEPAY_API_TOKEN`. Thiếu biến này thì endpoint trả `503 reconcile_unconfigured`.
 
 ## 6. Email (Resend)
 
@@ -73,9 +74,18 @@ Lặp lại với `0003_articles_and_surveys.sql`, `0004_workflows.sql` và `000
 2. Tạo API key và lưu vào `RESEND_API_KEY`.
 3. Đặt `RESEND_FROM`, ví dụ `Zuey <booking@zuey.me>`.
 
-## 7. Kiểm tra
+## 7. Thành viên & gói
 
-1. Mở `/docs`. Kiểm tra có các nhóm Reads, Workflows, Booking và Articles.
+1. `ADMIN_EMAILS`: danh sách email admin, phân tách bằng dấu phẩy. Chỉ email **đã xác minh** (qua magic link hoặc Google/GitHub) mới có quyền admin. Để trống thì dùng mặc định `goon.nguyen@gmail.com,duy@wearetopgroup.com`.
+2. `MEMBER_HASH_SALT`: chuỗi ngẫu nhiên dài, dùng để băm IP khi giới hạn tần suất gửi magic link.
+3. `USD_VND_RATE`: tỷ giá dùng để quy đổi giá USD sang VND, ví dụ `26350`. Mỗi tháng được làm tròn lên 1.000 ₫. Thiếu biến này thì tạo đơn trả `503 billing_unconfigured`.
+4. `PUBLIC_SITE_URL`: domain dùng để tạo link trong email (ví dụ `https://zuey.me`; local là `http://localhost:4321`).
+5. Magic link cần `RESEND_API_KEY`. Đăng nhập Google/GitHub dùng lại `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` và `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` cùng callback URL đã đăng ký cho Studio, không cần đăng ký thêm.
+6. Nhắc gia hạn chạy hằng ngày bởi `.github/workflows/billing-reminders.yml`, dùng chung secret `ZUEY_ADMIN_API_KEY` và variable `SITE_URL` với cron Reads.
+
+## 8. Kiểm tra
+
+1. Mở `/docs`. Kiểm tra có các nhóm Reads, Workflows, Booking, Articles, Members & account và Membership billing.
 2. Gọi `POST /api/v1/reads/sync` bằng admin key. Kết quả mong đợi là `200`, không phải `503`.
 3. Đặt thử một slot trên `/business` bằng sandbox hoặc chuyển khoản nhỏ. Sau khi thanh toán, kiểm tra 3 việc:
    - Booking chuyển sang `confirmed`.

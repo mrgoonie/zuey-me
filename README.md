@@ -26,6 +26,7 @@ The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed b
   - **AI Workflows** (`/workflows`, `/api/v1/workflows`): `src/lib/workflows/` keeps draft and published JSON apart; publishing requires explicit confirmation and is blocked when the secret scan finds credentials. Local extraction skill: `skills/zuey-me/workflows/`.
   - **Zuey for Business booking** (`/business`, `/booking/[id]`, `/api/v1/booking/*`, webhooks `/api/webhooks/polar`, `/api/webhooks/sepay`): `src/lib/booking/`, `src/lib/payments/`, `src/lib/integrations/`. A partial unique index guarantees one active booking per slot.
   - **Articles & rich blocks** (`/articles`, `/api/v1/articles`, `/api/v1/surveys/*`): `src/lib/blocks/` validates chart, Mermaid diagram, survey, embed and layout blocks; surveys accept one vote per hashed voter.
+  - **Members & plans** (`/login`, `/account`, `/pricing`, `/billing/[code]`, `/api/members/auth/*`, `/api/v1/me/*`, `/api/v1/plans`, `/api/v1/billing/*`, `/api/v1/admin/members`): `src/lib/members/`. Sign-in by magic link (Resend) or Google/GitHub (reusing the Studio OAuth callbacks); `policy.ts` (`resolvePrincipal` + `can`) is the single access decision for HTML, `.md`, REST and MCP. Full articles need the `read_full` entitlement (Knowledges, Kết hợp, Cộng đồng); admins are verified emails in `ADMIN_EMAILS`. Personal `zk_` API keys are scope-limited and never admin. Plans are prepaid 1/3/6/12 months by SePay `ZSB…` transfers; renewal reminders run from `.github/workflows/billing-reminders.yml`.
 - Studio tabs for Articles, Reads, Workflows and Booking live in `src/components/studio/`.
 
 ---
@@ -45,7 +46,7 @@ bun run build    # Typecheck and build production bundle
 - Workflow: `.github/workflows/deploy.yml` runs test suite and production build on push to `main`.
 - Automated deploy to Cloudflare Pages runs when repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are configured.
 - Manual deployment via wrangler: `wrangler pages deploy dist --project-name=zuey-me --branch=main`.
-- Remote D1 schema migrations (apply in order): `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y` for `0001_initial.sql` through `0005_booking_and_payments.sql`.
+- Remote D1 schema migrations (apply in order): `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y` for `0001_initial.sql` through `0006_members_and_billing.sql`.
 
 ### Environment & Secrets
 
@@ -59,6 +60,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | Polar | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_CONSULTATION_PRODUCT_ID`, `POLAR_API_BASE` (optional) |
 | SePay | `SEPAY_WEBHOOK_API_KEY`, `SEPAY_BANK_ACCOUNT`, `SEPAY_BANK_CODE`, `CONSULTATION_PRICE_VND` |
 | Email | `RESEND_API_KEY`, `RESEND_FROM` |
-| Reads cron (GitHub) | secret `ZUEY_ADMIN_API_KEY`, variable `SITE_URL` |
+| Members & billing | `ADMIN_EMAILS`, `MEMBER_HASH_SALT`, `USD_VND_RATE`, `SEPAY_API_TOKEN` (reconciliation), plus the SePay bank variables and `PUBLIC_SITE_URL` |
+| Reads / reminders cron (GitHub) | secret `ZUEY_ADMIN_API_KEY`, variable `SITE_URL` |
 
 Missing credentials return an explicit `503` error naming the missing variables instead of failing silently.
