@@ -49,8 +49,29 @@ export async function getEntitlements(d1: D1DatabaseLike, userId: string): Promi
 }
 
 /**
- * Rebuilds a plan's period end from every paid order: each order extends from
- * max(paid_at, previous end) by its months. Deterministic, so re-running is idempotent.
+ * An auto-renewing card subscription keeps access this long past the provider's billing date, so the
+ * minutes between the renewal charge and its webhook never lock a paying member out.
+ */
+export const CARD_RENEWAL_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** Latest access end granted by active card (Dodo) subscriptions for a plan; 0 when none. */
+async function cardAccessEnd(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<number> {
+  const { results } = await d1.prepare(
+    "SELECT current_period_end, cancel_at_period_end FROM card_subscriptions WHERE user_id = ? AND plan = ? AND status = 'active' AND current_period_end IS NOT NULL"
+  ).bind(userId, plan).all<Row>();
+  let end = 0;
+  for (const r of results ?? []) {
+    const periodEnd = Date.parse(str(r, 'current_period_end'));
+    if (!Number.isFinite(periodEnd)) continue;
+    end = Math.max(end, periodEnd + (num(r, 'cancel_at_period_end') === 1 ? 0 : CARD_RENEWAL_GRACE_MS));
+  }
+  return end;
+}
+
+/**
+ * Rebuilds a plan's period end from every paid SePay order (each extends from max(paid_at, previous
+ * end) by its months) and from active card subscriptions (provider period end). Deterministic, so
+ * re-running is idempotent; when nothing grants the plan any more, access ends now.
  */
 export async function recomputeSubscription(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<SubscriptionView | null> {
   const { results } = await d1.prepare(
@@ -62,8 +83,17 @@ export async function recomputeSubscription(d1: D1DatabaseLike, userId: string, 
     if (!Number.isFinite(paidAt)) continue;
     end = addMonths(Math.max(paidAt, end), num(r, 'months'));
   }
-  if (end === 0) return null;
+  end = Math.max(end, await cardAccessEnd(d1, userId, plan));
   const now = membersRuntime.now();
+  if (end === 0) {
+    // A revoked card subscription was the only source: end access now instead of at the old period end.
+    await d1.prepare(
+      `UPDATE subscriptions SET status = 'expired', current_period_end = CASE WHEN current_period_end > ? THEN ? ELSE current_period_end END, updated_at = ?
+       WHERE user_id = ? AND plan = ?`
+    ).bind(iso(now), iso(now), iso(now), userId, plan).run();
+    const views = await listSubscriptions(d1, userId);
+    return views.find(v => v.plan === plan) ?? null;
+  }
   const endIso = iso(end);
   const status = end > now ? 'active' : 'expired';
   await d1.prepare(

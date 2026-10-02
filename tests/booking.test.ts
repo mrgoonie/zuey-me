@@ -7,7 +7,7 @@ import { generateSlots } from '../src/lib/booking/availability';
 import { zonedTimeToUtc } from '../src/lib/booking/timezone';
 import { bookingRuntime, getBookingRow } from '../src/lib/booking/store';
 import type { BookingRow } from '../src/lib/booking/store';
-import { signPolarPayload } from '../src/lib/payments/polar';
+import { resetPaypalTokenCache } from '../src/lib/payments/paypal';
 import { GET as slotsApi } from '../src/pages/api/v1/booking/slots';
 import { POST as holdApi } from '../src/pages/api/v1/booking/hold';
 import { GET as bookingApi } from '../src/pages/api/v1/booking/[id]/index';
@@ -15,13 +15,13 @@ import { POST as checkoutApi } from '../src/pages/api/v1/booking/[id]/checkout';
 import { POST as rescheduleApi } from '../src/pages/api/v1/booking/[id]/reschedule';
 import { PUT as putAvailabilityApi } from '../src/pages/api/v1/booking/availability';
 import { GET as adminListApi, POST as adminActionApi } from '../src/pages/api/v1/booking/admin';
-import { POST as polarWebhook } from '../src/pages/api/webhooks/polar';
+import { POST as paypalWebhook } from '../src/pages/api/webhooks/paypal';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
 import { bookingMcpModule } from '../src/lib/booking/mcp';
 import { bookingOpenApi } from '../src/lib/booking/openapi';
 
 const HCM = 'Asia/Ho_Chi_Minh';
-const POLAR_SECRET = `whsec_${btoa('zuey-test-webhook-secret')}`;
+const PAYPAL_BASE = 'https://api-m.sandbox.paypal.com';
 // Monday 2026-10-05 00:00 UTC (07:00 in Ho Chi Minh City).
 const T0 = Date.parse('2026-10-05T00:00:00.000Z');
 
@@ -32,13 +32,16 @@ let d1: TestDb;
 let adminKey: string;
 let now: number;
 let calls: FetchCall[];
+/** What the mocked PayPal verify-webhook-signature API answers. */
+let verifyStatus: string;
 
 const paymentEnv = (): RuntimeEnv => ({
   DB: d1,
   PUBLIC_SITE_URL: 'https://zuey.test',
-  POLAR_ACCESS_TOKEN: 'polar_at',
-  POLAR_WEBHOOK_SECRET: POLAR_SECRET,
-  POLAR_CONSULTATION_PRODUCT_ID: 'prod_1',
+  PAYPAL_CLIENT_ID: 'pp_client',
+  PAYPAL_CLIENT_SECRET: 'pp_secret',
+  PAYPAL_WEBHOOK_ID: 'WH-123',
+  PAYPAL_API_BASE: PAYPAL_BASE,
   SEPAY_WEBHOOK_API_KEY: 'sepay-key',
   SEPAY_BANK_ACCOUNT: '0123456789',
   SEPAY_BANK_CODE: 'MBBank',
@@ -59,7 +62,11 @@ function json(body: unknown, status = 200): Response {
 
 async function fakeFetch(input: string, init?: RequestInit): Promise<Response> {
   calls.push({ url: input, init });
-  if (input.includes('/v1/checkouts/')) return json({ id: 'chk_123', url: 'https://polar.test/checkout/chk_123' }, 201);
+  if (input === `${PAYPAL_BASE}/v1/oauth2/token`) return json({ access_token: 'pp_access', expires_in: 32400 });
+  if (input === `${PAYPAL_BASE}/v2/checkout/orders`) {
+    return json({ id: 'ORDER-1', status: 'PAYER_ACTION_REQUIRED', links: [{ rel: 'payer-action', href: 'https://www.sandbox.paypal.com/checkoutnow?token=ORDER-1' }] });
+  }
+  if (input === `${PAYPAL_BASE}/v1/notifications/verify-webhook-signature`) return json({ verification_status: verifyStatus });
   if (input.startsWith('https://oauth2.googleapis.com/token')) return json({ access_token: 'g_access' });
   if (input.startsWith('https://www.googleapis.com/calendar/v3/')) {
     return json({ id: 'evt_1', hangoutLink: 'https://meet.google.com/abc-defg-hij' });
@@ -99,7 +106,7 @@ async function setDefaultAvailability(): Promise<void> {
   expect(res.status).toBe(200);
 }
 
-async function hold(env: RuntimeEnv, slotStart: string, method: 'polar' | 'sepay' = 'polar'): Promise<Response> {
+async function hold(env: RuntimeEnv, slotStart: string, method: 'paypal' | 'sepay' = 'paypal'): Promise<Response> {
   return holdApi(ctx({
     env,
     method: 'POST',
@@ -107,7 +114,7 @@ async function hold(env: RuntimeEnv, slotStart: string, method: 'polar' | 'sepay
   }));
 }
 
-async function holdOk(env: RuntimeEnv, slotStart: string, method: 'polar' | 'sepay' = 'polar'): Promise<{ id: string; token: string; code: string }> {
+async function holdOk(env: RuntimeEnv, slotStart: string, method: 'paypal' | 'sepay' = 'paypal'): Promise<{ id: string; token: string; code: string }> {
   const res = await hold(env, slotStart, method);
   const body = await read(res);
   expect(res.status).toBe(201);
@@ -119,19 +126,27 @@ async function holdOk(env: RuntimeEnv, slotStart: string, method: 'polar' | 'sep
   return { id: String(booking.id), code: String(booking.code), token };
 }
 
-async function polarEvent(env: RuntimeEnv, opts: { bookingId: string; amount: number; eventId?: string; badSignature?: boolean }): Promise<Response> {
-  const eventId = opts.eventId ?? `msg_${crypto.randomUUID()}`;
+/** Sends a PAYMENT.CAPTURE.COMPLETED webhook; `amount` is in cents and the capture id is the idempotency key. */
+async function paypalEvent(env: RuntimeEnv, opts: { bookingId: string; amount: number; captureId?: string; badSignature?: boolean }): Promise<Response> {
+  const captureId = opts.captureId ?? `CAP-${crypto.randomUUID()}`;
+  const value = `${Math.floor(opts.amount / 100)}.${String(opts.amount % 100).padStart(2, '0')}`;
   const body = JSON.stringify({
-    type: 'order.paid',
-    data: { id: `ord_${eventId}`, total_amount: opts.amount, currency: 'usd', checkout_id: 'chk_123', metadata: { booking_id: opts.bookingId } },
+    id: `WH-${crypto.randomUUID()}`,
+    event_type: 'PAYMENT.CAPTURE.COMPLETED',
+    resource: {
+      id: captureId, status: 'COMPLETED', amount: { currency_code: 'USD', value }, custom_id: opts.bookingId,
+      supplementary_data: { related_ids: { order_id: 'ORDER-1' } },
+    },
   });
-  const ts = String(Math.floor(now / 1000));
-  const signature = opts.badSignature ? 'v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' : await signPolarPayload(POLAR_SECRET, eventId, ts, body);
-  return polarWebhook(ctx({
+  verifyStatus = opts.badSignature ? 'FAILURE' : 'SUCCESS';
+  return paypalWebhook(ctx({
     env,
     method: 'POST',
     rawBody: body,
-    headers: { 'webhook-id': eventId, 'webhook-timestamp': ts, 'webhook-signature': signature },
+    headers: {
+      'paypal-auth-algo': 'SHA256withRSA', 'paypal-cert-url': `${PAYPAL_BASE}/v1/notifications/certs/CERT-1`,
+      'paypal-transmission-id': 'tx-1', 'paypal-transmission-sig': 'sig', 'paypal-transmission-time': '2026-10-05T00:05:00Z',
+    },
   }));
 }
 
@@ -151,6 +166,8 @@ beforeEach(async () => {
   adminKey = (await createApiKey('test-admin', 'admin', d1)).key;
   now = T0;
   calls = [];
+  verifyStatus = 'SUCCESS';
+  resetPaypalTokenCache();
   bookingRuntime.now = () => now;
   bookingRuntime.fetch = fakeFetch;
   await setDefaultAvailability();
@@ -233,12 +250,12 @@ describe('holds', () => {
     expect((await read(res)).error?.code).toBe('slot_unavailable');
   });
 
-  it('returns 503 payment_unconfigured when Polar credentials are missing', async () => {
-    const res = await hold({ DB: d1 }, SLOT_OCT7, 'polar');
+  it('returns 503 payment_unconfigured when PayPal credentials are missing', async () => {
+    const res = await hold({ DB: d1 }, SLOT_OCT7, 'paypal');
     const body = await read(res);
     expect(res.status).toBe(503);
     expect(body.error?.code).toBe('payment_unconfigured');
-    expect(body.error?.message).toContain('POLAR_ACCESS_TOKEN');
+    expect(body.error?.message).toContain('PAYPAL_CLIENT_ID');
 
     // A hold created while configured cannot fake a checkout once credentials disappear.
     const b = await holdOk(paymentEnv(), SLOT_OCT8);
@@ -246,12 +263,31 @@ describe('holds', () => {
     expect(checkout.status).toBe(503);
     expect((await read(checkout)).error?.code).toBe('payment_unconfigured');
   });
+
+  it('refuses checkout for a historical booking on a retired payment rail', async () => {
+    const b = await holdOk(paymentEnv(), SLOT_OCT7);
+    // Simulates a row written before the rail was retired (the server-generated id is safe to inline).
+    d1.raw.run(`UPDATE bookings SET payment_method = 'polar' WHERE id = '${b.id}'`);
+    const res = await checkoutApi(ctx({ env: paymentEnv(), method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+    expect(res.status).toBe(409);
+    expect((await read(res)).error?.code).toBe('payment_method_retired');
+    expect(calls.length).toBe(0);
+  });
+
+  it('rejects the retired polar method for new holds', async () => {
+    const retired = await holdApi(ctx({
+      env: paymentEnv(), method: 'POST',
+      body: { slot_start: SLOT_OCT8, name: 'Lan', email: 'lan@example.com', payment_method: 'polar' },
+    }));
+    expect(retired.status).toBe(400);
+    expect((await read(retired)).error?.code).toBe('invalid_payment_method');
+  });
 });
 
-describe('Polar payments', () => {
-  it('rejects a bad signature with 401', async () => {
+describe('PayPal payments', () => {
+  it('rejects a webhook that PayPal does not verify with 401', async () => {
     const b = await holdOk(fullEnv(), SLOT_OCT7);
-    const res = await polarEvent(fullEnv(), { bookingId: b.id, amount: 199900, badSignature: true });
+    const res = await paypalEvent(fullEnv(), { bookingId: b.id, amount: 199900, badSignature: true });
     expect(res.status).toBe(401);
     expect((await row(b.id)).status).toBe('held');
   });
@@ -262,12 +298,12 @@ describe('Polar payments', () => {
     const checkout = await checkoutApi(ctx({ env, method: 'POST', body: { token: b.token }, params: { id: b.id } }));
     const co = await read(checkout);
     expect(checkout.status).toBe(200);
-    expect(co.data?.url).toBe('https://polar.test/checkout/chk_123');
-    const polarCall = calls.find(c => c.url.includes('/v1/checkouts/'));
-    const polarBody: unknown = JSON.parse(String(polarCall?.init?.body));
-    expect(polarBody).toMatchObject({ products: ['prod_1'], customer_email: 'lan@example.com', metadata: { booking_id: b.id } });
+    expect(co.data?.url).toBe('https://www.sandbox.paypal.com/checkoutnow?token=ORDER-1');
+    const orderCall = calls.find(c => c.url === `${PAYPAL_BASE}/v2/checkout/orders`);
+    const orderBody: unknown = JSON.parse(String(orderCall?.init?.body));
+    expect(orderBody).toMatchObject({ intent: 'CAPTURE', purchase_units: [{ custom_id: b.id, amount: { currency_code: 'USD', value: '1999.00' } }] });
 
-    const res = await polarEvent(env, { bookingId: b.id, amount: 199900, eventId: 'msg_full' });
+    const res = await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-full' });
     expect(res.status).toBe(200);
     expect((await read(res)).data?.outcome).toBe('confirmed');
     const confirmed = await row(b.id);
@@ -297,12 +333,12 @@ describe('Polar payments', () => {
     expect(ics).toContain('ORGANIZER;CN="Zuey":mailto:hi@zuey.me');
     expect(ics).toContain('meet.google.com/abc-defg-hij');
 
-    // Replay of the same event: no-op, no second email.
-    const replay = await polarEvent(env, { bookingId: b.id, amount: 199900, eventId: 'msg_full' });
+    // Replay of the same capture: no-op, no second email.
+    const replay = await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-full' });
     expect(replay.status).toBe(200);
     expect((await read(replay)).data?.outcome).toBe('duplicate_event');
-    // A different event for the same booking is also a no-op.
-    const second = await polarEvent(env, { bookingId: b.id, amount: 199900, eventId: 'msg_other' });
+    // A different capture for the same booking is also a no-op.
+    const second = await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-other' });
     expect((await read(second)).data?.outcome).toBe('already_confirmed');
     expect(calls.filter(c => c.url === 'https://api.resend.com/emails').length).toBe(1);
     expect(d1.raw.query('SELECT COUNT(*) AS n FROM payment_events').get()).toEqual({ n: 2 });
@@ -320,7 +356,7 @@ describe('Polar payments', () => {
   it('marks insufficient amount as needs_attention', async () => {
     const env = fullEnv();
     const b = await holdOk(env, SLOT_OCT7);
-    const res = await polarEvent(env, { bookingId: b.id, amount: 100000 });
+    const res = await paypalEvent(env, { bookingId: b.id, amount: 100000 });
     expect((await read(res)).data?.outcome).toBe('needs_attention');
     const r = await row(b.id);
     expect(r.status).toBe('needs_attention');
@@ -332,7 +368,7 @@ describe('Polar payments', () => {
     const env = fullEnv();
     const b = await holdOk(env, SLOT_OCT7);
     now += 20 * 60 * 1000;
-    const res = await polarEvent(env, { bookingId: b.id, amount: 199900 });
+    const res = await paypalEvent(env, { bookingId: b.id, amount: 199900 });
     expect(res.status).toBe(200);
     const r = await row(b.id);
     expect(r.status).toBe('needs_attention');
@@ -342,13 +378,14 @@ describe('Polar payments', () => {
   it('confirms honestly when Google and Resend are not configured', async () => {
     const env = paymentEnv();
     const b = await holdOk(env, SLOT_OCT7);
-    await polarEvent(env, { bookingId: b.id, amount: 199900 });
+    await paypalEvent(env, { bookingId: b.id, amount: 199900 });
     const r = await row(b.id);
     expect(r.status).toBe('confirmed');
     expect(r.meet_status).toBe('unconfigured');
     expect(r.email_status).toBe('unconfigured');
     expect(r.meet_url).toBeNull();
-    expect(calls.length).toBe(0);
+    // Only the PayPal verification round-trip happened: no calendar or email calls.
+    expect(calls.filter(c => !c.url.startsWith(PAYPAL_BASE)).length).toBe(0);
   });
 });
 
@@ -394,7 +431,7 @@ describe('reschedule and admin', () => {
   async function confirmedBooking(slot: string): Promise<{ id: string; token: string }> {
     const env = fullEnv();
     const b = await holdOk(env, slot);
-    await polarEvent(env, { bookingId: b.id, amount: 199900 });
+    await paypalEvent(env, { bookingId: b.id, amount: 199900 });
     expect((await row(b.id)).status).toBe('confirmed');
     return b;
   }
@@ -457,7 +494,8 @@ describe('reschedule and admin', () => {
     expect(JSON.stringify(slots)).toContain(SLOT_OCT6);
     await bookingMcpModule.call('availability_get', {}, mcpCtx);
     expect(adminChecks).toBe(1);
-    expect(Object.keys(bookingOpenApi.paths)).toContain('/api/webhooks/polar');
+    expect(Object.keys(bookingOpenApi.paths)).toContain('/api/webhooks/paypal');
+    expect(Object.keys(bookingOpenApi.paths)).not.toContain('/api/webhooks/polar');
     expect(Object.keys(bookingOpenApi.paths)).toContain('/api/v1/booking/{id}/reschedule');
   });
 });

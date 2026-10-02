@@ -6,11 +6,7 @@ import { AppError } from '../http';
 import type { FetchLike } from '../integrations/google-calendar';
 import { createMeetEvent, rescheduleMeetEvent } from '../integrations/google-calendar';
 import { sendEmail } from '../integrations/resend';
-import {
-  CONSULTATION_PRICE_USD_CENTS,
-  createPolarCheckout,
-  missingPolarCheckoutConfig,
-} from '../payments/polar';
+import { capturePaypalOrder, createPaypalOrder, missingPaypalConfig } from '../payments/paypal';
 import { buildSepayTransfer, missingSepayConfig, parseVndPrice } from '../payments/sepay';
 import type { SepayTransferInfo } from '../payments/sepay';
 import type { AvailabilityException, AvailabilityRule, Slot } from './availability';
@@ -31,9 +27,18 @@ export const bookingRuntime: { fetch: FetchLike; now: () => number } = {
 };
 
 export const ORGANIZER_EMAIL = 'hi@zuey.me';
+/** One-off consultation price charged on the USD card rail (PayPal): $1,999.00. */
+export const CONSULTATION_PRICE_USD_CENTS = 199_900;
 
 export type BookingStatus = 'held' | 'confirmed' | 'expired' | 'cancelled' | 'needs_attention';
-export type PaymentMethod = 'polar' | 'sepay';
+export type PaymentMethod = 'sepay' | 'paypal';
+/** Display order of the rails a guest may choose (only configured ones are offered). */
+export const PAYMENT_METHODS: PaymentMethod[] = ['sepay', 'paypal'];
+
+/** The live rail of a stored booking, or null for a retired rail that may remain on historical rows. */
+export function paymentMethodOf(row: { payment_method: string }): PaymentMethod | null {
+  return PAYMENT_METHODS.find(m => m === row.payment_method) ?? null;
+}
 export const BOOKING_STATUSES: BookingStatus[] = ['held', 'confirmed', 'expired', 'cancelled', 'needs_attention'];
 
 export interface BookingRow {
@@ -49,7 +54,8 @@ export interface BookingRow {
   company: string | null;
   notes: string | null;
   guest_timezone: string | null;
-  payment_method: PaymentMethod;
+  /** A PaymentMethod for every new booking; historical rows may still name a retired rail. */
+  payment_method: string;
   amount_expected: number | null;
   currency: string | null;
   amount_paid: number | null;
@@ -81,7 +87,7 @@ export interface GuestBookingView {
   guest_name: string;
   guest_email: string;
   guest_timezone: string | null;
-  payment_method: PaymentMethod;
+  payment_method: string;
   amount_expected: number | null;
   currency: string | null;
   meet_url: string | null;
@@ -130,6 +136,10 @@ function randomToken(): string {
 
 function siteUrl(env: RuntimeEnv): string {
   return (env.PUBLIC_SITE_URL || 'https://zuey.me').replace(/\/+$/, '');
+}
+
+function manageUrl(env: RuntimeEnv, id: string, token: string): string {
+  return `${siteUrl(env)}/booking/${id}?token=${encodeURIComponent(token)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +275,9 @@ export function parseHoldInput(body: Record<string, unknown>): HoldInput {
   if (company.length > 160) throw new AppError(400, 'invalid_company', '`company` max 160 characters');
   const notes = str('notes');
   if (notes.length > 2000) throw new AppError(400, 'invalid_notes', '`notes` max 2000 characters');
-  const method = str('payment_method');
-  if (method !== 'polar' && method !== 'sepay') {
-    throw new AppError(400, 'invalid_payment_method', '`payment_method` must be "polar" or "sepay"');
+  const method = PAYMENT_METHODS.find(m => m === str('payment_method'));
+  if (!method) {
+    throw new AppError(400, 'invalid_payment_method', `\`payment_method\` must be one of ${PAYMENT_METHODS.join(', ')}`);
   }
   const tz = str('timezone');
   return {
@@ -281,10 +291,22 @@ export function parseHoldInput(body: Record<string, unknown>): HoldInput {
   };
 }
 
+const METHOD_LABEL: Record<PaymentMethod, string> = { sepay: 'SePay', paypal: 'PayPal' };
+
+/** Env names still missing before a payment method can take money. */
+export function missingPaymentConfig(env: RuntimeEnv, method: PaymentMethod): string[] {
+  return method === 'paypal' ? missingPaypalConfig(env) : missingSepayConfig(env);
+}
+
+/** Payment methods whose credentials are configured, in display order (only these are offered). */
+export function configuredPaymentMethods(env: RuntimeEnv): PaymentMethod[] {
+  return PAYMENT_METHODS.filter(m => missingPaymentConfig(env, m).length === 0);
+}
+
 export function assertPaymentConfigured(env: RuntimeEnv, method: PaymentMethod): void {
-  const missing = method === 'polar' ? missingPolarCheckoutConfig(env) : missingSepayConfig(env);
+  const missing = missingPaymentConfig(env, method);
   if (missing.length > 0) {
-    throw new AppError(503, 'payment_unconfigured', `${method === 'polar' ? 'Polar' : 'SePay'} payments are not configured: missing ${missing.join(', ')}`, { missing });
+    throw new AppError(503, 'payment_unconfigured', `${METHOD_LABEL[method]} payments are not configured: missing ${missing.join(', ')}`, { missing });
   }
 }
 
@@ -333,7 +355,7 @@ export async function createHold(
       return {
         booking: toGuestView(row, env, now),
         manage_token: token,
-        manage_url: `${siteUrl(env)}/booking/${id}?token=${encodeURIComponent(token)}`,
+        manage_url: manageUrl(env, id, token),
       };
     } catch (err) {
       if (isUniqueViolation(err) && err instanceof Error && /bookings\.code/.test(err.message)) continue;
@@ -426,7 +448,9 @@ export async function listBookings(d1: D1DatabaseLike, filter: BookingListFilter
 // Checkout
 // ---------------------------------------------------------------------------
 
-export type CheckoutResult = { provider: 'polar'; url: string; checkout_id: string; expires_at: string } | (SepayTransferInfo & { expires_at: string });
+export type CheckoutResult =
+  | { provider: 'paypal'; url: string; order_id: string; expires_at: string }
+  | (SepayTransferInfo & { expires_at: string });
 
 export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null): Promise<CheckoutResult> {
   const row = await getBookingForGuest(d1, id, token);
@@ -434,16 +458,24 @@ export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: str
   if (row.status !== 'held' || row.hold_expires_at < iso(now)) {
     throw new AppError(409, 'hold_not_active', 'This hold is no longer active. Please choose a slot again.', { status: row.status });
   }
-  assertPaymentConfigured(env, row.payment_method);
-  if (row.payment_method === 'polar') {
-    const checkout = await createPolarCheckout(env, {
+  const method = paymentMethodOf(row);
+  if (!method) {
+    throw new AppError(409, 'payment_method_retired', 'This payment method is no longer offered. Please choose a slot again or email hi@zuey.me.');
+  }
+  assertPaymentConfigured(env, method);
+  if (method === 'paypal') {
+    // PayPal appends its own `token` (the order id) to these URLs, so the manage token travels as `manage`.
+    const base = `${siteUrl(env)}/booking/${row.id}?manage=${encodeURIComponent(token ?? '')}`;
+    const order = await createPaypalOrder(env, {
       bookingId: row.id,
-      customerEmail: row.guest_email,
-      successUrl: `${siteUrl(env)}/booking/${row.id}?token=${encodeURIComponent(token ?? '')}`,
-    }, bookingRuntime.fetch);
+      bookingCode: row.code,
+      amountCents: CONSULTATION_PRICE_USD_CENTS,
+      returnUrl: `${base}&paypal=return`,
+      cancelUrl: `${base}&paypal=cancel`,
+    }, bookingRuntime.fetch, now);
     await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, payment_ref = ?, updated_at = ? WHERE id = ?')
-      .bind(CONSULTATION_PRICE_USD_CENTS, 'USD', checkout.id, iso(now), row.id).run();
-    return { provider: 'polar', url: checkout.url, checkout_id: checkout.id, expires_at: row.hold_expires_at };
+      .bind(CONSULTATION_PRICE_USD_CENTS, 'USD', order.id, iso(now), row.id).run();
+    return { provider: 'paypal', url: order.approveUrl, order_id: order.id, expires_at: row.hold_expires_at };
   }
   const transfer = buildSepayTransfer(env, row.code);
   await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, updated_at = ? WHERE id = ?')
@@ -476,8 +508,8 @@ export type PaymentOutcome =
   | 'needs_attention';
 
 function expectedAmount(row: BookingRow, env: RuntimeEnv): { amount: number | null; currency: string } {
-  if (row.payment_method === 'polar') return { amount: row.amount_expected ?? CONSULTATION_PRICE_USD_CENTS, currency: 'USD' };
-  return { amount: row.amount_expected ?? parseVndPrice(env), currency: 'VND' };
+  if (row.payment_method === 'sepay') return { amount: row.amount_expected ?? parseVndPrice(env), currency: 'VND' };
+  return { amount: row.amount_expected ?? CONSULTATION_PRICE_USD_CENTS, currency: 'USD' };
 }
 
 async function findBookingForPayment(d1: D1DatabaseLike, n: PaymentNotice): Promise<BookingRow | null> {
@@ -555,6 +587,46 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
     await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind(n.provider, n.eventId).run().catch(() => undefined);
     throw err;
   }
+}
+
+export type CaptureStatus = 'confirmed' | 'pending' | 'not_approved' | 'declined' | 'needs_attention' | 'unchanged';
+
+/**
+ * Guest returned from PayPal: captures the approved order server-side and applies the capture through
+ * the same idempotent path as the PAYMENT.CAPTURE.COMPLETED webhook (event id = capture id). An expired
+ * hold is never captured, so the guest is not charged for a slot that was already released.
+ */
+export async function capturePaypalBooking(
+  d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null
+): Promise<{ booking: GuestBookingView; capture_status: CaptureStatus }> {
+  const row = await getBookingForGuest(d1, id, token);
+  const now = bookingRuntime.now();
+  if (row.payment_method !== 'paypal') throw new AppError(409, 'invalid_payment_method', 'This booking is not paid with PayPal');
+  if (row.status !== 'held') return { booking: toGuestView(row, env, now), capture_status: 'unchanged' };
+  if (row.hold_expires_at < iso(now)) {
+    throw new AppError(409, 'hold_not_active', 'This hold expired before the payment was captured, so you have not been charged. Please choose a slot again.', { status: 'expired' });
+  }
+  if (!row.payment_ref) throw new AppError(409, 'checkout_not_started', 'Start the PayPal checkout first');
+  assertPaymentConfigured(env, 'paypal');
+  const order = await capturePaypalOrder(env, row.payment_ref, bookingRuntime.fetch, now);
+  const capture = order.capture;
+  let status: CaptureStatus = order.status === 'NOT_APPROVED' ? 'not_approved' : capture?.status === 'PENDING' ? 'pending' : 'declined';
+  if (capture?.status === 'COMPLETED') {
+    if (capture.amountCents === null || !capture.currency) throw new AppError(502, 'payment_provider_error', 'PayPal capture has no amount');
+    const result = await applyPayment(d1, env, {
+      provider: 'paypal',
+      eventId: capture.id,
+      rawType: 'capture_on_return',
+      amount: capture.amountCents,
+      currency: capture.currency,
+      paymentRef: capture.id,
+      bookingId: capture.customId ?? row.id,
+      checkoutId: order.orderId,
+    });
+    status = result.outcome === 'needs_attention' ? 'needs_attention' : 'confirmed';
+  }
+  const fresh = (await getBookingRow(d1, row.id)) ?? row;
+  return { booking: toGuestView(fresh, env, bookingRuntime.now()), capture_status: status };
 }
 
 // ---------------------------------------------------------------------------

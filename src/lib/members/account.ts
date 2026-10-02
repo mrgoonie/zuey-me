@@ -2,6 +2,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import type { APIContext, APIRoute } from 'astro';
 import { AppError, errorResponse, readJsonObject } from '../http';
+import { dodoCardPlans } from '../payments/dodo';
 import { missingBillingConfig } from './billing';
 import type { Entitlement, PlanId, PlanPrice } from './plans';
 import { PLANS, parseUsdVndRate, planPrices } from './plans';
@@ -90,6 +91,8 @@ export interface PlansCatalog {
   missing: string[];
   usd_vnd_rate: number | null;
   months: number[];
+  /** Plans purchasable as a monthly USD card subscription (Dodo Payments); empty when not configured. */
+  card_plans: PlanId[];
   plans: {
     id: PlanId;
     name: string;
@@ -106,11 +109,12 @@ export function plansCatalog(env: RuntimeEnv): PlansCatalog {
   const rate = parseUsdVndRate(env);
   const missing = missingBillingConfig(env);
   return {
-    currency_note: 'Prices are monthly in USD. SePay bank transfer charges VND = USD × USD_VND_RATE rounded up to 1,000 VND per month, prepaid for 1, 3, 6 or 12 months without discounts.',
+    currency_note: 'Prices are monthly in USD. SePay bank transfer charges VND = USD × USD_VND_RATE rounded up to 1,000 VND per month, prepaid for 1, 3, 6 or 12 months without discounts. International cards (Dodo Payments) renew monthly in USD until cancelled.',
     billing_configured: missing.length === 0,
     missing,
     usd_vnd_rate: rate,
     months: [1, 3, 6, 12],
+    card_plans: dodoCardPlans(env),
     plans: PLANS.map(plan => ({ ...plan, prices: planPrices(plan, rate) })),
   };
 }

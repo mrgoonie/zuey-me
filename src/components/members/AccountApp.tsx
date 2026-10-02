@@ -139,19 +139,122 @@ function EmailSection({ me }: { me: Me }) {
 
 interface Subscription { plan: string; status: string; current_period_end: string }
 interface OrderRow { code: string; plan: string; months: number; amount_vnd: number; status: string; created_at: string }
+interface CardRow {
+  id: string;
+  plan: string | null;
+  status: string;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  can_manage: boolean;
+  can_cancel: boolean;
+}
 
 const ORDER_STATUS: Record<string, string> = { pending: 'Chờ thanh toán', paid: 'Đã thanh toán', expired: 'Hết hạn', needs_attention: 'Cần kiểm tra' };
+const CARD_STATUS: Record<string, string> = {
+  pending: 'Chờ xác nhận', active: 'Đang hoạt động', on_hold: 'Tạm dừng do thanh toán lỗi', paused: 'Tạm dừng',
+  cancelled: 'Đã kết thúc', failed: 'Thanh toán thất bại', expired: 'Hết hạn', needs_attention: 'Cần kiểm tra',
+};
+
+function parseCardRow(r: Record<string, unknown>): CardRow {
+  return {
+    id: str(r, 'id'),
+    plan: strOrNull(r, 'plan'),
+    status: str(r, 'status'),
+    current_period_end: strOrNull(r, 'current_period_end'),
+    cancel_at_period_end: r.cancel_at_period_end === true,
+    can_manage: r.can_manage === true,
+    can_cancel: r.can_cancel === true,
+  };
+}
+
+/** Card (Dodo) memberships: renewal date, the Dodo customer portal, and scheduled cancellation. */
+function CardSubscriptions({ cards, onChanged }: { cards: CardRow[]; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<CardRow | null>(null);
+
+  async function manage(c: CardRow) {
+    setBusy(c.id); setError(null); setOk(null);
+    const res = await callApi(`/api/v1/billing/card/${encodeURIComponent(c.id)}/portal`, { method: 'POST' });
+    if (res.ok && isRecord(res.data) && str(res.data, 'url')) {
+      window.location.assign(str(res.data, 'url'));
+      return;
+    }
+    setBusy(null);
+    setError(res.ok ? 'Không mở được trang quản lý thẻ. Vui lòng thử lại.' : res.message);
+  }
+
+  async function cancel() {
+    if (!cancelling) return;
+    setBusy(cancelling.id); setError(null); setOk(null);
+    const res = await callApi(`/api/v1/billing/card/${encodeURIComponent(cancelling.id)}/cancel`, { method: 'POST' });
+    setBusy(null);
+    if (res.ok) {
+      const end = isRecord(res.data) ? strOrNull(res.data, 'current_period_end') : null;
+      setOk(`Đã huỷ gia hạn. Gói vẫn dùng được${end ? ` đến ${fmtDateTime(end)}` : ' đến hết kỳ đã thanh toán'}.`);
+      setCancelling(null);
+      onChanged();
+    } else {
+      setError(res.message);
+    }
+  }
+
+  return (
+    <>
+      <h3 className="mt-6 text-sm font-semibold">Thẻ quốc tế (Dodo)</h3>
+      <Notice ok={ok} error={cancelling ? null : error} />
+      <ul className="mt-2 grid gap-2 text-sm">
+        {cards.map(c => (
+          <li key={c.id} className="grid gap-2 rounded-xl border border-stone-300 bg-white/70 px-3 py-2 min-w-0">
+            <span className="min-w-0 break-words">
+              <a className="underline" href={`/billing/card/${encodeURIComponent(c.id)}`}><strong>{c.plan ? planName(c.plan) : 'Gói thành viên'}</strong></a> · {CARD_STATUS[c.status] ?? c.status}
+              {c.status === 'active' && c.current_period_end && (
+                <> · {c.cancel_at_period_end ? 'đã huỷ, hiệu lực đến' : 'gia hạn ngày'} {fmtDateTime(c.current_period_end)}</>
+              )}
+            </span>
+            {(c.can_manage || c.can_cancel) && (
+              <span className="flex flex-wrap gap-2">
+                {c.can_manage && <button type="button" className={btnGhost} onClick={() => { void manage(c); }} disabled={busy !== null}>{busy === c.id && !cancelling ? 'Đang mở…' : 'Quản lý thẻ'}</button>}
+                {c.can_cancel && <button type="button" className={btnDanger} onClick={() => { setError(null); setCancelling(c); }} disabled={busy !== null}>Huỷ gia hạn</button>}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <MemberDialog open={cancelling !== null} title="Huỷ gia hạn gói thẻ" onClose={() => setCancelling(null)} busy={busy !== null}>
+        <div className="grid gap-3">
+          <p className="text-sm">
+            Gói {cancelling?.plan ? planName(cancelling.plan) : ''} sẽ không tự gia hạn nữa. Bạn vẫn dùng được
+            {cancelling?.current_period_end ? ` đến ${fmtDateTime(cancelling.current_period_end)}` : ' đến hết kỳ đã thanh toán'}; không hoàn tiền phần còn lại.
+          </p>
+          <div role="status" aria-live="polite" className="empty:hidden">{error && <p className={alertError}>{error}</p>}</div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className={btnGhost} onClick={() => setCancelling(null)} disabled={busy !== null}>Giữ gói</button>
+            <button type="button" className={btnDanger} onClick={() => { void cancel(); }} disabled={busy !== null}>{busy ? 'Đang huỷ…' : 'Huỷ gia hạn'}</button>
+          </div>
+        </div>
+      </MemberDialog>
+    </>
+  );
+}
 
 function BillingSection() {
   const [subs, setSubs] = useState<Subscription[] | null>(null);
   const [orders, setOrders] = useState<OrderRow[] | null>(null);
+  const [cards, setCards] = useState<CardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const loadSubscription = useCallback(async () => {
+    const s = await callApi('/api/v1/billing/subscription', { cache: 'no-store' });
+    if (s.ok && isRecord(s.data)) {
+      setSubs(records(s.data.subscriptions).map(r => ({ plan: str(r, 'plan'), status: str(r, 'status'), current_period_end: str(r, 'current_period_end') })));
+      setCards(records(s.data.card_subscriptions).map(parseCardRow).filter(c => c.id && c.status !== 'expired'));
+    } else if (!s.ok) setError(s.message);
+  }, []);
+
   useEffect(() => {
-    void Promise.all([callApi('/api/v1/billing/subscription', { cache: 'no-store' }), callApi('/api/v1/billing/orders', { cache: 'no-store' })]).then(([s, o]) => {
-      if (s.ok && isRecord(s.data)) {
-        setSubs(records(s.data.subscriptions).map(r => ({ plan: str(r, 'plan'), status: str(r, 'status'), current_period_end: str(r, 'current_period_end') })));
-      } else if (!s.ok) setError(s.message);
+    void Promise.all([loadSubscription(), callApi('/api/v1/billing/orders', { cache: 'no-store' })]).then(([, o]) => {
       if (o.ok) {
         setOrders(records(o.data).map(r => ({
           code: str(r, 'code'), plan: str(r, 'plan'), months: numOr(r, 'months', 1), amount_vnd: numOr(r, 'amount_vnd'), status: str(r, 'status'), created_at: str(r, 'created_at'),
@@ -182,7 +285,8 @@ function BillingSection() {
         <p className="mt-2 text-xs text-stone-600">Đã hết hạn: {subs.filter(s => s.status !== 'active').map(s => `${planName(s.plan)} (${fmtDate(s.current_period_end)})`).join(', ')}</p>
       )}
       <p className="mt-4"><a className={btnPrimary} href="/pricing">{active.length > 0 ? 'Gia hạn hoặc thêm gói' : 'Xem các gói'}</a></p>
-      <h3 className="mt-6 text-sm font-semibold">Đơn hàng</h3>
+      {cards.length > 0 && <CardSubscriptions cards={cards} onChanged={() => { void loadSubscription(); }} />}
+      <h3 className="mt-6 text-sm font-semibold">Đơn hàng chuyển khoản</h3>
       {orders && orders.length === 0 && <p className="mt-2 text-sm text-stone-600">Chưa có đơn hàng.</p>}
       {orders && orders.length > 0 && (
         <ul className="mt-2 grid gap-2 text-sm">
@@ -265,6 +369,11 @@ const ACTIVITY_COPY: Record<string, string> = {
   'billing.paid': 'Thanh toán thành công',
   'billing.needs_attention': 'Thanh toán cần kiểm tra',
   'billing.extra_payment': 'Nhận thêm khoản thanh toán',
+  'billing.card_checkout': 'Mở thanh toán bằng thẻ',
+  'billing.card_active': 'Kích hoạt gói bằng thẻ',
+  'billing.card_renewed': 'Gia hạn gói bằng thẻ',
+  'billing.card_ended': 'Gói thẻ kết thúc',
+  'billing.card_cancel_scheduled': 'Huỷ gia hạn gói thẻ',
   'account.exported': 'Xuất dữ liệu',
 };
 

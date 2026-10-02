@@ -196,7 +196,7 @@ export const membersOpenApi: OpenApiFragment = {
 export const billingOpenApi: OpenApiFragment = {
   tag: {
     name: BILLING_TAG,
-    description: 'Monthly plans: Knowledges $9 (read_full), Zuey AI $9 (ai_chat), Kết hợp $19 (read_full + ai_chat), Cộng đồng $29 (+ community). SePay bank transfer prepays 1, 3, 6 or 12 months at USD × USD_VND_RATE rounded up to 1,000 VND per month (no discounts). Orders are confirmed only by the verified SePay webhook or admin reconciliation.',
+    description: 'Monthly plans: Knowledges $9 (read_full), Zuey AI $9 (ai_chat), Kết hợp $19 (read_full + ai_chat), Cộng đồng $29 (+ community). SePay bank transfer prepays 1, 3, 6 or 12 months at USD × USD_VND_RATE rounded up to 1,000 VND per month (no discounts). When Dodo Payments is configured, a plan can also be a monthly USD card subscription that renews automatically and is cancellable from the account page. Plans are activated only by a verified SePay or Dodo webhook (or admin reconciliation), never by a checkout redirect.',
   },
   paths: {
     '/api/v1/plans': {
@@ -205,12 +205,24 @@ export const billingOpenApi: OpenApiFragment = {
     '/api/v1/billing/orders': {
       get: { tags: [BILLING_TAG], summary: 'Your orders (billing:read)', security: memberSecurity, responses: { '200': ok('Orders', { type: 'array', items: ref('BillingOrder') }), ...denied } },
       post: {
-        tags: [BILLING_TAG], summary: 'Create a SePay order (checkout:write); returns VietQR transfer details', security: memberSecurity,
-        requestBody: body({ type: 'object', required: ['plan'], properties: { plan: { type: 'string', enum: PLAN_IDS }, months: { type: 'integer', enum: [...BILLING_MONTHS], default: 1 } } }),
+        tags: [BILLING_TAG],
+        summary: 'Start a purchase (checkout:write): SePay VietQR prepaid order, or a Dodo monthly card subscription checkout',
+        description: '`provider: sepay` (default) returns VietQR transfer details. `provider: dodo` returns a hosted `checkout_url`; months must be 1 or omitted. Either way, poll `status_url` for the real state.',
+        security: memberSecurity,
+        requestBody: body({
+          type: 'object', required: ['plan'],
+          properties: {
+            plan: { type: 'string', enum: PLAN_IDS },
+            provider: { type: 'string', enum: ['sepay', 'dodo'], default: 'sepay' },
+            months: { type: 'integer', enum: [...BILLING_MONTHS], default: 1, description: 'SePay only; card subscriptions are monthly' },
+          },
+        }),
         responses: {
-          '201': ok('Pending order', ref('BillingOrder')), '400': errorResponses['400'], ...denied,
+          '201': ok('Pending SePay order or pending card checkout', { oneOf: [ref('BillingOrderCheckout'), ref('CardCheckout')] }), '400': errorResponses['400'], ...denied,
+          '409': { description: '`already_subscribed` (an active card subscription exists for this plan)', ...errorRef },
           '429': { description: '`too_many_pending_orders`', ...errorRef },
-          '503': { description: '`billing_unconfigured` (lists missing env names, e.g. USD_VND_RATE)', ...errorRef },
+          '502': { description: '`payment_provider_error` (Dodo API failure)', ...errorRef },
+          '503': { description: '`billing_unconfigured` (SePay) or `payment_unconfigured` (Dodo); lists missing env names', ...errorRef },
         },
       },
     },
@@ -224,7 +236,70 @@ export const billingOpenApi: OpenApiFragment = {
     '/api/v1/billing/subscription': {
       get: {
         tags: [BILLING_TAG], summary: 'Your plans and effective entitlements (billing:read)', security: memberSecurity,
-        responses: { '200': ok('Subscription', { type: 'object', properties: { subscriptions: { type: 'array', items: { type: 'object' } }, active_plans: { type: 'array', items: { type: 'string' } }, entitlements: { type: 'array', items: { type: 'string' } } } }), ...denied },
+        responses: {
+          '200': ok('Subscription', {
+            type: 'object',
+            properties: {
+              subscriptions: { type: 'array', items: { type: 'object' } },
+              card_subscriptions: { type: 'array', items: ref('CardSubscription') },
+              active_plans: { type: 'array', items: { type: 'string' } },
+              entitlements: { type: 'array', items: { type: 'string' } },
+            },
+          }),
+          ...denied,
+        },
+      },
+    },
+    '/api/v1/billing/card/{id}': {
+      get: {
+        tags: [BILLING_TAG], summary: 'One of your card subscriptions (billing:read; admins any)', security: memberSecurity,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', pattern: '^csub_[a-f0-9]{20}$' } }],
+        responses: { '200': ok('Card subscription', ref('CardSubscription')), '404': notFound, ...denied },
+      },
+    },
+    '/api/v1/billing/card/{id}/portal': {
+      post: {
+        tags: [BILLING_TAG], summary: 'Open the Dodo customer portal (card, invoices, cancellation; session only)', security: sessionOnly,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': ok('One-time portal link', { type: 'object', properties: { url: { type: 'string' } } }), '404': notFound, ...denied,
+          '409': { description: '`not_manageable` (no Dodo customer yet)', ...errorRef },
+          '502': { description: '`payment_provider_error`', ...errorRef }, '503': { description: '`payment_unconfigured`', ...errorRef },
+        },
+      },
+    },
+    '/api/v1/billing/card/{id}/cancel': {
+      post: {
+        tags: [BILLING_TAG], summary: 'Stop renewing at the end of the paid period; access continues until then (session only)', security: sessionOnly,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': ok('Updated card subscription', ref('CardSubscription')), '404': notFound, ...denied,
+          '409': { description: '`not_cancellable` (not active)', ...errorRef },
+          '502': { description: '`payment_provider_error`', ...errorRef }, '503': { description: '`payment_unconfigured`', ...errorRef },
+        },
+      },
+    },
+    '/api/webhooks/dodo': {
+      post: {
+        tags: [BILLING_TAG],
+        summary: 'Dodo Payments webhook (Standard Webhooks signature, 5-minute window; subscription.* and payment.succeeded/failed)',
+        description: 'Idempotent by `webhook-id`. Activation requires the configured product, the plan price and USD; anything else, or a payment without member metadata, is recorded as needs_attention.',
+        parameters: [
+          { name: 'webhook-id', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'webhook-timestamp', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'webhook-signature', in: 'header', required: true, schema: { type: 'string', example: 'v1,<base64>' } },
+        ],
+        requestBody: body({ type: 'object' }),
+        responses: {
+          '200': ok('Event processed or ignored', {
+            type: 'object',
+            properties: {
+              outcome: { type: 'string', enum: ['duplicate_event', 'unmatched', 'ignored', 'stale_event', 'needs_attention', 'activated', 'deactivated', 'updated'] },
+              card_subscription_id: { type: ['string', 'null'] },
+            },
+          }),
+          '400': errorResponses['400'], '401': { description: '`invalid_signature`', ...errorRef }, '503': { description: '`payment_unconfigured` (DODO_WEBHOOK_SECRET missing)', ...errorRef },
+        },
       },
     },
     '/api/v1/billing/reconcile': {
@@ -248,6 +323,7 @@ export const billingOpenApi: OpenApiFragment = {
       type: 'object',
       properties: {
         billing_configured: { type: 'boolean' }, missing: { type: 'array', items: { type: 'string' } }, usd_vnd_rate: { type: ['number', 'null'] },
+        card_plans: { type: 'array', items: { type: 'string', enum: PLAN_IDS }, description: 'Plans purchasable as a Dodo monthly card subscription (empty when Dodo is not configured)' },
         plans: {
           type: 'array',
           items: {
@@ -260,6 +336,24 @@ export const billingOpenApi: OpenApiFragment = {
           },
         },
       },
+    },
+    BillingOrderCheckout: {
+      allOf: [ref('BillingOrder'), { type: 'object', properties: { provider: { type: 'string', enum: ['sepay'] }, status_url: { type: 'string' } } }],
+    },
+    CardSubscription: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' }, provider: { type: 'string', enum: ['dodo'] },
+        plan: { type: ['string', 'null'], enum: [...PLAN_IDS, null] }, plan_name: { type: ['string', 'null'] },
+        status: { type: 'string', enum: ['pending', 'active', 'on_hold', 'paused', 'cancelled', 'failed', 'expired', 'needs_attention'] },
+        current_period_end: { type: ['string', 'null'], description: "Provider's next billing date: renewal date, or end of access once cancellation is scheduled" },
+        cancel_at_period_end: { type: 'boolean' }, amount_cents: { type: ['integer', 'null'] }, currency: { type: ['string', 'null'] },
+        attention_reason: { type: ['string', 'null'] }, can_manage: { type: 'boolean' }, can_cancel: { type: 'boolean' },
+        created_at: { type: 'string' }, updated_at: { type: 'string' }, status_url: { type: 'string' },
+      },
+    },
+    CardCheckout: {
+      allOf: [ref('CardSubscription'), { type: 'object', properties: { checkout_url: { type: 'string', description: 'Dodo hosted checkout; redirect the member here' } } }],
     },
     BillingOrder: {
       type: 'object',

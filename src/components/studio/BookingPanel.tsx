@@ -156,7 +156,7 @@ export function BookingPanel() {
   };
 
   const act = async (id: string, action: 'cancel' | 'resolve' | 'mark_attention' | 'note') => {
-    if (action === 'cancel' && !window.confirm('Cancel this booking? Refunds are NOT automatic; handle them manually in Polar/bank.')) return;
+    if (action === 'cancel' && !window.confirm('Cancel this booking? Refunds are NOT automatic; handle them manually in PayPal or by bank transfer.')) return;
     setBusy(true);
     const r = await api('/api/v1/booking/admin', { method: 'POST', body: JSON.stringify({ id, action, note: notes[id] || undefined }) });
     setBusy(false);

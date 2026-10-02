@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isValidTimeZone, zonedDateKey } from '../../lib/booking/timezone';
 
 // ---------------------------------------------------------------------------
@@ -289,13 +289,14 @@ function useSlots(): { slots: Slot[]; loading: boolean; error: string | null; re
 // ---------------------------------------------------------------------------
 
 type Step = 1 | 2 | 3 | 4;
-type Method = 'polar' | 'sepay';
+type Method = 'sepay' | 'paypal';
 
 interface HoldState {
   booking: GuestBooking;
   manageUrl: string;
   token: string;
-  polarUrl: string | null;
+  /** Hosted PayPal checkout the guest is sent to; payment is confirmed server-side only. */
+  checkoutUrl: string | null;
   sepay: SepayInfo | null;
 }
 
@@ -303,7 +304,7 @@ const STEP_LABELS = ['Chọn giờ', 'Thông tin', 'Thanh toán', 'Xác nhận']
 
 const METHOD_COPY: Record<Method, [string, string]> = {
   sepay: ['Chuyển khoản VietQR (SePay)', 'Chuyển khoản VND, xác nhận tự động khi nhận tiền.'],
-  polar: ['Thẻ quốc tế (Polar)', 'Thanh toán USD qua trang Polar an toàn.'],
+  paypal: ['Thẻ quốc tế / PayPal (USD)', 'Thanh toán $1,999 bằng thẻ hoặc tài khoản PayPal. Lịch được xác nhận khi Zuey nhận được khoản thanh toán.'],
 };
 
 export function BookingWidget({ methods }: { methods: Method[] }) {
@@ -351,7 +352,7 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
       booking,
       manageUrl,
       token,
-      polarUrl: co.ok && typeof co.data.url === 'string' ? co.data.url : null,
+      checkoutUrl: co.ok && typeof co.data.url === 'string' ? co.data.url : null,
       sepay: co.ok ? parseSepay(co.data) : null,
     });
     if (!co.ok) setError(co.code === 'payment_unconfigured' ? `Thanh toán chưa được cấu hình: ${co.message}` : co.message);
@@ -454,8 +455,11 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
           <p className={`text-center text-3xl font-bold tabular-nums ${expired ? 'text-rose-700' : ''}`} role="timer" aria-live="polite" aria-atomic="true">
             {expired ? 'Hết thời gian giữ chỗ' : mmss(remaining)}
           </p>
-          {!expired && hold.polarUrl && (
-            <a href={hold.polarUrl} className={`${btnPrimary} w-full`}>Thanh toán $1,999 qua Polar</a>
+          {!expired && hold.checkoutUrl && (
+            <>
+              <a href={hold.checkoutUrl} className={`${btnPrimary} w-full`}>Thanh toán $1,999 qua PayPal</a>
+              <p className="text-xs text-stone-600">Sau khi bạn bấm thanh toán trên PayPal, Zuey ghi nhận khoản tiền và đưa bạn về trang quản lý lịch. Lịch chỉ được xác nhận khi hệ thống thấy khoản thanh toán đã hoàn tất.</p>
+            </>
           )}
           {!expired && hold.sepay && (
             <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)] items-start">
@@ -499,8 +503,18 @@ const RESCHEDULE_REASON: Record<string, string> = {
   too_close_to_start: 'Chỉ có thể dời lịch trước buổi tư vấn ít nhất 48 giờ.',
 };
 
+const CAPTURE_NOTICE: Record<string, string> = {
+  confirmed: 'Đã nhận thanh toán PayPal. Lịch tư vấn của bạn đã được xác nhận.',
+  pending: 'PayPal đang xử lý khoản thanh toán. Trang sẽ tự cập nhật khi PayPal xác nhận; bạn không cần thanh toán lại.',
+  not_approved: 'Thanh toán PayPal chưa được hoàn tất. Bạn có thể thử lại trước khi hết thời gian giữ chỗ.',
+  declined: 'PayPal từ chối khoản thanh toán này. Bạn có thể thử lại bằng thẻ hoặc tài khoản khác.',
+  needs_attention: 'Đã nhận thanh toán nhưng cần Zuey kiểm tra thêm. Zuey sẽ liên hệ qua email; bạn không cần thanh toán lại.',
+};
+
 export function BookingManage({ bookingId }: { bookingId: string }) {
   const [token, setToken] = useState<string | null>(null);
+  const [paypalReturn, setPaypalReturn] = useState<'return' | 'cancel' | null>(null);
+  const captureStarted = useRef(false);
   const [booking, setBooking] = useState<GuestBooking | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tz, setTz] = useState('Asia/Ho_Chi_Minh');
@@ -512,7 +526,15 @@ export function BookingManage({ bookingId }: { bookingId: string }) {
   const remaining = useCountdown(booking?.status === 'held' ? booking.hold_expires_at : null);
 
   useEffect(() => {
-    setToken(new URLSearchParams(window.location.search).get('token'));
+    const params = new URLSearchParams(window.location.search);
+    // PayPal appends its own `token` (order id) on return, so our manage token arrives as `manage`.
+    const manage = params.get('manage') ?? params.get('token');
+    const paypal = params.get('paypal');
+    setToken(manage);
+    setPaypalReturn(paypal === 'return' || paypal === 'cancel' ? paypal : null);
+    if (manage && (params.has('manage') || paypal)) {
+      window.history.replaceState(null, '', `${window.location.pathname}?token=${encodeURIComponent(manage)}`);
+    }
     setTz(browserTimeZone());
   }, []);
 
@@ -522,7 +544,40 @@ export function BookingManage({ bookingId }: { bookingId: string }) {
     if (r.ok) { setBooking(parseBooking(r.data)); setError(null); } else setError(r.message);
   }, [bookingId, token]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!token) return;
+    if (paypalReturn !== 'return' || captureStarted.current) { void load(); return; }
+    // Back from PayPal: capture server-side once, then show whatever state the server reports.
+    captureStarted.current = true;
+    setBusy(true);
+    void callApi(`/api/v1/booking/${encodeURIComponent(bookingId)}/capture`, { method: 'POST', body: JSON.stringify({ token }) }).then(r => {
+      setBusy(false);
+      if (r.ok) {
+        if (isRecord(r.data.booking)) setBooking(parseBooking(r.data.booking));
+        const status = str(r.data, 'capture_status');
+        setNotice(CAPTURE_NOTICE[status] ?? null);
+      } else {
+        setError(r.message);
+        void load();
+      }
+    });
+  }, [token, paypalReturn, bookingId, load]);
+  useEffect(() => {
+    if (paypalReturn === 'cancel') setNotice('Bạn đã quay lại từ PayPal mà chưa thanh toán. Lịch vẫn được giữ đến khi hết thời gian bên dưới.');
+  }, [paypalReturn]);
+
+  const payWithPaypal = async () => {
+    if (!token) return;
+    setBusy(true);
+    const r = await callApi(`/api/v1/booking/${encodeURIComponent(bookingId)}/checkout`, { method: 'POST', body: JSON.stringify({ token }) });
+    if (r.ok && typeof r.data.url === 'string') {
+      window.location.assign(r.data.url);
+      return;
+    }
+    setBusy(false);
+    setError(r.ok ? 'Không mở được trang PayPal. Vui lòng thử lại.' : r.message);
+  };
+
   useEffect(() => {
     if (booking?.status !== 'held') return undefined;
     const t = setInterval(() => { void load(); }, 5000);
@@ -578,6 +633,11 @@ export function BookingManage({ bookingId }: { bookingId: string }) {
             <div className="grid gap-3">
               <p className="text-center text-2xl font-bold tabular-nums" role="timer" aria-live="polite">{mmss(remaining)}</p>
               <p className="text-xs text-stone-600">Trang tự cập nhật khi thanh toán được ghi nhận.</p>
+              {booking.payment_method === 'paypal' && (
+                <button type="button" className={`${btnPrimary} w-full`} onClick={payWithPaypal} disabled={busy || remaining === 0}>
+                  {busy ? 'Đang xử lý…' : 'Thanh toán $1,999 qua PayPal'}
+                </button>
+              )}
               {booking.sepay && (
                 <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)] items-start">
                   <img src={booking.sepay.qr_url} alt="Mã VietQR chuyển khoản" width={180} height={180} className="w-44 h-44 mx-auto rounded-xl bg-white p-2 border border-stone-300" />

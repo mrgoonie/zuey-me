@@ -1,15 +1,17 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
+import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';
+import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
 import type { SepayTransferInfo } from '../payments/sepay';
 import { SEPAY_BILLING_PREFIX, extractBillingCode, missingSepayBankConfig, vietQrTransfer } from '../payments/sepay';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
-import type { BillingMonths, PlanId } from './plans';
+import type { BillingMonths, Entitlement, PlanId } from './plans';
 import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, monthlyVnd, parseUsdVndRate } from './plans';
 import type { Row } from './runtime';
 import { DAY_MS, iso, isUniqueViolation, membersRuntime, num, numOrNull, randomCode, randomId, siteUrl, str, strOrNull } from './runtime';
 import type { SubscriptionView } from './subscriptions';
-import { recomputeSubscription } from './subscriptions';
+import { getEntitlements, listSubscriptions, recomputeSubscription } from './subscriptions';
 import { getUserById, logActivity } from './users';
 
 /** How long a pending order's VietQR stays payable. Later transfers are flagged for the admin. */
@@ -176,6 +178,49 @@ export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: s
     }
   }
   throw new AppError(500, 'internal_error', 'Could not allocate an order code');
+}
+
+export interface SubscriptionSummary {
+  subscriptions: SubscriptionView[];
+  /** Card (Dodo) subscriptions with provider status, renewal date and manage/cancel availability. */
+  card_subscriptions: CardSubscriptionView[];
+  active_plans: PlanId[];
+  entitlements: Entitlement[];
+}
+
+/** Plans, card subscriptions and the entitlements currently in effect (REST and MCP share this). */
+export async function subscriptionSummary(d1: D1DatabaseLike, env: RuntimeEnv, userId: string): Promise<SubscriptionSummary> {
+  const [subscriptions, cards, effective] = await Promise.all([
+    listSubscriptions(d1, userId), listCardSubscriptions(d1, userId), getEntitlements(d1, userId),
+  ]);
+  return { subscriptions, card_subscriptions: cards.map(c => toCardView(c, env)), active_plans: effective.plans, entitlements: effective.entitlements };
+}
+
+export type CheckoutProvider = 'sepay' | 'dodo';
+export const CHECKOUT_PROVIDERS: CheckoutProvider[] = ['sepay', 'dodo'];
+
+export type MemberCheckout =
+  | (OrderView & { provider: 'sepay'; status_url: string })
+  | (CardCheckout & { provider: 'dodo' });
+
+/**
+ * Starts a membership purchase on the chosen rail: `sepay` (default) creates a prepaid VietQR order,
+ * `dodo` opens a monthly card subscription checkout (months must be 1 or omitted).
+ */
+export async function createMemberCheckout(
+  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, body: Record<string, unknown>, request?: Request
+): Promise<MemberCheckout> {
+  const provider = body.provider ?? 'sepay';
+  if (provider === 'dodo') {
+    if (!isPlanId(body.plan)) throw new AppError(400, 'invalid_field', "plan must be one of 'knowledges', 'ai', 'combo', 'community'", { field: 'plan' });
+    if (body.months !== undefined && body.months !== 1) {
+      throw new AppError(400, 'invalid_field', 'Card subscriptions renew monthly; months must be 1 or omitted', { field: 'months' });
+    }
+    return { ...(await startCardCheckout(d1, env, userId, body.plan, request)), provider: 'dodo' };
+  }
+  if (provider !== 'sepay') throw new AppError(400, 'invalid_field', `provider must be one of ${CHECKOUT_PROVIDERS.join(', ')}`, { field: 'provider' });
+  const view = toOrderView(await createOrder(d1, env, userId, body, request), env);
+  return { ...view, provider: 'sepay', status_url: `${siteUrl(env)}/billing/${view.code}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +401,10 @@ export interface ReminderResult {
   failed: number;
 }
 
-/** Emails members whose plan ends within the reminder window; one email per plan period. */
+/**
+ * Emails members whose plan ends within the reminder window; one email per plan period. Plans kept
+ * alive by an auto-renewing card subscription are skipped: the card renews them.
+ */
 export async function sendRenewalReminders(d1: D1DatabaseLike, env: RuntimeEnv): Promise<ReminderResult> {
   if (!env.RESEND_API_KEY) {
     throw new AppError(503, 'email_unconfigured', 'Renewal reminders are unavailable: RESEND_API_KEY is not configured', { missing: ['RESEND_API_KEY'] });
@@ -367,7 +415,11 @@ export async function sendRenewalReminders(d1: D1DatabaseLike, env: RuntimeEnv):
   await expireStaleOrders(d1, null);
   const { results } = await d1.prepare(
     `SELECT s.user_id, s.plan, s.current_period_end, u.email FROM subscriptions s JOIN users u ON u.id = s.user_id
-     WHERE s.status = 'active' AND s.current_period_end > ? AND s.current_period_end <= ? AND u.deleted_at IS NULL`
+     WHERE s.status = 'active' AND s.current_period_end > ? AND s.current_period_end <= ? AND u.deleted_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM card_subscriptions c
+         WHERE c.user_id = s.user_id AND c.plan = s.plan AND c.status = 'active' AND c.cancel_at_period_end = 0
+       )`
   ).bind(now, iso(nowMs + REMINDER_WINDOW_DAYS * DAY_MS)).all<Row>();
   const out: ReminderResult = { due: 0, sent: 0, duplicate: 0, skipped: 0, failed: 0 };
   for (const r of results ?? []) {

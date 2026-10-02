@@ -23,10 +23,6 @@ export interface RuntimeEnv {
   // Booking, payments, email
   GOOGLE_CALENDAR_REFRESH_TOKEN?: string;
   GOOGLE_CALENDAR_ID?: string;
-  POLAR_ACCESS_TOKEN?: string;
-  POLAR_WEBHOOK_SECRET?: string;
-  POLAR_CONSULTATION_PRODUCT_ID?: string;
-  POLAR_API_BASE?: string;
   SEPAY_WEBHOOK_API_KEY?: string;
   SEPAY_BANK_ACCOUNT?: string;
   SEPAY_BANK_CODE?: string;
@@ -44,6 +40,23 @@ export interface RuntimeEnv {
   USD_VND_RATE?: string;
   /** SePay user API token for admin reconciliation of recent bank transactions. */
   SEPAY_API_TOKEN?: string;
+  // Card payments: Dodo Payments (membership subscriptions, USD)
+  DODO_API_KEY?: string;
+  /** Standard Webhooks signing secret (`whsec_…`) of the /api/webhooks/dodo endpoint. */
+  DODO_WEBHOOK_SECRET?: string;
+  DODO_PRODUCT_KNOWLEDGES?: string;
+  DODO_PRODUCT_AI?: string;
+  DODO_PRODUCT_COMBO?: string;
+  DODO_PRODUCT_COMMUNITY?: string;
+  /** https://test.dodopayments.com (test mode) or https://live.dodopayments.com (default). */
+  DODO_API_BASE?: string;
+  // Card payments: PayPal Business (consultation booking, USD)
+  PAYPAL_CLIENT_ID?: string;
+  PAYPAL_CLIENT_SECRET?: string;
+  /** Id of the webhook registered for /api/webhooks/paypal (used by verify-webhook-signature). */
+  PAYPAL_WEBHOOK_ID?: string;
+  /** https://api-m.sandbox.paypal.com (sandbox) or https://api-m.paypal.com (default). */
+  PAYPAL_API_BASE?: string;
   // Zuey AI (Dewee gateway)
   DEWEE_GATEWAY_URL?: string;
   DEWEE_GATEWAY_TOKEN?: string;

@@ -62,7 +62,17 @@ export const bookingOpenApi: OpenApiFragment = {
         summary: 'Start payment for an active hold',
         parameters: [idParam],
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } } } },
-        responses: { '200': ok('Polar checkout URL or SePay VietQR instructions', 'BookingCheckout'), '404': notFound, '409': conflict, '502': { description: 'Payment provider error', ...errorRef }, '503': unconfigured },
+        responses: { '200': ok('PayPal approval URL or SePay VietQR instructions', 'BookingCheckout'), '404': notFound, '409': conflict, '502': { description: 'Payment provider error', ...errorRef }, '503': unconfigured },
+      },
+    },
+    '/api/v1/booking/{id}/capture': {
+      post: {
+        tags: [TAG],
+        summary: 'Capture the PayPal order after the guest returns from PayPal',
+        description: 'Called by the manage page on return. Never captures an expired hold. The booking is confirmed only when PayPal reports the capture as COMPLETED; the PAYMENT.CAPTURE.COMPLETED webhook confirms it too, idempotently by capture id.',
+        parameters: [idParam],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { token: { type: 'string', description: 'Manage token' } }, required: ['token'] } } } },
+        responses: { '200': ok('Booking state after the capture attempt', 'BookingCaptureResult'), '404': notFound, '409': conflict, '502': { description: 'Payment provider error', ...errorRef }, '503': unconfigured },
       },
     },
     '/api/v1/booking/{id}/reschedule': {
@@ -102,17 +112,19 @@ export const bookingOpenApi: OpenApiFragment = {
         responses: { '200': ok('Updated booking', 'BookingAdminView'), '400': errorResponses['400'], '401': errorResponses['401'], '403': errorResponses['403'], '404': notFound, '409': conflict },
       },
     },
-    '/api/webhooks/polar': {
+    '/api/webhooks/paypal': {
       post: {
         tags: [TAG],
-        summary: 'Polar webhook (Standard Webhooks signature; handles order.paid)',
+        summary: 'PayPal webhook (verified through PayPal verify-webhook-signature; handles PAYMENT.CAPTURE.COMPLETED)',
         parameters: [
-          { name: 'webhook-id', in: 'header', required: true, schema: { type: 'string' } },
-          { name: 'webhook-timestamp', in: 'header', required: true, schema: { type: 'string' } },
-          { name: 'webhook-signature', in: 'header', required: true, schema: { type: 'string', example: 'v1,<base64>' } },
+          { name: 'paypal-transmission-id', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'paypal-transmission-time', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'paypal-transmission-sig', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'paypal-cert-url', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'paypal-auth-algo', in: 'header', required: true, schema: { type: 'string' } },
         ],
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
-        responses: { '200': ok('Event processed or ignored (idempotent)', 'BookingPaymentResult'), '401': { description: 'Invalid signature', ...errorRef }, '503': unconfigured },
+        responses: { '200': ok('Event processed or ignored (idempotent by capture id)', 'BookingPaymentResult'), '400': errorResponses['400'], '401': { description: 'Signature verification failed', ...errorRef }, '502': { description: 'PayPal verification API error', ...errorRef }, '503': unconfigured },
       },
     },
     '/api/webhooks/sepay': {
@@ -140,7 +152,7 @@ export const bookingOpenApi: OpenApiFragment = {
         company: { type: 'string', maxLength: 160 },
         notes: { type: 'string', maxLength: 2000 },
         timezone: { type: 'string', description: 'Guest IANA time zone' },
-        payment_method: { type: 'string', enum: ['polar', 'sepay'] },
+        payment_method: { type: 'string', enum: ['sepay', 'paypal'] },
       },
     },
     BookingHoldResult: {
@@ -159,7 +171,7 @@ export const bookingOpenApi: OpenApiFragment = {
         slot_start: { type: 'string', format: 'date-time' }, slot_end: { type: 'string', format: 'date-time' },
         duration_min: { type: 'integer' }, hold_expires_at: { type: 'string', format: 'date-time' },
         guest_name: { type: 'string' }, guest_email: { type: 'string' }, guest_timezone: { type: 'string', nullable: true },
-        payment_method: { type: 'string', enum: ['polar', 'sepay'] },
+        payment_method: { type: 'string', enum: ['sepay', 'paypal'] },
         amount_expected: { type: 'integer', nullable: true, description: 'USD cents or VND' }, currency: { type: 'string', nullable: true },
         meet_url: { type: 'string', nullable: true }, reschedule_count: { type: 'integer' },
         can_reschedule: { type: 'boolean' }, reschedule_blocked_reason: { type: 'string', nullable: true },
@@ -223,10 +235,17 @@ export const bookingOpenApi: OpenApiFragment = {
     },
     BookingCheckout: {
       type: 'object',
-      description: 'Polar: { provider, url, checkout_id, expires_at }. SePay: SepayTransfer fields plus expires_at.',
+      description: 'PayPal: { provider, url (approval link), order_id, expires_at }. SePay: SepayTransfer fields plus expires_at.',
       properties: {
-        provider: { type: 'string', enum: ['polar', 'sepay'] }, url: { type: 'string' }, checkout_id: { type: 'string' },
+        provider: { type: 'string', enum: ['sepay', 'paypal'] }, url: { type: 'string' }, order_id: { type: 'string' },
         qr_url: { type: 'string' }, transfer_content: { type: 'string' }, amount: { type: 'integer' }, expires_at: { type: 'string', format: 'date-time' },
+      },
+    },
+    BookingCaptureResult: {
+      type: 'object',
+      properties: {
+        booking: { $ref: '#/components/schemas/BookingGuestView' },
+        capture_status: { type: 'string', enum: ['confirmed', 'pending', 'not_approved', 'declined', 'needs_attention', 'unchanged'] },
       },
     },
     BookingPaymentResult: {

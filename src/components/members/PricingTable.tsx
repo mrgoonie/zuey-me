@@ -10,22 +10,35 @@ interface Props {
 
 const MONTH_LABEL: Record<number, string> = { 1: '1 tháng', 3: '3 tháng', 6: '6 tháng', 12: '12 tháng' };
 
-/** Plan cards with a prepay-length selector; checkout is an explicit click that creates a SePay order. */
+type Provider = 'sepay' | 'dodo';
+
+/**
+ * Plan cards. SePay prepays 1/3/6/12 months by VietQR; when Dodo is configured a plan can also be a
+ * monthly USD card subscription. Checkout is an explicit click; the status page shows the server state.
+ */
 export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
   const [months, setMonths] = useState(catalog.months.includes(initialMonths) ? initialMonths : 1);
-  const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const cardPlans = new Set(catalog.card_plans);
 
-  async function checkout(planId: string) {
-    if (busyPlan) return;
-    setBusyPlan(planId);
+  async function checkout(planId: string, provider: Provider) {
+    if (busy) return;
+    setBusy(`${planId}:${provider}`);
     setError(null);
-    const res = await callApi('/api/v1/billing/orders', { method: 'POST', body: jsonBody({ plan: planId, months }) });
-    if (res.ok && isRecord(res.data) && str(res.data, 'code')) {
-      window.location.assign(`/billing/${encodeURIComponent(str(res.data, 'code'))}`);
-      return;
+    const payload = provider === 'dodo' ? { plan: planId, provider } : { plan: planId, months, provider };
+    const res = await callApi('/api/v1/billing/orders', { method: 'POST', body: jsonBody(payload) });
+    if (res.ok && isRecord(res.data)) {
+      if (provider === 'dodo' && str(res.data, 'checkout_url')) {
+        window.location.assign(str(res.data, 'checkout_url'));
+        return;
+      }
+      if (provider === 'sepay' && str(res.data, 'code')) {
+        window.location.assign(`/billing/${encodeURIComponent(str(res.data, 'code'))}`);
+        return;
+      }
     }
-    setBusyPlan(null);
+    setBusy(null);
     if (!res.ok && res.status === 401) {
       window.location.assign(loginUrl(`/pricing?plan=${planId}&months=${months}`));
       return;
@@ -45,12 +58,12 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
             </label>
           ))}
         </div>
-        <p className="mt-2 text-center text-xs text-stone-300">Trả trước qua chuyển khoản ngân hàng (VietQR). Không tự động gia hạn, không giảm giá theo kỳ.</p>
+        <p className="mt-2 text-center text-xs text-stone-300">Áp dụng cho chuyển khoản ngân hàng (VietQR): trả trước, không tự động gia hạn, không giảm giá theo kỳ.</p>
       </fieldset>
 
       <div aria-live="polite" role="status" className="empty:hidden mx-auto w-full max-w-[720px]">
         {error && <p className={alertError}>{error}</p>}
-        {!catalog.billing_configured && <p className={alertInfo}>Thanh toán đang tạm đóng trong lúc cấu hình. Bạn vẫn có thể xem các gói; vui lòng quay lại sau.</p>}
+        {!catalog.billing_configured && cardPlans.size === 0 && <p className={alertInfo}>Thanh toán đang tạm đóng trong lúc cấu hình. Bạn vẫn có thể xem các gói; vui lòng quay lại sau.</p>}
       </div>
 
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 min-w-0">
@@ -73,20 +86,36 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
                   <li key={f} className="flex gap-2 min-w-0"><span aria-hidden="true" className="text-amber-600">✓</span><span className="min-w-0 break-words">{f}</span></li>
                 ))}
               </ul>
-              <button
-                type="button" className={`${highlighted ? btnPrimary : btnGhost} mt-5 w-full`}
-                onClick={() => checkout(plan.id)}
-                disabled={!catalog.billing_configured || busyPlan !== null}
-                aria-describedby={titleId}
-              >
-                {busyPlan === plan.id ? 'Đang tạo đơn…' : `Chọn ${plan.name}`}
-              </button>
+              {catalog.billing_configured && (
+                <button
+                  type="button" className={`${highlighted ? btnPrimary : btnGhost} mt-5 w-full`}
+                  onClick={() => checkout(plan.id, 'sepay')}
+                  disabled={busy !== null}
+                  aria-describedby={titleId}
+                >
+                  {busy === `${plan.id}:sepay` ? 'Đang tạo đơn…' : `Chọn ${plan.name} · VietQR`}
+                </button>
+              )}
+              {cardPlans.has(plan.id) && (
+                <button
+                  type="button" className={`${catalog.billing_configured ? btnGhost : highlighted ? btnPrimary : btnGhost} mt-2 w-full`}
+                  onClick={() => checkout(plan.id, 'dodo')}
+                  disabled={busy !== null}
+                  aria-describedby={titleId}
+                >
+                  {busy === `${plan.id}:dodo` ? 'Đang mở trang thanh toán…' : 'Thẻ quốc tế (USD, Dodo)'}
+                </button>
+              )}
+              {!catalog.billing_configured && !cardPlans.has(plan.id) && (
+                <button type="button" className={`${btnGhost} mt-5 w-full`} disabled aria-describedby={titleId}>Tạm đóng</button>
+              )}
             </li>
           );
         })}
       </ul>
       <p className="text-center text-xs text-stone-300 max-w-[720px] mx-auto">
         Giá niêm yết bằng USD; số tiền chuyển khoản tính theo VND (làm tròn lên 1.000 ₫ mỗi tháng). Gói được kích hoạt ngay khi hệ thống nhận được chuyển khoản, và cộng dồn nếu bạn gia hạn sớm.
+        {cardPlans.size > 0 && ' Thẻ quốc tế thanh toán bằng USD qua Dodo Payments, tự gia hạn hằng tháng và huỷ được bất cứ lúc nào trong mục Tài khoản.'}
       </p>
     </div>
   );

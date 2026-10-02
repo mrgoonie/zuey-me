@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  alertError, alertInfo, alertOk, btnGhost, btnPrimary, callApi, card, fmtDateTime, fmtVnd, isRecord, loginUrl, numOr, str, strOrNull,
+  alertError, alertInfo, alertOk, btnGhost, btnPrimary, callApi, card, fmtDateTime, fmtUsd, fmtVnd, isRecord, loginUrl, numOr, planName, str, strOrNull,
 } from './member-ui';
 
 interface Transfer {
@@ -181,6 +181,129 @@ export function BillingStatus({ code }: { code: string }) {
         </div>
       )}
       {error && <p className={`mt-4 ${alertError}`}>{error}</p>}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Card subscription (Dodo): the page members land on after the hosted checkout
+// ---------------------------------------------------------------------------
+
+interface CardSub {
+  id: string;
+  plan: string | null;
+  plan_name: string;
+  status: string;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  amount_cents: number | null;
+  attention_reason: string | null;
+}
+
+function parseCard(v: unknown): CardSub | null {
+  if (!isRecord(v) || !str(v, 'id')) return null;
+  const plan = strOrNull(v, 'plan');
+  return {
+    id: str(v, 'id'),
+    plan,
+    plan_name: strOrNull(v, 'plan_name') ?? (plan ? planName(plan) : 'Gói thành viên'),
+    status: str(v, 'status'),
+    current_period_end: strOrNull(v, 'current_period_end'),
+    cancel_at_period_end: v.cancel_at_period_end === true,
+    amount_cents: typeof v.amount_cents === 'number' ? v.amount_cents : null,
+    attention_reason: strOrNull(v, 'attention_reason'),
+  };
+}
+
+const CARD_ATTENTION_COPY: Record<string, string> = {
+  amount_mismatch: 'Số tiền hoặc loại tiền thanh toán không khớp với giá gói.',
+  product_mismatch: 'Sản phẩm thanh toán không khớp với gói đã chọn.',
+  metadata_missing: 'Thanh toán thiếu thông tin liên kết tài khoản.',
+  metadata_mismatch: 'Thông tin tài khoản trong thanh toán không khớp.',
+};
+
+/** Stop automatic polling after this long and say plainly that confirmation has not arrived yet. */
+const CARD_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * Card checkout result. Returning from Dodo proves nothing, so the page polls the server until a
+ * verified webhook moves the subscription out of `pending`, and only then reports the plan as active.
+ */
+export function CardBillingStatus({ id }: { id: string }) {
+  const [sub, setSub] = useState<CardSub | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [since, setSince] = useState(() => Date.now());
+  const [gaveUp, setGaveUp] = useState(false);
+
+  const load = useCallback(async () => {
+    const res = await callApi(`/api/v1/billing/card/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    if (res.ok) {
+      const parsed = parseCard(res.data);
+      if (parsed) { setSub(parsed); setError(null); } else setError('Phản hồi không hợp lệ từ máy chủ.');
+      return;
+    }
+    if (res.status === 401) { window.location.assign(loginUrl(`/billing/card/${id}`)); return; }
+    setError(res.status === 404 ? 'Không tìm thấy giao dịch thẻ này trong tài khoản của bạn.' : res.message);
+  }, [id]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const pending = sub?.status === 'pending';
+  useEffect(() => {
+    if (!pending || gaveUp) return;
+    const timer = window.setInterval(() => {
+      if (Date.now() - since > CARD_WAIT_MS) { setGaveUp(true); return; }
+      if (document.visibilityState === 'visible') void load();
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pending, gaveUp, load, since]);
+
+  const retry = () => { setGaveUp(false); setSince(Date.now()); void load(); };
+  const renewCopy = sub?.current_period_end
+    ? (sub.cancel_at_period_end ? `, hiệu lực đến ${fmtDateTime(sub.current_period_end)} (đã huỷ gia hạn).` : `, tự gia hạn vào ${fmtDateTime(sub.current_period_end)}.`)
+    : '.';
+
+  return (
+    <section className={card} aria-labelledby="card-title">
+      <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Thẻ quốc tế · Dodo Payments</p>
+      <h1 id="card-title" className="mt-1 text-2xl sm:text-3xl font-bold font-serif">{sub ? `${sub.plan_name} · hằng tháng` : 'Thanh toán bằng thẻ'}</h1>
+      {sub && sub.amount_cents !== null && <p className="mt-1 text-sm text-stone-700 tabular-nums">{fmtUsd(sub.amount_cents)}/tháng</p>}
+      <div className="mt-5 grid gap-4" role="status" aria-live="polite" aria-atomic="true">
+        {!sub && !error && <p className="text-sm text-stone-600">Đang kiểm tra trạng thái thanh toán…</p>}
+        {error && <p className={alertError}>{error}</p>}
+        {sub && pending && !gaveUp && (
+          <p className={alertInfo}>Đang chờ Dodo Payments xác nhận thanh toán. Trang tự cập nhật; gói chỉ được kích hoạt khi hệ thống nhận được xác nhận từ Dodo, không dựa vào việc bạn được chuyển về trang này.</p>
+        )}
+        {sub && pending && gaveUp && (
+          <p className={alertInfo}>Chưa nhận được xác nhận từ Dodo. Nếu bạn đã thanh toán, xác nhận có thể đến muộn; hãy kiểm tra lại sau hoặc email hi@zuey.me kèm mã {sub.id}. Nếu bạn chưa thanh toán thì không có khoản nào bị trừ.</p>
+        )}
+        {sub?.status === 'active' && (
+          <div className="grid gap-3">
+            <p className={alertOk}>Đã xác nhận thanh toán. Gói {sub.plan_name} đang hoạt động{renewCopy}</p>
+            <p className="flex flex-wrap gap-2"><a className={btnPrimary} href="/account#billing">Xem gói của tôi</a><a className={btnGhost} href="/">Về trang chủ</a></p>
+          </div>
+        )}
+        {sub && ['failed', 'expired', 'cancelled', 'on_hold', 'paused'].includes(sub.status) && (
+          <div className="grid gap-3">
+            <p className={alertInfo}>
+              {sub.status === 'failed' && 'Thanh toán không thành công; gói chưa được kích hoạt.'}
+              {sub.status === 'expired' && 'Phiên thanh toán đã hết hạn mà chưa có khoản thanh toán nào được xác nhận.'}
+              {sub.status === 'cancelled' && 'Gói thẻ này đã kết thúc.'}
+              {(sub.status === 'on_hold' || sub.status === 'paused') && 'Gia hạn bằng thẻ đang tạm dừng (thường do thẻ bị từ chối). Hãy cập nhật thẻ trong mục Gói của tài khoản.'}
+            </p>
+            <p className="flex flex-wrap gap-2">
+              <a className={btnPrimary} href={sub.plan ? `/pricing?plan=${sub.plan}` : '/pricing'}>Chọn lại gói</a>
+              <a className={btnGhost} href="/account#billing">Về tài khoản</a>
+            </p>
+          </div>
+        )}
+        {sub?.status === 'needs_attention' && (
+          <p className={alertInfo}>
+            Thanh toán cần Zuey kiểm tra thủ công: {CARD_ATTENTION_COPY[sub.attention_reason ?? ''] ?? 'giao dịch cần đối soát.'} Zuey sẽ liên hệ với bạn qua email; bạn cũng có thể email hi@zuey.me kèm mã {sub.id}.
+          </p>
+        )}
+      </div>
+      {sub && pending && <p className="mt-4"><button type="button" className={btnGhost} onClick={retry}>Kiểm tra lại ngay</button></p>}
     </section>
   );
 }
