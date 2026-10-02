@@ -1,0 +1,135 @@
+---
+// OAuth 2.1 authorization endpoint + consent screen. Standalone page (no site Layout) so no analytics
+// script runs next to authorization parameters.
+import '../../styles/global.css';
+import type { ConsentView } from '../../lib/oauth/authorize';
+import { loadConsent, startAuthorization } from '../../lib/oauth/authorize';
+import { scopeLabel } from '../../lib/oauth/scope-copy';
+import { card, btnPrimary, btnGhost, alertError, alertInfo, fmtDateTime } from '../../components/members/member-ui';
+
+const SECURITY_HEADERS: Record<string, string> = {
+  'Cache-Control': 'no-store',
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'Referrer-Policy': 'no-referrer',
+  'X-Robots-Tag': 'noindex, nofollow',
+};
+for (const [k, v] of Object.entries(SECURITY_HEADERS)) Astro.response.headers.set(k, v);
+
+const env = Astro.locals.runtime?.env ?? {};
+
+let view: ConsentView | null = null;
+let failure: { title: string; message: string } | null = null;
+
+if (!env.DB) {
+  Astro.response.status = 503;
+  failure = { title: 'Tạm thời không khả dụng', message: 'Hệ thống uỷ quyền cần cơ sở dữ liệu. Vui lòng thử lại sau.' };
+} else {
+  try {
+    const requestId = Astro.url.searchParams.get('request_id');
+    const outcome = requestId === null
+      ? await startAuthorization(env.DB, Astro.request)
+      : await loadConsent(env.DB, env, Astro.request, requestId);
+    // Client redirect URIs may use private-use schemes, so build the 302 directly rather than via Astro.redirect.
+    if (outcome.kind === 'redirect' || outcome.kind === 'login') {
+      return new Response(null, { status: 302, headers: { Location: outcome.location, ...SECURITY_HEADERS } });
+    }
+    if (outcome.kind === 'error') {
+      Astro.response.status = outcome.status;
+      failure = { title: outcome.title, message: outcome.message };
+    } else {
+      view = outcome.view;
+    }
+  } catch (err) {
+    console.error('OAuth authorize error:', err instanceof Error ? err.message : 'unknown');
+    Astro.response.status = 500;
+    failure = { title: 'Đã có lỗi xảy ra', message: 'Không xử lý được yêu cầu uỷ quyền. Vui lòng kết nối lại từ ứng dụng.' };
+  }
+}
+
+const noScopeError = Astro.url.searchParams.get('error') === 'no_scope';
+const pageTitle = view ? `Cho phép ${view.client_name} truy cập Zuey?` : (failure?.title ?? 'Uỷ quyền');
+---
+
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>{pageTitle} — Zuey</title>
+    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+  </head>
+  <body class="bg-[#181513] min-h-screen text-stone-900 antialiased">
+    <main class="min-h-screen w-full flex flex-col items-center justify-center py-6 sm:py-12 px-2.5 sm:px-4">
+      {failure && (
+        <section class={card} aria-labelledby="oauth-title">
+          <h1 id="oauth-title" class="text-xl sm:text-2xl font-bold mb-3 break-words">{failure.title}</h1>
+          <p class="text-sm leading-relaxed text-stone-700 break-words">{failure.message}</p>
+          <p class="mt-5"><a href="/account" class={btnGhost}>Về trang tài khoản</a></p>
+        </section>
+      )}
+      {view && (
+        <section class={card} aria-labelledby="oauth-title">
+          <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-2">Kết nối ứng dụng</p>
+          <h1 id="oauth-title" class="text-xl sm:text-2xl font-bold mb-2 break-words">
+            Cho phép <span class="text-amber-800">{view.client_name}</span> truy cập tài khoản Zuey của bạn?
+          </h1>
+          <p class="text-sm text-stone-700 mb-4 break-words">Đang đăng nhập: <strong>{view.user_email}</strong></p>
+
+          <dl class="grid gap-2 text-sm rounded-2xl border border-stone-300 bg-white/70 p-3 sm:p-4 mb-4 min-w-0">
+            <div class="min-w-0">
+              <dt class="font-semibold">Sau khi đồng ý, bạn sẽ được chuyển tới</dt>
+              <dd class="break-all"><strong class="text-base">{view.redirect_host}</strong><span class="block font-mono text-xs text-stone-600">{view.redirect_uri}</span></dd>
+            </div>
+            {view.client_uri && (
+              <div class="min-w-0">
+                <dt class="font-semibold">Trang của ứng dụng (do ứng dụng tự khai báo)</dt>
+                <dd class="break-all font-mono text-xs text-stone-600">{view.client_uri}</dd>
+              </div>
+            )}
+            <div class="min-w-0">
+              <dt class="font-semibold">Mã ứng dụng</dt>
+              <dd class="break-all font-mono text-xs text-stone-600">{view.client_id}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="font-semibold">Dùng cho</dt>
+              <dd class="break-all font-mono text-xs text-stone-600">{view.resource}</dd>
+            </div>
+          </dl>
+
+          {view.registration === 'dcr' && (
+            <p class={`${alertInfo} mb-4`}>Tên ứng dụng do chính ứng dụng tự khai báo, Zuey không xác minh. Chỉ đồng ý nếu bạn vừa bấm kết nối từ ứng dụng này.</p>
+          )}
+          {noScopeError && <p class={`${alertError} mb-4`} role="alert">Hãy chọn ít nhất một quyền, hoặc bấm “Từ chối”.</p>}
+
+          <form method="post" action="/oauth/consent" class="grid gap-4">
+            <input type="hidden" name="request_id" value={view.request_id} />
+            <fieldset class="grid gap-2 min-w-0">
+              <legend class="text-sm font-semibold mb-1">Quyền ứng dụng yêu cầu (bạn có thể bỏ bớt)</legend>
+              {view.scopes.map(choice => (
+                <label class="flex gap-2 items-start text-sm min-w-0">
+                  <input type="checkbox" name="scope" value={choice.scope} checked={choice.requested} class="mt-1 accent-stone-900 shrink-0" />
+                  <span class="min-w-0">
+                    <span class="font-mono text-xs break-all">{choice.scope}</span>
+                    <span class="block text-xs text-stone-600">{scopeLabel(choice.scope)}{choice.requested ? '' : ' (ứng dụng không yêu cầu)'}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <p class="text-xs text-stone-600">
+              Quyền luôn bị giới hạn bởi gói hiện tại của bạn. Ứng dụng không thể tạo hay xem khoá API. Bạn có thể ngắt kết nối bất cứ lúc nào tại
+              <a href="/account#connected-apps" class="underline font-semibold">Tài khoản → Ứng dụng đã kết nối</a>.
+              Yêu cầu hết hạn lúc {fmtDateTime(view.expires_at)}.
+            </p>
+            <div class="flex flex-wrap justify-end gap-2">
+              <button type="submit" name="decision" value="deny" class={btnGhost}>Từ chối</button>
+              <button type="submit" name="decision" value="approve" class={btnPrimary}>Cho phép</button>
+            </div>
+          </form>
+        </section>
+      )}
+    </main>
+  </body>
+</html>
