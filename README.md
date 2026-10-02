@@ -24,7 +24,7 @@ The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed b
 - **Membership features** (each has a migration, REST endpoints in OpenAPI/Scalar, and MCP tools registered in `src/lib/mcp/registry.ts` / `src/lib/openapi/registry.ts`):
   - **Zuey Reads** (`/reads`, `/reads.md`, `/api/v1/reads`, `POST /api/v1/reads/sync`): `src/lib/reads/` syncs AnyMD items tagged `zuey-reads` and caches Workers AI summaries by content hash. AnyMD has no server-side tag filter, so the sync pages the library and filters locally. Scheduled by `.github/workflows/reads-sync.yml`.
   - **AI Workflows** (`/workflows`, `/api/v1/workflows`): `src/lib/workflows/` keeps draft and published JSON apart; publishing requires explicit confirmation and is blocked when the secret scan finds credentials. Local extraction skill: `skills/zuey-me/workflows/`.
-  - **Zuey for Business booking** (`/business`, `/booking/[id]`, `/api/v1/booking/*`, webhooks `/api/webhooks/polar`, `/api/webhooks/sepay`): `src/lib/booking/`, `src/lib/payments/`, `src/lib/integrations/`. A partial unique index guarantees one active booking per slot.
+  - **Zuey for Business booking** (`/business`, `/booking/[id]`, `/api/v1/booking/*`, webhooks `/api/webhooks/paypal`, `/api/webhooks/sepay`; membership cards via `/api/webhooks/dodo`): `src/lib/booking/`, `src/lib/payments/`, `src/lib/integrations/`. A partial unique index guarantees one active booking per slot.
   - **Articles & rich blocks** (`/articles`, `/api/v1/articles`, `/api/v1/surveys/*`): `src/lib/blocks/` validates chart, Mermaid diagram, survey, embed and layout blocks; surveys accept one vote per hashed voter.
   - **Members & plans** (`/login`, `/account`, `/pricing`, `/billing/[code]`, `/api/members/auth/*`, `/api/v1/me/*`, `/api/v1/plans`, `/api/v1/billing/*`, `/api/v1/admin/members`): `src/lib/members/`. Sign-in by magic link (Resend) or Google/GitHub (reusing the Studio OAuth callbacks); `policy.ts` (`resolvePrincipal` + `can`) is the single access decision for HTML, `.md`, REST and MCP. Full articles need the `read_full` entitlement (Knowledges, Kết hợp, Cộng đồng); admins are verified emails in `ADMIN_EMAILS`. Personal `zk_` API keys are scope-limited and never admin. Plans are prepaid 1/3/6/12 months by SePay `ZSB…` transfers; renewal reminders run from `.github/workflows/billing-reminders.yml`.
 - Studio tabs for Articles, Reads, Workflows and Booking live in `src/components/studio/`.
@@ -57,7 +57,8 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | Surveys | `SURVEY_HASH_SALT` |
 | Reads | `ANYMD_API_KEY`, `READS_SUMMARY_MODEL` (optional), Workers AI binding `AI` |
 | Booking calendar | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALENDAR_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID` |
-| Polar | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_CONSULTATION_PRODUCT_ID`, `POLAR_API_BASE` (optional) |
+| PayPal (consultation, USD) | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_API_BASE` (optional, sandbox) |
+| Dodo Payments (membership cards, USD) | `DODO_API_KEY`, `DODO_WEBHOOK_SECRET`, `DODO_PRODUCT_KNOWLEDGES`, `DODO_PRODUCT_AI`, `DODO_PRODUCT_COMBO`, `DODO_PRODUCT_COMMUNITY`, `DODO_API_BASE` (optional, test mode) |
 | SePay | `SEPAY_WEBHOOK_API_KEY`, `SEPAY_BANK_ACCOUNT`, `SEPAY_BANK_CODE`, `CONSULTATION_PRICE_VND` |
 | Email | `RESEND_API_KEY`, `RESEND_FROM` |
 | Members & billing | `ADMIN_EMAILS`, `MEMBER_HASH_SALT`, `USD_VND_RATE`, `SEPAY_API_TOKEN` (reconciliation), plus the SePay bank variables and `PUBLIC_SITE_URL` |
