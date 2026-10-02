@@ -27,13 +27,19 @@ Triển khai toàn bộ các mục còn lại trong bảng "User-requested produ
 - **Polar bị loại tạm thời**, vì Polar từ chối sản phẩm AI clone.
   - Chỉ dùng SePay (VND).
   - Booking chỉ hiển thị các cổng đã cấu hình.
-  - Code Polar để lại nhưng không hoạt động, chờ phương án thay thế (xem `plans/reports/researcher-261001-2351-polar-alternatives.md`).
+  - Polar bị gỡ hoàn toàn khỏi code (user chốt ngày 2026-10-02), thay bằng Dodo + PayPal (xem `plans/reports/researcher-261001-2351-polar-alternatives.md`).
 - **Ngân hàng nhận tiền SePay:** ACB ****9829 (CTY TNHH MTV DIGITOP). `USD_VND_RATE=26000`.
 - **Cổng thẻ thay Polar:**
   - Dodo Payments cho gói membership.
   - PayPal Business cho buổi tư vấn $1,999 (các nhà cung cấp merchant-of-record đều cấm dịch vụ consulting).
   - Cả hai chỉ bật khi đã có key.
-- **Production** nằm ở tài khoản Cloudflare NextLevelBuilder (`7ac87…`), không phải tài khoản trong `.env`.
+- **Cloudflare:** user chốt chuyển toàn bộ production về tài khoản Digitop (`009dc…`), nơi đang giữ zone DNS `zuey.me`. Project và D1 cũ hiện nằm ở NextLevelBuilder. Các bước cutover:
+  1. Export lại D1 cũ.
+  2. Tạo D1 `zuey_me_db` trên Digitop, import dữ liệu, rồi chạy migrations 0002+.
+  3. Tạo Pages project trên Digitop, set secrets từ `.env`, deploy.
+  4. Gỡ `zuey.me` và `www` khỏi project cũ, gắn sang project mới, cập nhật CNAME.
+  5. Cập nhật `database_id` trong `wrangler.toml` và GitHub secrets `CLOUDFLARE_*`.
+  6. Giữ nguyên project và D1 cũ ở NextLevelBuilder, chỉ xoá khi user đồng ý.
 - **Được phép chủ động** chạy migration remote và deploy. Phải backup D1 trước mỗi lần thay đổi schema.
 
 ## Quyết định thiết kế
