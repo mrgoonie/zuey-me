@@ -123,7 +123,8 @@ html.home-motion-pending .home-reveal {
   .home-actions { gap: 3px; }
   .home-chip { width: 36px; min-width: 36px; height: 36px; }
   .home-chip > span[aria-hidden='true']:not(.home-chip-dot) { display: none; }
-  .home-tab { font-size: 13px; padding: 0 4px; }
+  .home-tabs { padding: 8px; }
+  .home-tab { font-size: 13px; padding: 0 2px; letter-spacing: -0.01em; white-space: nowrap; }
 }
 .home-chip-dot {
   position: absolute;

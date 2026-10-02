@@ -39,7 +39,7 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
     <div slot="aiPanel" class="home-ai-panel min-w-0">
       <ZueyAiPanel client:visible locale={locale} />
     </div>
-    <div slot="knowledgePanel" class="home-knowledge-panel min-w-0">
+    <div slot="knowledgePanel" class="home-side-card home-knowledge-panel min-w-0 p-4 sm:p-6">
       <KnowledgesPanel client:visible locale={locale} />
     </div>
   </HomeShell>
