@@ -5,7 +5,7 @@ import type { Principal } from '../members/policy';
 import { requireCan, resolvePrincipal } from '../members/policy';
 import { LOCALES } from '../i18n/locales';
 import { sweepCommunity } from './community';
-import { getGithubActivity } from './github-activity';
+import { getGithubActivity, githubAppAuth } from './github-activity';
 import { NOTICE_EXPRESSIONS, NOTICE_MAX_WINDOW_DAYS, NOTICE_TARGETS, createNotice, expireNotice, listNotices, parseNoticeInput, principalLabel } from './notices';
 import { getWeather, parseWeatherQuery } from './weather';
 
@@ -98,7 +98,7 @@ export const experienceMcpModule: McpToolModule = {
         return sweepCommunity(requireDb(ctx), ctx.env);
       }
       case 'github_activity_get':
-        return getGithubActivity();
+        return getGithubActivity(githubAppAuth(ctx.env));
       case 'weather_get': {
         const params = new URLSearchParams();
         for (const key of ['city', 'lat', 'lon', 'lang']) {

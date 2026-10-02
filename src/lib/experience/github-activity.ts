@@ -138,13 +138,19 @@ function retryAfter(res: Response, nowMs: number): number | null {
   return null;
 }
 
-async function fetchPage(page: number, etag: string | null): Promise<PageResult> {
+/** Basic auth with the site's GitHub OAuth app lifts the shared-IP limit (60/h) to the app's 5,000/h. */
+export function githubAppAuth(env: { GITHUB_CLIENT_ID?: string; GITHUB_CLIENT_SECRET?: string }): string | null {
+  return env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET ? `Basic ${btoa(`${env.GITHUB_CLIENT_ID}:${env.GITHUB_CLIENT_SECRET}`)}` : null;
+}
+
+async function fetchPage(page: number, etag: string | null, auth: string | null): Promise<PageResult> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'zuey.me-activity',
   };
   if (etag) headers['If-None-Match'] = etag;
+  if (auth) headers.Authorization = auth;
   const url = `https://api.github.com/users/${GITHUB_ACTIVITY_USER}/events/public?per_page=${PER_PAGE}&page=${page}`;
   const res = await fetchWithTimeout(url, { headers }, FETCH_TIMEOUT_MS);
   const base = { status: res.status, etag: res.headers.get('etag'), retryAfterSeconds: retryAfter(res, experienceRuntime.now()) };
@@ -159,8 +165,8 @@ function isRateLimited(page: PageResult): boolean {
   return page.status === 429 || (page.status === 403 && page.retryAfterSeconds !== null);
 }
 
-async function fetchSnapshot(previous: ActivitySnapshot | null): Promise<{ snapshot: ActivitySnapshot; revalidated: boolean }> {
-  const first = await fetchPage(1, previous?.etag ?? null);
+async function fetchSnapshot(previous: ActivitySnapshot | null, auth: string | null): Promise<{ snapshot: ActivitySnapshot; revalidated: boolean }> {
+  const first = await fetchPage(1, previous?.etag ?? null, auth);
   const now = new Date(experienceRuntime.now()).toISOString();
   // GitHub's newest page is unchanged, so the whole (append-only) feed is unchanged.
   if (first.status === 304 && previous) return { snapshot: { ...previous, fetched_at: now }, revalidated: true };
@@ -175,7 +181,7 @@ async function fetchSnapshot(previous: ActivitySnapshot | null): Promise<{ snaps
   let lastCount = first.rawCount;
   while (lastCount === PER_PAGE && pages < GITHUB_MAX_PAGES) {
     try {
-      const next = await fetchPage(pages + 1, null);
+      const next = await fetchPage(pages + 1, null, auth);
       if (next.status !== 200) {
         // GitHub answers 422 past the last available page; anything else is a real failure.
         partial = next.status !== 422;
@@ -211,7 +217,7 @@ function toActivityError(err: unknown): { code: ActivityErrorCode; message: stri
  * Public events for GITHUB_ACTIVITY_USER: served from a 15-minute cache, revalidated with ETag,
  * and falling back to the last good snapshot (marked stale) when GitHub is rate limited or down.
  */
-export async function getGithubActivity(cache: JsonCache = experienceRuntime.cache()): Promise<ActivityResult> {
+export async function getGithubActivity(auth: string | null = null, cache: JsonCache = experienceRuntime.cache()): Promise<ActivityResult> {
   const fresh = await cache.get(KEY_FRESH);
   if (isSnapshot(fresh)) return { snapshot: fresh, source: 'cache', error: null };
 
@@ -225,7 +231,7 @@ export async function getGithubActivity(cache: JsonCache = experienceRuntime.cac
         retry_after_seconds: Math.ceil((blocked.until - experienceRuntime.now()) / 1000),
       });
     }
-    const { snapshot, revalidated } = await fetchSnapshot(stale);
+    const { snapshot, revalidated } = await fetchSnapshot(stale, auth);
     await cache.put(KEY_FRESH, snapshot, FRESH_TTL_SECONDS);
     await cache.put(KEY_STALE, snapshot, STALE_TTL_SECONDS);
     return { snapshot, source: revalidated ? 'revalidated' : 'live', error: null };
