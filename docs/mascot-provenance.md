@@ -2,7 +2,7 @@
 
 Production assets: `public/mascot/zuey-mascot.webp` (primary), `public/mascot/zuey-mascot.png`
 (fallback) and `public/mascot/manifest.json` (cells, pivot, baseline, animations, expressions, QA).
-The raw codex output is kept at `public/mascot/raw/codex-spritesheet.png` so the atlas can be rebuilt.
+The raw codex output is kept at `plans/visuals/assets/zuey-mascot-codex-raw.png` so the atlas can be rebuilt.
 
 ## 1. Generation (codex CLI)
 
@@ -52,7 +52,7 @@ deterministic post-processing below exists. Its sandboxed shell calls failed on 
 ## 2. Deterministic post-processing
 
 ```bash
-python scripts/build-mascot-atlas.py --input public/mascot/raw/codex-spritesheet.png --out public/mascot
+python scripts/build-mascot-atlas.py --input plans/visuals/assets/zuey-mascot-codex-raw.png --out public/mascot
 ```
 
 Tested with Python 3.14.0, Pillow 12.0.0, numpy 2.3.5, scipy 1.17.0. Two runs give identical sha256 output.
