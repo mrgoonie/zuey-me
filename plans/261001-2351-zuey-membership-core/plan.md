@@ -28,6 +28,12 @@ Triển khai toàn bộ các mục còn lại trong bảng "User-requested produ
   - Chỉ dùng SePay (VND).
   - Booking chỉ hiển thị các cổng đã cấu hình.
   - Code Polar để lại nhưng không hoạt động, chờ phương án thay thế (xem `plans/reports/researcher-261001-2351-polar-alternatives.md`).
+- **Ngân hàng nhận tiền SePay:** ACB ****9829 (CTY TNHH MTV DIGITOP). `USD_VND_RATE=26000`.
+- **Cổng thẻ thay Polar:**
+  - Dodo Payments cho gói membership.
+  - PayPal Business cho buổi tư vấn $1,999 (các nhà cung cấp merchant-of-record đều cấm dịch vụ consulting).
+  - Cả hai chỉ bật khi đã có key.
+- **Production** nằm ở tài khoản Cloudflare NextLevelBuilder (`7ac87…`), không phải tài khoản trong `.env`.
 - **Được phép chủ động** chạy migration remote và deploy. Phải backup D1 trước mỗi lần thay đổi schema.
 
 ## Quyết định thiết kế
@@ -59,6 +65,7 @@ Triển khai toàn bộ các mục còn lại trong bảng "User-requested produ
 | `0008_ai_chat.sql` | B2 |
 | `0009_knowledge_taxonomy.sql` | B3 |
 | `0010_notices_and_community.sql` | B4 |
+| `0011_card_payments.sql` | B5 (Dodo + PayPal) |
 
 ## Waves
 
