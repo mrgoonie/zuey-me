@@ -123,8 +123,6 @@ html.home-motion-pending .home-reveal {
   .home-actions { gap: 3px; }
   .home-chip { width: 36px; min-width: 36px; height: 36px; }
   .home-chip > span[aria-hidden='true']:not(.home-chip-dot) { display: none; }
-  .home-tabs { padding: 8px; }
-  .home-tab { font-size: 13px; padding: 0 2px; letter-spacing: -0.01em; white-space: nowrap; }
 }
 .home-chip-dot {
   position: absolute;
@@ -236,6 +234,10 @@ html.home-motion-pending .home-reveal {
 html[data-home-tab='ai'] .home-tab-indicator { transform: translateX(0); }
 html:not([data-home-tab]) .home-tab-indicator, html[data-home-tab='profile'] .home-tab-indicator { transform: translateX(100%); }
 html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200%); }
+@media (max-width: 399px) {
+  .home-tabs { padding: 8px; }
+  .home-tab { font-size: 13px; padding: 0 2px; letter-spacing: -0.01em; }
+}
 
 /* ---------- Workspace ---------- */
 .home-workspace {
