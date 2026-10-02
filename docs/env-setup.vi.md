@@ -2,7 +2,7 @@
 
 Tài liệu này chỉ ghi **tên** biến. Không commit giá trị thật; `.dev.vars` và `.env` đã nằm trong `.gitignore`.
 
-- **Production (Cloudflare Pages):** `wrangler pages secret put <TÊN> --project-name=zuey-me`, rồi nhập giá trị khi được hỏi.
+- **Production (Cloudflare Pages):** project `zuey-me`, D1 `zuey_me_db` và DNS zone `zuey.me` cùng nằm trong **một** tài khoản Cloudflare (tài khoản sở hữu DNS). Trước mọi lệnh `wrangler`, export `CLOUDFLARE_ACCOUNT_ID` và `CLOUDFLARE_API_TOKEN` của tài khoản đó (lấy từ `.env`), để wrangler không dùng phiên OAuth của tài khoản khác. Đặt secret bằng `wrangler pages secret put <TÊN> --project-name=zuey-me`, rồi nhập giá trị khi được hỏi. Có thể đặt hàng loạt bằng `scripts/set-pages-secrets.js`.
 - **Local:** sao chép `.env.example` thành `.env` và điền giá trị (dùng cho `import.meta.env` và script). Server runtime (`locals.runtime.env`, đọc qua wrangler platform proxy) chỉ đọc `.dev.vars`, nên chép các biến runtime vào `.dev.vars` theo cùng định dạng `TÊN=giá_trị`, rồi khởi động lại `bun run dev`. Cả hai file đều bị git bỏ qua.
 
 Thiếu biến nào thì API trả lỗi `503` kèm tên biến còn thiếu, không âm thầm hỏng.
@@ -15,9 +15,15 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại với `0003_articles_and_surveys.sql`, `0004_workflows.sql`, `0005_booking_and_payments.sql` và `0006_members_and_billing.sql`.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0011_card_payments.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
-Thanh toán thẻ (PayPal, Dodo) cần thêm `0011_card_payments.sql`. Migration này dựng lại bảng `bookings` để nhận phương thức `paypal`, nên hãy chạy nó sau các migration có số nhỏ hơn.
+**Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
+
+```bash
+wrangler d1 time-travel info zuey_me_db --json
+```
+
+Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bookmark>`.
 
 ## 1. Survey: `SURVEY_HASH_SALT`
 
@@ -31,7 +37,7 @@ Thanh toán thẻ (PayPal, Dodo) cần thêm `0011_card_payments.sql`. Migration
 3. Binding Workers AI `AI` đã được khai báo trong `wrangler.toml`. Trên Pages, kiểm tra thêm ở *Settings → Bindings → Workers AI* (tên biến `AI`).
 4. Tùy chọn: đặt `READS_SUMMARY_MODEL` để đổi model. Mặc định là `@cf/meta/llama-3.1-8b-instruct`.
 5. Cấu hình cron sync trong GitHub, mục *Settings → Secrets and variables → Actions*:
-   - Secret `ZUEY_ADMIN_API_KEY`: một API key có role **admin**, tạo trong Studio → API Keys.
+   - Secret `ZUEY_ADMIN_API_KEY`: một API key có role **admin**, tạo trong Studio → API Keys (hoặc đăng nhập `POST /api/auth/login` bằng `ADMIN_MASTER_TOKEN` rồi gọi `POST /api/v1/keys`). Đưa key vào GitHub qua stdin, ví dụ `gh secret set ZUEY_ADMIN_API_KEY`, để key không nằm trong lịch sử shell.
    - Variable `SITE_URL`: ví dụ `https://zuey.me`.
    - Workflow `.github/workflows/reads-sync.yml` chạy 6 giờ một lần. Có thể bấm *Run workflow* để chạy thử.
 
@@ -91,37 +97,60 @@ Nút "Thẻ quốc tế (USD, Dodo)" trên `/pricing` chỉ hiện cho gói đã
 7. Thử mua một gói bằng thẻ test của Dodo. Sau thanh toán, Dodo đưa thành viên về `/billing/card/<id>`; trang này chờ webhook xác nhận rồi mới báo gói đã kích hoạt. Trong `/account#billing` sẽ thấy ngày gia hạn cùng nút "Quản lý thẻ" (mở cổng khách hàng của Dodo) và "Huỷ gia hạn" (gói vẫn dùng được đến hết kỳ đã trả).
 
 Lưu ý vận hành:
-- Thanh toán thiếu `user_id` trong metadata (ví dụ tạo link thanh toán thủ công trong dashboard Dodo) được lưu thành bản ghi `needs_attention` không gắn thành viên. Hiện chưa có giao diện admin cho các bản ghi này; xử lý trực tiếp trong D1 và dashboard Dodo.
+- Thanh toán thiếu `user_id` trong metadata (ví dụ tạo link thanh toán thủ công trong dashboard Dodo) được lưu thành bản ghi `needs_attention` không gắn thành viên. Mọi bản ghi `needs_attention` (SePay, Dodo, PayPal) hiện trong Studio → tab **Payments**; admin đánh dấu đã xử lý tại đó (`POST /api/v1/admin/billing/orders/{code}/resolve`), còn hoàn tiền vẫn làm trên dashboard của cổng thanh toán.
 - Gói thẻ tự gia hạn được giữ quyền thêm 24 giờ sau ngày gia hạn để chờ webhook `subscription.renewed`; nhắc gia hạn qua email không gửi cho gói đang tự gia hạn.
 
 ## 5. SePay (chuyển khoản, VND)
 
 1. Trong SePay, liên kết tài khoản ngân hàng nhận tiền.
-2. Đặt `SEPAY_BANK_ACCOUNT` là số tài khoản và `SEPAY_BANK_CODE` là mã ngân hàng theo VietQR, ví dụ `MBBank`.
-3. Đặt `CONSULTATION_PRICE_VND` là số tiền nguyên, không có dấu chấm.
-4. Tạo webhook:
-   - URL: `https://<domain>/api/webhooks/sepay`
-   - Kiểu xác thực: **API Key**
-5. Lưu API key của webhook vào `SEPAY_WEBHOOK_API_KEY`. SePay sẽ gửi header `Authorization: Apikey <key>`.
+2. Đặt `SEPAY_BANK_ACCOUNT` là số tài khoản và `SEPAY_BANK_CODE` là mã ngân hàng theo VietQR, ví dụ `ACB`.
+3. Đặt `CONSULTATION_PRICE_VND` là số tiền nguyên, không có dấu chấm (= 1.999 × `USD_VND_RATE`).
+4. Tự tạo một chuỗi ngẫu nhiên dài (`openssl rand -hex 32`) và lưu vào `SEPAY_WEBHOOK_API_KEY`.
+5. Trong SePay, vào *Tích hợp WebHooks → Thêm webhooks*:
+   - Sự kiện: **Có tiền vào**; chọn đúng tài khoản ngân hàng ở bước 1.
+   - URL: `https://zuey.me/api/webhooks/sepay`
+   - Kiểu chứng thực: **API Key**, dán chuỗi ở bước 4. SePay sẽ gửi header `Authorization: Apikey <key>`; sai key thì endpoint trả `401`.
+   - Bỏ qua các giao dịch không có code thanh toán: **Không** (zuey.me tự lọc theo mã `ZBK…`/`ZSB…`).
 6. Nội dung chuyển khoản phải chứa mã `ZBK…` (booking) hoặc `ZSB…` (gói thành viên). Mã hiển thị sẵn trên trang booking và trang `/billing/<mã>`.
 7. (Tuỳ chọn) Để admin đối soát giao dịch bị lỡ webhook qua `POST /api/v1/billing/reconcile`, tạo API token trong trang quản trị SePay và lưu vào `SEPAY_API_TOKEN`. Thiếu biến này thì endpoint trả `503 reconcile_unconfigured`.
 
 ## 6. Email (Resend)
 
-1. Verify domain gửi mail trong Resend.
+1. Verify domain `zuey.me` trong Resend: thêm các bản ghi DKIM/SPF/MX mà Resend đưa ra vào DNS zone `zuey.me`, rồi bấm *Verify*.
 2. Tạo API key và lưu vào `RESEND_API_KEY`.
-3. Đặt `RESEND_FROM`, ví dụ `Zuey <booking@zuey.me>`.
+3. Đặt `RESEND_FROM`, ví dụ `hi@zuey.me` hoặc `Zuey <hi@zuey.me>`.
 
 ## 7. Thành viên & gói
 
 1. `ADMIN_EMAILS`: danh sách email admin, phân tách bằng dấu phẩy. Chỉ email **đã xác minh** (qua magic link hoặc Google/GitHub) mới có quyền admin. Để trống thì dùng mặc định `goon.nguyen@gmail.com,duy@wearetopgroup.com`.
 2. `MEMBER_HASH_SALT`: chuỗi ngẫu nhiên dài, dùng để băm IP khi giới hạn tần suất gửi magic link.
-3. `USD_VND_RATE`: tỷ giá dùng để quy đổi giá USD sang VND, ví dụ `26350`. Mỗi tháng được làm tròn lên 1.000 ₫. Thiếu biến này thì tạo đơn trả `503 billing_unconfigured`.
+3. `USD_VND_RATE`: tỷ giá dùng để quy đổi giá USD sang VND, ví dụ `26000`. Mỗi tháng được làm tròn lên 1.000 ₫. Thiếu biến này thì tạo đơn trả `503 billing_unconfigured`.
 4. `PUBLIC_SITE_URL`: domain dùng để tạo link trong email (ví dụ `https://zuey.me`; local là `http://localhost:4321`).
 5. Magic link cần `RESEND_API_KEY`. Đăng nhập Google/GitHub dùng lại `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` và `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` cùng callback URL đã đăng ký cho Studio, không cần đăng ký thêm.
 6. Nhắc gia hạn chạy hằng ngày bởi `.github/workflows/billing-reminders.yml`, dùng chung secret `ZUEY_ADMIN_API_KEY` và variable `SITE_URL` với cron Reads.
+7. Widget GitHub activity trên trang chủ gọi GitHub API bằng chính `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` (giới hạn 5.000 request/giờ thay vì 60). Không cần biến mới.
+8. `ADMIN_MASTER_TOKEN` là token break-glass: dán vào ô đăng nhập bằng token của Studio (`/studio`) để có phiên admin khi SSO hỏng. Tạo bằng `openssl rand -hex 32` và chỉ lưu trong trình quản lý mật khẩu.
 
-## 8. Kiểm tra
+## 8. Zuey AI (Dewee gateway)
+
+1. `DEWEE_GATEWAY_URL`: URL gateway Dewee; `DEWEE_GATEWAY_TOKEN`: token gọi gateway (chỉ dùng phía server). Nên dùng token operator có phạm vi hẹp cho agent, không dùng token tenant-admin.
+2. `DEWEE_AGENT_KEY`: key của agent trả lời, mặc định `zuey-ai`.
+3. Tuỳ chọn: `AI_MONTHLY_REQUEST_LIMIT` (mặc định 300 request/thành viên/tháng) và `AI_EST_COST_USD_PER_MTOK` (ước tính chi phí hiển thị cho admin).
+4. Thiếu biến nào thì API chat trả `503 ai_unconfigured` kèm tên biến còn thiếu.
+5. `SANDBOX_FETCH_ALLOWLIST`: danh sách host mà block tương tác (HTML/JS) được GET qua `/api/v1/sandbox/fetch`, phân tách bằng dấu phẩy, hỗ trợ `*.example.com`. Để trống thì tắt proxy. Hiện dùng `api.open-meteo.com,geocoding-api.open-meteo.com,api.github.com,api.frankfurter.app`.
+
+## 9. Cộng đồng Telegram (gói $29)
+
+1. Tạo bot bằng @BotFather, lưu token vào `TELEGRAM_BOT_TOKEN`.
+2. Thêm bot làm admin của hai nhóm kín (tiếng Anh, tiếng Việt) với quyền *Invite users via link* và *Ban users*. Lưu ID nhóm (dạng `-100…`) vào `TELEGRAM_GROUP_EN_ID` và `TELEGRAM_GROUP_VI_ID`.
+3. Tạo chuỗi ngẫu nhiên cho `TELEGRAM_WEBHOOK_SECRET`, rồi đăng ký webhook một lần theo lệnh `setWebhook` ghi trong `.env.example` (URL `https://zuey.me/api/v1/community/telegram-webhook`, `allowed_updates=["chat_member"]`).
+4. Thiếu biến nào thì các endpoint cộng đồng trả `503 community_unconfigured`; thành viên vẫn thấy thẻ cộng đồng trong `/account#community` nhưng chưa nhận được link mời.
+
+## 10. OAuth / MCP cho ứng dụng bên ngoài
+
+`/mcp` và OAuth 2.1 (`/.well-known/oauth-authorization-server`) không cần secret mới. Chỉ đặt `MCP_ALLOWED_ORIGINS` (phân tách bằng dấu phẩy) khi một web app ở origin khác cần gọi `/mcp` trực tiếp từ trình duyệt.
+
+## 11. Kiểm tra
 
 1. Mở `/docs`. Kiểm tra có các nhóm Reads, Workflows, Booking, Articles, Members & account và Membership billing.
 2. Gọi `POST /api/v1/reads/sync` bằng admin key. Kết quả mong đợi là `200`, không phải `503`.

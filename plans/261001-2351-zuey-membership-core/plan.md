@@ -123,9 +123,15 @@ Theo bước 9 của handoff, trong phạm vi credential đang có:
 - Key bị revoke hoặc hết hạn thì bị từ chối.
 - Deploy production và kiểm tra trên browser.
 
+## Trạng thái (2026-10-02)
+
+- Wave 1, 2 đã merge vào nhánh `claude/zuey-membership-implementation-ev50kx`; `bun test` 307/0, `bun run build` 0/0/0.
+- D1 production (tài khoản sở hữu DNS) đã chạy đủ `0001`–`0011`; secrets đã đặt; bản deploy chạy trên `zuey-me-aub.pages.dev`.
+- Chặn: Single Redirect rule của zone `zuey.me` đang chuyển hướng toàn bộ domain sang Substack, và token hiện có không đủ quyền đọc/sửa rule này. Custom domain `zuey.me`/`www` vẫn ở trạng thái pending cho tới khi rule được tắt.
+
 ## Đã biết chưa có
 
 - Link Telegram (user cung cấp sau).
-- Cổng thẻ quốc tế (chờ kết quả research).
+- Cổng thẻ quốc tế: chọn Dodo (gói) + PayPal (tư vấn); chưa có API key.
 - Mức chiết khấu trả trước và ngân sách AI theo user ($3/$5/$5 trong preview) chưa được xác nhận.
 - Lớp quyết định "Jev/TypeSafeAI" chưa có nguồn tham chiếu.

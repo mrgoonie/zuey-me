@@ -69,13 +69,13 @@ Bảng dưới là các mục của handoff gốc. Mục nào chưa làm trong l
 
 | Mục handoff | Trạng thái |
 | --- | --- |
-| Pricing $9/$9/$19/$29, checkout Polar/SePay subscription, entitlement | Còn lại: chưa triển khai subscription checkout và entitlement theo gói. |
-| Paywall ~1/3 ở server cho article/.md/REST/MCP | Làm trong Phase 3 (access `knowledges`). Entitlement thật phụ thuộc subscription. |
-| Identity thành viên, user API keys theo scope, OAuth `/mcp` | Còn lại. |
-| Dewee `zuey-ai` chat streaming, interactive code sandbox | Còn lại (repo tham chiếu Dewee không có trên máy này). |
-| Mascot sprite (codex CLI), GSAP, thời tiết, Duy notices | Còn lại. |
-| Telegram community, command palette, GitHub activity, privacy policy | Còn lại. |
-| Taxonomy/tags công khai, audit nhãn bằng AI | Còn lại (tag công khai đơn giản có trong article). |
+| Pricing $9/$9/$19/$29, checkout SePay + thẻ (Dodo), entitlement | Đã triển khai (plan `261001-2351-zuey-membership-core`, wave A + B5). Polar bị loại vì không duyệt sản phẩm AI clone. |
+| Paywall ~1/3 ở server cho article/.md/REST/MCP | Đã triển khai, theo entitlement `read_full`. |
+| Identity thành viên, user API keys theo scope, OAuth `/mcp` | Đã triển khai (wave A + B1). |
+| Dewee `zuey-ai` chat streaming, interactive code sandbox | Đã triển khai (wave D + B2). |
+| Mascot sprite (codex CLI), GSAP, thời tiết, Duy notices | Đã triển khai (wave M + B4). |
+| Telegram community, command palette, GitHub activity, privacy policy | Đã triển khai; Telegram chờ bot token và ID nhóm. |
+| Taxonomy/tags công khai, audit nhãn bằng AI | Đã triển khai (wave B3). |
 
 ## Acceptance (Done means của prompt)
 1. Mỗi tính năng: migration mới, test, OpenAPI + Scalar, MCP tool.

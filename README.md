@@ -46,7 +46,8 @@ bun run build    # Typecheck and build production bundle
 - Workflow: `.github/workflows/deploy.yml` runs test suite and production build on push to `main`.
 - Automated deploy to Cloudflare Pages runs when repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are configured.
 - Manual deployment via wrangler: `wrangler pages deploy dist --project-name=zuey-me --branch=main`.
-- Remote D1 schema migrations (apply in order): `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y` for `0001_initial.sql` through `0006_members_and_billing.sql`.
+- The Pages project, the D1 database and the `zuey.me` DNS zone live in the same Cloudflare account. Export that account's `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` before any wrangler command so a cached OAuth login for another account is never used.
+- Remote D1 schema migrations (apply every file in `migrations/` in numeric order): `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y`. Record a Time Travel bookmark first (`wrangler d1 time-travel info zuey_me_db`); `wrangler d1 export` refuses databases with FTS5 tables.
 
 ### Environment & Secrets
 
@@ -62,6 +63,10 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | SePay | `SEPAY_WEBHOOK_API_KEY`, `SEPAY_BANK_ACCOUNT`, `SEPAY_BANK_CODE`, `CONSULTATION_PRICE_VND` |
 | Email | `RESEND_API_KEY`, `RESEND_FROM` |
 | Members & billing | `ADMIN_EMAILS`, `MEMBER_HASH_SALT`, `USD_VND_RATE`, `SEPAY_API_TOKEN` (reconciliation), plus the SePay bank variables and `PUBLIC_SITE_URL` |
+| Zuey AI chat | `DEWEE_GATEWAY_URL`, `DEWEE_GATEWAY_TOKEN`, `DEWEE_AGENT_KEY`, `AI_MONTHLY_REQUEST_LIMIT` / `AI_EST_COST_USD_PER_MTOK` (optional) |
+| Interactive blocks | `SANDBOX_FETCH_ALLOWLIST` (empty disables the fetch proxy) |
+| Telegram community | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_EN_ID`, `TELEGRAM_GROUP_VI_ID`, `TELEGRAM_WEBHOOK_SECRET` |
+| MCP from other web origins | `MCP_ALLOWED_ORIGINS` (optional) |
 | Reads / reminders cron (GitHub) | secret `ZUEY_ADMIN_API_KEY`, variable `SITE_URL` |
 
 Missing credentials return an explicit `503` error naming the missing variables instead of failing silently.
