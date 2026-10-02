@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getLinks, createLink } from '../../../../db/store';
-import { authenticateRequest } from '../../../../lib/auth';
+import { authenticateAdmin } from '../../../../lib/auth';
 
 export const GET: APIRoute = async ({ locals }) => {
   const d1 = locals.runtime?.env?.DB;
@@ -12,10 +12,10 @@ export const GET: APIRoute = async ({ locals }) => {
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const d1 = locals.runtime?.env?.DB;
-  const auth = await authenticateRequest(request, d1);
+  const auth = await authenticateAdmin(request, d1, locals.runtime?.env);
   if (!auth.authenticated) {
     return new Response(JSON.stringify({ success: false, error: auth.error }), {
-      status: 401,
+      status: auth.role ? 403 : 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
