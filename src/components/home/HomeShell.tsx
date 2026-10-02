@@ -144,6 +144,7 @@ export const HomeShell: React.FC<HomeShellProps> = ({ locale, profile, links, ai
     const html = document.documentElement;
     if (!html.classList.contains('home-motion-pending')) return;
     let cancelled = false;
+    let safety = 0;
     void loadGsap().then(gsap => {
       if (cancelled) return;
       const els = Array.from(document.querySelectorAll<HTMLElement>('.home-reveal'));
@@ -161,17 +162,29 @@ export const HomeShell: React.FC<HomeShellProps> = ({ locale, profile, links, ai
       const [bar, ...rest] = visible;
       if (bar) tl.fromTo(bar, { opacity: 0, y: -14 }, { opacity: 1, y: 0, duration: 0.45, clearProps: 'transform' });
       if (rest.length) tl.fromTo(rest, { opacity: 0, y: 26, scale: 0.985 }, { opacity: 1, y: 0, scale: 1, duration: 0.7, stagger: 0.09, clearProps: 'transform' }, '-=0.2');
+      // Renderers that never paint a frame (prerenderers, link previews, hidden webviews) would leave
+      // the content at opacity 0 forever; if no frame arrives, drop the choreography and show it all.
+      let painted = false;
+      let io: IntersectionObserver | null = null;
+      requestAnimationFrame(() => { painted = true; });
+      safety = window.setTimeout(() => {
+        if (painted) return;
+        tl.kill();
+        io?.disconnect();
+        gsap.set(els, { clearProps: 'opacity,transform' });
+      }, 2000);
       if (later.length === 0) return;
-      const io = new IntersectionObserver(entries => {
+      const observer = new IntersectionObserver(entries => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
-          io.unobserve(entry.target);
+          observer.unobserve(entry.target);
           gsap.fromTo(entry.target, { opacity: 0, y: 32 }, { opacity: 1, y: 0, duration: 0.7, ease: 'power3.out', clearProps: 'transform' });
         }
       }, { rootMargin: '0px 0px -8% 0px' });
-      later.forEach(el => io.observe(el));
+      later.forEach(el => observer.observe(el));
+      io = observer;
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; window.clearTimeout(safety); };
   }, []);
 
   useEffect(() => {
