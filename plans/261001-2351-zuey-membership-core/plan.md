@@ -39,7 +39,7 @@ Triển khai toàn bộ các mục còn lại trong bảng "User-requested produ
   3. Tạo Pages project trên Digitop, set secrets từ `.env`, deploy.
   4. Gỡ `zuey.me` và `www` khỏi project cũ, gắn sang project mới, cập nhật CNAME.
   5. Cập nhật `database_id` trong `wrangler.toml` và GitHub secrets `CLOUDFLARE_*`.
-  6. Giữ nguyên project và D1 cũ ở NextLevelBuilder, chỉ xoá khi user đồng ý.
+  6. Sau khi cutover và verify thành công: xoá Pages project `zuey-me` và D1 `zuey_me_db` ở NextLevelBuilder (user đã đồng ý ngày 2026-10-02). Backup D1 giữ ở `D:/www/zuey/backups/`.
 - **Được phép chủ động** chạy migration remote và deploy. Phải backup D1 trước mỗi lần thay đổi schema.
 
 ## Quyết định thiết kế
