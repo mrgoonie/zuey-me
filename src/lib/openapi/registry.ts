@@ -4,6 +4,7 @@ import { workflowsOpenApi } from '../workflows/openapi';
 import { bookingOpenApi } from '../booking/openapi';
 import { articlesOpenApi } from '../blocks/openapi';
 import { billingOpenApi, membersOpenApi } from '../members/openapi';
+import { chatOpenApi } from '../ai/openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
-export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [readsOpenApi, workflowsOpenApi, bookingOpenApi, articlesOpenApi, membersOpenApi, billingOpenApi];
+export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [readsOpenApi, workflowsOpenApi, bookingOpenApi, articlesOpenApi, membersOpenApi, billingOpenApi, chatOpenApi];

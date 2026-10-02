@@ -54,6 +54,11 @@ function blockToMarkdown(block: Block, opts: MarkdownOptions): string {
     }
     case 'layout':
       return block.children.flatMap(child => child.blocks.map(b => blockToMarkdown(b, opts))).filter(Boolean).join('\n\n');
+    case 'interactive': {
+      // Source code never leaves the sandboxed renderer through Markdown: text fallback plus a link to run it.
+      const where = opts.articleUrl ? `[Open the interactive version](${opts.articleUrl})` : '(open the article page to run it)';
+      return `**Interactive:** ${block.title}${block.caption ? `\n\n*${block.caption}*` : ''}\n\n${where}`;
+    }
   }
 }
 

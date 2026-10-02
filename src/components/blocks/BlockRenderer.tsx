@@ -9,6 +9,7 @@ import { embedSrc, PROVIDER_LABELS } from '../../lib/blocks/embed';
 import { ChartBlock } from './ChartBlock';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
+import { InteractiveFrame } from '../ai/InteractiveFrame';
 
 type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
 
@@ -167,6 +168,8 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'diagram': return <DiagramBlock block={block} />;
     case 'survey': return <SurveyBlock block={block} articleSlug={ctx.articleSlug} interactive={ctx.interactive} />;
     case 'layout': return <LayoutView block={block} ctx={ctx} />;
+    // Sandboxed, click-to-run in articles; previews never execute code automatically.
+    case 'interactive': return <InteractiveFrame block={block} />;
   }
 }
 

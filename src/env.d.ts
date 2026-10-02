@@ -61,6 +61,12 @@ export interface RuntimeEnv {
   DEWEE_GATEWAY_URL?: string;
   DEWEE_GATEWAY_TOKEN?: string;
   DEWEE_AGENT_KEY?: string;
+  /** Zuey AI requests per member per month (Asia/Saigon month); default 300. */
+  AI_MONTHLY_REQUEST_LIMIT?: string;
+  /** Optional blended USD per million tokens used for chat cost estimates. */
+  AI_EST_COST_USD_PER_MTOK?: string;
+  /** Comma-separated hosts (`api.example.com` or `*.example.com`) interactive blocks may GET via /api/v1/sandbox/fetch. */
+  SANDBOX_FETCH_ALLOWLIST?: string;
 }
 
 declare global {

@@ -67,6 +67,14 @@ export const blockSchemas: Record<string, unknown> = {
     gap: { type: 'string', enum: [...LAYOUT_GAPS] },
     children: { type: 'array', minItems: 1, maxItems: LIMITS.layoutChildren, items: ref('LayoutChild') },
   }, ['cols', 'children']),
+  BlockInteractive: block('interactive', {
+    title: short,
+    html: { type: 'string', maxLength: LIMITS.interactiveField, description: 'Body HTML' },
+    css: { type: 'string', maxLength: LIMITS.interactiveField },
+    js: { type: 'string', maxLength: LIMITS.interactiveField, description: 'Runs in a sandboxed opaque-origin iframe with CSP connect-src none; call zuey.fetch(url) for allowlisted GET requests via the server proxy' },
+    height: { type: 'integer', minimum: LIMITS.interactiveHeightMin, maximum: LIMITS.interactiveHeightMax },
+    caption: short,
+  }, ['title']),
 };
 
 export const BLOCK_SCHEMA_NOTES = [
@@ -74,6 +82,7 @@ export const BLOCK_SCHEMA_NOTES = [
   'Object span values must be ≤ cols at that breakpoint; a numeric span must be ≤ cols.lg and is clamped per breakpoint.',
   'Each chart series must have exactly as many data points as labels.',
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
+  `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,
 ];
 
 const articleSummary = {

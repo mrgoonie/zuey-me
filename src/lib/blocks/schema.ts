@@ -25,11 +25,16 @@ export const LIMITS = {
   layoutRowSpanMax: 4,
   /** A layout may contain a layout, but not a third level. */
   layoutDepth: 2,
+  /** Interactive (sandboxed HTML/CSS/JS) blocks: per-field and combined source size. */
+  interactiveField: 60_000,
+  interactiveTotal: 100_000,
+  interactiveHeightMin: 120,
+  interactiveHeightMax: 1_200,
 } as const;
 
 export const BLOCK_TYPES = [
   'paragraph', 'heading', 'list', 'checklist', 'quote', 'callout', 'code', 'divider',
-  'image', 'embed', 'table', 'chart', 'diagram', 'survey', 'layout',
+  'image', 'embed', 'table', 'chart', 'diagram', 'survey', 'layout', 'interactive',
 ] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
 
@@ -71,6 +76,21 @@ export interface DiagramBlock extends BlockBase { type: 'diagram'; syntax: 'merm
 export interface SurveyOption { id: string; label: string }
 export interface SurveyBlock extends BlockBase { type: 'survey'; question: string; options: SurveyOption[]; allowMultiple?: boolean }
 
+/**
+ * Self-contained HTML/CSS/JS demo. Rendered only inside an `<iframe sandbox="allow-scripts">`
+ * (opaque origin) with a strict CSP; network access goes through the server fetch proxy.
+ */
+export interface InteractiveBlock extends BlockBase {
+  type: 'interactive';
+  title: string;
+  html: string;
+  css: string;
+  js: string;
+  /** Initial frame height in CSS pixels. */
+  height?: number;
+  caption?: string;
+}
+
 export interface ResponsiveCols { base: number; md: number; lg: number }
 export interface ResponsiveSpan { base?: number; md?: number; lg?: number }
 export interface LayoutChild {
@@ -89,7 +109,8 @@ export interface LayoutBlock extends BlockBase {
 
 export type Block =
   | ParagraphBlock | HeadingBlock | ListBlock | ChecklistBlock | QuoteBlock | CalloutBlock | CodeBlock
-  | DividerBlock | ImageBlock | EmbedBlock | TableBlock | ChartBlock | DiagramBlock | SurveyBlock | LayoutBlock;
+  | DividerBlock | ImageBlock | EmbedBlock | TableBlock | ChartBlock | DiagramBlock | SurveyBlock | LayoutBlock
+  | InteractiveBlock;
 
 export interface ArticleDocument { version: 1; blocks: Block[] }
 

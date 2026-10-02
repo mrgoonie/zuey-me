@@ -272,7 +272,29 @@ class Validator {
       }
       case 'layout':
         return this.layout(id, v, path, layoutDepth);
+      case 'interactive':
+        return this.interactive(id, v, path);
     }
+  }
+
+  private interactive(id: string, v: Obj, path: string): Block | undefined {
+    const title = this.str(v, 'title', path, LIMITS.shortText, { nonEmpty: true });
+    const html = this.str(v, 'html', path, LIMITS.interactiveField, { optional: true }) ?? '';
+    const css = this.str(v, 'css', path, LIMITS.interactiveField, { optional: true }) ?? '';
+    const js = this.str(v, 'js', path, LIMITS.interactiveField, { optional: true }) ?? '';
+    const caption = this.str(v, 'caption', path, LIMITS.shortText, { optional: true });
+    if (html.length + css.length + js.length > LIMITS.interactiveTotal) {
+      this.err(path, `html + css + js must be at most ${LIMITS.interactiveTotal} characters in total`);
+      return undefined;
+    }
+    if (!html.trim() && !js.trim()) { this.err(`${path}.html`, 'html or js must not be empty'); return undefined; }
+    if (v.height !== undefined && !isInt(v.height, LIMITS.interactiveHeightMin, LIMITS.interactiveHeightMax)) {
+      this.err(`${path}.height`, `must be an integer ${LIMITS.interactiveHeightMin}–${LIMITS.interactiveHeightMax}`);
+      return undefined;
+    }
+    const height = typeof v.height === 'number' ? v.height : undefined;
+    if (title === undefined) return undefined;
+    return { id, type: 'interactive', title, html, css, js, ...(height ? { height } : {}), ...(caption ? { caption } : {}) };
   }
 
   private layout(id: string, v: Obj, path: string, layoutDepth: number): Block | undefined {

@@ -42,6 +42,7 @@ export function blockWeight(block: Block): number {
     case 'diagram': w = block.source.length + len(block.caption); break;
     case 'survey': w = len(block.question) + block.options.reduce((n, o) => n + o.label.length, 0); break;
     case 'layout': w = block.children.reduce((n, c) => n + c.blocks.reduce((m, b) => m + blockWeight(b), 0), 0); break;
+    case 'interactive': w = 40 + len(block.title) + len(block.caption); break;
   }
   return Math.max(1, w);
 }

@@ -88,7 +88,7 @@ const newId = () => 'b_' + crypto.randomUUID().replace(/-/g, '').slice(0, 10);
 const TYPE_LABELS: Record<BlockType, string> = {
   paragraph: 'Đoạn văn', heading: 'Tiêu đề', list: 'Danh sách', checklist: 'Checklist', quote: 'Trích dẫn',
   callout: 'Callout', code: 'Code', divider: 'Đường kẻ', image: 'Ảnh', embed: 'Nhúng (embed)', table: 'Bảng',
-  chart: 'Biểu đồ', diagram: 'Sơ đồ Mermaid', survey: 'Khảo sát', layout: 'Bố cục (layout)',
+  chart: 'Biểu đồ', diagram: 'Sơ đồ Mermaid', survey: 'Khảo sát', layout: 'Bố cục (layout)', interactive: 'Tương tác (HTML/JS)',
 };
 
 function newBlock(type: BlockType): Block {
@@ -109,6 +109,7 @@ function newBlock(type: BlockType): Block {
     case 'diagram': return { id, type, syntax: 'mermaid', source: 'graph TD\n  A[Start] --> B[End]' };
     case 'survey': return { id, type, question: 'Câu hỏi?', options: [{ id: 'o1', label: 'Lựa chọn 1' }, { id: 'o2', label: 'Lựa chọn 2' }], allowMultiple: false };
     case 'layout': return { id, type, variant: 'columns', cols: { base: 1, md: 2, lg: 3 }, gap: 'md', children: [{ blocks: [] }, { blocks: [] }] };
+    case 'interactive': return { id, type, title: 'Demo', html: '<p>Hello</p>', css: '', js: '' };
   }
 }
 
@@ -371,6 +372,15 @@ function BlockFields({ block, onChange, layoutDepth, slug }: FieldsProps) {
       );
     case 'layout':
       return <LayoutFields block={block} onChange={onChange} layoutDepth={layoutDepth} slug={slug} />;
+    case 'interactive':
+      return (
+        <div className="space-y-2">
+          <Text label="Tiêu đề" value={block.title} onChange={title => onChange({ ...block, title })} />
+          <Area label="HTML" value={block.html} onChange={html => onChange({ ...block, html })} rows={5} mono />
+          <Area label="CSS" value={block.css} onChange={css => onChange({ ...block, css })} rows={4} mono />
+          <Area label="JS (chạy trong iframe sandbox, mạng chỉ qua zuey.fetch)" value={block.js} onChange={js => onChange({ ...block, js })} rows={6} mono />
+        </div>
+      );
   }
 }
 
