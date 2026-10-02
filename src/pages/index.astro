@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { HomeShell } from '../components/home/HomeShell';
+import { ZueyAiPanel } from '../components/ai/ZueyAiPanel';
 import { homeStrings } from '../components/home/home-i18n';
 import { getProfile, getLinks } from '../db/store';
 import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
@@ -36,11 +37,8 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
     })();
   </script>
   <HomeShell client:load locale={locale} profile={profile} links={links}>
-    <div slot="aiPanel" class="home-side-card home-placeholder">
-      <p class="home-eyebrow">{s.tabAi}</p>
-      <h2>{s.placeholder.aiTitle}</h2>
-      <p>{s.placeholder.aiBody}</p>
-      <a class="home-cta" href="/chat" data-press>{s.placeholder.aiLink} →</a>
+    <div slot="aiPanel" class="home-ai-panel min-w-0">
+      <ZueyAiPanel client:visible locale={locale} />
     </div>
     <div slot="knowledgePanel" class="home-side-card home-placeholder">
       <p class="home-eyebrow">{s.tabKnowledge}</p>
