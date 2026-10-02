@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { OPENAPI_FRAGMENTS } from '../../lib/openapi/registry';
+import { OAUTH_SCOPES } from '../../lib/oauth/config';
 
 export const GET: APIRoute = async () => {
   const spec = {
@@ -43,6 +44,18 @@ export const GET: APIRoute = async () => {
           in: 'cookie',
           name: 'zuey_member',
           description: 'Member browser session (HttpOnly). Unsafe methods must be same-origin; member personal keys (`zk_...`) use BearerAuth instead.'
+        },
+        McpOAuth: {
+          type: 'oauth2',
+          description: 'OAuth 2.1 for MCP clients (PKCE S256, audience `<origin>/mcp`). Access tokens are only accepted by `/mcp`.',
+          flows: {
+            authorizationCode: {
+              authorizationUrl: '/oauth/authorize',
+              tokenUrl: '/oauth/token',
+              refreshUrl: '/oauth/token',
+              scopes: Object.fromEntries(OAUTH_SCOPES.map(s => [s, s === 'admin' ? 'Admin tools (allowlisted admins only)' : `Member scope ${s}`])),
+            },
+          },
         }
       },
       schemas: {
@@ -57,6 +70,7 @@ export const GET: APIRoute = async () => {
               properties: {
                 code: { type: 'string', description: 'Stable machine-readable error code' },
                 message: { type: 'string' },
+                request_id: { type: 'string', description: 'Same value as the X-Request-Id response header; quote it when reporting a problem' },
               },
             },
           },

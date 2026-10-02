@@ -40,6 +40,48 @@ export function errorResponse(err: unknown): Response {
   return jsonError(500, 'internal_error', 'Internal server error');
 }
 
+export const REQUEST_ID_HEADER = 'X-Request-Id';
+const INBOUND_REQUEST_ID = /^[A-Za-z0-9._:-]{8,128}$/;
+
+/** Reuses a well-formed inbound X-Request-Id (proxy/client correlation) or mints a new one. */
+export function resolveRequestId(request: Request): string {
+  const inbound = request.headers.get(REQUEST_ID_HEADER);
+  if (inbound && INBOUND_REQUEST_ID.test(inbound)) return inbound;
+  return `req_${crypto.randomUUID().replace(/-/g, '')}`;
+}
+
+/**
+ * Stamps the request id on the response and, for the JSON error envelope (`success: false`), adds
+ * `error.request_id` so a member can quote it in a support request. Other bodies pass through untouched.
+ * The returned response always has mutable headers (fetch/redirect responses do not).
+ */
+export async function withRequestId(response: Response, requestId: string): Promise<Response> {
+  let out = response;
+  try {
+    out.headers.set(REQUEST_ID_HEADER, requestId);
+  } catch {
+    out = new Response(response.body, response);
+    out.headers.set(REQUEST_ID_HEADER, requestId);
+  }
+  const type = out.headers.get('Content-Type') ?? '';
+  if (out.status < 400 || !type.includes('application/json') || out.body === null) return out;
+  const text = await out.text();
+  let body: unknown = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  if (body && typeof body === 'object' && !Array.isArray(body) && 'success' in body && body.success === false
+    && 'error' in body && body.error && typeof body.error === 'object' && !Array.isArray(body.error)) {
+    const envelope = { ...body, error: { ...body.error, request_id: requestId } };
+    const headers = new Headers(out.headers);
+    headers.delete('Content-Length');
+    return new Response(JSON.stringify(envelope), { status: out.status, statusText: out.statusText, headers });
+  }
+  return new Response(text, { status: out.status, statusText: out.statusText, headers: out.headers });
+}
+
 export function getString(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === 'string' ? v : undefined;

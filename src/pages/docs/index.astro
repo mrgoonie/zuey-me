@@ -1,5 +1,38 @@
 ---
-// Scalar API Reference documentation page
+// Scalar API Reference with same-origin "Try it": the member cookie session or a key pasted for this tab only.
+// Standalone page (no site Layout) so no analytics script ever sees a pasted key.
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Frame-Options', 'DENY');
+
+// Placeholders only: never real keys.
+const EXAMPLES: { title: string; code: string }[] = [
+  {
+    title: 'REST',
+    code: [
+      'curl -H "Authorization: Bearer $ZUEY_API_KEY" https://zuey.me/api/v1/me',
+      'curl -H "Authorization: Bearer $ZUEY_API_KEY" https://zuey.me/api/v1/articles',
+    ].join('\n'),
+  },
+  {
+    title: 'CLI',
+    code: [
+      'zuey login                       # paste a zk_ key (input hidden, saved with 0600 permissions)',
+      'zuey whoami',
+      'zuey articles list',
+      'zuey subscribe <plan> --months 3',
+      'zuey mcp config',
+    ].join('\n'),
+  },
+  {
+    title: 'MCP (OAuth, recommended)',
+    code: JSON.stringify({ mcpServers: { zuey: { type: 'http', url: 'https://zuey.me/mcp' } } }, null, 2),
+  },
+  {
+    title: 'MCP (personal key header)',
+    code: JSON.stringify({ mcpServers: { zuey: { type: 'http', url: 'https://zuey.me/mcp', headers: { Authorization: 'Bearer <YOUR_ZK_KEY>' } } } }, null, 2),
+  },
+];
 ---
 
 <!doctype html>
@@ -7,35 +40,161 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
     <title>Zuey.me — API Documentation (Scalar)</title>
-    <meta name="description" content="Interactive API documentation for Zuey.me Linktree and AI management APIs." />
+    <meta name="description" content="Interactive API documentation for Zuey.me: REST, CLI and MCP (OAuth) access." />
     <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
     <style>
-      body {
-        margin: 0;
-        padding: 0;
-        background-color: #0f172a;
-      }
+      body { margin: 0; padding: 0; background-color: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      .zd-bar { border-bottom: 1px solid #1e293b; background: #0b1222; padding: 12px 16px; }
+      .zd-wrap { max-width: 1200px; margin: 0 auto; display: grid; gap: 10px; min-width: 0; }
+      .zd-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+      .zd-title { font-weight: 700; font-size: 15px; margin: 0; }
+      .zd-note { font-size: 13px; line-height: 1.5; color: #94a3b8; margin: 0; }
+      .zd-note a, .zd-ex a { color: #c4b5fd; }
+      .zd-label { font-size: 13px; font-weight: 600; }
+      .zd-input { flex: 1 1 220px; min-width: 0; max-width: 420px; padding: 8px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font: 13px ui-monospace, monospace; }
+      .zd-btn { padding: 8px 12px; border-radius: 8px; border: 1px solid #475569; background: #1e293b; color: #e2e8f0; font-size: 13px; font-weight: 600; cursor: pointer; }
+      .zd-btn:hover { background: #334155; }
+      .zd-btn:focus-visible, .zd-input:focus-visible, summary:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+      .zd-btn-danger { border-color: #be123c; background: #881337; }
+      .zd-status { font-size: 13px; color: #a7f3d0; }
+      .zd-ex summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+      .zd-ex pre { overflow-x: auto; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 10px; font-size: 12px; line-height: 1.5; margin: 6px 0 10px; }
+      .zd-ex h3 { font-size: 13px; margin: 10px 0 0; }
+      dialog.zd-confirm { max-width: min(92vw, 460px); border: 1px solid #475569; border-radius: 12px; background: #0f172a; color: #e2e8f0; padding: 18px; }
+      dialog.zd-confirm::backdrop { background: rgb(2 6 23 / 0.7); }
+      .zd-confirm code { word-break: break-all; }
     </style>
   </head>
   <body>
-    <!-- Scalar API Reference CDN Container -->
-    <script
-      is:inline
-      id="api-reference"
-      data-url="/api/openapi.json"
-      data-configuration={JSON.stringify({
-        theme: 'purple',
-        layout: 'modern',
-        hideModels: false,
-        showSidebar: true,
-        searchHotKey: 'k',
-        metaData: {
-          title: 'Zuey.me API Reference',
-          description: 'Programmatic Linktree & Agent Management for Duy Nguyen',
-        },
-      })}
-      src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"
-    ></script>
+    <header class="zd-bar">
+      <div class="zd-wrap">
+        <div class="zd-row">
+          <h1 class="zd-title">Zuey.me API</h1>
+          <a class="zd-note" href="/account#keys">Manage personal keys</a>
+          <a class="zd-note" href="/api/openapi.json">openapi.json</a>
+        </div>
+        <p class="zd-note">
+          “Test Request” only calls this site (same origin). If you are signed in, your member session cookie is used.
+          Or paste a personal key (<code>zk_…</code>) below: it lives in this tab's memory only (never in the URL, storage or analytics) and is sent as
+          <code>Authorization: Bearer</code> with cookies omitted. Every POST/PUT/PATCH/DELETE asks for confirmation before it is sent.
+        </p>
+        <form class="zd-row" id="zd-key-form" autocomplete="off">
+          <label class="zd-label" for="zd-key">Personal key</label>
+          <input class="zd-input" id="zd-key" type="password" spellcheck="false" autocomplete="off" placeholder="zk_… (optional)" />
+          <button class="zd-btn" type="submit">Use for this tab</button>
+          <button class="zd-btn" type="button" id="zd-key-clear">Forget key</button>
+          <span class="zd-status" id="zd-key-status" role="status" aria-live="polite">Using: member session (if signed in)</span>
+        </form>
+        <details class="zd-ex">
+          <summary>REST, CLI and MCP examples</summary>
+          {EXAMPLES.map(ex => (
+            <>
+              <h3>{ex.title}</h3>
+              <pre><code set:text={ex.code} /></pre>
+            </>
+          ))}
+          <p class="zd-note">MCP clients discover OAuth from <a href="/.well-known/oauth-protected-resource/mcp">/.well-known/oauth-protected-resource/mcp</a>. Connected apps can be disconnected at <a href="/account#connected-apps">/account</a>.</p>
+        </details>
+      </div>
+    </header>
+
+    <dialog class="zd-confirm" id="zd-confirm" aria-labelledby="zd-confirm-title">
+      <form method="dialog">
+        <h2 id="zd-confirm-title" style="font-size:16px;margin:0 0 8px">Send this request?</h2>
+        <p class="zd-note" style="margin:0 0 8px">It can change data on your account.</p>
+        <p style="margin:0 0 14px"><code id="zd-confirm-target"></code></p>
+        <div class="zd-row" style="justify-content:flex-end">
+          <button class="zd-btn" value="cancel" autofocus>Cancel</button>
+          <button class="zd-btn zd-btn-danger" value="send">Send request</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="app"></div>
+
+    <script is:inline src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.72.3"></script>
+    <script is:inline>
+      (function () {
+        'use strict';
+        // The pasted key is a closure variable only: never written to the URL, storage, or any third party.
+        var pastedKey = '';
+        var keyInput = document.getElementById('zd-key');
+        var keyStatus = document.getElementById('zd-key-status');
+        var dialog = document.getElementById('zd-confirm');
+        var target = document.getElementById('zd-confirm-target');
+        var MUTATING = { POST: true, PUT: true, PATCH: true, DELETE: true };
+
+        document.getElementById('zd-key-form').addEventListener('submit', function (e) {
+          e.preventDefault();
+          var v = keyInput.value.trim();
+          keyInput.value = '';
+          if (!v) { keyStatus.textContent = 'Paste a key first'; return; }
+          pastedKey = v;
+          keyStatus.textContent = 'Using: pasted key (' + v.slice(0, 8) + '…), this tab only';
+        });
+        document.getElementById('zd-key-clear').addEventListener('click', function () {
+          pastedKey = '';
+          keyInput.value = '';
+          keyStatus.textContent = 'Using: member session (if signed in)';
+        });
+
+        function confirmSend(method, url) {
+          return new Promise(function (resolve) {
+            target.textContent = method + ' ' + url.pathname + url.search;
+            dialog.returnValue = '';
+            dialog.addEventListener('close', function onClose() {
+              dialog.removeEventListener('close', onClose);
+              resolve(dialog.returnValue === 'send');
+            });
+            dialog.showModal();
+          });
+        }
+
+        function synthetic(status, code, message) {
+          return new Response(JSON.stringify({ success: false, error: { code: code, message: message } }), {
+            status: status,
+            statusText: code,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        async function sameOriginFetch(input, init) {
+          var request = new Request(input, init);
+          var url = new URL(request.url, location.href);
+          if (url.origin !== location.origin) {
+            return synthetic(400, 'cross_origin_blocked', 'This docs page only sends requests to ' + location.origin);
+          }
+          if (MUTATING[request.method] && !(await confirmSend(request.method, url))) {
+            return synthetic(499, 'cancelled_by_user', 'Request not sent: you cancelled the confirmation.');
+          }
+          var headers = new Headers(request.headers);
+          var useKey = pastedKey && !headers.has('Authorization');
+          if (useKey) headers.set('Authorization', 'Bearer ' + pastedKey);
+          return fetch(new Request(request, { headers: headers, credentials: useKey ? 'omit' : 'same-origin', referrerPolicy: 'no-referrer' }));
+        }
+
+        Scalar.createApiReference('#app', {
+          url: '/api/openapi.json',
+          theme: 'purple',
+          layout: 'modern',
+          hideModels: false,
+          showSidebar: true,
+          searchHotKey: 'k',
+          servers: [{ url: location.origin, description: 'This site (same origin)' }],
+          customFetch: sameOriginFetch,
+          persistAuth: false,
+          telemetry: false,
+          agent: { disabled: true },
+          withDefaultFonts: false,
+          showDeveloperTools: 'never',
+          metaData: {
+            title: 'Zuey.me API Reference',
+            description: 'REST, CLI and MCP access to zuey.me',
+          },
+        });
+      })();
+    </script>
   </body>
 </html>
