@@ -6,6 +6,7 @@ import { articlesMcpModule } from '../blocks/mcp';
 import { membersMcpModule } from '../members/mcp';
 import { chatMcpModule } from '../ai/mcp';
 import { accountMcpModule } from '../oauth/account-mcp';
+import { experienceMcpModule } from '../experience/mcp';
 
 /** Feature tool modules served by /api/mcp and /mcp in addition to the built-in profile/link tools. */
-export const MCP_FEATURE_MODULES: McpToolModule[] = [readsMcpModule, workflowsMcpModule, bookingMcpModule, articlesMcpModule, membersMcpModule, chatMcpModule, accountMcpModule];
+export const MCP_FEATURE_MODULES: McpToolModule[] = [readsMcpModule, workflowsMcpModule, bookingMcpModule, articlesMcpModule, membersMcpModule, chatMcpModule, accountMcpModule, experienceMcpModule];

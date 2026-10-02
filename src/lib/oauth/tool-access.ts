@@ -65,6 +65,13 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   chat_ask: member('chat:write'),
   chat_sessions_list: member('chat:write'),
   chat_admin_sessions: ADMIN,
+  // Homepage experience
+  notice_send: ADMIN,
+  notice_list: ADMIN,
+  notice_expire: ADMIN,
+  community_sweep: ADMIN,
+  github_activity_get: PUBLIC,
+  weather_get: PUBLIC,
 };
 
 export function toolAccess(name: string): ToolAccess {

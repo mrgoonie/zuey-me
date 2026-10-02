@@ -70,6 +70,14 @@ export interface RuntimeEnv {
   AI_EST_COST_USD_PER_MTOK?: string;
   /** Comma-separated hosts (`api.example.com` or `*.example.com`) interactive blocks may GET via /api/v1/sandbox/fetch. */
   SANDBOX_FETCH_ALLOWLIST?: string;
+  // Telegram community ($29 plan): bot must be an admin of both groups with invite + ban rights.
+  TELEGRAM_BOT_TOKEN?: string;
+  /** Numeric chat id of the private English group (e.g. -1001234567890). */
+  TELEGRAM_GROUP_EN_ID?: string;
+  /** Numeric chat id of the private Vietnamese group. */
+  TELEGRAM_GROUP_VI_ID?: string;
+  /** secret_token passed to setWebhook; Telegram echoes it in X-Telegram-Bot-Api-Secret-Token. */
+  TELEGRAM_WEBHOOK_SECRET?: string;
 }
 
 declare global {
