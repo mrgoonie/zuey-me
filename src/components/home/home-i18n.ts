@@ -24,14 +24,6 @@ const en = {
   hideZuey: 'Hide Zuey',
   noticeWaiting: '1 notice from Duy',
   privacy: 'Privacy',
-  placeholder: {
-    aiTitle: 'Zuey AI',
-    aiBody: 'Ask Zuey AI about what Duy has written. Answers cite their sources and say so when the sources are not enough.',
-    aiLink: 'Open Zuey AI chat',
-    knowledgeTitle: "Zuey's Knowledges",
-    knowledgeBody: 'Articles, notes and interactive explainers. Free previews for everyone; members read in full.',
-    knowledgeLink: 'Browse articles',
-  },
   offer: {
     eyebrow: 'Membership',
     title: 'Read, ask and connect',
@@ -166,14 +158,6 @@ const vi: HomeStrings = {
   hideZuey: 'Ẩn Zuey',
   noticeWaiting: '1 thông báo từ Duy',
   privacy: 'Quyền riêng tư',
-  placeholder: {
-    aiTitle: 'Zuey AI',
-    aiBody: 'Hỏi Zuey AI về những gì Duy đã viết. Câu trả lời dẫn nguồn, và nói rõ khi nguồn chưa đủ.',
-    aiLink: 'Mở Zuey AI',
-    knowledgeTitle: "Zuey's Knowledges",
-    knowledgeBody: 'Bài viết, ghi chép và giải thích tương tác. Ai cũng đọc được phần preview; thành viên đọc toàn bộ.',
-    knowledgeLink: 'Xem bài viết',
-  },
   offer: {
     eyebrow: 'Thành viên',
     title: 'Đọc, hỏi và kết nối',
@@ -306,14 +290,6 @@ const zh: HomeStrings = {
   hideZuey: '隐藏 Zuey',
   noticeWaiting: '1 条来自 Duy 的通知',
   privacy: '隐私',
-  placeholder: {
-    aiTitle: 'Zuey AI',
-    aiBody: '向 Zuey AI 询问 Duy 写过的内容。回答会注明来源，来源不足时会直接说明。',
-    aiLink: '打开 Zuey AI',
-    knowledgeTitle: "Zuey's Knowledges",
-    knowledgeBody: '文章、笔记和互动讲解。所有人可读预览，会员可读全文。',
-    knowledgeLink: '浏览文章',
-  },
   offer: {
     eyebrow: '会员',
     title: '阅读、提问与连接',
@@ -446,14 +422,6 @@ const ko: HomeStrings = {
   hideZuey: 'Zuey 숨기기',
   noticeWaiting: 'Duy의 알림 1개',
   privacy: '개인정보',
-  placeholder: {
-    aiTitle: 'Zuey AI',
-    aiBody: 'Duy가 쓴 글에 대해 Zuey AI에게 물어보세요. 답변은 출처를 밝히고, 출처가 부족하면 그렇다고 말합니다.',
-    aiLink: 'Zuey AI 열기',
-    knowledgeTitle: "Zuey's Knowledges",
-    knowledgeBody: '글, 노트, 인터랙티브 설명. 누구나 미리보기를 읽을 수 있고 회원은 전문을 읽습니다.',
-    knowledgeLink: '글 둘러보기',
-  },
   offer: {
     eyebrow: '멤버십',
     title: '읽고, 묻고, 연결하기',
@@ -586,14 +554,6 @@ const ja: HomeStrings = {
   hideZuey: 'Zuey を隠す',
   noticeWaiting: 'Duy からのお知らせ 1 件',
   privacy: 'プライバシー',
-  placeholder: {
-    aiTitle: 'Zuey AI',
-    aiBody: 'Duy が書いた内容について Zuey AI に質問できます。回答は出典を示し、出典が足りないときはそう伝えます。',
-    aiLink: 'Zuey AI を開く',
-    knowledgeTitle: "Zuey's Knowledges",
-    knowledgeBody: '記事、ノート、インタラクティブな解説。プレビューは誰でも、全文はメンバーが読めます。',
-    knowledgeLink: '記事を見る',
-  },
   offer: {
     eyebrow: 'メンバーシップ',
     title: '読む、聞く、つながる',

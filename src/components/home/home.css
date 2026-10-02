@@ -283,10 +283,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   }
 }
 
-/* ---------- Placeholder side panels ---------- */
-.home-placeholder { padding: 24px; display: flex; flex-direction: column; gap: 14px; }
-.home-placeholder h2 { font-family: 'Fraunces', Georgia, serif; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
-.home-placeholder p { font-size: 14px; line-height: 1.6; color: var(--home-muted); }
+/* ---------- Side panels ---------- */
 .home-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--home-accent); }
 .home-cta {
   display: inline-flex;

@@ -7,6 +7,7 @@
  */
 import type { D1DatabaseLike } from '../../db/store';
 import type { Locale } from '../i18n/locales';
+import { LOCALES } from '../i18n/locales';
 import { inlineToPlain } from '../blocks/inline';
 import { applyPaywall, canReadFull } from '../blocks/paywall';
 import type { ArticleAccess, ArticleDocument, Block } from '../blocks/schema';
@@ -45,6 +46,7 @@ export type ContextRetriever = (principal: Principal, query: string, locale: Loc
 
 export const MAX_SOURCES = 4;
 const MAX_CANDIDATES = 300;
+const LOCALE_COUNT = LOCALES.length;
 const FULL_PASSAGE_CHARS = 1_400;
 const PREVIEW_PASSAGE_CHARS = 700;
 const K1 = 1.2;
@@ -83,6 +85,13 @@ function blockText(block: Block): string {
     case 'diagram': return t(block.caption);
     case 'survey': return [block.question, ...block.options.map(o => o.label)].join(' ');
     case 'interactive': return [block.title, t(block.caption)].join(' ');
+    case 'math': return [block.tex, t(block.caption)].join(' ');
+    case 'gallery': return [...block.images.map(img => [img.alt, t(img.caption)].join(' ')), t(block.caption)].join(' ');
+    case 'audio': case 'video': return [block.title ?? '', t(block.caption)].join(' ');
+    case 'file': return [block.name, t(block.caption)].join(' ');
+    case 'bookmark': return [block.title ?? '', block.siteName ?? '', block.description ?? ''].join(' ');
+    // Toggle children are visited by walkBlocks.
+    case 'toggle': return t(block.summary);
     case 'divider': case 'layout': return '';
   }
 }
@@ -163,13 +172,23 @@ export async function retrieveContext(principal: Principal, query: string, local
   if (terms.length === 0) return [];
   const viewer = viewerFromPrincipal(principal);
   const full = canReadFull(viewer);
+  // One published edition per article: the asker's locale when it exists, otherwise the primary locale.
   const { results } = await deps.d1.prepare(
-    `SELECT id, slug, locale, title, excerpt, tags, access, published_json, published_at FROM articles
-     WHERE deleted_at IS NULL AND published_json IS NOT NULL ORDER BY published_at DESC LIMIT ${MAX_CANDIDATES}`
+    `SELECT a.id, a.slug, e.locale, e.title, e.excerpt, a.tags, a.access, e.published_json, e.published_at, a.locale AS primary_locale
+     FROM article_editions e JOIN articles a ON a.id = e.article_id
+     WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL AND e.published_json IS NOT NULL
+     ORDER BY e.published_at DESC LIMIT ${MAX_CANDIDATES * LOCALE_COUNT}`
   ).all<Row>();
+  const picked = new Map<string, Row>();
+  for (const row of results ?? []) {
+    const id = s(row, 'id');
+    const current = picked.get(id);
+    const rank = (r: Row) => (r.locale === locale ? 2 : r.locale === r.primary_locale ? 1 : 0);
+    if (!current || rank(row) > rank(current)) picked.set(id, row);
+  }
 
   const candidates: Candidate[] = [];
-  for (const row of results ?? []) {
+  for (const row of Array.from(picked.values()).slice(0, MAX_CANDIDATES)) {
     const doc = parseDoc(s(row, 'published_json'));
     if (!doc) continue;
     const access: ArticleAccess = row.access === 'knowledges' ? 'knowledges' : 'free';

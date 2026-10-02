@@ -251,6 +251,10 @@ function insertArticle(slug: string, access: 'free' | 'knowledges', texts: strin
     `INSERT INTO articles (id, slug, locale, title, excerpt, tags, access, status, draft_json, published_json, revision, created_at, updated_at, published_at)
      VALUES (?, ?, 'vi', ?, ?, '[]', ?, 'published', ?, ?, 1, ?, ?, ?)`
   ).run(`art_${slug}`, slug, extra.title ?? `Bài ${slug}`, extra.excerpt ?? '', access, JSON.stringify(doc), JSON.stringify(doc), at, at, at);
+  d1.raw.query(
+    `INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, published_json, revision, published_revision, status, created_at, updated_at, published_at)
+     VALUES (?, ?, 'vi', ?, ?, ?, ?, 1, 1, 'published', ?, ?, ?)`
+  ).run(`ed_${slug}`, `art_${slug}`, extra.title ?? `Bài ${slug}`, extra.excerpt ?? '', JSON.stringify(doc), JSON.stringify(doc), at, at, at);
 }
 
 const interactiveJson = (html: string) => JSON.stringify({ title: 'Đồng hồ', html, css: 'p{color:red}', js: 'document.querySelector("p").textContent = "ok";', height: 240 });
