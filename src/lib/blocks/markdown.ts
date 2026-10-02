@@ -1,4 +1,5 @@
 import type { ArticleDocument, Block } from './schema';
+import { isPdfUrl } from './schema';
 import { PROVIDER_LABELS } from './embed';
 
 export interface MarkdownOptions {
@@ -59,7 +60,52 @@ function blockToMarkdown(block: Block, opts: MarkdownOptions): string {
       const where = opts.articleUrl ? `[Open the interactive version](${opts.articleUrl})` : '(open the article page to run it)';
       return `**Interactive:** ${block.title}${block.caption ? `\n\n*${block.caption}*` : ''}\n\n${where}`;
     }
+    case 'math': return `$$\n${block.tex}\n$$${caption(block.caption)}`;
+    case 'gallery':
+      return block.images.map(img => `![${linkText(img.alt)}](${img.url})${img.caption ? ` — ${img.caption}` : ''}`).join('\n\n') + caption(block.caption);
+    case 'audio': return `[Audio: ${linkText(block.title || fileName(block.url))}](${block.url})${caption(block.caption)}`;
+    case 'video': return `[Video: ${linkText(block.title || fileName(block.url))}](${block.url})${caption(block.caption)}`;
+    case 'file': {
+      const size = block.sizeBytes !== undefined ? `, ${formatBytes(block.sizeBytes)}` : '';
+      const kind = isPdfUrl(block.url) ? 'PDF' : 'File';
+      return `[${kind}: ${linkText(block.name)}${size}](${block.url})${caption(block.caption)}`;
+    }
+    case 'bookmark': {
+      const title = linkText(block.title || block.url);
+      const meta = [block.siteName, block.description].filter(Boolean).join(' — ');
+      return `[${title}](${block.url})${meta ? `\n\n> ${meta.replace(/\r?\n/g, ' ')}` : ''}`;
+    }
+    case 'toggle': {
+      const inner = block.blocks.map(b => blockToMarkdown(b, opts)).filter(Boolean).join('\n\n');
+      return `**${block.summary}**${inner ? `\n\n${inner}` : ''}`;
+    }
   }
+}
+
+function caption(text: string | undefined): string {
+  return text ? `\n\n*${text}*` : '';
+}
+
+function linkText(text: string): string {
+  return text.replace(/[[\]]/g, '');
+}
+
+function fileName(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).pathname.split('/').pop() || url);
+  } catch {
+    return url;
+  }
+}
+
+/** Human-readable size (1 KB = 1024 bytes). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }
 
 /** Serializes a document to Markdown in reading order (layouts are flattened child by child). */

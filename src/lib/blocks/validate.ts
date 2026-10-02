@@ -2,8 +2,8 @@ import {
   BLOCK_TYPES, BREAKPOINTS, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
 } from './schema';
 import type {
-  ArticleDocument, Block, BlockType, ChartSeries, ChecklistItem, EmbedProvider, LayoutChild, ResponsiveCols,
-  ResponsiveSpan, SurveyOption,
+  ArticleDocument, Block, BlockType, ChartSeries, ChecklistItem, EmbedProvider, GalleryImage, KnowledgeMediaBlock,
+  LayoutChild, ResponsiveCols, ResponsiveSpan, SurveyOption,
 } from './schema';
 import { detectProvider } from './embed';
 
@@ -35,6 +35,7 @@ class Validator {
   errors: ValidationError[] = [];
   private ids = new Set<string>();
   private count = 0;
+  private inToggle = false;
 
   err(path: string, message: string): void {
     if (this.errors.length < MAX_ERRORS) this.errors.push({ path, message });
@@ -113,6 +114,10 @@ class Validator {
     const type = v.type;
     if (!isOneOf<BlockType>(BLOCK_TYPES, type)) {
       this.err(`${path}.type`, `unknown block type ${JSON.stringify(type)}; expected one of ${BLOCK_TYPES.join(', ')}`);
+      return undefined;
+    }
+    if (this.inToggle && (type === 'toggle' || type === 'layout')) {
+      this.err(`${path}.type`, `a toggle may not contain a ${type}`);
       return undefined;
     }
     const id = this.id(v, path);
@@ -274,6 +279,87 @@ class Validator {
         return this.layout(id, v, path, layoutDepth);
       case 'interactive':
         return this.interactive(id, v, path);
+      case 'math': case 'gallery': case 'audio': case 'video': case 'file': case 'bookmark': case 'toggle':
+        return this.media(type, id, v, path, layoutDepth);
+    }
+  }
+
+  private optUrl(o: Obj, key: string, path: string): string | undefined | null {
+    if (o[key] === undefined || o[key] === null || o[key] === '') return undefined;
+    return this.url(o, key, path) ?? null;
+  }
+
+  /** Knowledge media blocks: math, gallery, audio, video, file, bookmark, toggle. */
+  private media(type: KnowledgeMediaBlock['type'], id: string, v: Obj, path: string, layoutDepth: number): Block | undefined {
+    const S = LIMITS.shortText;
+    const caption = this.str(v, 'caption', path, S, { optional: true });
+    const withCaption = caption ? { caption } : {};
+    switch (type) {
+      case 'math': {
+        const tex = this.str(v, 'tex', path, LIMITS.math, { nonEmpty: true });
+        return tex === undefined ? undefined : { id, type, tex, ...withCaption };
+      }
+      case 'gallery': {
+        if (!Array.isArray(v.images) || v.images.length < 1 || v.images.length > LIMITS.galleryImages) {
+          this.err(`${path}.images`, `must contain 1–${LIMITS.galleryImages} images`);
+          return undefined;
+        }
+        const images: GalleryImage[] = [];
+        v.images.forEach((img: unknown, i: number) => {
+          const p = `${path}.images[${i}]`;
+          if (!isObj(img)) { this.err(p, 'must be an object {url, alt, caption?}'); return; }
+          const url = this.url(img, 'url', p);
+          const alt = this.str(img, 'alt', p, S, { optional: true }) ?? '';
+          const imgCaption = this.str(img, 'caption', p, S, { optional: true });
+          if (url) images.push({ url, alt, ...(imgCaption ? { caption: imgCaption } : {}) });
+        });
+        return images.length === v.images.length ? { id, type, images, ...withCaption } : undefined;
+      }
+      case 'audio': {
+        const url = this.url(v, 'url', path);
+        const title = this.str(v, 'title', path, S, { optional: true });
+        return url ? { id, type, url, ...(title ? { title } : {}), ...withCaption } : undefined;
+      }
+      case 'video': {
+        const url = this.url(v, 'url', path);
+        const poster = this.optUrl(v, 'poster', path);
+        const title = this.str(v, 'title', path, S, { optional: true });
+        if (!url || poster === null) return undefined;
+        return { id, type, url, ...(poster ? { poster } : {}), ...(title ? { title } : {}), ...withCaption };
+      }
+      case 'file': {
+        const url = this.url(v, 'url', path);
+        const name = this.str(v, 'name', path, S, { nonEmpty: true });
+        const size = v.sizeBytes;
+        if (size !== undefined && !isInt(size, 0, Number.MAX_SAFE_INTEGER)) { this.err(`${path}.sizeBytes`, 'must be a non-negative integer'); return undefined; }
+        if (!url || name === undefined) return undefined;
+        return { id, type, url, name, ...(typeof size === 'number' ? { sizeBytes: size } : {}), ...withCaption };
+      }
+      case 'bookmark': {
+        const url = this.url(v, 'url', path);
+        const title = this.str(v, 'title', path, S, { optional: true });
+        const description = this.str(v, 'description', path, 1_000, { optional: true });
+        const siteName = this.str(v, 'siteName', path, 120, { optional: true });
+        const image = this.optUrl(v, 'image', path);
+        if (!url || image === null) return undefined;
+        return {
+          id, type, url, ...(title ? { title } : {}), ...(description ? { description } : {}),
+          ...(image ? { image } : {}), ...(siteName ? { siteName } : {}),
+        };
+      }
+      case 'toggle': {
+        const summary = this.str(v, 'summary', path, S, { nonEmpty: true });
+        if (v.open !== undefined && typeof v.open !== 'boolean') { this.err(`${path}.open`, 'must be a boolean'); return undefined; }
+        if (!Array.isArray(v.blocks) || v.blocks.length > LIMITS.toggleChildren) {
+          this.err(`${path}.blocks`, `must be an array of at most ${LIMITS.toggleChildren} blocks`);
+          return undefined;
+        }
+        this.inToggle = true;
+        const blocks = this.blocks(v.blocks, `${path}.blocks`, layoutDepth);
+        this.inToggle = false;
+        if (summary === undefined || !blocks) return undefined;
+        return { id, type, summary, ...(v.open === true ? { open: true } : {}), blocks };
+      }
     }
   }
 

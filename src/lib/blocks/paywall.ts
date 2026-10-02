@@ -43,6 +43,12 @@ export function blockWeight(block: Block): number {
     case 'survey': w = len(block.question) + block.options.reduce((n, o) => n + o.label.length, 0); break;
     case 'layout': w = block.children.reduce((n, c) => n + c.blocks.reduce((m, b) => m + blockWeight(b), 0), 0); break;
     case 'interactive': w = 40 + len(block.title) + len(block.caption); break;
+    case 'math': w = block.tex.length + len(block.caption); break;
+    case 'gallery': w = block.images.reduce((n, img) => n + 40 + len(img.alt) + len(img.caption), 0) + len(block.caption); break;
+    case 'audio': case 'video': w = 40 + len(block.title) + len(block.caption); break;
+    case 'file': w = 20 + len(block.name) + len(block.caption); break;
+    case 'bookmark': w = 20 + len(block.title) + len(block.description); break;
+    case 'toggle': w = len(block.summary) + block.blocks.reduce((n, b) => n + blockWeight(b), 0); break;
   }
   return Math.max(1, w);
 }

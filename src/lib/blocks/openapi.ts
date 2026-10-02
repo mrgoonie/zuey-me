@@ -1,11 +1,13 @@
 import type { OpenApiFragment } from '../openapi/types';
 import { adminSecurity, errorResponses } from '../openapi/types';
+import { LOCALES } from '../i18n/locales';
+import { SORTS } from './articles';
 import {
   BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
 } from './schema';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
-const inline = { type: 'string', maxLength: LIMITS.text, description: 'Inline text: **bold**, *italic*, `code`, [label](https://...) — no HTML' };
+const inline = { type: 'string', maxLength: LIMITS.text, description: 'Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, `code`, [label](https://...) — no HTML' };
 const short = { type: 'string', maxLength: LIMITS.shortText };
 const id = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: 'Unique within the document; generated when omitted' };
 const httpsUrl = { type: 'string', format: 'uri', pattern: '^https://', maxLength: LIMITS.url };
@@ -75,6 +77,25 @@ export const blockSchemas: Record<string, unknown> = {
     height: { type: 'integer', minimum: LIMITS.interactiveHeightMin, maximum: LIMITS.interactiveHeightMax },
     caption: short,
   }, ['title']),
+  BlockMath: block('math', { tex: { type: 'string', maxLength: LIMITS.math, description: 'TeX source; shown as accessible source text' }, caption: short }, ['tex']),
+  BlockGallery: block('gallery', {
+    images: {
+      type: 'array', minItems: 1, maxItems: LIMITS.galleryImages,
+      items: { type: 'object', required: ['url'], properties: { url: httpsUrl, alt: short, caption: short } },
+    },
+    caption: short,
+  }, ['images']),
+  BlockAudio: block('audio', { url: httpsUrl, title: short, caption: short }, ['url']),
+  BlockVideo: block('video', { url: httpsUrl, poster: httpsUrl, title: short, caption: short }, ['url']),
+  BlockFile: block('file', { url: httpsUrl, name: short, sizeBytes: { type: 'integer', minimum: 0 }, caption: short }, ['url', 'name']),
+  BlockBookmark: block('bookmark', {
+    url: httpsUrl, title: short, description: { type: 'string', maxLength: 1000 }, image: httpsUrl, siteName: { type: 'string', maxLength: 120 },
+  }, ['url']),
+  BlockToggle: block('toggle', {
+    summary: short,
+    open: { type: 'boolean', default: false },
+    blocks: { type: 'array', maxItems: LIMITS.toggleChildren, items: ref('Block'), description: 'May not contain toggle or layout blocks' },
+  }, ['summary', 'blocks']),
 };
 
 export const BLOCK_SCHEMA_NOTES = [
@@ -83,18 +104,44 @@ export const BLOCK_SCHEMA_NOTES = [
   'Each chart series must have exactly as many data points as labels.',
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
   `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,
+  'Toggle blocks may contain any block except toggle and layout.',
+  'Inline text supports **bold**, *italic*, ~~strike~~, ==highlight==, `code` and [label](https://...).',
 ];
 
+const localeEnum = { type: 'string', enum: [...LOCALES] };
+const publicTag = { type: 'object', properties: { id: { type: 'string' }, slug: { type: 'string' }, name: { type: 'string' } } };
+const publicLabel = {
+  type: 'object',
+  properties: { id: { type: 'string' }, kind: { type: 'string' }, slug: { type: 'string' }, name: { type: 'string' }, version: { type: ['string', 'null'] } },
+};
+const editionSummary = {
+  type: 'object',
+  properties: {
+    locale: localeEnum, title: { type: 'string' }, excerpt: { type: 'string' }, status: { type: 'string', enum: ['draft', 'published'] },
+    revision: { type: 'integer' }, published_revision: { type: ['integer', 'null'] }, published_at: { type: ['string', 'null'] },
+    updated_at: { type: 'string' }, has_unpublished_changes: { type: 'boolean' }, reading_minutes: { type: 'integer' },
+  },
+};
 const articleSummary = {
   type: 'object',
   properties: {
-    id: { type: 'string' }, slug: { type: 'string' }, locale: { type: 'string', enum: ['vi', 'en'] },
-    title: { type: 'string' }, excerpt: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
+    id: { type: 'string' }, slug: { type: 'string' },
+    locale: { ...localeEnum, description: 'Locale of the edition in this response' }, primary_locale: localeEnum,
+    title: { type: 'string' }, excerpt: { type: 'string' },
+    tags: { type: 'array', items: { type: 'string' }, description: 'Display names of topic_tags (public for every reader)' },
+    topic_tags: { type: 'array', items: publicTag }, category: { oneOf: [publicTag, { type: 'null' }] },
+    labels: { type: 'array', items: publicLabel, description: 'Approved labels for this edition (evidence is admin-only)' },
     access: { type: 'string', enum: ['free', 'knowledges'] }, status: { type: 'string', enum: ['draft', 'published'] },
-    revision: { type: 'integer' }, created_at: { type: 'string' }, updated_at: { type: 'string' },
+    revision: { type: 'integer', description: 'Article-wide revision for expected_revision' }, label_revision: { type: 'integer' },
+    published_revision: { type: ['integer', 'null'] }, created_at: { type: 'string' }, updated_at: { type: 'string' },
     published_at: { type: ['string', 'null'] }, has_unpublished_changes: { type: 'boolean' },
+    available_locales: { type: 'array', items: localeEnum, description: 'Locales with a published, human-written edition' },
+    reading_minutes: { type: 'integer' }, cover_url: { type: ['string', 'null'] },
+    snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
+    editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
   },
 };
+const localeQuery = { name: 'lang', in: 'query', schema: localeEnum, description: 'Edition locale; falls back to the primary edition (locale_fallback: true)' };
 
 const json = (schema: unknown) => ({ 'application/json': { schema } });
 const ok = (description: string, data: unknown) => ({
@@ -144,6 +191,7 @@ export const articlesOpenApi: OpenApiFragment = {
           document: ref('ArticleDocument'),
           truncated: { type: 'boolean', description: 'True when the paid remainder was withheld for this viewer' },
           preview: { type: 'boolean' },
+          locale_fallback: { type: 'boolean', description: 'The requested locale had no edition; another edition is returned' },
         },
       }],
     },
@@ -151,11 +199,16 @@ export const articlesOpenApi: OpenApiFragment = {
       type: 'object',
       properties: {
         slug: { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }, title: { type: 'string', maxLength: 200 },
-        excerpt: { type: 'string', maxLength: 500 }, locale: { type: 'string', enum: ['vi', 'en'] },
-        access: { type: 'string', enum: ['free', 'knowledges'] }, tags: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 40 } },
+        excerpt: { type: 'string', maxLength: 500 },
+        locale: { ...localeEnum, description: 'Edition to create/update (default: primary). Translations are written by people, never generated.' },
+        primary_locale: localeEnum,
+        access: { type: 'string', enum: ['free', 'knowledges'] },
+        tags: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 40 }, description: 'Topic tag ids, slugs, aliases or names; unknown names create tags' },
+        category: { type: ['string', 'null'], description: 'Category id or slug; null clears' },
         document: ref('ArticleDocument'),
       },
     },
+    ArticleEdition: editionSummary,
     SurveyResults: {
       type: 'object',
       properties: {
@@ -168,8 +221,18 @@ export const articlesOpenApi: OpenApiFragment = {
   paths: {
     '/api/v1/articles': {
       get: {
-        tags, summary: 'List published articles (admins: ?include_drafts=1)',
-        parameters: [{ name: 'include_drafts', in: 'query', schema: { type: 'string', enum: ['1'] } }],
+        tags, summary: 'List/discover published articles (admins: ?include_drafts=1). With q, the authorization-first knowledge search orders results (X-Search-Semantic: 1|0).',
+        parameters: [
+          { name: 'include_drafts', in: 'query', schema: { type: 'string', enum: ['1'] } },
+          { name: 'q', in: 'query', schema: { type: 'string', maxLength: 200 } },
+          { ...localeQuery, description: 'Preferred edition locale; articles without it show their primary edition' },
+          { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Category slug or id' },
+          { name: 'tag', in: 'query', schema: { type: 'string' }, description: 'Topic tag slug or id' },
+          { name: 'label', in: 'query', schema: { type: 'string' }, description: '<kind>:<slug>, e.g. freshness:current' },
+          { name: 'access', in: 'query', schema: { type: 'string', enum: ['free', 'knowledges'] } },
+          { name: 'sort', in: 'query', schema: { type: 'string', enum: [...SORTS] } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+        ],
         responses: { '200': ok('Articles', { type: 'array', items: ref('ArticleSummary') }), ...errorResponses },
       },
       post: {
@@ -183,12 +246,12 @@ export const articlesOpenApi: OpenApiFragment = {
     },
     '/api/v1/articles/{slug}': {
       get: {
-        tags, summary: 'Get a published article (paywalled) or, for admins, the draft with ?draft=1',
-        parameters: [slugParam, { name: 'draft', in: 'query', schema: { type: 'string', enum: ['1'] } }],
+        tags, summary: 'Get one published edition (paywalled) or, for admins, its draft with ?draft=1',
+        parameters: [slugParam, localeQuery, { name: 'draft', in: 'query', schema: { type: 'string', enum: ['1'] } }],
         responses: { '200': ok('Article', ref('Article')), '404': notFound, ...errorResponses },
       },
       put: {
-        tags, summary: 'Update the draft (optimistic concurrency)', security: adminSecurity, parameters: [slugParam],
+        tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' } } }] }) },
         responses: { '200': ok('Updated draft', ref('Article')), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
@@ -199,9 +262,64 @@ export const articlesOpenApi: OpenApiFragment = {
     },
     '/api/v1/articles/{slug}/publish': {
       post: {
-        tags, summary: 'Publish the current draft', security: adminSecurity, parameters: [slugParam],
-        requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: { expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true } } }) },
+        tags, summary: 'Publish one edition draft (locale, default primary)', security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: { expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum } }) },
         responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/editions': {
+      get: {
+        tags, summary: 'List every locale edition (draft and published state)', security: adminSecurity, parameters: [slugParam],
+        responses: { '200': ok('Editions', { type: 'object', properties: { slug: { type: 'string' }, primary_locale: localeEnum, revision: { type: 'integer' }, editions: { type: 'array', items: ref('ArticleEdition') } } }), '404': notFound, ...errorResponses },
+      },
+      delete: {
+        tags, summary: 'Delete one non-primary edition', security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', required: ['locale', 'expected_revision'], properties: { locale: localeEnum, expected_revision: { type: 'integer' } } }) },
+        responses: { '200': ok('Remaining article', ref('ArticleSummary')), '404': notFound, '409': { description: '`revision_conflict` or `primary_edition`', content: json(ref('Error')) }, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/revisions': {
+      get: {
+        tags, summary: 'Revision history; with ?revision=N&lang=xx the stored document (restore by saving it as the draft)', security: adminSecurity,
+        parameters: [slugParam, localeQuery, { name: 'revision', in: 'query', schema: { type: 'integer', minimum: 1 } }],
+        responses: {
+          '200': ok('History or document', {
+            oneOf: [
+              { type: 'array', items: { type: 'object', properties: { revision: { type: 'integer' }, locale: localeEnum, action: { type: 'string' }, title: { type: 'string' }, actor: { type: 'string' }, created_at: { type: 'string' } } } },
+              { type: 'object', properties: { revision: { type: 'integer' }, locale: localeEnum, title: { type: 'string' }, excerpt: { type: 'string' }, document: ref('ArticleDocument') } },
+            ],
+          }),
+          '404': notFound, ...errorResponses,
+        },
+      },
+    },
+    '/api/v1/articles/{slug}/tags': {
+      put: {
+        tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', required: ['tags', 'expected_revision'], properties: { tags: { type: 'array', maxItems: 20, items: { type: 'string' } }, expected_revision: { type: 'integer' } } }) },
+        responses: { '200': ok('Article', ref('ArticleSummary')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/labels': {
+      get: {
+        tags, summary: 'Label assignments with evidence and label history', security: adminSecurity, parameters: [slugParam],
+        responses: { '200': ok('Label state', ref('LabelState')), '404': notFound, ...errorResponses },
+      },
+      put: {
+        tags, summary: 'Replace label assignments as a new label revision (strict: facts need evidence)', security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', required: ['assignments', 'expected_label_revision'], properties: { assignments: { type: 'array', items: ref('LabelAssignment') }, expected_label_revision: { type: 'integer' }, reason: { type: 'string' } } }) },
+        responses: {
+          '200': ok('Label state', ref('LabelState')), '404': notFound,
+          '409': { description: '`label_revision_conflict`', content: json(ref('Error')) },
+          '422': { description: '`invalid_labels` with errors', content: json(ref('Error')) }, ...errorResponses,
+        },
+      },
+    },
+    '/api/v1/articles/{slug}/labels/revert': {
+      post: {
+        tags, summary: 'Restore an earlier label revision as a new revision', security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', required: ['to_label_revision', 'expected_label_revision'], properties: { to_label_revision: { type: 'integer', minimum: 0 }, expected_label_revision: { type: 'integer' }, reason: { type: 'string' } } }) },
+        responses: { '200': ok('Label state', ref('LabelState')), '404': notFound, '409': { description: '`label_revision_conflict`', content: json(ref('Error')) }, ...errorResponses },
       },
     },
     '/api/v1/surveys/{blockId}/vote': {

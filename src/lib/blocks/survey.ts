@@ -2,11 +2,10 @@ import type { D1DatabaseLike } from '../../db/store';
 import { hashString } from '../../db/store';
 import { AppError } from '../http';
 import { findBlock } from './schema';
-import type { SurveyBlock } from './schema';
+import type { ArticleAccess, SurveyBlock } from './schema';
 import { applyPaywall } from './paywall';
 import type { Viewer } from './paywall';
-import { getArticle } from './articles';
-import type { ArticleRecord } from './articles';
+import { getPublishedDocuments } from './articles';
 
 export const VOTER_COOKIE = 'zuey_voter';
 export const VOTE_RATE_LIMIT = { max: 20, windowMs: 10 * 60 * 1000 } as const;
@@ -21,7 +20,7 @@ export interface SurveyResults {
   voted: boolean;
 }
 
-export interface LocatedSurvey { article: ArticleRecord; survey: SurveyBlock }
+export interface LocatedSurvey { article: { id: string; slug: string; access: ArticleAccess }; survey: SurveyBlock }
 
 type Row = Record<string, unknown>;
 
@@ -46,19 +45,25 @@ export async function locateSurvey(
   viewer: Viewer,
   opts: { includeDraft?: boolean } = {},
 ): Promise<LocatedSurvey> {
-  const article = await getArticle(d1, articleSlug);
-  const doc = article ? (article.published ?? (opts.includeDraft && viewer.isAdmin ? article.draft : null)) : null;
-  if (!article || !doc) throw new AppError(404, 'survey_not_found', 'Survey not found');
-  let block = findBlock(doc.blocks, blockId);
-  if (!block && opts.includeDraft && viewer.isAdmin) block = findBlock(article.draft.blocks, blockId);
-  if (!block || block.type !== 'survey') throw new AppError(404, 'survey_not_found', 'Survey not found');
-  if (!opts.includeDraft) {
-    const visible = applyPaywall(doc, article.access, viewer).doc;
-    if (!findBlock(visible.blocks, blockId)) {
-      throw new AppError(403, 'survey_locked', 'This survey is in the members-only part of the article');
+  const found = await getPublishedDocuments(d1, articleSlug);
+  if (!found) throw new AppError(404, 'survey_not_found', 'Survey not found');
+  const article = { id: found.article.id, slug: found.article.slug, access: found.article.access };
+  let locked = false;
+  for (const edition of found.docs) {
+    const block = findBlock(edition.doc.blocks, blockId);
+    if (!block || block.type !== 'survey') continue;
+    if (opts.includeDraft) return { article, survey: block };
+    if (findBlock(applyPaywall(edition.doc, article.access, viewer).doc.blocks, blockId)) return { article, survey: block };
+    locked = true;
+  }
+  if (locked) throw new AppError(403, 'survey_locked', 'This survey is in the members-only part of the article');
+  if (opts.includeDraft && viewer.isAdmin) {
+    for (const edition of found.docs) {
+      const block = findBlock(edition.draft.blocks, blockId);
+      if (block && block.type === 'survey') return { article, survey: block };
     }
   }
-  return { article, survey: block };
+  throw new AppError(404, 'survey_not_found', 'Survey not found');
 }
 
 function readCookie(request: Request, name: string): string | null {

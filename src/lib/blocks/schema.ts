@@ -30,11 +30,16 @@ export const LIMITS = {
   interactiveTotal: 100_000,
   interactiveHeightMin: 120,
   interactiveHeightMax: 1_200,
+  math: 10_000,
+  galleryImages: 24,
+  toggleChildren: 50,
 } as const;
 
 export const BLOCK_TYPES = [
   'paragraph', 'heading', 'list', 'checklist', 'quote', 'callout', 'code', 'divider',
   'image', 'embed', 'table', 'chart', 'diagram', 'survey', 'layout', 'interactive',
+  // Knowledge media blocks
+  'math', 'gallery', 'audio', 'video', 'file', 'bookmark', 'toggle',
 ] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
 
@@ -107,10 +112,29 @@ export interface LayoutBlock extends BlockBase {
   children: LayoutChild[];
 }
 
+/** TeX source; rendered as accessible source text (no math engine is bundled). */
+export interface MathBlock extends BlockBase { type: 'math'; tex: string; caption?: string }
+export interface GalleryImage { url: string; alt: string; caption?: string }
+export interface GalleryBlock extends BlockBase { type: 'gallery'; images: GalleryImage[]; caption?: string }
+/** Direct https audio file (hosted players such as SoundCloud/Spotify use `embed`). */
+export interface AudioBlock extends BlockBase { type: 'audio'; url: string; title?: string; caption?: string }
+/** Direct https video file (hosted players such as YouTube/Vimeo use `embed`). */
+export interface VideoBlock extends BlockBase { type: 'video'; url: string; poster?: string; title?: string; caption?: string }
+export interface FileBlock extends BlockBase { type: 'file'; url: string; name: string; sizeBytes?: number; caption?: string }
+/** Link preview card; metadata is stored with the block, never fetched while reading. */
+export interface BookmarkBlock extends BlockBase {
+  type: 'bookmark'; url: string; title?: string; description?: string; image?: string; siteName?: string;
+}
+/** Collapsible section. Children may not contain toggles or layouts. */
+export interface ToggleBlock extends BlockBase { type: 'toggle'; summary: string; open?: boolean; blocks: Block[] }
+
+export type KnowledgeMediaBlock = MathBlock | GalleryBlock | AudioBlock | VideoBlock | FileBlock | BookmarkBlock | ToggleBlock;
+
 export type Block =
   | ParagraphBlock | HeadingBlock | ListBlock | ChecklistBlock | QuoteBlock | CalloutBlock | CodeBlock
   | DividerBlock | ImageBlock | EmbedBlock | TableBlock | ChartBlock | DiagramBlock | SurveyBlock | LayoutBlock
-  | InteractiveBlock;
+  | InteractiveBlock
+  | KnowledgeMediaBlock;
 
 export interface ArticleDocument { version: 1; blocks: Block[] }
 
@@ -126,11 +150,21 @@ export function resolveSpan(span: LayoutChild['span'], cols: ResponsiveCols): Re
   return { base: pick('base'), md: pick('md'), lg: pick('lg') };
 }
 
-/** Depth-first walk over every block, including blocks nested in layouts. */
+/** Depth-first walk over every block, including blocks nested in layouts and toggles. */
 export function walkBlocks(blocks: Block[], visit: (block: Block) => void): void {
   for (const block of blocks) {
     visit(block);
     if (block.type === 'layout') for (const child of block.children) walkBlocks(child.blocks, visit);
+    if (block.type === 'toggle') walkBlocks(block.blocks, visit);
+  }
+}
+
+/** True for a PDF link (by path extension); readers may open those inline on request. */
+export function isPdfUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith('.pdf');
+  } catch {
+    return false;
   }
 }
 

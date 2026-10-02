@@ -1,5 +1,5 @@
 /**
- * Tiny inline Markdown subset: **bold**, *italic*, `code`, [label](https://url).
+ * Tiny inline Markdown subset: **bold**, *italic*, ~~strike~~, ==highlight==, `code`, [label](https://url).
  * Parsed into a node tree that renderers turn into elements, so text is always escaped
  * and raw HTML is never interpreted.
  */
@@ -9,9 +9,11 @@ export type InlineNode =
   | { kind: 'code'; value: string }
   | { kind: 'bold'; children: InlineNode[] }
   | { kind: 'italic'; children: InlineNode[] }
+  | { kind: 'strike'; children: InlineNode[] }
+  | { kind: 'mark'; children: InlineNode[] }
   | { kind: 'link'; href: string; children: InlineNode[] };
 
-const INLINE_RE = /\*\*([^*]+?)\*\*|\*([^*\s][^*]*?)\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+const INLINE_RE = /\*\*([^*]+?)\*\*|\*([^*\s][^*]*?)\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|~~([^~]+?)~~|==([^=]+?)==/g;
 
 export function parseInline(text: string, depth = 0): InlineNode[] {
   const nodes: InlineNode[] = [];
@@ -24,13 +26,15 @@ export function parseInline(text: string, depth = 0): InlineNode[] {
     else if (m[2] !== undefined) nodes.push({ kind: 'italic', children: nested(m[2]) });
     else if (m[3] !== undefined) nodes.push({ kind: 'code', value: m[3] });
     else if (m[4] !== undefined && m[5] !== undefined) nodes.push({ kind: 'link', href: m[5], children: nested(m[4]) });
+    else if (m[6] !== undefined) nodes.push({ kind: 'strike', children: nested(m[6]) });
+    else if (m[7] !== undefined) nodes.push({ kind: 'mark', children: nested(m[7]) });
     last = index + m[0].length;
   }
   if (last < text.length) nodes.push({ kind: 'text', value: text.slice(last) });
   return nodes;
 }
 
-/** Plain text with inline markers removed (used for weights, excerpts and CSV labels). */
+/** Plain text with inline markers removed (used for weights, excerpts, search and CSV labels). */
 export function inlineToPlain(text: string): string {
   const walk = (nodes: InlineNode[]): string =>
     nodes.map(n => (n.kind === 'text' || n.kind === 'code' ? n.value : walk(n.children))).join('');

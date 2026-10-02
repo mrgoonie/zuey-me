@@ -1,21 +1,24 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
-import {
-  adminGuard, deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, updateArticle,
-} from '../../../../lib/blocks/articles';
+import { deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, updateArticle } from '../../../../lib/blocks/articles';
+import { localeParam } from '../../../../lib/blocks/params';
+import { requireAdminActor } from '../../../../lib/taxonomy/admin';
 
-/** Published article (paywalled for non-entitled viewers); admins may request ?draft=1. */
+/**
+ * One edition of a published article (?lang=, default primary), paywalled for non-entitled viewers.
+ * Admins may request ?draft=1 for the edition's draft.
+ */
 export const GET: APIRoute = async ({ params, request, locals }) => {
   const env = locals.runtime?.env ?? {};
-  const d1 = env.DB;
   try {
-    const { viewer, principal } = await resolveReader(request, d1, env);
+    const { viewer, principal } = await resolveReader(request, env.DB, env);
     if (principal.credentialError) {
       return jsonError(principal.credentialError.status, principal.credentialError.code, principal.credentialError.message);
     }
-    const draft = new URL(request.url).searchParams.get('draft') === '1';
+    const url = new URL(request.url);
+    const draft = url.searchParams.get('draft') === '1';
     if (draft && !viewer.isAdmin) return jsonError(401, 'unauthorized', 'Draft access requires an admin session or key');
-    const view = await getArticleView(d1, params.slug ?? '', viewer, { draft });
+    const view = await getArticleView(env.DB, params.slug ?? '', viewer, { draft, locale: localeParam(url) });
     if (!view) return jsonError(404, 'not_found', 'Article not found');
     return jsonOk(view, 200, { 'Cache-Control': 'private, no-store' });
   } catch (err) {
@@ -23,28 +26,29 @@ export const GET: APIRoute = async ({ params, request, locals }) => {
   }
 };
 
-/** Admin: update draft and metadata. Body: { expected_revision, document?, title?, ... }. */
+/**
+ * Admin: update one edition's draft (body.locale, default primary; a missing edition is created and
+ * needs a title) plus article-wide metadata. Body: { expected_revision, locale?, document?, title?, tags?, category?, ... }.
+ */
 export const PUT: APIRoute = async ({ params, request, locals }) => {
-  const d1 = locals.runtime?.env?.DB;
+  const env = locals.runtime?.env ?? {};
   try {
-    const denied = await adminGuard(request, d1);
-    if (denied) return denied;
+    const { actor } = await requireAdminActor(request, env);
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
-    const rec = await updateArticle(d1, params.slug ?? '', parseArticleInput(body, 'update'), body.expected_revision);
+    const rec = await updateArticle(env.DB, params.slug ?? '', parseArticleInput(body, 'update'), body.expected_revision, { actor, env });
     return jsonOk({ ...toSummary(rec), document: rec.draft });
   } catch (err) {
     return errorResponse(err);
   }
 };
 
-/** Admin: soft delete. */
+/** Admin: soft delete (all editions; search rows are removed immediately). */
 export const DELETE: APIRoute = async ({ params, request, locals }) => {
-  const d1 = locals.runtime?.env?.DB;
+  const env = locals.runtime?.env ?? {};
   try {
-    const denied = await adminGuard(request, d1);
-    if (denied) return denied;
-    await deleteArticle(d1, params.slug ?? '');
+    const { actor } = await requireAdminActor(request, env);
+    await deleteArticle(env.DB, params.slug ?? '', { actor, env });
     return jsonOk({ deleted: true });
   } catch (err) {
     return errorResponse(err);

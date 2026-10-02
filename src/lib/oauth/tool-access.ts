@@ -53,6 +53,17 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   article_publish: ADMIN,
   article_delete: ADMIN,
   survey_results: ADMIN,
+  article_edition_delete: ADMIN,
+  article_revisions: ADMIN,
+  article_tags_set: ADMIN,
+  article_labels_set: ADMIN,
+  article_labels_revert: ADMIN,
+  // Knowledge search & taxonomy (search filters paid text by the caller inside the tool)
+  knowledge_search: PUBLIC,
+  label_create: ADMIN,
+  label_proposal_create: ADMIN,
+  label_proposal_decide: ADMIN,
+  label_audit_job_create: ADMIN,
   // Membership & billing
   plans_list: PUBLIC,
   me_get: member('account:read'),

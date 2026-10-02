@@ -63,8 +63,10 @@ export function embedSrc(url: string, provider: EmbedProvider): string | null {
       const id = path.match(/\/status\/(\d+)/)?.[1];
       return id ? `https://platform.twitter.com/embed/Tweet.html?id=${id}&dnt=true` : null;
     }
-    case 'facebook':
-      return `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(u.toString())}`;
+    case 'facebook': {
+      const isVideo = u.hostname.endsWith('fb.watch') || /\/(videos|watch|reel)\b/.test(path);
+      return `https://www.facebook.com/plugins/${isVideo ? 'video' : 'post'}.php?href=${encodeURIComponent(u.toString())}`;
+    }
     case 'instagram': {
       const m = path.match(/\/(p|reel|tv)\/([\w-]+)/);
       return m ? `https://www.instagram.com/${m[1]}/${m[2]}/embed` : null;
@@ -81,4 +83,26 @@ export function embedSrc(url: string, provider: EmbedProvider): string | null {
     default:
       return null;
   }
+}
+
+/** Frame shape used by the renderer so players reserve space before loading (no layout shift). */
+export function embedFrame(provider: EmbedProvider, url: string): 'video' | 'audio' | 'vertical' | 'post' {
+  if (provider === 'youtube') return /\/shorts\//.test(url) ? 'vertical' : 'video';
+  if (provider === 'vimeo') return 'video';
+  if (provider === 'soundcloud' || provider === 'spotify') return 'audio';
+  if (provider === 'tiktok' || provider === 'instagram') return 'vertical';
+  return 'post';
+}
+
+export interface EmbedRecognition {
+  provider: EmbedProvider;
+  label: string;
+  /** Player URL; null when the URL is not embeddable and must be shown as a link. */
+  src: string | null;
+}
+
+/** URL recognition shared by the editor (live preview) and the renderer. */
+export function recognizeEmbed(url: string): EmbedRecognition {
+  const provider = detectProvider(url);
+  return { provider, label: PROVIDER_LABELS[provider], src: embedSrc(url, provider) };
 }

@@ -7,6 +7,10 @@ import { billingOpenApi, membersOpenApi } from '../members/openapi';
 import { chatOpenApi } from '../ai/openapi';
 import { oauthOpenApi } from '../oauth/openapi';
 import { experienceOpenApi } from '../experience/openapi';
+import { taxonomyOpenApi } from '../taxonomy/openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
-export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [readsOpenApi, workflowsOpenApi, bookingOpenApi, articlesOpenApi, membersOpenApi, billingOpenApi, chatOpenApi, oauthOpenApi, experienceOpenApi];
+export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [
+  readsOpenApi, workflowsOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
+  chatOpenApi, oauthOpenApi, experienceOpenApi,
+];
