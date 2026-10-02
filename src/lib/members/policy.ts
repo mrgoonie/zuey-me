@@ -14,7 +14,9 @@ import type { UserRecord } from './users';
 import { getUserById } from './users';
 
 export type PrincipalKind = 'anonymous' | 'member' | 'admin';
-export type CredentialVia = 'none' | 'studio_session' | 'admin_api_key' | 'read_api_key' | 'member_session' | 'user_api_key';
+/** How the caller authenticated; `oauth_token` is an OAuth access token presented to /mcp. */
+export const CREDENTIAL_VIAS = ['none', 'studio_session', 'admin_api_key', 'read_api_key', 'member_session', 'user_api_key', 'oauth_token'] as const;
+export type CredentialVia = (typeof CREDENTIAL_VIAS)[number];
 
 export interface CredentialError {
   status: 401 | 403;

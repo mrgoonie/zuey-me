@@ -270,6 +270,9 @@ describe('authorization code + PKCE', () => {
     expect(me.status).toBe(200);
     expect(get(me.body, 'result', 'resultType')).toBe('complete');
     expect(String(get(me.body, 'result', 'content', 0, 'text'))).toContain('lan@example.com');
+    const meView: unknown = JSON.parse(String(get(me.body, 'result', 'content', 0, 'text')));
+    // OAuth access tokens are reported as such, not as personal `zk_` keys.
+    expect(get(meView, 'auth')).toEqual({ via: 'oauth_token', scopes: ['articles:read', 'account:read'] });
   });
 
   it('sends unauthenticated members to /login and back to the parked request', async () => {

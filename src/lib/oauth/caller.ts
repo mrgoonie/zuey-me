@@ -67,8 +67,9 @@ export async function resolveMcpCaller(request: Request, env: RuntimeEnv, audien
   const memberScopes: UserKeyScope[] = check.token.scopes.filter(isMemberScope);
   const principal: Principal = {
     kind: admin ? 'admin' : 'member',
-    // A scope-limited bearer credential acting for one member: same policy path as a personal key.
-    via: 'user_api_key',
+    // A scope-limited bearer credential acting for one member: same policy path as a personal key
+    // (`scopes` is non-null), reported distinctly so callers can tell OAuth clients from `zk_` keys.
+    via: 'oauth_token',
     userId: user.id,
     email: user.email,
     user,
