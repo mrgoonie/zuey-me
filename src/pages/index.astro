@@ -1,23 +1,52 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { ProfileView } from '../components/ProfileView';
+import { HomeShell } from '../components/home/HomeShell';
+import { homeStrings } from '../components/home/home-i18n';
 import { getProfile, getLinks } from '../db/store';
+import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
 
 // Retrieve D1 database if running on Cloudflare Pages
 const d1 = Astro.locals.runtime?.env?.DB;
 
 const profile = await getProfile(d1);
 const links = await getLinks(d1);
+const locale = resolveLocale(Astro.request);
+// The locale comes from ?lang, the locale cookie or Accept-Language, so caches must key on them.
+Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
+const s = homeStrings(locale);
+const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
 ---
 
 <Layout
   title={`${profile.name} — Profile & Links`}
-  description={profile.intro_en}
+  description={description}
   image="https://zuey.me/og.png"
+  lang={LOCALE_LABELS[locale].htmlLang}
 >
-  <ProfileView
-    client:load
-    initialProfile={profile}
-    initialLinks={links}
-  />
+  <script is:inline>
+    // Runs before the shell paints: pick the tab from the URL hash and arm the entrance
+    // choreography (CSS reveals everything after ~1s even if scripts never load).
+    (function () {
+      var root = document.documentElement;
+      var hash = location.hash.slice(1);
+      if (hash === 'ai' || hash === 'profile' || hash === 'knowledges') root.setAttribute('data-home-tab', hash);
+      try {
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) root.classList.add('home-motion-pending');
+      } catch (e) {}
+    })();
+  </script>
+  <HomeShell client:load locale={locale} profile={profile} links={links}>
+    <div slot="aiPanel" class="home-side-card home-placeholder">
+      <p class="home-eyebrow">{s.tabAi}</p>
+      <h2>{s.placeholder.aiTitle}</h2>
+      <p>{s.placeholder.aiBody}</p>
+      <a class="home-cta" href="/chat" data-press>{s.placeholder.aiLink} →</a>
+    </div>
+    <div slot="knowledgePanel" class="home-side-card home-placeholder">
+      <p class="home-eyebrow">{s.tabKnowledge}</p>
+      <h2>{s.placeholder.knowledgeTitle}</h2>
+      <p>{s.placeholder.knowledgeBody}</p>
+      <a class="home-cta" href="/articles" data-press>{s.placeholder.knowledgeLink} →</a>
+    </div>
+  </HomeShell>
 </Layout>
