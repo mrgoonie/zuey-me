@@ -1,16 +1,16 @@
 ---
 import '../../styles/global.css';
 import { StudioApp } from '../../components/studio/StudioApp';
-import { getProfile, getLinks, listApiKeys, verifySession } from '../../db/store';
+import { getProfile, getLinks, listApiKeys } from '../../db/store';
 import type { ApiKey } from '../../db/types';
+import { resolveStudioAccess } from '../../lib/members/studio-access';
 
-const d1 = Astro.locals.runtime?.env?.DB;
+const env = Astro.locals.runtime?.env ?? {};
+const d1 = env.DB;
 
-// 1. Check session cookie first
-const cookie = Astro.request.headers.get('cookie') || '';
-const match = cookie.match(/(?:^|;\s*)zuey_session=([^;]+)/);
-const sessionToken = match ? decodeURIComponent(match[1]) : null;
-const isAuthenticated = sessionToken ? await verifySession(sessionToken, d1) : false;
+// 1. Owner Studio session or an admin member session (verified ADMIN_EMAILS), via the shared policy
+const access = await resolveStudioAccess(Astro.request, env);
+const isAuthenticated = access.authenticated;
 
 // 2. Gate sensitive keys behind authentication
 const profile = await getProfile(d1);
@@ -39,6 +39,9 @@ const keys: ApiKey[] = isAuthenticated ? await listApiKeys(d1) : [];
       initialLinks={links}
       initialKeys={keys}
       isAuthenticated={isAuthenticated}
+      sessionVia={access.via}
+      adminEmail={access.email}
+      deniedEmail={access.deniedEmail}
     />
   </body>
 </html>

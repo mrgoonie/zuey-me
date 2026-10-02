@@ -546,9 +546,11 @@ describe('API surface registration', () => {
     expect(OPENAPI_FRAGMENTS).toContain(billingOpenApi);
     expect(MCP_FEATURE_MODULES).toContain(membersMcpModule);
     const paths = [...Object.keys(membersOpenApi.paths), ...Object.keys(billingOpenApi.paths)];
-    for (const p of ['/api/v1/me', '/api/v1/me/keys', '/api/v1/me/keys/{id}/rotate', '/api/v1/plans', '/api/v1/billing/orders', '/api/v1/billing/subscription', '/api/v1/admin/members', '/api/v1/billing/reconcile', '/api/members/auth/magic-link', '/api/members/auth/logout']) {
+    for (const p of ['/api/v1/me', '/api/v1/me/keys', '/api/v1/me/keys/{id}/rotate', '/api/v1/plans', '/api/v1/billing/orders', '/api/v1/billing/subscription', '/api/v1/admin/members', '/api/v1/billing/reconcile', '/api/v1/admin/billing/attention', '/api/v1/admin/billing/orders/{code}/resolve', '/api/members/auth/magic-link', '/api/members/auth/logout']) {
       expect(paths).toContain(p);
     }
-    expect(membersMcpModule.tools.map(t => t.name).sort()).toEqual(['billing_checkout_create', 'billing_order_get', 'me_get', 'members_list', 'plans_list', 'subscription_get']);
+    expect(membersMcpModule.tools.map(t => t.name).sort()).toEqual([
+      'billing_attention_list', 'billing_checkout_create', 'billing_order_get', 'billing_order_resolve', 'me_get', 'members_list', 'plans_list', 'subscription_get',
+    ]);
   });
 });

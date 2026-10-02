@@ -94,6 +94,8 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   billing_order_get: member('billing:read'),
   subscription_get: member('billing:read'),
   members_list: ADMIN,
+  billing_attention_list: ADMIN,
+  billing_order_resolve: ADMIN,
   // Zuey AI (the ai_chat entitlement is checked inside the tool)
   chat_ask: member('chat:write'),
   chat_sessions_list: member('chat:write'),

@@ -2,6 +2,7 @@ import type { McpContext, McpToolModule } from '../mcp/types';
 import { AppError, getNumber, getString } from '../http';
 import { buildMeView, plansCatalog } from './account';
 import { CHECKOUT_PROVIDERS, createMemberCheckout, getOrderFor, subscriptionSummary, toOrderView } from './billing';
+import { MAX_NOTE_LENGTH, RESOLVE_ACTIONS, adminLabel, listBillingAttention, parseResolveInput, resolveBillingOrder } from './billing-attention';
 import { listMembers } from './directory';
 import { BILLING_MONTHS, PLAN_IDS } from './plans';
 import type { Principal } from './policy';
@@ -47,6 +48,24 @@ export const membersMcpModule: McpToolModule = {
       name: 'members_list', description: 'Admin: list/search members by email or name.',
       inputSchema: { type: 'object', properties: { q: { type: 'string' }, limit: { type: 'integer' }, offset: { type: 'integer' } } },
     },
+    {
+      name: 'billing_attention_list',
+      description: 'Admin: payments needing attention — SePay orders (late, underpaid or repeated transfers) and Dodo card subscriptions (metadata or price mismatch) with reason, amounts, member email and timestamps. Card rows are read-only.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'billing_order_resolve',
+      description: 'Admin: resolve a flagged SePay order. "activate" grants/extends the plan exactly like a paid order and marks it paid; "dismiss" closes it without access. Repeating an action is a no-op; the admin and note are written to the member activity log.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'Order code, e.g. ZSB7K2M9QXA' },
+          action: { type: 'string', enum: RESOLVE_ACTIONS },
+          note: { type: 'string', maxLength: MAX_NOTE_LENGTH },
+        },
+        required: ['code', 'action'],
+      },
+    },
   ],
 
   async call(name, args, ctx) {
@@ -83,6 +102,18 @@ export const membersMcpModule: McpToolModule = {
         const p = await principalOf(ctx);
         requireCan(p, 'admin');
         return listMembers(requireDb(ctx), ctx.env, { q: getString(args, 'q'), limit: getNumber(args, 'limit'), offset: getNumber(args, 'offset') });
+      }
+      case 'billing_attention_list': {
+        const p = await principalOf(ctx);
+        requireCan(p, 'admin');
+        return listBillingAttention(requireDb(ctx));
+      }
+      case 'billing_order_resolve': {
+        const p = await principalOf(ctx);
+        requireCan(p, 'admin');
+        const code = getString(args, 'code');
+        if (!code) throw new AppError(400, 'invalid_field', 'code is required', { field: 'code' });
+        return resolveBillingOrder(requireDb(ctx), ctx.env, code, parseResolveInput(args), adminLabel(p), ctx.request);
       }
       default:
         throw new AppError(404, 'unknown_tool', `Unknown tool ${name}`);

@@ -1,7 +1,9 @@
 import type { OpenApiFragment } from '../openapi/types';
 import { adminSecurity, errorResponses } from '../openapi/types';
 import { USER_KEY_SCOPES } from './api-keys';
+import { MAX_NOTE_LENGTH, RESOLVE_ACTIONS } from './billing-attention';
 import { BILLING_MONTHS, ENTITLEMENTS, PLAN_IDS } from './plans';
+import { CREDENTIAL_VIAS } from './policy';
 
 const ACCOUNT_TAG = 'Members & account';
 const BILLING_TAG = 'Membership billing';
@@ -165,7 +167,13 @@ export const membersOpenApi: OpenApiFragment = {
         is_admin: { type: 'boolean' }, plans: { type: 'array', items: { type: 'string', enum: PLAN_IDS } },
         entitlements: { type: 'array', items: { type: 'string', enum: ENTITLEMENTS } },
         identities: { type: 'array', items: { type: 'object', properties: { provider: { type: 'string' }, email: { type: ['string', 'null'] } } } },
-        auth: { type: 'object', properties: { via: { type: 'string' }, scopes: { type: ['array', 'null'], items: { type: 'string' } } } },
+        auth: {
+          type: 'object',
+          properties: {
+            via: { type: 'string', enum: [...CREDENTIAL_VIAS], description: '`oauth_token` for OAuth access tokens on /mcp, `user_api_key` for personal `zk_` keys' },
+            scopes: { type: ['array', 'null'], items: { type: 'string' } },
+          },
+        },
       },
     },
     MemberSession: {
@@ -317,6 +325,41 @@ export const billingOpenApi: OpenApiFragment = {
         responses: { '200': ok('Counts', { type: 'object' }), ...denied, '503': { description: '`email_unconfigured`', ...errorRef } },
       },
     },
+    '/api/v1/admin/billing/attention': {
+      get: {
+        tags: [BILLING_TAG], summary: 'Admin: payments needing attention (SePay orders and Dodo card subscriptions)', security: [...adminSecurity, { MemberSession: [] }],
+        description: 'Oldest first, at most 200 of each kind. Card rows are read-only (resolve them in the Dodo dashboard; `card_note` explains why).',
+        responses: { '200': ok('Attention queue', ref('BillingAttentionQueue')), ...denied },
+      },
+    },
+    '/api/v1/admin/billing/orders/{code}/resolve': {
+      post: {
+        tags: [BILLING_TAG], summary: 'Admin: activate or dismiss a flagged SePay order', security: [...adminSecurity, { MemberSession: [] }],
+        description: [
+          '`activate` marks the order paid now and grants/extends its plan through the normal fulfilment path (receipt email included).',
+          '`dismiss` closes it as `expired` without access, keeping `attention_reason`. Repeating an action returns `already_activated` / `already_dismissed`;',
+          'a dismissed order may still be activated. The admin and note are written to the member activity log.',
+        ].join(' '),
+        parameters: [{ name: 'code', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: body({
+          type: 'object',
+          properties: { action: { type: 'string', enum: RESOLVE_ACTIONS }, note: { type: 'string', maxLength: MAX_NOTE_LENGTH } },
+          required: ['action'],
+        }),
+        responses: {
+          '200': ok('Resolution', {
+            type: 'object',
+            properties: {
+              outcome: { type: 'string', enum: ['activated', 'already_activated', 'dismissed', 'already_dismissed'] },
+              order: ref('BillingOrder'),
+              subscription: { type: ['object', 'null'], description: 'Plan period after activation; null otherwise' },
+            },
+          }),
+          '400': errorResponses['400'], ...denied, '404': notFound,
+          '409': { description: '`not_in_attention` (the order is pending, expired normally or already paid)', ...errorRef },
+        },
+      },
+    },
   },
   schemas: {
     PlansCatalog: {
@@ -354,6 +397,39 @@ export const billingOpenApi: OpenApiFragment = {
     },
     CardCheckout: {
       allOf: [ref('CardSubscription'), { type: 'object', properties: { checkout_url: { type: 'string', description: 'Dodo hosted checkout; redirect the member here' } } }],
+    },
+    BillingAttentionQueue: {
+      type: 'object',
+      properties: {
+        orders: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              code: { type: 'string' }, user_id: { type: 'string' }, member_email: { type: ['string', 'null'] },
+              plan: { type: 'string', enum: PLAN_IDS }, plan_name: { type: 'string' }, months: { type: 'integer' },
+              amount_vnd: { type: 'integer' }, amount_paid: { type: ['integer', 'null'] },
+              attention_reason: { type: ['string', 'null'], description: '`late_payment`, `underpaid`, `additional_payment`, …' },
+              payment_ref: { type: ['string', 'null'] }, expires_at: { type: 'string' }, created_at: { type: 'string' }, updated_at: { type: 'string' },
+            },
+          },
+        },
+        card_subscriptions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' }, user_id: { type: ['string', 'null'] }, member_email: { type: ['string', 'null'] },
+              plan: { type: ['string', 'null'] }, plan_name: { type: ['string', 'null'] },
+              amount_cents: { type: ['integer', 'null'] }, currency: { type: ['string', 'null'] },
+              attention_reason: { type: ['string', 'null'], description: '`metadata_missing`, `metadata_mismatch`, `product_mismatch`, `amount_mismatch`' },
+              provider_subscription_id: { type: ['string', 'null'] }, current_period_end: { type: ['string', 'null'] },
+              last_event_at: { type: ['string', 'null'] }, created_at: { type: 'string' }, updated_at: { type: 'string' },
+            },
+          },
+        },
+        card_note: { type: 'string' },
+      },
     },
     BillingOrder: {
       type: 'object',

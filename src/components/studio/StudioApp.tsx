@@ -19,11 +19,13 @@ import {
   BookOpen,
   Workflow,
   CalendarDays,
+  Receipt,
 } from 'lucide-react';
 import { ArticlesPanel } from './ArticleEditor';
 import { ReadsPanel } from './ReadsPanel';
 import { WorkflowsPanel } from './WorkflowsPanel';
 import { BookingPanel } from './BookingPanel';
+import { BillingAttentionPanel } from './BillingAttentionPanel';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
 
 interface StudioAppProps {
@@ -31,15 +33,23 @@ interface StudioAppProps {
   initialLinks: LinkItem[];
   initialKeys: ApiKey[];
   isAuthenticated: boolean;
+  /** Which browser session opened Studio: the owner's Studio session or an admin member session. */
+  sessionVia?: 'studio_session' | 'member_session' | null;
+  adminEmail?: string | null;
+  /** A signed-in member who is not an admin (shown on the sign-in screen). */
+  deniedEmail?: string | null;
 }
 
-type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'workflows' | 'booking';
+type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'workflows' | 'booking' | 'billing';
 
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
   initialLinks,
   initialKeys,
   isAuthenticated: initialAuth,
+  sessionVia = null,
+  adminEmail = null,
+  deniedEmail = null,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(initialAuth);
   const [activeTab, setActiveTab] = useState<StudioTab>('profile');
@@ -102,7 +112,9 @@ export const StudioApp: React.FC<StudioAppProps> = ({
 
   // Handle Logout
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    // Member admins end their member session; the owner's Studio session has its own endpoint.
+    const endpoint = sessionVia === 'member_session' ? '/api/members/auth/logout' : '/api/auth/logout';
+    await fetch(endpoint, { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
     setIsAuthenticated(false);
   };
 
@@ -256,7 +268,19 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             </p>
           </div>
 
+          {deniedEmail && (
+            <p role="alert" className="mb-4 text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2 text-center break-words">
+              Signed in as {deniedEmail}, which is not a Studio administrator.
+            </p>
+          )}
+
           <div className="space-y-3">
+            <a
+              href="/login?next=/studio"
+              className="w-full py-3 px-4 bg-amber-400/10 hover:bg-amber-400/20 text-amber-200 rounded-xl font-semibold text-sm flex items-center justify-center gap-3 border border-amber-400/40 transition-all active:scale-98"
+            >
+              <span>Sign in with your member account (admins)</span>
+            </a>
             <a
               href="/api/auth/github"
               className="w-full py-3 px-4 bg-stone-900 hover:bg-stone-800 text-white rounded-xl font-semibold text-sm flex items-center justify-center gap-3 border border-stone-700 transition-all active:scale-98 shadow-sm"
@@ -314,7 +338,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     );
   }
 
-  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'workflows' || activeTab === 'booking';
+  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'workflows' || activeTab === 'booking' || activeTab === 'billing';
 
   // Filtered links for Links tab
   const filteredLinks = filterSection === 'all'
@@ -349,6 +373,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             { id: 'reads', label: 'Reads', icon: BookOpen },
             { id: 'workflows', label: 'Workflows', icon: Workflow },
             { id: 'booking', label: 'Booking', icon: CalendarDays },
+            { id: 'billing', label: 'Payments', icon: Receipt },
             { id: 'keys', label: 'API & Agents', icon: Key },
           ] satisfies { id: StudioTab; label: string; icon: typeof User }[]).map(({ id, label, icon: Icon }) => (
             <button
@@ -386,7 +411,8 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           <button
             onClick={handleLogout}
             className="p-2 text-stone-400 hover:text-rose-400 transition-colors"
-            title="Sign out"
+            title={adminEmail ? `Sign out ${adminEmail}` : 'Sign out'}
+            aria-label={adminEmail ? `Sign out ${adminEmail}` : 'Sign out'}
           >
             <LogOut className="w-4 h-4" />
           </button>
@@ -401,6 +427,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           {activeTab === 'reads' && <ReadsPanel />}
           {activeTab === 'workflows' && <WorkflowsPanel />}
           {activeTab === 'booking' && <BookingPanel />}
+          {activeTab === 'billing' && <BillingAttentionPanel />}
 
           {saveStatus && (
             <div className="mb-6 p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">

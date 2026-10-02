@@ -63,7 +63,7 @@ function toStatus(v: unknown): OrderStatus {
   return v === 'paid' || v === 'expired' || v === 'needs_attention' ? v : 'pending';
 }
 
-function rowToOrder(row: Row): BillingOrder {
+export function rowToOrder(row: Row): BillingOrder {
   const plan = row.plan;
   const months = num(row, 'months');
   return {
@@ -247,7 +247,7 @@ async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: st
 }
 
 /** Extends the plan from paid orders, then records and emails a receipt (email failure never undoes payment). */
-async function fulfilOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder): Promise<SubscriptionView | null> {
+export async function fulfilOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder): Promise<SubscriptionView | null> {
   const sub = await recomputeSubscription(d1, order.user_id, order.plan);
   await logActivity(d1, order.user_id, 'billing.paid', { code: order.code, plan: order.plan, months: order.months, period_end: sub?.current_period_end ?? null });
   const user = await getUserById(d1, order.user_id);
