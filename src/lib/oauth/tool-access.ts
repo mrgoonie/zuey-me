@@ -61,6 +61,10 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   billing_order_get: member('billing:read'),
   subscription_get: member('billing:read'),
   members_list: ADMIN,
+  // Zuey AI (the ai_chat entitlement is checked inside the tool)
+  chat_ask: member('chat:write'),
+  chat_sessions_list: member('chat:write'),
+  chat_admin_sessions: ADMIN,
 };
 
 export function toolAccess(name: string): ToolAccess {

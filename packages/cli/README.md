@@ -38,7 +38,7 @@ zuey whoami                        # account, plans, entitlements, key scopes
 zuey articles list [--tag <tag>]   # articles you can read
 zuey articles read <slug>          # plain-text article (preview only if the article needs Knowledges)
 zuey search "<query>"              # matches article titles, excerpts and tags (body text is not searched)
-zuey chat "<message>"              # Zuey AI over REST when the server exposes it; otherwise says so and exits 2
+zuey chat "<message>" [--session <id>]  # Zuey AI, streamed; prints sources and the session id to continue
 zuey plans                         # plans and VND prices for 1/3/6/12 months
 zuey subscribe <plan> --months 3   # creates an order and prints the VietQR bank-transfer details
 zuey keys                          # where to create, rotate and revoke keys (browser only)

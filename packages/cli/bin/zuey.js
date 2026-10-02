@@ -223,7 +223,7 @@ MEMBER COMMANDS (personal key zk_…, created at https://zuey.me/account#keys):
   articles list [--tag <t>]            List articles you can read
   articles read <slug>                 Print an article as plain text
   search <query>                       Search article titles, excerpts and tags
-  chat "<message>"                     Ask Zuey AI (requires the chat:write scope and an AI plan)
+  chat "<message>" [--session <id>]    Ask Zuey AI, streamed (chat:write scope + AI plan; --session continues)
   plans                                Show membership plans and VND prices
   subscribe <plan> --months <n>        Create an order and print the VietQR bank-transfer details
   keys                                 How to create, rotate and revoke keys
@@ -346,20 +346,70 @@ async function cmdChat(args) {
   requireKey();
   const message = positional(args, 1).join(' ').trim();
   if (!message) {
-    console.error('Usage: zuey chat "<message>"');
+    console.error('Usage: zuey chat "<message>" [--session <id>]');
     process.exit(1);
   }
+  let sessionId = flag(args, '--session');
+  if (!sessionId) {
+    const created = await requestApi('/api/v1/chat/sessions', 'POST', { title: message.slice(0, 80) });
+    sessionId = created && created.data && created.data.id;
+    if (!sessionId) throw new ApiError(0, 'bad_response', 'The server did not return a chat session id', null);
+  }
+
+  const config = loadConfig();
+  const abort = new AbortController();
+  process.once('SIGINT', () => abort.abort());
+  let res;
   try {
-    const res = await requestApi('/api/v1/chat', 'POST', { message });
-    const d = res && res.data;
-    const text = d && (typeof d.reply === 'string' ? d.reply : typeof d.answer === 'string' ? d.answer : typeof d.content === 'string' ? d.content : typeof d.message === 'string' ? d.message : null);
-    console.log(text !== null ? text : JSON.stringify(d, null, 2));
+    res = await fetch(`${config.apiUrl}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', 'User-Agent': `zuey-cli/${VERSION}`, Authorization: `Bearer ${config.apiKey}` },
+      body: JSON.stringify({ message }),
+      signal: abort.signal,
+    });
   } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
-      console.error('Zuey AI chat is not available over the REST API on this server yet. Use the web chat at https://zuey.me or an MCP client ("zuey mcp config").');
-      process.exit(2);
+    throw new ApiError(0, 'network_error', `Cannot reach ${config.apiUrl}: ${err.message}`, null);
+  }
+  if (!res.ok) {
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    const e = data && typeof data.error === 'object' && data.error ? data.error : {};
+    throw new ApiError(res.status, typeof e.code === 'string' ? e.code : `http_${res.status}`, typeof e.message === 'string' ? e.message : res.statusText, res.headers.get('x-request-id'));
+  }
+
+  // SSE: `sources`, `delta`*, then `done` or `error`.
+  const decoder = new TextDecoder();
+  let buf = '';
+  let sources = [];
+  let failed = null;
+  try {
+    for await (const chunk of res.body) {
+      buf += decoder.decode(chunk, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const event = (frame.match(/^event: (.+)$/m) || [])[1];
+        const raw = (frame.match(/^data: (.+)$/m) || [])[1];
+        if (!event || !raw) continue;
+        const data = JSON.parse(raw);
+        if (event === 'sources') sources = Array.isArray(data.sources) ? data.sources : [];
+        else if (event === 'delta') process.stdout.write(data.text || '');
+        else if (event === 'error') failed = data;
+      }
     }
-    throw err;
+  } catch (err) {
+    if (!abort.signal.aborted) throw err;
+  }
+  process.stdout.write('\n');
+  if (sources.length) {
+    console.log('\nSources:');
+    for (const s of sources) console.log(`  - ${s.title || s.slug || ''}${s.url ? ` ${s.url}` : ''}`);
+  }
+  console.error(`\nSession: ${sessionId} (continue with --session ${sessionId})`);
+  if (failed) {
+    console.error(`Error (${failed.code}): ${failed.message}`);
+    process.exit(1);
   }
 }
 
