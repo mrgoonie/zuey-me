@@ -57,6 +57,9 @@ export interface RuntimeEnv {
   PAYPAL_WEBHOOK_ID?: string;
   /** https://api-m.sandbox.paypal.com (sandbox) or https://api-m.paypal.com (default). */
   PAYPAL_API_BASE?: string;
+  // MCP over OAuth
+  /** Extra comma-separated browser origins allowed to call /mcp (same origin and loopback are always allowed). */
+  MCP_ALLOWED_ORIGINS?: string;
   // Zuey AI (Dewee gateway)
   DEWEE_GATEWAY_URL?: string;
   DEWEE_GATEWAY_TOKEN?: string;
