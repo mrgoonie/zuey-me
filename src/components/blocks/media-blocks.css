@@ -1,0 +1,43 @@
+/* Knowledge media blocks (math, gallery, audio, video, file/PDF, bookmark, toggle) and inline marks. */
+.zb-doc s { text-decoration-thickness: 1.5px; }
+.zb-doc mark { background: #fde68a; color: inherit; border-radius: 0.2em; padding: 0 0.15em; }
+
+.zb-embed-frame.zb-ratio-vertical { aspect-ratio: 9 / 16; max-width: 340px; margin-inline: auto; background: transparent; }
+
+.zb-math { margin: 0; padding: 0.9rem 1rem; border-radius: 0.9rem; background: #fff; border: 1px solid #e7e5e4; overflow-x: auto; }
+.zb-math code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92rem; white-space: pre; color: #292524; }
+.zb-math-tag { display: block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #a8a29e; margin-bottom: 0.35rem; }
+
+.zb-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
+.zb-gallery figure { margin: 0; }
+.zb-gallery img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.8rem; background: #e7e5e4; }
+.zb-gallery figcaption { font-size: 0.78rem; color: #78716c; margin-top: 0.25rem; }
+
+.zb-media { margin: 0; }
+.zb-media audio { width: 100%; }
+.zb-media video { display: block; width: 100%; max-height: 70vh; border-radius: 0.9rem; background: #000; }
+.zb-media-title { font-weight: 700; font-size: 0.9rem; color: #292524; margin-bottom: 0.4rem; }
+
+.zb-file { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; border-radius: 0.9rem; background: #fff; border: 1px solid #e7e5e4; }
+.zb-file-icon { flex: none; width: 2.25rem; height: 2.25rem; border-radius: 0.6rem; display: grid; place-items: center; background: #f5efeb; color: #925629; font-size: 0.7rem; font-weight: 800; }
+.zb-file-main { flex: 1 1 12rem; min-width: 0; }
+.zb-file-name { font-weight: 700; color: #1c1917; overflow-wrap: anywhere; }
+.zb-file-meta { font-size: 0.78rem; color: #78716c; }
+.zb-file-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.zb-pdf-frame { width: 100%; height: min(80vh, 720px); border: 1px solid #e7e5e4; border-radius: 0.9rem; margin-top: 0.6rem; background: #fff; }
+
+.zb-bookmark { display: flex; gap: 0.9rem; align-items: stretch; text-decoration: none; color: inherit; border: 1px solid #e7e5e4; border-radius: 0.9rem; background: #fff; overflow: hidden; }
+.zb-bookmark:hover { border-color: #d6d3d1; box-shadow: 0 4px 14px rgba(28, 25, 23, 0.06); }
+.zb-bookmark:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+.zb-bookmark-body { flex: 1; min-width: 0; padding: 0.8rem 1rem; }
+.zb-bookmark-title { font-weight: 700; color: #1c1917; overflow-wrap: anywhere; }
+.zb-bookmark-desc { font-size: 0.85rem; color: #57534e; margin-top: 0.2rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.zb-bookmark-site { font-size: 0.75rem; color: #a8a29e; margin-top: 0.35rem; overflow-wrap: anywhere; }
+.zb-bookmark-img { flex: none; width: 30%; max-width: 180px; object-fit: cover; background: #e7e5e4; }
+@media (max-width: 420px) { .zb-bookmark-img { display: none; } }
+
+.zb-toggle { border-radius: 0.9rem; border: 1px solid #e7e5e4; background: rgba(255, 255, 255, 0.6); padding: 0.2rem 1rem; }
+.zb-toggle > summary { cursor: pointer; font-weight: 700; padding: 0.6rem 0; color: #1c1917; list-style-position: outside; }
+.zb-toggle > summary:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; border-radius: 0.4rem; }
+.zb-toggle[open] > summary { border-bottom: 1px solid #e7e5e4; margin-bottom: 0.6rem; }
+.zb-toggle-body { display: flex; flex-direction: column; gap: 1rem; padding-bottom: 0.8rem; }

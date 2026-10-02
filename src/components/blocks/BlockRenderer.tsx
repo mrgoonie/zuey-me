@@ -5,8 +5,9 @@ import type { ArticleDocument, Block, EmbedBlock, LayoutBlock } from '../../lib/
 import { resolveSpan } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
-import { embedSrc, PROVIDER_LABELS } from '../../lib/blocks/embed';
+import { embedFrame, embedSrc, PROVIDER_LABELS } from '../../lib/blocks/embed';
 import { ChartBlock } from './ChartBlock';
+import { MediaBlockView } from './MediaBlocks';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
 import { InteractiveFrame } from '../ai/InteractiveFrame';
@@ -25,6 +26,8 @@ function renderNodes(nodes: InlineNode[]): ReactNode[] {
       case 'code': return <code key={i}>{n.value}</code>;
       case 'bold': return <strong key={i}>{renderNodes(n.children)}</strong>;
       case 'italic': return <em key={i}>{renderNodes(n.children)}</em>;
+      case 'strike': return <s key={i}>{renderNodes(n.children)}</s>;
+      case 'mark': return <mark key={i}>{renderNodes(n.children)}</mark>;
       case 'link': return <a key={i} href={n.href} target="_blank" rel="noopener noreferrer nofollow">{renderNodes(n.children)}</a>;
     }
   });
@@ -36,10 +39,8 @@ export function Inline({ text }: { text: string }) {
   return <>{lines.map((line, i) => <span key={i}>{i > 0 && <br />}{renderNodes(parseInline(line))}</span>)}</>;
 }
 
-function frameClass(provider: EmbedBlock['provider']): string {
-  if (provider === 'soundcloud' || provider === 'spotify') return 'zb-ratio-audio';
-  if (provider === 'youtube' || provider === 'vimeo') return 'zb-ratio-video';
-  return 'zb-ratio-post';
+function frameClass(block: EmbedBlock): string {
+  return `zb-ratio-${embedFrame(block.provider, block.url)}`;
 }
 
 /** Click-to-load embed: no third-party request happens until the reader opts in. */
@@ -60,7 +61,7 @@ function EmbedView({ block }: { block: EmbedBlock }) {
       </div>
       {src && !loaded && <p className="zb-note" style={{ marginTop: '0.5rem' }}>Nội dung nhúng chỉ tải khi bạn bấm, để {label} không theo dõi bạn trước.</p>}
       {src && loaded && (
-        <div className={`zb-embed-frame ${frameClass(block.provider)}`}>
+        <div className={`zb-embed-frame ${frameClass(block)}`}>
           <iframe
             src={src}
             title={block.caption || `${label} embed`}
@@ -170,6 +171,20 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'layout': return <LayoutView block={block} ctx={ctx} />;
     // Sandboxed, click-to-run in articles; previews never execute code automatically.
     case 'interactive': return <InteractiveFrame block={block} />;
+    case 'math':
+    case 'gallery':
+    case 'audio':
+    case 'video':
+    case 'file':
+    case 'bookmark':
+    case 'toggle':
+      return (
+        <MediaBlockView
+          block={block}
+          renderInline={text => <Inline text={text} />}
+          renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
+        />
+      );
   }
 }
 

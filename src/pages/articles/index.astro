@@ -1,41 +1,177 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { listArticles } from '../../lib/blocks/articles';
+import { ArticleCard } from '../../components/knowledge/ArticleCard';
+import { knowledgeStrings } from '../../components/knowledge/strings';
+import { discoverArticles } from '../../lib/blocks/discovery';
+import type { DiscoveryItem } from '../../lib/blocks/discovery';
+import { parseDiscoveryQuery } from '../../lib/blocks/params';
+import type { DiscoveryQuery } from '../../lib/blocks/params';
+import { AppError } from '../../lib/http';
+import { LOCALES, LOCALE_LABELS, resolveLocale } from '../../lib/i18n/locales';
+import { resolvePrincipal } from '../../lib/members/policy';
+import { publicTaxonomy } from '../../lib/taxonomy/public';
 
-const d1 = Astro.locals.runtime?.env?.DB;
-const articles = await listArticles(d1);
-Astro.response.headers.set('Cache-Control', 'public, max-age=300');
+const env = Astro.locals.runtime?.env ?? {};
+const uiLocale = resolveLocale(Astro.request);
+const t = knowledgeStrings(uiLocale);
 
-const fmt = (iso: string | null, locale: string) =>
-  iso ? new Date(iso).toLocaleDateString(locale === 'en' ? 'en-US' : 'vi-VN', { timeZone: 'Asia/Saigon', year: 'numeric', month: 'short', day: 'numeric' }) : '';
+let query: DiscoveryQuery = {};
+let invalid = false;
+try {
+  query = parseDiscoveryQuery(Astro.url);
+} catch (err) {
+  if (!(err instanceof AppError)) throw err;
+  invalid = true;
+}
+// Discovery lists every article; ?lang only prefers that edition (others show their primary edition).
+const listLocale = query.locale ?? uiLocale;
+let items: DiscoveryItem[] = [];
+let semantic = false;
+let failed = false;
+try {
+  const principal = await resolvePrincipal(Astro.request, env);
+  const result = await discoverArticles(principal, env, { ...query, locale: listLocale });
+  items = result.items;
+  semantic = result.semantic;
+} catch (err) {
+  console.error('Article discovery failed:', err instanceof Error ? err.message : 'unknown');
+  failed = true;
+}
+const facets = await publicTaxonomy(env.DB, listLocale).catch(() => ({ tags: [], categories: [], labels: [] }));
+
+const filtering = Boolean(query.q || query.category || query.tag || query.label || query.access || (query.sort && query.sort !== 'new'));
+// Search results depend on the reader's entitlements (snippets); plain listings are public.
+Astro.response.headers.set('Cache-Control', query.q ? 'private, no-store' : 'public, max-age=120');
+Astro.response.headers.set('Vary', 'Cookie, Authorization, Accept-Language');
+
+const hrefWith = (patch: Record<string, string | undefined>) => {
+  const params = new URLSearchParams();
+  const merged: Record<string, string | undefined> = {
+    q: query.q, category: query.category, tag: query.tag, label: query.label, sort: query.sort, lang: query.locale, ...patch,
+  };
+  for (const [k, v] of Object.entries(merged)) if (v) params.set(k, v);
+  const qs = params.toString();
+  return `/articles${qs ? `?${qs}` : ''}`;
+};
+const activeTag = facets.tags.find(tag => tag.slug === query.tag);
+const chip = (pressed: boolean) =>
+  `inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${pressed ? 'bg-stone-900 text-white border-stone-900' : 'bg-white/80 text-stone-700 border-stone-200 hover:bg-white'}`;
+const origin = Astro.url.origin;
 ---
 
-<Layout title="Bài viết — Duy Nguyen /zuey/" description="Ghi chép, biểu đồ và khảo sát của Duy Nguyen /zuey/" url={`${Astro.url.origin}/articles`} lang="vi">
+<Layout
+  title={`${t.sectionTitle} — Duy Nguyen /zuey/`}
+  description={t.sectionLead}
+  url={`${origin}/articles${query.locale ? `?lang=${query.locale}` : ''}`}
+  lang={LOCALE_LABELS[uiLocale].htmlLang}
+>
   <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6">
-    <section class="w-full max-w-[760px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9">
-      <nav class="text-xs font-semibold text-stone-500 mb-5"><a href="/" class="hover:text-stone-900">← zuey.me</a></nav>
-      <h1 class="font-serif text-3xl sm:text-4xl font-extrabold text-stone-950">Bài viết</h1>
-      <p class="mt-2 text-stone-600">Ghi chép, biểu đồ, sơ đồ và khảo sát.</p>
-
-      {articles.length === 0 ? (
-        <p class="mt-10 text-center text-stone-500">Chưa có bài viết nào được xuất bản.</p>
-      ) : (
-        <ul class="mt-8 flex flex-col gap-3">
-          {articles.map(a => (
-            <li>
-              <a href={`/articles/${a.slug}`} class="block rounded-2xl bg-white/70 border border-stone-200 px-4 py-4 sm:px-5 hover:bg-white hover:shadow-card-hover transition-all">
-                <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-stone-500">
-                  <span>{fmt(a.published_at, a.locale)}</span>
-                  {a.access === 'knowledges' && <span class="rounded-full bg-stone-900 text-amber-300 px-2 py-0.5">Knowledges</span>}
-                  {a.tags.slice(0, 4).map(t => <span class="text-stone-400">#{t}</span>)}
-                </div>
-                <h2 class="mt-1.5 font-serif text-xl font-bold text-stone-900 break-words">{a.title}</h2>
-                {a.excerpt && <p class="mt-1 text-sm text-stone-600 line-clamp-2">{a.excerpt}</p>}
-              </a>
-            </li>
+    <section class="w-full max-w-[820px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9">
+      <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap justify-between gap-3">
+        <a href="/" class="hover:text-stone-900">{t.back}</a>
+        <span class="flex flex-wrap gap-2" aria-label="Language">
+          {LOCALES.map(l => (
+            <a href={hrefWith({ lang: l })} hreflang={l} aria-current={listLocale === l ? 'true' : undefined}
+              class={listLocale === l ? 'text-stone-900 underline' : 'hover:text-stone-900'}>{LOCALE_LABELS[l].native}</a>
           ))}
-        </ul>
-      )}
+        </span>
+      </nav>
+      <h1 class="font-serif text-3xl sm:text-4xl font-extrabold text-stone-950">{t.sectionTitle}</h1>
+      <p class="mt-2 text-stone-600">{t.sectionLead}</p>
+
+      <details class="mt-6 group rounded-2xl border border-stone-200 bg-white/60" open={filtering || invalid}>
+        <summary class="flex cursor-pointer items-center justify-between gap-2 px-4 py-2.5 text-sm font-bold text-stone-800 list-none">
+          <span class="inline-flex items-center gap-2">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></svg>
+            {t.searchAndFilter}
+            {filtering && <span class="h-2 w-2 rounded-full bg-amber-600" aria-hidden="true" />}
+          </span>
+          <span class="text-xs font-semibold text-stone-500">{t.results(items.length)}</span>
+        </summary>
+        <form method="get" action="/articles" role="search" class="flex flex-col gap-3 px-4 pb-4">
+          {query.locale && <input type="hidden" name="lang" value={query.locale} />}
+          <div class="flex gap-2">
+            <label for="kq" class="sr-only">{t.searchLabel}</label>
+            <input id="kq" name="q" type="search" value={query.q ?? ''} maxlength="200" placeholder={t.searchPlaceholder}
+              class="min-w-0 flex-1 rounded-full border border-stone-300 bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-600" />
+            <button type="submit" class="rounded-full bg-stone-900 px-4 py-2 text-xs font-bold text-white hover:bg-stone-800">{t.apply}</button>
+          </div>
+          {facets.categories.length > 0 && (
+            <fieldset>
+              <legend class="text-xs font-bold text-stone-600 mb-1.5">{t.category}</legend>
+              <div class="flex flex-wrap gap-1.5">
+                <a href={hrefWith({ category: undefined })} class={chip(!query.category)} aria-current={!query.category ? 'true' : undefined}>{t.all}</a>
+                {facets.categories.map(c => (
+                  <a href={hrefWith({ category: query.category === c.slug ? undefined : c.slug })} class={chip(query.category === c.slug)}
+                    aria-current={query.category === c.slug ? 'true' : undefined}>{c.name} <span class="opacity-60">{c.published_count}</span></a>
+                ))}
+              </div>
+            </fieldset>
+          )}
+          {query.category && <input type="hidden" name="category" value={query.category} />}
+          {query.tag && <input type="hidden" name="tag" value={query.tag} />}
+          <div class="grid gap-3 sm:grid-cols-2">
+            {facets.labels.length > 0 && (
+              <label class="flex flex-col gap-1 text-xs font-bold text-stone-600">
+                {t.labelsAndFreshness}
+                <select name="label" class="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm font-normal text-stone-800">
+                  <option value="">{t.anyLabel}</option>
+                  {['claim', 'freshness', 'domain', 'tool', 'model', 'workflow', 'mindset', 'extension'].map(kind => {
+                    const group = facets.labels.filter(l => l.kind === kind);
+                    return group.length > 0 && (
+                      <optgroup label={kind}>
+                        {group.map(l => <option value={l.key} selected={query.label === l.key}>{l.name}{l.version ? ` ${l.version}` : ''} ({l.published_count})</option>)}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </label>
+            )}
+            <label class="flex flex-col gap-1 text-xs font-bold text-stone-600">
+              {t.sort}
+              <select name="sort" class="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm font-normal text-stone-800">
+                {query.q && <option value="relevance" selected={!query.sort || query.sort === 'relevance'}>{t.sortRelevance}</option>}
+                <option value="new" selected={query.sort === 'new' || (!query.q && !query.sort)}>{t.sortNew}</option>
+                <option value="old" selected={query.sort === 'old'}>{t.sortOld}</option>
+                <option value="title" selected={query.sort === 'title'}>{t.sortTitle}</option>
+              </select>
+            </label>
+          </div>
+          {facets.tags.length > 0 && (
+            <fieldset>
+              <legend class="text-xs font-bold text-stone-600 mb-1.5">{t.tags}</legend>
+              <div class="flex flex-wrap gap-1.5">
+                {facets.tags.slice(0, 30).map(tag => (
+                  <a href={hrefWith({ tag: query.tag === tag.slug ? undefined : tag.slug })} class={chip(query.tag === tag.slug)}
+                    aria-current={query.tag === tag.slug ? 'true' : undefined}>#{tag.name}</a>
+                ))}
+              </div>
+            </fieldset>
+          )}
+          <div class="flex flex-wrap items-center gap-3">
+            <button type="submit" class="rounded-full border border-stone-300 bg-white px-4 py-1.5 text-xs font-bold text-stone-800 hover:bg-stone-50">{t.apply}</button>
+            {filtering && <a href={`/articles${query.locale ? `?lang=${query.locale}` : ''}`} class="text-xs font-bold text-stone-600 underline hover:text-stone-900">{t.reset}</a>}
+            {query.q && !semantic && <span class="text-[11px] text-stone-500">{t.semanticOff}</span>}
+          </div>
+        </form>
+      </details>
+
+      {activeTag && <p class="mt-4 text-sm text-stone-600">#{activeTag.name} — <a href={hrefWith({ tag: undefined })} class="underline">{t.reset}</a></p>}
+
+      <div aria-live="polite">
+        {failed ? (
+          <p class="mt-10 text-center text-stone-500">{t.loadFailed}</p>
+        ) : items.length === 0 ? (
+          <div class="mt-10 text-center">
+            <p class="text-stone-500">{filtering ? t.noResults : t.noArticles}</p>
+            {filtering && <a href="/articles" class="mt-4 inline-flex rounded-full bg-stone-900 text-white px-5 py-2 text-sm font-bold">{t.reset}</a>}
+          </div>
+        ) : (
+          <ul class="mt-6 flex flex-col gap-3 list-none p-0">
+            {items.map(a => <li><ArticleCard article={a} uiLocale={uiLocale} /></li>)}
+          </ul>
+        )}
+      </div>
     </section>
   </main>
 </Layout>

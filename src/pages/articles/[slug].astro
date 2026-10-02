@@ -1,8 +1,14 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import { BlockRenderer } from '../../components/blocks/BlockRenderer';
+import { ShareMenu } from '../../components/knowledge/ShareMenu';
+import { TagBadges } from '../../components/knowledge/TagBadges';
+import { EntitlementIcon } from '../../components/knowledge/EntitlementIcon';
+import { formatKnowledgeDate, knowledgeStrings } from '../../components/knowledge/strings';
 import { getArticleView, resolveViewer } from '../../lib/blocks/articles';
-import { readerCacheControl } from '../../lib/blocks/paywall';
+import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
+import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
+import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
@@ -10,67 +16,120 @@ const slug = Astro.params.slug ?? '';
 const viewer = await resolveViewer(Astro.request, d1, runtimeEnv);
 // Draft preview is honoured only for admin sessions; everyone else gets the published version.
 const preview = Astro.url.searchParams.get('preview') === '1' && viewer.isAdmin;
-const view = await getArticleView(d1, slug, viewer, { draft: preview });
+
+// ?lang= picks an edition explicitly (with a notice when it does not exist); otherwise the reader's
+// locale preference picks one when available, falling back silently to the primary edition.
+const langParam = Astro.url.searchParams.get('lang');
+const explicitLocale = isLocale(langParam) ? langParam : undefined;
+const preferred = explicitLocale ?? resolveLocale(Astro.request);
+let view = await getArticleView(d1, slug, viewer, { draft: preview, locale: preferred });
+const fallback = Boolean(view?.locale_fallback && explicitLocale);
+if (view && view.locale_fallback && !explicitLocale) view = { ...view, locale_fallback: false };
+
+const uiLocale = view?.locale ?? preferred;
+const t = knowledgeStrings(uiLocale);
+const origin = (runtimeEnv.PUBLIC_SITE_URL || Astro.url.origin).replace(/\/$/, '');
 
 Astro.response.headers.set('Cache-Control', readerCacheControl(viewer));
-Astro.response.headers.set('Vary', 'Cookie, Authorization');
+Astro.response.headers.set('Vary', 'Cookie, Authorization, Accept-Language');
 if (!view) Astro.response.status = 404;
+if (preview) Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 
-const siteUrl = Astro.url.origin;
-const published = view?.published_at ? new Date(view.published_at) : null;
-const dateText = published
-  ? published.toLocaleDateString(view?.locale === 'en' ? 'en-US' : 'vi-VN', { timeZone: 'Asia/Saigon', year: 'numeric', month: 'long', day: 'numeric' })
-  : '';
+const canonical = view ? articleUrl(origin, view.slug, view.locale) : `${origin}/articles/${slug}`;
+const alternates = view && !preview ? articleAlternates(origin, view.slug, view.available_locales) : [];
+if (view && !preview) Astro.response.headers.set('Link', linkHeader(canonical, alternates));
+const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, 'https://zuey.me/og.png')) : null;
+const translations = view ? view.available_locales.filter(l => l !== view?.locale) : [];
+const dateText = view ? formatKnowledgeDate(view.published_at, view.locale) : '';
+const paywallClass = PAYWALL_SELECTOR.slice(1);
+const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.truncated && !view.preview && canReadFull(viewer));
 ---
 
 <Layout
-  title={view ? `${view.title} — Zuey` : 'Không tìm thấy bài viết — Zuey'}
-  description={view?.excerpt || 'Bài viết từ Duy Nguyen /zuey/'}
-  url={`${siteUrl}/articles/${slug}`}
-  lang={view?.locale ?? 'vi'}
+  title={view ? `${view.title} — Zuey` : `${t.notFoundTitle} — Zuey`}
+  description={view?.excerpt || t.sectionLead}
+  url={canonical}
+  image={view?.cover_url ?? undefined}
+  lang={LOCALE_LABELS[uiLocale].htmlLang}
 >
+  {jsonLd && <script is:inline type="application/ld+json" set:html={jsonLd} />}
   <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6">
     <article class="w-full max-w-[860px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12">
-      <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap gap-3 justify-between">
-        <a href="/articles" class="hover:text-stone-900">← Bài viết</a>
-        {view && <a href={`/articles/${view.slug}.md`} class="hover:text-stone-900">Markdown</a>}
+      <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap gap-3 justify-between items-center">
+        <a href={`/articles?lang=${uiLocale}`} class="hover:text-stone-900">← {t.sectionTitle}</a>
+        {view && (
+          <span class="flex flex-wrap gap-3 items-center">
+            <a href={articlePath(view.slug, view.locale, true)} class="hover:text-stone-900" type="text/markdown">{t.markdown}</a>
+            {!view.preview && (
+              <ShareMenu
+                client:visible
+                locale={view.locale}
+                title={view.title}
+                publicUrl={canonical}
+                markdownUrl={articleUrl(origin, view.slug, view.locale, true)}
+                canCopyPrivate={canCopyPrivate}
+              />
+            )}
+          </span>
+        )}
       </nav>
 
       {view ? (
         <>
           {view.preview && (
             <p class="mb-4 rounded-xl bg-amber-100 border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-900" role="status">
-              Bản xem trước bản nháp (revision {view.revision}) — chỉ quản trị viên thấy.
+              {t.draftPreview(view.revision)}
+            </p>
+          )}
+          {fallback && explicitLocale && (
+            <p class="mb-4 rounded-xl bg-white/80 border border-stone-200 px-3 py-2 text-xs font-semibold text-stone-700" role="status" lang={LOCALE_LABELS[explicitLocale].htmlLang}>
+              {knowledgeStrings(explicitLocale).fallbackNotice(LOCALE_LABELS[explicitLocale].native, LOCALE_LABELS[view.locale].native)}
             </p>
           )}
           <header class="mb-7">
-            <div class="flex flex-wrap gap-2 mb-3 text-[11px] font-bold uppercase tracking-wider">
-              {view.access === 'knowledges' && <span class="rounded-full bg-stone-900 text-amber-300 px-2.5 py-1">Knowledges</span>}
-              {view.tags.map(tag => <span class="rounded-full bg-white/70 border border-stone-200 text-stone-600 px-2.5 py-1">#{tag}</span>)}
+            <div class="flex flex-wrap items-center gap-2 mb-3 text-[11px] font-bold uppercase tracking-wider text-stone-500">
+              <EntitlementIcon access={view.access} paidLabel={t.paidAria} freeLabel={t.freeAria} />
+              {view.access === 'knowledges' && <span class="rounded-full bg-stone-900 text-amber-300 px-2.5 py-1">{t.membersBadge}</span>}
+              {view.category && <a href={`/articles?category=${encodeURIComponent(view.category.slug)}&lang=${view.locale}`} class="hover:text-stone-900">{view.category.name}</a>}
+              {view.reading_minutes > 0 && <span>{t.minutes(view.reading_minutes)}</span>}
             </div>
             <h1 class="font-serif text-3xl sm:text-4xl md:text-5xl font-extrabold leading-tight text-stone-950 break-words">{view.title}</h1>
             {view.excerpt && <p class="mt-3 text-stone-600 text-base sm:text-lg">{view.excerpt}</p>}
-            {dateText && <p class="mt-3 text-xs text-stone-500">{dateText}</p>}
+            {dateText && <p class="mt-3 text-xs text-stone-500"><time datetime={view.published_at ?? undefined}>{dateText}</time></p>}
+            <div class="mt-3">
+              <TagBadges tags={view.topic_tags} labels={view.labels} linkBase="/articles" query={`lang=${view.locale}`} />
+            </div>
+            {translations.length > 0 && (
+              <p class="mt-3 text-xs text-stone-600">
+                {t.alsoIn}:{' '}
+                {translations.map((l, i) => (
+                  <>
+                    {i > 0 && ' · '}
+                    <a href={articlePath(view.slug, l)} hreflang={l} lang={LOCALE_LABELS[l].htmlLang} class="font-semibold underline hover:text-stone-900">{LOCALE_LABELS[l].native}</a>
+                  </>
+                ))}
+              </p>
+            )}
           </header>
 
           <BlockRenderer client:load doc={view.document} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
 
           {view.truncated && (
-            <section class="zb-locked" aria-labelledby="locked-title">
-              <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">Phần còn lại dành cho thành viên Knowledges</p>
-              <p class="mt-2 text-sm text-stone-600">Bạn đang đọc khoảng một phần ba đầu bài. Các gói Knowledges, Kết hợp và Cộng đồng mở toàn bộ bài viết trả phí; gói Zuey AI chỉ đọc phần preview.</p>
+            <section class={`zb-locked ${paywallClass}`} aria-labelledby="locked-title">
+              <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">{t.lockedTitle}</p>
+              <p class="mt-2 text-sm text-stone-600">{t.lockedBody}</p>
               <div class="mt-4 flex flex-wrap gap-2">
-                <a href="/pricing" class="inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">Xem các gói</a>
-                <a href={`/login?next=${encodeURIComponent(`/articles/${view.slug}`)}`} class="inline-flex rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800 hover:bg-stone-50">Đăng nhập</a>
+                <a href="/pricing" class="inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">{t.seePlans}</a>
+                <a href={`/login?next=${encodeURIComponent(articlePath(view.slug, view.locale))}`} class="inline-flex rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800 hover:bg-stone-50">{t.signIn}</a>
               </div>
             </section>
           )}
         </>
       ) : (
         <div class="py-16 text-center">
-          <h1 class="font-serif text-3xl font-bold text-stone-900">Không tìm thấy bài viết</h1>
-          <p class="mt-3 text-stone-600">Bài viết không tồn tại hoặc chưa được xuất bản.</p>
-          <a href="/articles" class="mt-6 inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold">Xem tất cả bài viết</a>
+          <h1 class="font-serif text-3xl font-bold text-stone-900">{t.notFoundTitle}</h1>
+          <p class="mt-3 text-stone-600">{t.notFoundBody}</p>
+          <a href="/articles" class="mt-6 inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold">{t.viewAll}</a>
         </div>
       )}
     </article>
