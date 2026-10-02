@@ -3,6 +3,7 @@
 Tài liệu này chỉ ghi **tên** biến. Không commit giá trị thật; `.dev.vars` và `.env` đã nằm trong `.gitignore`.
 
 - **Production (Cloudflare Pages):** project `zuey-me`, D1 `zuey_me_db` và DNS zone `zuey.me` cùng nằm trong **một** tài khoản Cloudflare (tài khoản sở hữu DNS). Trước mọi lệnh `wrangler`, export `CLOUDFLARE_ACCOUNT_ID` và `CLOUDFLARE_API_TOKEN` của tài khoản đó (lấy từ `.env`), để wrangler không dùng phiên OAuth của tài khoản khác. Đặt secret bằng `wrangler pages secret put <TÊN> --project-name=zuey-me`, rồi nhập giá trị khi được hỏi. Có thể đặt hàng loạt bằng `scripts/set-pages-secrets.js`.
+- **Domain:** `zuey.me` và `www.zuey.me` được gắn vào Pages project (*Custom domains*); hai bản ghi CNAME (proxied) trỏ tới subdomain `*.pages.dev` của project. Rule chuyển hướng của zone (*Rules → Redirect Rules*) chạy trước Pages: chỉ cần còn một rule khớp `zuey.me` thì site không bao giờ được phục vụ và domain kẹt ở trạng thái `pending`. Token trong `.env` đọc/sửa được DNS và Pages, nhưng **không** có quyền *Single Redirect* hay *Page Rules*. Muốn sửa rule thì làm trên dashboard, hoặc thêm quyền *Zone → Single Redirect: Edit* cho token.
 - **Local:** sao chép `.env.example` thành `.env` và điền giá trị (dùng cho `import.meta.env` và script). Server runtime (`locals.runtime.env`, đọc qua wrangler platform proxy) chỉ đọc `.dev.vars`, nên chép các biến runtime vào `.dev.vars` theo cùng định dạng `TÊN=giá_trị`, rồi khởi động lại `bun run dev`. Cả hai file đều bị git bỏ qua.
 
 Thiếu biến nào thì API trả lỗi `503` kèm tên biến còn thiếu, không âm thầm hỏng.
