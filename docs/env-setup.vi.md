@@ -36,7 +36,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 1. Trong AnyMD, tạo API key có quyền đọc thư viện. Lưu key vào secret `ANYMD_API_KEY`.
 2. Gắn tag `zuey-reads` cho những bài muốn hiển thị. AnyMD không có bộ lọc tag phía server, nên mỗi lần sync sẽ đọc cả thư viện rồi lọc ở phía zuey.me.
 3. Binding Workers AI `AI` đã được khai báo trong `wrangler.toml`. Trên Pages, kiểm tra thêm ở *Settings → Bindings → Workers AI* (tên biến `AI`).
-4. Tùy chọn: đặt `READS_SUMMARY_MODEL` để đổi model. Mặc định là `@cf/meta/llama-3.1-8b-instruct`.
+4. Tùy chọn: đặt `READS_SUMMARY_MODEL` để đổi model. Mặc định là `@cf/meta/llama-3.1-8b-instruct-fp8`.
 5. Cấu hình cron sync trong GitHub, mục *Settings → Secrets and variables → Actions*:
    - Secret `ZUEY_ADMIN_API_KEY`: một API key có role **admin**, tạo trong Studio → API Keys (hoặc đăng nhập `POST /api/auth/login` bằng `ADMIN_MASTER_TOKEN` rồi gọi `POST /api/v1/keys`). Đưa key vào GitHub qua stdin, ví dụ `gh secret set ZUEY_ADMIN_API_KEY`, để key không nằm trong lịch sử shell.
    - Variable `SITE_URL`: ví dụ `https://zuey.me`.

@@ -1,7 +1,7 @@
 import { AppError } from '../http';
 import type { WorkersAiLike } from '../../env';
 
-export const DEFAULT_SUMMARY_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+export const DEFAULT_SUMMARY_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8';
 export const MAX_SUMMARY_INPUT_CHARS = 12000;
 
 export interface SummaryInput {
