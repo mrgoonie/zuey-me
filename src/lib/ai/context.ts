@@ -3,6 +3,9 @@
  * same paywall decision every reader surface uses. The model only ever sees text the caller
  * may read; paid articles the caller cannot read in full contribute their public preview only.
  *
+ * When the Jev layer is configured, a wider BM25 shortlist is scored by Jev (src/lib/search/jev.ts)
+ * and passages Jev judges unable to answer the question are dropped before they reach the model.
+ *
  * `retrieveContext` is the swap point for a later FTS5/vector index (src/lib/search/*).
  */
 import type { D1DatabaseLike } from '../../db/store';
@@ -15,6 +18,8 @@ import { walkBlocks } from '../blocks/schema';
 import { validateDocument } from '../blocks/validate';
 import type { Principal } from '../members/policy';
 import { viewerFromPrincipal } from '../members/policy';
+import type { JevConfig } from '../search/jev';
+import { jevRelevance, orderByRelevance } from '../search/jev';
 
 export interface ContextSource {
   id: string;
@@ -40,11 +45,16 @@ export interface RetrievalDeps {
   /** Absolute site origin used for source URLs, e.g. https://zuey.me */
   siteUrl: string;
   limit?: number;
+  /** Jev relevance layer; null/undefined keeps plain BM25 order. */
+  jev?: JevConfig | null;
 }
 
 export type ContextRetriever = (principal: Principal, query: string, locale: Locale, deps: RetrievalDeps) => Promise<ContextSource[]>;
 
 export const MAX_SOURCES = 4;
+/** BM25 shortlist size handed to Jev, and the probability below which a passage is not used. */
+const JEV_SHORTLIST = 12;
+export const JEV_MIN_RELEVANCE = 0.15;
 const MAX_CANDIDATES = 300;
 const LOCALE_COUNT = LOCALES.length;
 const FULL_PASSAGE_CHARS = 1_400;
@@ -222,10 +232,24 @@ export async function retrieveContext(principal: Principal, query: string, local
     }
     if (score > 0 && c.locale === locale) score *= 1.2;
     return { c, score };
-  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, deps.limit ?? MAX_SOURCES);
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+
+  const limit = deps.limit ?? MAX_SOURCES;
+  const passageOf = (c: Candidate) => bestPassage(c.body, terms, c.full ? FULL_PASSAGE_CHARS : PREVIEW_PASSAGE_CHARS);
+  let chosen = scored.slice(0, limit).map(x => x.c);
+  if (deps.jev && scored.length > 0) {
+    const shortlist = scored.slice(0, JEV_SHORTLIST).map(x => x.c);
+    // Same caller-visible passage the model would receive: Jev never sees withheld paid text.
+    const scores = await jevRelevance(deps.jev, query, shortlist.map(c => ({ id: c.id, text: `${c.title}\n${c.excerpt}\n${passageOf(c)}` })));
+    if (scores) {
+      chosen = orderByRelevance(shortlist, c => c.id, scores)
+        .filter(c => (scores.get(c.id) ?? 1) >= JEV_MIN_RELEVANCE)
+        .slice(0, limit);
+    }
+  }
 
   const site = deps.siteUrl.replace(/\/+$/, '');
-  return scored.map(({ c }) => ({
+  return chosen.map(c => ({
     id: c.id,
     slug: c.slug,
     title: c.title,
@@ -235,7 +259,7 @@ export async function retrieveContext(principal: Principal, query: string, local
     locale: c.locale,
     published_at: c.published_at,
     excerpt: c.excerpt,
-    text: bestPassage(c.body, terms, c.full ? FULL_PASSAGE_CHARS : PREVIEW_PASSAGE_CHARS),
+    text: passageOf(c),
   }));
 }
 
