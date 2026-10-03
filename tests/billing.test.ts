@@ -12,7 +12,7 @@ import { createUserKey } from '../src/lib/members/api-keys';
 import type { UserKeyScope } from '../src/lib/members/api-keys';
 import { addMonths } from '../src/lib/members/subscriptions';
 import { membersMcpModule } from '../src/lib/members/mcp';
-import { monthlyVnd } from '../src/lib/members/plans';
+import { monthlyVnd, prepayVnd } from '../src/lib/members/plans';
 import { resolvePrincipal } from '../src/lib/members/policy';
 import { membersRuntime } from '../src/lib/members/runtime';
 import { createMemberSession } from '../src/lib/members/session';
@@ -163,7 +163,7 @@ beforeEach(async () => {
 });
 
 describe('plans and pricing', () => {
-  it('converts USD to VND per month, rounded up to 1,000, without period discounts', async () => {
+  it('converts USD to VND per month, rounded up to 1,000, with 5/10/20% off 3/6/12-month prepayments', async () => {
     expect(monthlyVnd(900, 26350)).toBe(238000); // 237,150 → 238,000
     expect(monthlyVnd(1900, 26000)).toBe(494000);
     const res = await plansApi(ctx({}));
@@ -173,7 +173,14 @@ describe('plans and pricing', () => {
     expect(field(combo, 'price_usd_cents')).toBe(1900);
     const prices = field(combo, 'prices');
     const twelve = Array.isArray(prices) ? prices.find(p => field(p, 'months') === 12) : null;
-    expect(field(twelve, 'amount_vnd')).toBe(monthlyVnd(1900, RATE) * 12);
+    // 501,000 × 12 = 6,012,000; −20% = 4,809,600 → rounded up to 4,810,000.
+    expect(field(twelve, 'amount_vnd')).toBe(4_810_000);
+    expect(field(twelve, 'discount_percent')).toBe(20);
+    expect(field(twelve, 'amount_usd_cents')).toBe(18240);
+    const one = Array.isArray(prices) ? prices.find(p => field(p, 'months') === 1) : null;
+    expect(field(one, 'amount_vnd')).toBe(501_000);
+    expect(field(one, 'discount_percent')).toBe(0);
+    expect(prepayVnd(900, 6, RATE)).toBe(1_286_000); // 238,000 × 6 = 1,428,000; −10% = 1,285,200
   });
 
   it('returns 503 billing_unconfigured when the rate or bank settings are missing', async () => {
@@ -205,7 +212,8 @@ describe('order → SePay webhook → entitlement', () => {
     const m = await member('lan@example.com');
     const o = await order(m, 'knowledges', 3);
     expect(o.code).toMatch(/^ZSB[A-Z0-9]{8}$/);
-    expect(o.amount).toBe(monthlyVnd(900, RATE) * 3);
+    expect(o.amount).toBe(prepayVnd(900, 3, RATE)); // 714,000 − 5% = 678,300 → 679,000
+    expect(o.amount).toBe(679_000);
     const view = (await read(await orderApi(ctx({ params: { code: o.code }, headers: { cookie: m.cookie } })))).data;
     expect(field(field(view, 'transfer'), 'transfer_content')).toBe(o.code);
     expect(String(field(field(view, 'transfer'), 'qr_url'))).toContain(`des=${o.code}`);

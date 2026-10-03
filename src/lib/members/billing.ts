@@ -7,7 +7,7 @@ import type { SepayTransferInfo } from '../payments/sepay';
 import { SEPAY_BILLING_PREFIX, extractBillingCode, missingSepayBankConfig, vietQrTransfer } from '../payments/sepay';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
 import type { BillingMonths, Entitlement, PlanId } from './plans';
-import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, monthlyVnd, parseUsdVndRate } from './plans';
+import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, parseUsdVndRate, prepayUsdCents, prepayVnd } from './plans';
 import type { Row } from './runtime';
 import { DAY_MS, iso, isUniqueViolation, membersRuntime, num, numOrNull, randomCode, randomId, siteUrl, str, strOrNull } from './runtime';
 import type { SubscriptionView } from './subscriptions';
@@ -146,7 +146,7 @@ export async function listOrders(d1: D1DatabaseLike, userId: string, limit = 50)
   return (results ?? []).map(rowToOrder);
 }
 
-/** Creates a prepaid SePay order for 1/3/6/12 months at the plain monthly price (no discounts). */
+/** Creates a prepaid SePay order for 1/3/6/12 months with the term discount (PREPAY_DISCOUNT_PERCENT). */
 export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: string, body: Record<string, unknown>, request?: Request): Promise<BillingOrder> {
   if (!isPlanId(body.plan)) throw new AppError(400, 'invalid_field', "plan must be one of 'knowledges', 'ai', 'combo', 'community'", { field: 'plan' });
   const months = body.months ?? 1;
@@ -167,7 +167,7 @@ export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: s
       await d1.prepare(
         `INSERT INTO billing_orders (id, code, user_id, plan, months, amount_usd_cents, usd_vnd_rate, amount_vnd, status, expires_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-      ).bind(id, code, userId, plan.id, months, plan.price_usd_cents * months, rate, monthlyVnd(plan.price_usd_cents, rate) * months,
+      ).bind(id, code, userId, plan.id, months, prepayUsdCents(plan.price_usd_cents, months), rate, prepayVnd(plan.price_usd_cents, months, rate),
         iso(now + ORDER_TTL_MS), iso(now), iso(now)).run();
       const order = await getOrderByCode(d1, code);
       if (!order) throw new AppError(500, 'internal_error', 'Order was not persisted');

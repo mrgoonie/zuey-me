@@ -21,6 +21,9 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cardPlans = new Set(catalog.card_plans);
+  // The prepay discount depends only on the term, so any plan's price list carries it.
+  const discountFor = (m: number) => catalog.plans[0]?.prices.find(p => p.months === m)?.discount_percent ?? 0;
+  const discountNote = catalog.months.filter(m => discountFor(m) > 0).map(m => `${m} tháng −${discountFor(m)}%`).join(', ');
 
   async function checkout(planId: string, provider: Provider) {
     if (busy) return;
@@ -55,10 +58,11 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
             <label key={m} className={`cursor-pointer rounded-full px-1 py-2 text-center text-xs sm:text-sm font-semibold focus-within:ring-2 focus-within:ring-amber-500 ${months === m ? 'bg-stone-900 text-amber-50' : 'text-stone-700 hover:bg-white/70'}`}>
               <input type="radio" name="months" value={m} checked={months === m} onChange={() => setMonths(m)} className="sr-only" />
               {MONTH_LABEL[m] ?? `${m} tháng`}
+              {discountFor(m) > 0 && <span className="block text-[10px] sm:text-[11px] font-bold opacity-80">−{discountFor(m)}%</span>}
             </label>
           ))}
         </div>
-        <p className="mt-2 text-center text-xs text-stone-300">Áp dụng cho chuyển khoản ngân hàng (VietQR): trả trước, không tự động gia hạn, không giảm giá theo kỳ.</p>
+        <p className="mt-2 text-center text-xs text-stone-300">Áp dụng cho chuyển khoản ngân hàng (VietQR): trả trước, không tự động gia hạn{discountNote && `; giảm giá khi trả trước: ${discountNote}`}.</p>
       </fieldset>
 
       <div aria-live="polite" role="status" className="empty:hidden mx-auto w-full max-w-[720px]">
@@ -78,7 +82,7 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
               <p className="mt-4"><span className="text-3xl font-bold">{fmtUsd(plan.price_usd_cents)}</span><span className="text-sm text-stone-600">/tháng</span></p>
               <p className="mt-1 text-sm text-stone-700 tabular-nums">
                 {price && price.amount_vnd !== null
-                  ? <>{MONTH_LABEL[months]}: <strong>{fmtVnd(price.amount_vnd)}</strong></>
+                  ? <>{MONTH_LABEL[months]}: <strong>{fmtVnd(price.amount_vnd)}</strong>{price.discount_percent > 0 && <> <span className="text-emerald-700 font-semibold">(−{price.discount_percent}%)</span></>}</>
                   : <>{MONTH_LABEL[months]}: {price ? fmtUsd(price.amount_usd_cents) : '—'}</>}
               </p>
               <ul className="mt-4 grid gap-1.5 text-sm text-stone-800 flex-1">

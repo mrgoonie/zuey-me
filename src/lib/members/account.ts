@@ -109,7 +109,7 @@ export function plansCatalog(env: RuntimeEnv): PlansCatalog {
   const rate = parseUsdVndRate(env);
   const missing = missingBillingConfig(env);
   return {
-    currency_note: 'Prices are monthly in USD. SePay bank transfer charges VND = USD × USD_VND_RATE rounded up to 1,000 VND per month, prepaid for 1, 3, 6 or 12 months without discounts. International cards (Dodo Payments) renew monthly in USD until cancelled.',
+    currency_note: 'Prices are monthly in USD. SePay bank transfer charges VND = USD × USD_VND_RATE rounded up to 1,000 VND per month, prepaid for 1, 3, 6 or 12 months; longer prepayments get the discount in prices[].discount_percent (the VND total is rounded up to 1,000 VND after the discount). International cards (Dodo Payments) renew monthly in USD until cancelled.',
     billing_configured: missing.length === 0,
     missing,
     usd_vnd_rate: rate,
