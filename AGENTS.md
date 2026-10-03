@@ -38,6 +38,7 @@ Process memory for AI agents collaborating on `zuey-me`.
 - Apply remote migration: `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y`.
 - Before any remote schema or data change, record a restore point with `wrangler d1 time-travel info zuey_me_db`; `wrangler d1 export` fails because the DB has FTS5 tables.
 - Every remote wrangler command (deploy, secrets, D1) must run with the DNS-owning account's `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` from `.env` exported; never fall back to a cached `wrangler login`, which may point at a different account.
+- Inside this repo, `wrangler d1 <cmd> zuey_me_db` resolves the database by the `database_id` in `wrangler.toml` (production), not by name. To act on a D1 in any other account, run wrangler from a directory without `wrangler.toml`.
 
 ## Definition of Done
 

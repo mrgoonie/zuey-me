@@ -13,9 +13,9 @@ Nguồn: `plans/handoffs/zuey-membership-new-scope-prompt-20261001.md`, mục *D
 | Thiếu credential → lỗi trung thực | `tests/reads.test.ts` (`anymd_unconfigured`, `llm_unconfigured`); `tests/booking.test.ts` ("confirms honestly when Google and Resend are not configured", `payment_unconfigured`); `tests/billing.test.ts` (`billing_unconfigured`); `tests/members.test.ts` (503 khi thiếu email provider); `tests/ai-chat.test.ts` (`ai_unconfigured`). |
 | `bun test` / `bun run build` | 307 pass, 0 fail; `astro check` 0 errors, 0 warnings, 0 hints. |
 | Browser 320/768/1440 | Chromium headless trên production, 14 route × 3 độ rộng: không cuộn ngang, không lỗi console, mọi route 200 (hoặc redirect `/account` → `/login` khi chưa đăng nhập). Lỗi phát hiện và đã sửa: tab bị cắt chữ ở 320px, thẻ Knowledges thiếu nền, nội dung kẹt opacity 0 khi không có frame, thẻ dưới lệch độ rộng ở 768px. |
+| Domain `zuey.me` (2026-10-03) | Đã tắt (không xoá) Single Redirect rule sang Substack trên dashboard. `https://zuey.me` và `www` trả 200 với app; Chromium headless trên `https://zuey.me`, 14 route × 320/768/1440: không cuộn ngang, không lỗi console. Pages project và D1 cũ ở tài khoản NextLevelBuilder đã xoá sau khi verify (backup ở `D:/www/zuey/backups/`); D1 production còn nguyên 56 bảng. |
 | README chỉ ghi tên secret | `README.md` → *Environment & Secrets*; hướng dẫn từng bước: `docs/env-setup.vi.md`. |
 
 ## Ngoài Done means nhưng còn mở
 
-- `zuey.me` vẫn bị Single Redirect rule của zone chuyển sang Substack; token hiện có không có quyền sửa rule. Domain custom ở trạng thái `pending`.
 - Chưa có tài liệu AnyMD nào gắn tag `zuey-reads`; chưa có lịch rảnh cho booking; webhook SePay, key Dodo/PayPal, Telegram và token Dewee phạm vi hẹp chờ chủ sở hữu cung cấp.
