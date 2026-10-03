@@ -14,8 +14,11 @@ Nguồn: `plans/handoffs/zuey-membership-new-scope-prompt-20261001.md`, mục *D
 | `bun test` / `bun run build` | 307 pass, 0 fail; `astro check` 0 errors, 0 warnings, 0 hints. |
 | Browser 320/768/1440 | Chromium headless trên production, 14 route × 3 độ rộng: không cuộn ngang, không lỗi console, mọi route 200 (hoặc redirect `/account` → `/login` khi chưa đăng nhập). Lỗi phát hiện và đã sửa: tab bị cắt chữ ở 320px, thẻ Knowledges thiếu nền, nội dung kẹt opacity 0 khi không có frame, thẻ dưới lệch độ rộng ở 768px. |
 | Domain `zuey.me` (2026-10-03) | Đã tắt (không xoá) Single Redirect rule sang Substack trên dashboard. `https://zuey.me` và `www` trả 200 với app; Chromium headless trên `https://zuey.me`, 14 route × 320/768/1440: không cuộn ngang, không lỗi console. Pages project và D1 cũ ở tài khoản NextLevelBuilder đã xoá sau khi verify (backup ở `D:/www/zuey/backups/`); D1 production còn nguyên 56 bảng. |
+| Dữ liệu thật (2026-10-03) | Zuey AI: secrets Dewee đã đặt, `/api/v1/chat/status` báo `configured: true`, probe agent `zuey-ai` trả lời. Booking: lịch T2–T6 9:00–11:00 và 13:00–15:00 (Asia/Ho_Chi_Minh), `/api/v1/booking/slots` trả slot 90 phút. Reads: 8 bài AnyMD gắn tag `zuey-reads`, sync `status: success`, 8/8 có tóm tắt (sửa model Workers AI đã bị ngừng). Chromium headless lại 14 route × 320/768/1440 trên `https://zuey.me`: không cuộn ngang, không lỗi console. |
 | README chỉ ghi tên secret | `README.md` → *Environment & Secrets*; hướng dẫn từng bước: `docs/env-setup.vi.md`. |
 
 ## Ngoài Done means nhưng còn mở
 
-- Chưa có tài liệu AnyMD nào gắn tag `zuey-reads`; chưa có lịch rảnh cho booking; webhook SePay, key Dodo/PayPal, Telegram và token Dewee phạm vi hẹp chờ chủ sở hữu cung cấp.
+- Webhook SePay: form đã điền sẵn, chờ chủ sở hữu dán API key và lưu.
+- Telegram: bot chưa được thêm vào group nên chưa lấy được group ID.
+- Key Dodo/PayPal chưa có.

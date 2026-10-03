@@ -28,6 +28,7 @@ Process memory for AI agents collaborating on `zuey-me`.
 
 - New MCP tools: add a module to `src/lib/mcp/registry.ts`. New REST docs: add a fragment to `src/lib/openapi/registry.ts` (merged into `/api/openapi.json` and Scalar `/docs`).
 - Admin-only endpoints and tools must use `authenticateAdmin` (`src/lib/auth.ts`); read-only API keys must never mutate.
+- Scripted `POST`/`PUT` calls to the API must send `Content-Type: application/json`; Astro's origin check rejects body-less or form requests with `403` before auth runs.
 - Errors use `src/lib/http.ts` (`AppError`, `jsonError`) with the `{ success: false, error: { code, message } }` envelope.
 - Secret names live in `.env.example`, README and `docs/env-setup.vi.md`; never values.
 
@@ -38,6 +39,7 @@ Process memory for AI agents collaborating on `zuey-me`.
 - Apply remote migration: `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y`.
 - Before any remote schema or data change, record a restore point with `wrangler d1 time-travel info zuey_me_db`; `wrangler d1 export` fails because the DB has FTS5 tables.
 - Every remote wrangler command (deploy, secrets, D1) must run with the DNS-owning account's `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` from `.env` exported; never fall back to a cached `wrangler login`, which may point at a different account.
+- If `wrangler pages` hits the wrong account despite exported credentials, delete the stale `node_modules/.cache/wrangler/pages.json`.
 - Inside this repo, `wrangler d1 <cmd> zuey_me_db` resolves the database by the `database_id` in `wrangler.toml` (production), not by name. To act on a D1 in any other account, run wrangler from a directory without `wrangler.toml`.
 
 ## Definition of Done
