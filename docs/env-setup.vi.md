@@ -65,6 +65,7 @@ Tuỳ chọn "Thẻ quốc tế / PayPal (USD)" trên `/business` chỉ hiện k
 3. Trong app vừa tạo, mục *Webhooks*, bấm *Add Webhook*:
    - URL: `https://zuey.me/api/webhooks/paypal` (khi thử sandbox cần một URL HTTPS công khai trỏ tới bản đang chạy).
    - Sự kiện: `Payment capture completed` (`PAYMENT.CAPTURE.COMPLETED`).
+   - Cách khác không cần dashboard: lấy token bằng `POST /v1/oauth2/token` (Basic auth từ Client ID và Secret), rồi gọi `POST /v1/notifications/webhooks` với `url` và `event_types` như trên. Kết quả trả về chính là Webhook ID.
 4. Sau khi lưu, PayPal hiển thị **Webhook ID**. Lưu giá trị này vào `PAYPAL_WEBHOOK_ID`. Mọi webhook được xác minh qua API `verify-webhook-signature` của PayPal bằng ID này; sai hoặc thiếu thì trả `401`.
 5. Đặt thử một slot với tài khoản sandbox *Personal* (tạo trong *Sandbox → Accounts*). Sau khi thanh toán, PayPal đưa khách về `/booking/<id>`; trang này gọi capture phía server rồi hiển thị trạng thái thật của booking.
 6. Khi lên live: chuyển sang tab *Live*, tạo app và webhook mới, cập nhật ba biến trên bằng giá trị live, rồi **xoá** `PAYPAL_API_BASE` (mặc định là `https://api-m.paypal.com`).
