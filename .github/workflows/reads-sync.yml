@@ -14,4 +14,4 @@ jobs:
         env:
           SITE_URL: ${{ vars.SITE_URL || 'https://zuey.me' }}
         run: |
-          curl -fsS --max-time 600 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer ${{ secrets.ZUEY_ADMIN_API_KEY }}"
+          curl -fsS --max-time 600 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer ${{ secrets.ZUEY_ADMIN_API_KEY }}" -H "Content-Type: application/json" -d '{}'

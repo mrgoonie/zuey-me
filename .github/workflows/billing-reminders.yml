@@ -16,4 +16,4 @@ jobs:
           SITE_URL: ${{ vars.SITE_URL || 'https://zuey.me' }}
           ZUEY_ADMIN_API_KEY: ${{ secrets.ZUEY_ADMIN_API_KEY }}
         run: |
-          curl -fsS --max-time 300 -X POST "$SITE_URL/api/v1/billing/reminders" -H "Authorization: Bearer $ZUEY_ADMIN_API_KEY"
+          curl -fsS --max-time 300 -X POST "$SITE_URL/api/v1/billing/reminders" -H "Authorization: Bearer $ZUEY_ADMIN_API_KEY" -H "Content-Type: application/json" -d '{}'
