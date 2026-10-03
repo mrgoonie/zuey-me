@@ -64,6 +64,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | Email | `RESEND_API_KEY`, `RESEND_FROM` |
 | Members & billing | `ADMIN_EMAILS`, `MEMBER_HASH_SALT`, `USD_VND_RATE`, `SEPAY_API_TOKEN` (reconciliation), plus the SePay bank variables and `PUBLIC_SITE_URL` |
 | Zuey AI chat | `DEWEE_GATEWAY_URL`, `DEWEE_GATEWAY_TOKEN`, `DEWEE_AGENT_KEY`, `AI_MONTHLY_REQUEST_LIMIT` / `AI_EST_COST_USD_PER_MTOK` (optional) |
+| Jev relevance (TypeSafe AI) | `TYPESAFEAI_API_KEY` enables reranking; `TYPESAFE_API_BASE` / `TYPESAFE_MODEL` (optional) |
 | Interactive blocks | `SANDBOX_FETCH_ALLOWLIST` (empty disables the fetch proxy) |
 | Telegram community | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_EN_ID`, `TELEGRAM_GROUP_VI_ID`, `TELEGRAM_WEBHOOK_SECRET` |
 | MCP from other web origins | `MCP_ALLOWED_ORIGINS` (optional) |

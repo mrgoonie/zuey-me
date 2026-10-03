@@ -70,7 +70,8 @@ export const taxonomyOpenApi: OpenApiFragment = {
         snippet: { type: 'string', description: 'Matched text from a tier this caller may read; ** marks matches; never HTML' },
         tier: { type: 'string', enum: [...SEARCH_TIERS] }, access: { type: 'string', enum: ['free', 'knowledges'] },
         full_text: { type: 'boolean' }, published_revision: { type: ['integer', 'null'] }, published_at: { type: ['string', 'null'] },
-        score: { type: 'number' }, sources: { type: 'array', items: { type: 'string', enum: ['bm25', 'semantic'] } },
+        score: { type: 'number' }, relevance: { type: ['number', 'null'], description: 'Jev (TypeSafe AI) probability that this hit answers the query; null when the Jev layer did not run. A ranking signal, not a guarantee of correctness' },
+        sources: { type: 'array', items: { type: 'string', enum: ['bm25', 'semantic'] } },
         url: { type: 'string' }, markdown_url: { type: 'string' },
       },
     },
@@ -79,6 +80,7 @@ export const taxonomyOpenApi: OpenApiFragment = {
       properties: {
         query: { type: 'string' }, locale: { oneOf: [locale, { type: 'null' }] },
         semantic: { type: 'boolean', description: 'False means BM25 only (no Vectorize/AI binding, or embedding failed)' },
+        reranked: { type: 'boolean', description: 'True when the Jev relevance layer (TYPESAFEAI_API_KEY) reordered the fused results; false falls back to BM25/vector fusion order' },
         tiers: { type: 'array', items: { type: 'string', enum: [...SEARCH_TIERS] }, description: 'Index tiers searched; others were excluded before ranking' },
         results: { type: 'array', items: ref('KnowledgeHit') },
       },

@@ -51,7 +51,7 @@ Triển khai toàn bộ các mục còn lại trong bảng "User-requested produ
 | Session | Cookie `zuey_member` (HttpOnly, Secure, SameSite=Lax). Server lưu hash của token. Request thay đổi dữ liệu bằng cookie phải có `Origin` cùng site (CSRF). |
 | Gói | `knowledges` $9, `ai` $9, `combo` $19, `community` $29, đều tính theo tháng. Mỗi gói cấp entitlement: knowledges → `read_full`; ai → `ai_chat`; combo → cả hai; community → cả hai + `community`. |
 | AI-only | Có `ai_chat` nhưng không có `read_full`. Chat được trích dẫn nhưng không trả full text của bài trả phí. |
-| Thanh toán gói | SePay chuyển khoản trả trước 1/3/6/12 tháng, chưa áp dụng chiết khấu (mức 10/20/40% của preview chưa được xác nhận). Giá VND = USD × `USD_VND_RATE`, làm tròn lên bội số 1.000. Order code `ZSB…` nằm trong nội dung chuyển khoản. Webhook SePay đối chiếu và gia hạn `current_period_end`. |
+| Thanh toán gói | SePay chuyển khoản trả trước 1/3/6/12 tháng, chiết khấu 0/5/10/20%. Giá VND = USD × `USD_VND_RATE`, làm tròn lên bội số 1.000. Order code `ZSB…` nằm trong nội dung chuyển khoản. Webhook SePay đối chiếu và gia hạn `current_period_end`. |
 | Đối soát | Admin gọi endpoint reconcile. Endpoint dùng `SEPAY_API_TOKEN` để đọc giao dịch gần đây và khớp với các order đang chờ. Endpoint này là phương án dự phòng khi webhook lỗi. |
 | Email | Resend gửi từ `hi@zuey.me` (`RESEND_FROM`) cho magic link, biên nhận, nhắc gia hạn và đổi email. Gửi idempotent theo khóa sự kiện. |
 | User API key | Token có prefix `zk_`. Server chỉ lưu SHA-256. Scopes: `articles:read`, `chat:write`, `account:read`, `account:write`, `billing:read`, `checkout:write`. Không có scope admin. Mỗi key có hạn, last-used, rotate (tồn tại song song key cũ) và revoke. Chỉ quản lý được qua session + CSRF. |
@@ -133,5 +133,9 @@ Theo bước 9 của handoff, trong phạm vi credential đang có:
 
 - Link Telegram (user cung cấp sau).
 - Cổng thẻ quốc tế: chọn Dodo (gói) + PayPal (tư vấn); chưa có API key.
-- Mức chiết khấu trả trước và ngân sách AI theo user ($3/$5/$5 trong preview) chưa được xác nhận.
-- Lớp quyết định "Jev/TypeSafeAI" chưa có nguồn tham chiếu.
+
+## Quyết định đã chốt
+
+- Chiết khấu trả trước: 5% (3 tháng), 10% (6 tháng), 20% (12 tháng); áp cho cả USD và VND.
+- Ngân sách AI hằng tháng theo gói: $3 (AI), $5 (combo), $5 (cộng đồng); kiểm tra nguyên tử trong `consumeQuota`.
+- Jev (TypeSafe AI System One, câu hỏi `noul`) xếp hạng lại search và lọc nguồn grounding của Zuey AI (ngưỡng 0,15); fail-open về BM25.

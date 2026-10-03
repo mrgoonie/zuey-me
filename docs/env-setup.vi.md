@@ -126,7 +126,7 @@ Lưu ý vận hành:
 
 1. `ADMIN_EMAILS`: danh sách email admin, phân tách bằng dấu phẩy. Chỉ email **đã xác minh** (qua magic link hoặc Google/GitHub) mới có quyền admin. Để trống thì dùng mặc định `goon.nguyen@gmail.com,duy@wearetopgroup.com`.
 2. `MEMBER_HASH_SALT`: chuỗi ngẫu nhiên dài, dùng để băm IP khi giới hạn tần suất gửi magic link.
-3. `USD_VND_RATE`: tỷ giá dùng để quy đổi giá USD sang VND, ví dụ `26000`. Mỗi tháng được làm tròn lên 1.000 ₫. Thiếu biến này thì tạo đơn trả `503 billing_unconfigured`.
+3. `USD_VND_RATE`: tỷ giá dùng để quy đổi giá USD sang VND, ví dụ `26000`. Mỗi tháng được làm tròn lên 1.000 ₫. Thiếu biến này thì tạo đơn trả `503 billing_unconfigured`. Trả trước được giảm 5% (3 tháng), 10% (6 tháng), 20% (12 tháng); mức giảm nằm trong `src/lib/members/plans.ts` (`PREPAY_DISCOUNT_PERCENT`), không phải biến môi trường.
 4. `PUBLIC_SITE_URL`: domain dùng để tạo link trong email (ví dụ `https://zuey.me`; local là `http://localhost:4321`).
 5. Magic link cần `RESEND_API_KEY`. Đăng nhập Google/GitHub dùng lại `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` và `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` cùng callback URL đã đăng ký cho Studio, không cần đăng ký thêm.
 6. Nhắc gia hạn chạy hằng ngày bởi `.github/workflows/billing-reminders.yml`, dùng chung secret `ZUEY_ADMIN_API_KEY` và variable `SITE_URL` với cron Reads.
@@ -137,9 +137,15 @@ Lưu ý vận hành:
 
 1. `DEWEE_GATEWAY_URL`: URL gateway Dewee; `DEWEE_GATEWAY_TOKEN`: token gọi gateway (chỉ dùng phía server). Nên dùng token operator có phạm vi hẹp cho agent, không dùng token tenant-admin.
 2. `DEWEE_AGENT_KEY`: key của agent trả lời, mặc định `zuey-ai`.
-3. Tuỳ chọn: `AI_MONTHLY_REQUEST_LIMIT` (mặc định 300 request/thành viên/tháng) và `AI_EST_COST_USD_PER_MTOK` (ước tính chi phí hiển thị cho admin).
+3. Tuỳ chọn: `AI_MONTHLY_REQUEST_LIMIT` (mặc định 300 request/thành viên/tháng) và `AI_EST_COST_USD_PER_MTOK` (giá blended USD/1 triệu token, mặc định `0.5`). Chi phí ước tính này được trừ vào ngân sách AI hằng tháng của gói ($3 gói AI, $5 gói combo/cộng đồng); hết ngân sách thì chat trả `429 ai_budget_exceeded` tới tháng sau.
 4. Thiếu biến nào thì API chat trả `503 ai_unconfigured` kèm tên biến còn thiếu.
 5. `SANDBOX_FETCH_ALLOWLIST`: danh sách host mà block tương tác (HTML/JS) được GET qua `/api/v1/sandbox/fetch`, phân tách bằng dấu phẩy, hỗ trợ `*.example.com`. Để trống thì tắt proxy. Hiện dùng `api.open-meteo.com,geocoding-api.open-meteo.com,api.github.com,api.frankfurter.app`.
+
+### Jev (TypeSafe AI): xếp hạng lại kết quả
+
+1. Đăng nhập [typesafe.ai](https://typesafe.ai), tạo API key, lưu vào `TYPESAFEAI_API_KEY`.
+2. Tuỳ chọn: `TYPESAFE_API_BASE` (mặc định `https://api.typesafe.ai`) và `TYPESAFE_MODEL` (mặc định `jev-latest`).
+3. Khi có key, `/api/v1/search` và nguồn trích dẫn của Zuey AI được Jev chấm điểm liên quan; kết quả search có `reranked: true` và `relevance` cho từng hit. Jev chỉ nhận phần nội dung người hỏi được phép đọc. Jev lỗi hoặc chậm quá 4 giây thì giữ nguyên thứ tự BM25, không làm hỏng search.
 
 ## 9. Cộng đồng Telegram (gói $29)
 

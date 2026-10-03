@@ -57,6 +57,12 @@ export interface RuntimeEnv {
   PAYPAL_WEBHOOK_ID?: string;
   /** https://api-m.sandbox.paypal.com (sandbox) or https://api-m.paypal.com (default). */
   PAYPAL_API_BASE?: string;
+  // Jev relevance layer (TypeSafe AI): reranks knowledge search and Zuey AI grounding when set.
+  TYPESAFEAI_API_KEY?: string;
+  /** https://api.typesafe.ai (default). */
+  TYPESAFE_API_BASE?: string;
+  /** Jev model id; default jev-latest. */
+  TYPESAFE_MODEL?: string;
   // MCP over OAuth
   /** Extra comma-separated browser origins allowed to call /mcp (same origin and loopback are always allowed). */
   MCP_ALLOWED_ORIGINS?: string;

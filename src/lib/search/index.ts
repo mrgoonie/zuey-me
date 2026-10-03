@@ -6,6 +6,7 @@ import type { Locale } from '../i18n/locales';
 import type { Principal } from '../members/policy';
 import { viewerFromPrincipal } from '../members/policy';
 import type { SearchTier } from './indexer';
+import { jevConfig, jevRelevance, MAX_JEV_CANDIDATES, orderByRelevance } from './jev';
 import { embedTexts, parseMatches, parseVectorId, semanticBackend } from './semantic';
 import { buildMatchQuery, unspaceCjk } from './text';
 
@@ -27,6 +28,8 @@ export interface KnowledgeHit {
   published_revision: number | null;
   published_at: string | null;
   score: number;
+  /** Jev probability that the hit answers the query (null when the Jev layer did not run). */
+  relevance: number | null;
   sources: Array<'bm25' | 'semantic'>;
   url: string;
   markdown_url: string;
@@ -36,6 +39,8 @@ export interface KnowledgeSearchResult {
   query: string;
   locale: Locale | null;
   semantic: boolean;
+  /** True when the Jev relevance layer reordered the results. */
+  reranked: boolean;
   /** Tiers this principal was allowed to search; everything else was excluded before ranking. */
   tiers: SearchTier[];
   results: KnowledgeHit[];
@@ -127,7 +132,7 @@ export async function searchKnowledge(
   const tiers = allowedTiers(principal);
   const q = query.trim().slice(0, 200);
   const max = Math.min(Math.max(Math.floor(limit) || 10, 1), 50);
-  const empty: KnowledgeSearchResult = { query: q, locale, semantic: false, tiers, results: [] };
+  const empty: KnowledgeSearchResult = { query: q, locale, semantic: false, reranked: false, tiers, results: [] };
   const match = buildMatchQuery(q);
   if (!match) return empty;
 
@@ -149,7 +154,10 @@ export async function searchKnowledge(
     const add = 1 / (RRF_K + (c.semanticRank ?? 0));
     if (existing) { existing.score += add; existing.sources.add('semantic'); } else merged.set(key(c), { ...c, score: add, sources: new Set(['semantic']) });
   }
-  const ranked = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, max);
+  // With Jev configured, a wider fused pool is fetched so the relevance layer can promote lower-ranked hits.
+  const jev = jevConfig(env);
+  const poolSize = jev ? Math.min(MAX_JEV_CANDIDATES, Math.max(max * 2, 10)) : max;
+  const ranked = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, poolSize);
   if (ranked.length === 0) return { ...empty, semantic };
 
   const origin = (env.PUBLIC_SITE_URL || 'https://zuey.me').replace(/\/$/, '');
@@ -169,9 +177,15 @@ export async function searchKnowledge(
       snippet: c.snippet, tier: c.tier, access, full_text: c.tier !== 'preview',
       published_revision: row.published_revision === null ? null : n(row, 'published_revision'),
       published_at: typeof row.published_at === 'string' ? row.published_at : null,
-      score: Number(c.score.toFixed(6)), sources: [...c.sources],
+      score: Number(c.score.toFixed(6)), relevance: null, sources: [...c.sources],
       url: `${origin}/articles/${slug}${lang}`, markdown_url: `${origin}/articles/${slug}.md${lang}`,
     });
   }
-  return { query: q, locale, semantic, tiers, results };
+  if (!jev || results.length < 2) return { query: q, locale, semantic, reranked: false, tiers, results: results.slice(0, max) };
+  // Only text this principal may read (public title/excerpt + the tier-filtered snippet) reaches Jev.
+  const scores = await jevRelevance(jev, q, results.map(h => ({ id: key({ articleId: h.article_id, locale: h.locale }), text: `${h.title}\n${h.excerpt}\n${h.snippet}` })));
+  if (!scores) return { query: q, locale, semantic, reranked: false, tiers, results: results.slice(0, max) };
+  const scored = results.map(h => ({ ...h, relevance: scores.get(key({ articleId: h.article_id, locale: h.locale })) ?? null }));
+  const reordered = orderByRelevance(scored, h => key({ articleId: h.article_id, locale: h.locale }), scores);
+  return { query: q, locale, semantic, reranked: true, tiers, results: reordered.slice(0, max) };
 }

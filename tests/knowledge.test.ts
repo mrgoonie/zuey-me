@@ -23,6 +23,7 @@ import { createUserKey } from '../src/lib/members/api-keys';
 import { requireCan, resolvePrincipal } from '../src/lib/members/policy';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import { allowedTiers, searchKnowledge } from '../src/lib/search';
+import { jevRuntime } from '../src/lib/search/jev';
 import { parseAiSuggestion } from '../src/lib/taxonomy/audit';
 import { taxonomyMcpModule } from '../src/lib/taxonomy/mcp';
 import { taxonomyOpenApi } from '../src/lib/taxonomy/openapi';
@@ -270,6 +271,45 @@ describe('FTS search applies authorization before ranking', () => {
     expect(JSON.stringify(filters[0])).toContain('"$in":["free","preview"]');
     expect(result.results.every(h => h.tier !== 'full')).toBe(true);
     expectNoPaid(JSON.stringify(result));
+  });
+
+  it('reorders fused hits by Jev relevance and keeps the fused order when Jev fails', async () => {
+    await create({ slug: 'kb-jev-a', title: 'Jevrank cooking notes', excerpt: 'Food', document: { version: 1, blocks: [para('jevrank recipe for noodles jevrank jevrank')] } });
+    await publish('kb-jev-a');
+    await create({ slug: 'kb-jev-b', title: 'Self-hosting guide', excerpt: 'Servers', document: { version: 1, blocks: [para('jevrank deploy on a VPS with Docker')] } });
+    await publish('kb-jev-b');
+    const env: RuntimeEnv = { DB: d1, TYPESAFEAI_API_KEY: 'test-key' };
+    const anon = await resolvePrincipal(new Request('https://zuey.test/'), env);
+    const plain = await searchKnowledge(anon, 'jevrank', 'vi', 10, { DB: d1 });
+    expect(plain.reranked).toBe(false);
+    expect(plain.results.map(h => h.slug)).toEqual(['kb-jev-a', 'kb-jev-b']);
+
+    const original = jevRuntime.fetch;
+    const sent: string[] = [];
+    try {
+      jevRuntime.fetch = async (url, init) => {
+        sent.push(`${url} ${String(init?.body)}`);
+        const body: unknown = JSON.parse(String(init?.body));
+        const candidates = rec(rec(rec(body).state).candidates);
+        // Jev favours the self-hosting passage.
+        const answers = Object.fromEntries(Object.entries(candidates).map(([k, v]) => [k, { type: 'noul', noul: String(v).includes('VPS') ? 0.9 : 0.2 }]));
+        return Response.json({ model: 'jev-test', answers });
+      };
+      const ranked = await searchKnowledge(anon, 'jevrank', 'vi', 10, env);
+      expect(ranked.reranked).toBe(true);
+      expect(ranked.results.map(h => h.slug)).toEqual(['kb-jev-b', 'kb-jev-a']);
+      expect(ranked.results[0].relevance).toBe(0.9);
+      expect(sent[0]).toStartWith('https://api.typesafe.ai/v1/systemone ');
+      expect(sent[0]).toContain('"type":"noul"');
+
+      jevRuntime.fetch = async () => new Response('overloaded', { status: 529 });
+      const fallback = await searchKnowledge(anon, 'jevrank', 'vi', 10, env);
+      expect(fallback.reranked).toBe(false);
+      expect(fallback.results.map(h => h.slug)).toEqual(['kb-jev-a', 'kb-jev-b']);
+      expect(fallback.results.every(h => h.relevance === null)).toBe(true);
+    } finally {
+      jevRuntime.fetch = original;
+    }
   });
 
   it('validates the query and reports BM25-only mode honestly', async () => {
