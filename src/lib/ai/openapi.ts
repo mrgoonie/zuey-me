@@ -63,7 +63,9 @@ export const chatOpenApi: OpenApiFragment = {
       properties: {
         month: { type: 'string', description: 'YYYY-MM in Asia/Saigon' }, used: { type: 'integer' },
         limit: { type: ['integer', 'null'], description: 'AI_MONTHLY_REQUEST_LIMIT (default 300); null for admins' },
-        remaining: { type: ['integer', 'null'] },
+        remaining: { type: ['integer', 'null'], description: '0 once either the request limit or the AI budget is used up' },
+        spent_cents: { type: 'number', description: 'Estimated AI cost this month in US cents' },
+        budget_cents: { type: ['integer', 'null'], description: 'Plan AI budget per month: Zuey AI 300, Kết hợp 500, Cộng đồng 500; null for admins. Over budget → 429 ai_budget_exceeded' },
       },
     },
   },
@@ -117,7 +119,7 @@ export const chatOpenApi: OpenApiFragment = {
         responses: {
           '200': { description: 'SSE stream', content: { 'text/event-stream': { schema: { type: 'string' } } } },
           '409': err('`chat_run_in_progress`: one reply at a time per session'),
-          '429': err('`ai_quota_exceeded` with `limit`, `month`, `upgrade_url`'),
+          '429': err('`ai_quota_exceeded` (request limit: `limit`, `month`, `upgrade_url`) or `ai_budget_exceeded` (plan AI budget: `budget_cents`, `spent_cents`, `month`, `upgrade_url`)'),
           '503': err('`ai_unconfigured` (Dewee gateway env missing) or `database_unavailable`'),
           ...chatErrors,
         },

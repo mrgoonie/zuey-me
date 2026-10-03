@@ -37,12 +37,18 @@ export function monthlyRequestLimit(env: RuntimeEnv): number {
   return n >= 1 && Number.isSafeInteger(n) ? n : DEFAULT_MONTHLY_REQUEST_LIMIT;
 }
 
-/** AI_EST_COST_USD_PER_MTOK: blended USD per million tokens for cost estimates; null when unset. */
-export function costRateUsdPerMTok(env: RuntimeEnv): number | null {
+/**
+ * Blended USD per million tokens when AI_EST_COST_USD_PER_MTOK is unset: DeepSeek V4.1 Flash peak
+ * pricing ($0.30 in / $1.20 out) at the input-heavy mix of grounded prompts.
+ */
+export const DEFAULT_COST_USD_PER_MTOK = 0.5;
+
+/** AI_EST_COST_USD_PER_MTOK: blended USD per million tokens behind cost estimates and the plan AI budget. */
+export function costRateUsdPerMTok(env: RuntimeEnv): number {
   const raw = (env.AI_EST_COST_USD_PER_MTOK ?? '').trim();
-  if (!/^\d+(\.\d+)?$/.test(raw)) return null;
+  if (!/^\d+(\.\d+)?$/.test(raw)) return DEFAULT_COST_USD_PER_MTOK;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(n) ? n : DEFAULT_COST_USD_PER_MTOK;
 }
 
 export function estimateCostCents(totalTokens: number, rate: number | null): number {

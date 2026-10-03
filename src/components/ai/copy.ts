@@ -15,6 +15,7 @@ export interface AiCopy {
   unconfiguredBody: string;
   quotaTitle: string;
   quotaBody: (limit: number, month: string) => string;
+  budgetBody: (budgetUsd: number, month: string) => string;
   quotaLeft: (remaining: number, limit: number) => string;
   unlimited: string;
   sessions: string;
@@ -78,6 +79,7 @@ const vi: AiCopy = {
   quotaTitle: 'Bạn đã dùng hết lượt tháng này',
   quotaBody: (limit, month) => `Gói của bạn có ${limit} lượt hỏi mỗi tháng. Lượt sẽ được làm mới sau tháng ${month} (giờ Việt Nam).`,
   quotaLeft: (remaining, limit) => `Còn ${remaining}/${limit} lượt`,
+  budgetBody: (usd, month) => `Gói của bạn có ngân sách AI $${usd} mỗi tháng và bạn đã dùng hết. Ngân sách sẽ được làm mới sau tháng ${month} (giờ Việt Nam).`,
   unlimited: 'Admin · không giới hạn',
   sessions: 'Cuộc trò chuyện',
   newChat: 'Trò chuyện mới',
@@ -153,6 +155,7 @@ const en: AiCopy = {
   quotaTitle: 'You\'ve used this month\'s requests',
   quotaBody: (limit, month) => `Your plan includes ${limit} questions per month. They renew after ${month} (Vietnam time).`,
   quotaLeft: (remaining, limit) => `${remaining}/${limit} left`,
+  budgetBody: (usd, month) => `You've used your plan's $${usd} monthly AI budget. It renews after ${month} (Vietnam time).`,
   unlimited: 'Admin · unlimited',
   sessions: 'Chats',
   newChat: 'New chat',
@@ -228,6 +231,7 @@ const zh: AiCopy = {
   quotaTitle: '本月次数已用完',
   quotaBody: (limit, month) => `你的方案每月可提问 ${limit} 次，将在 ${month} 之后（越南时间）重置。`,
   quotaLeft: (remaining, limit) => `剩余 ${remaining}/${limit} 次`,
+  budgetBody: (usd, month) => `你的方案每月 AI 预算为 $${usd}，本月已用完，将在 ${month} 之后（越南时间）重置。`,
   unlimited: '管理员 · 不限次数',
   sessions: '对话',
   newChat: '新对话',
@@ -303,6 +307,7 @@ const ko: AiCopy = {
   quotaTitle: '이번 달 사용량을 모두 썼어요',
   quotaBody: (limit, month) => `요금제에 매월 ${limit}회 질문이 포함됩니다. ${month} 이후(베트남 시간) 초기화됩니다.`,
   quotaLeft: (remaining, limit) => `${remaining}/${limit}회 남음`,
+  budgetBody: (usd, month) => `요금제의 월 AI 예산 $${usd}을(를) 모두 사용했어요. ${month} 이후(베트남 시간) 초기화됩니다.`,
   unlimited: '관리자 · 무제한',
   sessions: '대화',
   newChat: '새 대화',
@@ -378,6 +383,7 @@ const ja: AiCopy = {
   quotaTitle: '今月の利用回数を使い切りました',
   quotaBody: (limit, month) => `プランには毎月 ${limit} 回の質問が含まれます。${month} の後（ベトナム時間）にリセットされます。`,
   quotaLeft: (remaining, limit) => `残り ${remaining}/${limit} 回`,
+  budgetBody: (usd, month) => `プランの月間 AI 予算 $${usd} を使い切りました。${month} の後（ベトナム時間）にリセットされます。`,
   unlimited: '管理者 · 無制限',
   sessions: 'チャット',
   newChat: '新しいチャット',

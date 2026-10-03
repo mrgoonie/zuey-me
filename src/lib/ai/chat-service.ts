@@ -7,8 +7,10 @@ import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { Locale } from '../i18n/locales';
 import type { Principal } from '../members/policy';
+import { aiBudgetCents } from '../members/plans';
 import { requireCan } from '../members/policy';
 import { randomId, siteUrl } from '../members/runtime';
+import { jevConfig } from '../search/jev';
 import { extractArtifacts } from './artifacts';
 import type { ChatArtifactView } from './chat-store';
 import {
@@ -42,6 +44,9 @@ export interface QuotaView {
   used: number;
   limit: number | null;
   remaining: number | null;
+  /** Estimated AI cost spent this month and the plan's ceiling, in US cents (budget null for admins). */
+  spent_cents: number;
+  budget_cents: number | null;
 }
 
 /** Chat requires a member account with `ai_chat` (admins included) and, for keys, the chat:write scope. */
@@ -51,13 +56,19 @@ export function requireChatUser(p: Principal): string {
   return p.userId;
 }
 
-/** Admins are not metered; members get AI_MONTHLY_REQUEST_LIMIT requests per Asia/Saigon month. */
+/**
+ * Admins are not metered. Members get AI_MONTHLY_REQUEST_LIMIT requests and their plan's AI budget
+ * (estimated token cost) per Asia/Saigon month, whichever runs out first.
+ */
 export async function quotaFor(d1: D1DatabaseLike, env: RuntimeEnv, p: Principal, userId: string): Promise<QuotaView> {
   const month = saigonMonth(aiRuntime.now());
   const usage = await getUsage(d1, userId, month);
-  if (p.kind === 'admin') return { month, used: usage.requests, limit: null, remaining: null };
+  const spent = usage.est_cost_cents;
+  if (p.kind === 'admin') return { month, used: usage.requests, limit: null, remaining: null, spent_cents: spent, budget_cents: null };
   const limit = monthlyRequestLimit(env);
-  return { month, used: usage.requests, limit, remaining: Math.max(0, limit - usage.requests) };
+  const budget = aiBudgetCents(p.plans);
+  const remaining = spent >= budget ? 0 : Math.max(0, limit - usage.requests);
+  return { month, used: usage.requests, limit, remaining, spent_cents: spent, budget_cents: budget };
 }
 
 export function parseQuestion(raw: unknown): string {
@@ -101,9 +112,16 @@ export async function startChatTurn(input: ChatTurnInput): Promise<AsyncGenerato
   try {
     if (principal.kind !== 'admin') {
       const limit = monthlyRequestLimit(env);
-      if (!(await consumeQuota(d1, userId, month, limit))) {
-        throw new AppError(429, 'ai_quota_exceeded', `You have used all ${limit} Zuey AI requests for ${month}; the quota resets next month (Asia/Saigon)`, {
-          limit, month, upgrade_url: '/pricing',
+      const budget = aiBudgetCents(principal.plans);
+      if (!(await consumeQuota(d1, userId, month, limit, budget))) {
+        const usage = await getUsage(d1, userId, month);
+        if (usage.requests >= limit) {
+          throw new AppError(429, 'ai_quota_exceeded', `You have used all ${limit} Zuey AI requests for ${month}; the quota resets next month (Asia/Saigon)`, {
+            limit, month, upgrade_url: '/pricing',
+          });
+        }
+        throw new AppError(429, 'ai_budget_exceeded', `You have used this month's Zuey AI budget ($${(budget / 100).toFixed(2)}) for ${month}; it resets next month (Asia/Saigon)`, {
+          budget_cents: budget, spent_cents: usage.est_cost_cents, month, upgrade_url: '/pricing',
         });
       }
     }
@@ -117,7 +135,7 @@ export async function startChatTurn(input: ChatTurnInput): Promise<AsyncGenerato
   let assistantId: string;
   try {
     const retriever = input.retriever ?? retrieveContext;
-    const context = await retriever(principal, question, input.locale, { d1, siteUrl: siteUrl(env) });
+    const context = await retriever(principal, question, input.locale, { d1, siteUrl: siteUrl(env), jev: jevConfig(env) });
     sources = context.map(toSourceRef);
     gatewayMessage = buildContextMessage(context, question);
     await insertMessage(d1, input.sessionId, 'user', question, 'complete');

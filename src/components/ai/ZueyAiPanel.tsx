@@ -17,7 +17,7 @@ import { InteractiveFrame } from './InteractiveFrame';
 
 type Phase = 'loading' | 'signed_out' | 'no_entitlement' | 'unconfigured' | 'ready' | 'load_error';
 
-interface Quota { month: string; used: number; limit: number | null; remaining: number | null }
+interface Quota { month: string; used: number; limit: number | null; remaining: number | null; spentCents: number; budgetCents: number | null }
 interface Source { id: string; title: string; url: string; access: 'free' | 'paid'; scope: 'full' | 'preview' }
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; sources: Source[]; status: 'complete' | 'streaming' | 'cancelled' | 'error'; errorCode: string | null }
 interface Artifact { id: string; messageId: string | null; block: InteractiveBlock }
@@ -29,7 +29,8 @@ function parseQuota(v: unknown): Quota | null {
   if (!isRecord(v)) return null;
   const limit = typeof v.limit === 'number' ? v.limit : null;
   const remaining = typeof v.remaining === 'number' ? v.remaining : null;
-  return { month: str(v, 'month'), used: numOr(v, 'used'), limit, remaining };
+  const budgetCents = typeof v.budget_cents === 'number' ? v.budget_cents : null;
+  return { month: str(v, 'month'), used: numOr(v, 'used'), limit, remaining, spentCents: numOr(v, 'spent_cents'), budgetCents };
 }
 
 function parseSources(v: unknown): Source[] {
@@ -307,7 +308,15 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
   const handlePreStreamError = (code: string, extra: Record<string, unknown>) => {
     switch (code) {
       case 'ai_quota_exceeded':
-        setQuota(q => ({ month: typeof extra.month === 'string' ? extra.month : q?.month ?? '', used: q?.used ?? 0, limit: typeof extra.limit === 'number' ? extra.limit : q?.limit ?? 0, remaining: 0 }));
+        setQuota(q => ({ month: typeof extra.month === 'string' ? extra.month : q?.month ?? '', used: q?.used ?? 0, limit: typeof extra.limit === 'number' ? extra.limit : q?.limit ?? 0, remaining: 0, spentCents: q?.spentCents ?? 0, budgetCents: q?.budgetCents ?? null }));
+        announce(t.quotaTitle);
+        return;
+      case 'ai_budget_exceeded':
+        setQuota(q => ({
+          month: typeof extra.month === 'string' ? extra.month : q?.month ?? '', used: q?.used ?? 0, limit: q?.limit ?? 0, remaining: 0,
+          spentCents: typeof extra.spent_cents === 'number' ? extra.spent_cents : q?.spentCents ?? 0,
+          budgetCents: typeof extra.budget_cents === 'number' ? extra.budget_cents : q?.budgetCents ?? 0,
+        }));
         announce(t.quotaTitle);
         return;
       case 'ai_unconfigured': setPhase('unconfigured'); return;
@@ -671,7 +680,7 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
           {quotaExceeded && quota && quota.limit !== null && (
             <div className="zai-banner zai-banner-warn" role="status">
               <h3>{t.quotaTitle}</h3>
-              <p>{t.quotaBody(quota.limit, quota.month)}</p>
+              <p>{quota.budgetCents !== null && quota.spentCents >= quota.budgetCents ? t.budgetBody(quota.budgetCents / 100, quota.month) : t.quotaBody(quota.limit, quota.month)}</p>
               <div className="zai-banner-actions"><a className="zai-btn zai-btn-ghost" href="/pricing">{t.seePlans}</a></div>
             </div>
           )}

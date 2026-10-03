@@ -5,6 +5,7 @@ import type { RuntimeEnv } from '../src/env';
 import type { GatewaySocket } from '../src/lib/ai/dewee-client';
 import { aiRuntime } from '../src/lib/ai/runtime';
 import { buildContextMessage, retrieveContext } from '../src/lib/ai/context';
+import { jevRuntime } from '../src/lib/search/jev';
 import { extractArtifacts, validateInteractiveBlock } from '../src/lib/ai/artifacts';
 import { buildSandboxSrcdoc, SANDBOX_CSP } from '../src/lib/ai/sandbox-doc';
 import { isPrivateHost } from '../src/lib/ai/sandbox-proxy';
@@ -362,6 +363,35 @@ describe('grounding and the paywall', () => {
     expect(JSON.stringify(direct)).not.toContain('SECRETFULLTEXT');
   });
 
+  it('Jev reorders and prunes grounding sources using only caller-visible text', async () => {
+    const m = await member('ai@example.com', ['ai']);
+    const p = await resolvePrincipal(new Request(`${ORIGIN}/x`, { headers: m.headers }), baseEnv());
+    const original = jevRuntime.fetch;
+    const bodies: string[] = [];
+    try {
+      jevRuntime.fetch = async (_url, init) => {
+        const raw = String(init?.body);
+        bodies.push(raw);
+        const candidates: unknown = JSON.parse(raw).state.candidates;
+        const answers = Object.fromEntries(Object.entries(isRecord(candidates) ? candidates : {})
+          .map(([k, v]) => [k, { type: 'noul', noul: String(v).includes('nắng') ? 0.95 : 0.05 }]));
+        return Response.json({ answers });
+      };
+      const jev = { apiKey: 'k', base: 'https://api.typesafe.ai', model: 'jev-latest' };
+      const sources = await retrieveContext(p, 'mèo', 'vi', { d1, siteUrl: ORIGIN, jev });
+      // The paid preview scored below JEV_MIN_RELEVANCE and is dropped; the sunny-cat article stays.
+      expect(sources.map(s => s.slug)).toEqual(['meo-mien-phi']);
+      expect(bodies.join('\n')).toContain('PREVIEWMARK');
+      expect(bodies.join('\n')).not.toContain('SECRETFULLTEXT');
+
+      jevRuntime.fetch = async () => { throw new Error('network down'); };
+      const fallback = await retrieveContext(p, 'mèo', 'vi', { d1, siteUrl: ORIGIN, jev });
+      expect(fallback.map(s => s.slug).sort()).toEqual(['meo-mien-phi', 'meo-tra-phi']);
+    } finally {
+      jevRuntime.fetch = original;
+    }
+  });
+
   it('members with read_full get the full passage', async () => {
     const m = await member('combo@example.com', ['combo']);
     const sessionId = await newSession(m);
@@ -509,6 +539,29 @@ describe('runs, abort and quota', () => {
     expect(field(field(list.data, 'quota'), 'month')).toBe('2026-10');
     // The lock was released: the 429 did not leave the session stuck.
     expect(field(d1.raw.query('SELECT run_id FROM chat_sessions WHERE id = ?').get(sessionId), 'run_id')).toBeNull();
+  });
+
+  it('returns 429 ai_budget_exceeded once the plan AI budget ($3 AI, $5 combo) is spent', async () => {
+    const env = baseEnv();
+    const ai = await member('ai@example.com', ['ai']);
+    const combo = await member('combo@example.com', ['combo']);
+    const aiSession = await newSession(ai);
+    const comboSession = await newSession(combo);
+    for (const m of [ai, combo]) {
+      d1.raw.query('INSERT INTO ai_usage (user_id, month, requests, est_cost_cents, updated_at) VALUES (?, ?, 3, 300, ?)')
+        .run(m.userId, '2026-10', '2026-10-01T00:00:00.000Z');
+    }
+    const over = await ask(ai, aiSession, 'còn ngân sách không?', { env });
+    expect(over.status).toBe(429);
+    expect((await read(over)).code).toBe('ai_budget_exceeded');
+    const quota = field((await read(await listSessionsApi(ctx({ headers: ai.headers, env })))).data, 'quota');
+    expect(field(quota, 'remaining')).toBe(0);
+    expect(field(quota, 'budget_cents')).toBe(300);
+    expect(field(quota, 'spent_cents')).toBe(300);
+    // The combo plan's $5 budget still has room after $3.
+    const ok = await ask(combo, comboSession, 'còn ngân sách không?', { env });
+    expect(ok.status).toBe(200);
+    await ok.text();
   });
 
   it('defaults the monthly limit to 300', async () => {

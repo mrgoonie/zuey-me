@@ -243,13 +243,17 @@ export async function getUsage(d1: D1DatabaseLike, userId: string, month: string
   return { month, requests: row ? num(row, 'requests') : 0, est_cost_cents: row ? num(row, 'est_cost_cents') : 0 };
 }
 
-/** Atomically counts one request unless the user already reached `limit` this month. */
-export async function consumeQuota(d1: D1DatabaseLike, userId: string, month: string, limit: number): Promise<boolean> {
+/**
+ * Atomically counts one request unless the user already reached `limit` requests or spent
+ * `budgetCents` of estimated cost this month.
+ */
+export async function consumeQuota(d1: D1DatabaseLike, userId: string, month: string, limit: number, budgetCents: number): Promise<boolean> {
   const now = nowIso();
   const res = await d1.prepare(
     `INSERT INTO ai_usage (user_id, month, requests, est_cost_cents, updated_at) VALUES (?, ?, 1, 0, ?)
-     ON CONFLICT (user_id, month) DO UPDATE SET requests = requests + 1, updated_at = excluded.updated_at WHERE requests < ?`
-  ).bind(userId, month, now, limit).run();
+     ON CONFLICT (user_id, month) DO UPDATE SET requests = requests + 1, updated_at = excluded.updated_at
+     WHERE requests < ? AND est_cost_cents < ?`
+  ).bind(userId, month, now, limit, budgetCents).run();
   return (res.meta?.changes ?? 0) > 0;
 }
 
