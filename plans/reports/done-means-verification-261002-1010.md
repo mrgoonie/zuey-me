@@ -19,6 +19,7 @@ Nguồn: `plans/handoffs/zuey-membership-new-scope-prompt-20261001.md`, mục *D
 
 ## Ngoài Done means nhưng còn mở
 
-- Webhook SePay: form đã điền sẵn, chờ chủ sở hữu dán API key và lưu.
-- Telegram: bot chưa được thêm vào group nên chưa lấy được group ID.
-- Key Dodo/PayPal chưa có.
+- Telegram (2026-10-03): bot admin ở cả hai group (VN là supergroup, EN là group thường), webhook `chat_member` trỏ về `/api/v1/community/telegram-webhook`, secret sai trả `401`, secret đúng trả `200`.
+- Dodo (2026-10-03): 4 product subscription live ($9/$9/$19/$29, USD, không trial), webhook `ep_3KAe…` với 9 sự kiện, Adaptive Currency đã tắt; request không ký trả `401`. Dodo chặn checkout live (`MERCHANT_NOT_LIVE`) vì tài khoản chưa hoàn tất xác minh, nên `DODO_API_KEY` chưa đặt lên production và nút thẻ đang ẩn (`card_plans: []`).
+- Webhook SePay: form đã điền sẵn đến bước API Key, chờ chủ sở hữu dán key và lưu.
+- PayPal chưa có key.

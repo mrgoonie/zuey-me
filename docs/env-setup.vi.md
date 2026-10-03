@@ -89,7 +89,7 @@ Nút "Thẻ quốc tế (USD, Dodo)" trên `/pricing` chỉ hiện cho gói đã
 
    Không đặt trial và không bật giảm giá. Hệ thống chỉ kích hoạt gói khi product, số tiền và tiền tệ (USD) khớp đúng bảng trên; lệch thì gói chuyển sang `needs_attention`.
 3. Vào *Settings → Business* và **tắt Adaptive Currency**. Nếu bật, khách có thể trả bằng tiền tệ khác USD và mọi thanh toán đó sẽ bị đánh dấu `needs_attention`.
-4. Vào *Developer → API Keys*, tạo API key và lưu vào secret `DODO_API_KEY`.
+4. Vào *Developer → API Keys*, tạo API key và lưu vào secret `DODO_API_KEY`. Chỉ đặt key Live lên production khi dashboard đã báo *Go live* được duyệt: trước đó Dodo từ chối mọi checkout live với `403 MERCHANT_NOT_LIVE` và khách sẽ thấy lỗi `502 payment_provider_error`. Khi chưa có `DODO_API_KEY`, nút thẻ tự ẩn và SePay vẫn hoạt động.
 5. Vào *Developer → Webhooks*, bấm *Add Endpoint*:
    - URL: `https://zuey.me/api/webhooks/dodo`
    - Sự kiện: tất cả `subscription.*` (active, renewed, on_hold, cancelled, failed, expired, plan_changed) cùng `payment.succeeded` và `payment.failed`.
