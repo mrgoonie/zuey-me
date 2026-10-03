@@ -1,4 +1,6 @@
 import type { APIRoute } from 'astro';
+import { OPENAPI_FRAGMENTS } from '../../lib/openapi/registry';
+import { OAUTH_SCOPES } from '../../lib/oauth/config';
 
 export const GET: APIRoute = async () => {
   const spec = {
@@ -36,9 +38,43 @@ export const GET: APIRoute = async () => {
           in: 'header',
           name: 'X-API-Key',
           description: 'Pass secret API key in `X-API-Key` header'
+        },
+        MemberSession: {
+          type: 'apiKey',
+          in: 'cookie',
+          name: 'zuey_member',
+          description: 'Member browser session (HttpOnly). Unsafe methods must be same-origin; member personal keys (`zk_...`) use BearerAuth instead.'
+        },
+        McpOAuth: {
+          type: 'oauth2',
+          description: 'OAuth 2.1 for MCP clients (PKCE S256, audience `<origin>/mcp`). Access tokens are only accepted by `/mcp`.',
+          flows: {
+            authorizationCode: {
+              authorizationUrl: '/oauth/authorize',
+              tokenUrl: '/oauth/token',
+              refreshUrl: '/oauth/token',
+              scopes: Object.fromEntries(OAUTH_SCOPES.map(s => [s, s === 'admin' ? 'Admin tools (allowlisted admins only)' : `Member scope ${s}`])),
+            },
+          },
         }
       },
       schemas: {
+        Error: {
+          type: 'object',
+          required: ['success', 'error'],
+          properties: {
+            success: { type: 'boolean', const: false },
+            error: {
+              type: 'object',
+              required: ['code', 'message'],
+              properties: {
+                code: { type: 'string', description: 'Stable machine-readable error code' },
+                message: { type: 'string' },
+                request_id: { type: 'string', description: 'Same value as the X-Request-Id response header; quote it when reporting a problem' },
+              },
+            },
+          },
+        },
         Profile: {
           type: 'object',
           properties: {
@@ -255,7 +291,17 @@ export const GET: APIRoute = async () => {
     }
   };
 
-  return new Response(JSON.stringify(spec, null, 2), {
+  const merged = {
+    ...spec,
+    tags: OPENAPI_FRAGMENTS.map(f => f.tag),
+    components: {
+      ...spec.components,
+      schemas: Object.assign({}, spec.components.schemas, ...OPENAPI_FRAGMENTS.map(f => f.schemas)),
+    },
+    paths: Object.assign({}, spec.paths, ...OPENAPI_FRAGMENTS.map(f => f.paths)),
+  };
+
+  return new Response(JSON.stringify(merged, null, 2), {
     headers: {
       'Content-Type': 'application/json',
       'Cache-Control': 'public, max-age=3600',

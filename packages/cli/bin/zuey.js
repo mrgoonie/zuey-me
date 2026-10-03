@@ -5,96 +5,498 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 
-const CONFIG_DIR = path.join(os.homedir(), '.zuey');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const VERSION = '1.1.0';
+const DEFAULT_API_URL = 'https://zuey.me';
 
-function loadConfig() {
+// ---------------------------------------------------------------------------
+// Config: OS config dir, file mode 0600 (directory 0700). Keys are only ever sent in headers.
+// ---------------------------------------------------------------------------
+
+function configDir() {
+  if (process.env.ZUEY_CONFIG_DIR) return process.env.ZUEY_CONFIG_DIR;
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'zuey');
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'zuey');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'zuey');
+}
+
+const CONFIG_FILE = path.join(configDir(), 'config.json');
+const LEGACY_CONFIG_FILE = path.join(os.homedir(), '.zuey', 'config.json');
+
+function readJsonFile(file) {
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    }
-  } catch {}
+    if (!fs.existsSync(file)) return null;
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Environment variables win over the saved file so CI/agents never need to write secrets to disk. */
+function loadConfig() {
+  const saved = readJsonFile(CONFIG_FILE) || readJsonFile(LEGACY_CONFIG_FILE) || {};
   return {
-    apiUrl: process.env.ZUEY_API_URL || 'https://zuey.me',
-    apiKey: process.env.ZUEY_API_KEY || '',
+    apiUrl: (process.env.ZUEY_API_URL || (typeof saved.apiUrl === 'string' && saved.apiUrl) || DEFAULT_API_URL).replace(/\/+$/, ''),
+    apiKey: process.env.ZUEY_API_KEY || (typeof saved.apiKey === 'string' ? saved.apiKey : ''),
   };
 }
 
 function saveConfig(cfg) {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+  const dir = path.dirname(CONFIG_FILE);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  // mode only applies on creation; tighten an existing file too (no-op on Windows ACLs).
+  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* best effort on filesystems without POSIX modes */ }
 }
 
-async function requestApi(endpoint, method = 'GET', body = null) {
-  const config = loadConfig();
-  const headers = {
-    'Content-Type': 'application/json',
-  };
-  if (config.apiKey) {
-    headers['Authorization'] = `Bearer ${config.apiKey}`;
+function maskKey(key) {
+  return key ? `${key.slice(0, 7)}…` : '(none)';
+}
+
+function validateApiUrl(raw) {
+  let url;
+  try { url = new URL(raw); } catch { throw new Error(`Invalid --url: ${raw}`); }
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('--url must be https (http is allowed only for localhost) so the key is never sent in clear text');
   }
+  return url.origin;
+}
 
-  const url = `${config.apiUrl.replace(/\/$/, '')}${endpoint}`;
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : null,
-  });
+// ---------------------------------------------------------------------------
+// HTTP
+// ---------------------------------------------------------------------------
 
-  const data = await res.json();
+class ApiError extends Error {
+  constructor(status, code, message, requestId) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
+
+async function requestApi(endpoint, method = 'GET', body = null, { auth = true } = {}) {
+  const config = loadConfig();
+  const headers = { Accept: 'application/json', 'User-Agent': `zuey-cli/${VERSION}` };
+  if (body !== null) headers['Content-Type'] = 'application/json';
+  if (auth && config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+
+  let res;
+  try {
+    res = await fetch(`${config.apiUrl}${endpoint}`, { method, headers, body: body !== null ? JSON.stringify(body) : undefined });
+  } catch (err) {
+    throw new ApiError(0, 'network_error', `Cannot reach ${config.apiUrl}: ${err.message}`, null);
+  }
+  const requestId = res.headers.get('x-request-id');
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!res.ok) {
-    throw new Error(data.error || `HTTP ${res.status}: ${res.statusText}`);
+    const err = data && typeof data.error === 'object' && data.error ? data.error : {};
+    const code = typeof err.code === 'string' ? err.code : (typeof data?.error === 'string' ? data.error : `http_${res.status}`);
+    const message = typeof err.message === 'string' ? err.message : (res.statusText || 'Request failed');
+    throw new ApiError(res.status, code, message, requestId);
   }
   return data;
 }
 
+function requireKey() {
+  if (!loadConfig().apiKey) {
+    console.error('Not logged in. Run "zuey login" and paste a personal API key (create one at https://zuey.me/account#keys).');
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Input helpers
+// ---------------------------------------------------------------------------
+
+/** Reads a secret from the TTY without echoing it, or one line from piped stdin. */
+function readSecret(prompt) {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) {
+      let buf = '';
+      stdin.setEncoding('utf8');
+      stdin.on('data', chunk => { buf += chunk; });
+      stdin.on('end', () => resolve(buf.split(/\r?\n/)[0].trim()));
+      stdin.on('error', reject);
+      return;
+    }
+    process.stderr.write(prompt);
+    let value = '';
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    const onData = chunk => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          stdin.setRawMode(false);
+          stdin.pause();
+          stdin.off('data', onData);
+          process.stderr.write('\n');
+          resolve(value.trim());
+          return;
+        }
+        if (ch === '\u0003') { // Ctrl+C
+          stdin.setRawMode(false);
+          process.stderr.write('\n');
+          process.exit(130);
+        }
+        if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
+        else value += ch;
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
+
+function flag(args, name) {
+  const i = args.indexOf(name);
+  return i !== -1 && args[i + 1] !== undefined ? args[i + 1] : null;
+}
+
+function positional(args, from) {
+  const out = [];
+  for (let i = from; i < args.length; i++) {
+    if (args[i].startsWith('--')) { i++; continue; }
+    out.push(args[i]);
+  }
+  return out;
+}
+
+const SAIGON = 'Asia/Ho_Chi_Minh';
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : new Intl.DateTimeFormat('vi-VN', { timeZone: SAIGON, dateStyle: 'medium', timeStyle: 'short' }).format(d);
+}
+
+// ---------------------------------------------------------------------------
+// Article rendering (block document -> plain text)
+// ---------------------------------------------------------------------------
+
+function renderBlocks(blocks, out = []) {
+  for (const b of Array.isArray(blocks) ? blocks : []) {
+    if (!b || typeof b !== 'object') continue;
+    switch (b.type) {
+      case 'heading': out.push('', `${'#'.repeat(b.level || 2)} ${b.text || ''}`, ''); break;
+      case 'paragraph': out.push(b.text || '', ''); break;
+      case 'list': (b.items || []).forEach((it, i) => out.push(`${b.style === 'number' ? `${i + 1}.` : '-'} ${it}`)); out.push(''); break;
+      case 'checklist': (b.items || []).forEach(it => out.push(`[${it && it.checked ? 'x' : ' '}] ${it && it.text ? it.text : ''}`)); out.push(''); break;
+      case 'quote': out.push(`> ${b.text || ''}${b.cite ? ` — ${b.cite}` : ''}`, ''); break;
+      case 'callout': out.push(`! ${b.text || ''}`, ''); break;
+      case 'code': out.push('```' + (b.language || ''), b.code || '', '```', ''); break;
+      case 'divider': out.push('---', ''); break;
+      case 'image': out.push(`[image] ${b.alt || ''} ${b.url || ''}`.trim(), ''); break;
+      case 'embed': out.push(`[embed] ${b.url || ''}`, ''); break;
+      case 'table':
+        out.push((b.headers || []).join(' | '));
+        (b.rows || []).forEach(r => out.push((r || []).join(' | ')));
+        out.push('');
+        break;
+      case 'layout': for (const child of b.children || []) renderBlocks(child && child.blocks, out); break;
+      default:
+        if (typeof b.text === 'string') out.push(b.text, '');
+        else out.push(`[${b.type || 'block'}] (view on the web)`, '');
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
 function printHelp() {
   console.log(`
-Zuey.me CLI — Manage Duy Nguyen /zuey/ profile, links, themes & MCP server
+Zuey.me CLI v${VERSION} — your zuey.me membership from the terminal (and admin tools for the owner)
 
 USAGE:
   zuey <command> [options]
 
-COMMANDS:
-  login --key <API_KEY> [--url <URL>]   Save API key credentials
-  profile view                         Inspect active profile & bio
-  profile update [options]             Update profile name, intro, avatar
-  links list [--section <name>]        List link cards by section
-  links add [options]                  Add a new link card
-  links update <id> [options]          Update an existing link card
-  links delete <id>                    Remove a link card
-  links reorder <id1> <id2> ...        Reorder sequence of links
-  theme view                           View current theme preset
-  theme set <name>                     Switch theme (ivory | dark | minimal | glass)
-  mcp                                  Start standard input/output (STDIO) MCP server
+MEMBER COMMANDS (personal key zk_…, created at https://zuey.me/account#keys):
+  login [--url <URL>]                  Paste a personal API key (input hidden; saved with 0600 permissions)
+  logout                               Forget the saved key
+  whoami                               Show the account, plans and key scopes
+  articles list [--tag <t>]            List articles you can read
+  articles read <slug>                 Print an article as plain text
+  search <query>                       Search article titles, excerpts and tags
+  chat "<message>" [--session <id>]    Ask Zuey AI, streamed (chat:write scope + AI plan; --session continues)
+  plans                                Show membership plans and VND prices
+  subscribe <plan> --months <n>        Create an order and print the VietQR bank-transfer details
+  keys                                 How to create, rotate and revoke keys
+  mcp config                           Print MCP client configuration snippets
 
-OPTIONS:
-  --help, -h                           Show this help message
-  --version, -v                        Show version
+ADMIN COMMANDS (admin API key):
+  login --key <API_KEY> [--url <URL>]  Save an admin key non-interactively (prefer ZUEY_API_KEY env)
+  profile view | update [options]      Inspect or update the profile
+  links list | add | delete | reorder  Manage link cards
+  theme view | set <name>              Switch theme (ivory | dark | minimal | glass)
+  mcp                                  Stdio MCP bridge to /api/mcp
+
+ENVIRONMENT:
+  ZUEY_API_KEY    Key used instead of the saved one (recommended for CI and agents)
+  ZUEY_API_URL    API origin (default ${DEFAULT_API_URL})
+  ZUEY_CONFIG_DIR Override the config directory
+
+Config file: ${CONFIG_FILE}
 `);
 }
 
-async function startStdioMcp() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: false,
-  });
+async function cmdLogin(args) {
+  const urlArg = flag(args, '--url');
+  const apiUrl = urlArg ? validateApiUrl(urlArg) : loadConfig().apiUrl;
+  let apiKey = flag(args, '--key');
+  if (!apiKey) apiKey = await readSecret('Paste your zuey.me API key (input hidden): ');
+  if (!apiKey || /\s/.test(apiKey) || apiKey.length > 200) {
+    console.error('No valid key entered. Create one at https://zuey.me/account#keys');
+    process.exit(1);
+  }
+  // Verify before saving so a typo is not persisted.
+  process.env.ZUEY_API_URL = apiUrl;
+  process.env.ZUEY_API_KEY = apiKey;
+  let who = null;
+  try {
+    const res = await requestApi('/api/v1/me');
+    who = res && res.data ? res.data : null;
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403) && apiKey.startsWith('zk_')) {
+      console.error(`Key rejected (${err.code}): ${err.message}`);
+      process.exit(1);
+    }
+    // Admin keys have no member account (/api/v1/me answers 403); keep them.
+  }
+  saveConfig({ apiUrl, apiKey });
+  console.log(`Logged in to ${apiUrl}${who && who.email ? ` as ${who.email}` : ''} with key ${maskKey(apiKey)}`);
+  console.log(`Config saved to ${CONFIG_FILE} (mode 0600)`);
+}
 
+async function cmdWhoami() {
+  requireKey();
+  const cfg = loadConfig();
+  const { data } = await requestApi('/api/v1/me');
+  console.log(`Email:        ${data.email}${data.email_verified ? '' : ' (unverified)'}`);
+  if (data.name) console.log(`Name:         ${data.name}`);
+  console.log(`Plans:        ${(data.plans || []).join(', ') || 'none (free)'}`);
+  console.log(`Entitlements: ${(data.entitlements || []).join(', ') || 'none'}`);
+  if (data.auth) console.log(`Auth:         ${data.auth.via}${data.auth.scopes ? ` · scopes: ${data.auth.scopes.join(', ')}` : ''}`);
+  console.log(`Key:          ${maskKey(cfg.apiKey)} @ ${cfg.apiUrl}`);
+}
+
+async function fetchArticles() {
+  const res = await requestApi('/api/v1/articles', 'GET', null, { auth: Boolean(loadConfig().apiKey) });
+  return Array.isArray(res && res.data) ? res.data : [];
+}
+
+function printArticleList(list) {
+  if (list.length === 0) { console.log('No articles found.'); return; }
+  for (const a of list) {
+    const lock = a.access === 'knowledges' ? ' [Knowledges]' : '';
+    console.log(`${a.slug}${lock}\n  ${a.title}${a.excerpt ? `\n  ${a.excerpt}` : ''}${a.tags && a.tags.length ? `\n  #${a.tags.join(' #')}` : ''}\n`);
+  }
+}
+
+async function cmdArticles(args) {
+  const sub = args[1] || 'list';
+  if (sub === 'list') {
+    const tag = flag(args, '--tag');
+    const list = await fetchArticles();
+    printArticleList(tag ? list.filter(a => Array.isArray(a.tags) && a.tags.includes(tag)) : list);
+    return;
+  }
+  if (sub === 'read') {
+    const slug = args[2];
+    if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      console.error('Usage: zuey articles read <slug>');
+      process.exit(1);
+    }
+    const { data } = await requestApi(`/api/v1/articles/${encodeURIComponent(slug)}`, 'GET', null, { auth: Boolean(loadConfig().apiKey) });
+    console.log(`# ${data.title}\n`);
+    if (data.excerpt) console.log(`${data.excerpt}\n`);
+    console.log(renderBlocks(data.document && data.document.blocks).join('\n').replace(/\n{3,}/g, '\n\n').trim());
+    if (data.truncated) {
+      console.log(`\n— This is a preview. The full article needs the Knowledges plan: run "zuey plans" or open ${loadConfig().apiUrl}/pricing`);
+    }
+    console.log(`\n${loadConfig().apiUrl}/articles/${data.slug}`);
+    return;
+  }
+  console.error('Usage: zuey articles list [--tag <t>] | zuey articles read <slug>');
+  process.exit(1);
+}
+
+async function cmdSearch(args) {
+  const query = positional(args, 1).join(' ').trim().toLowerCase();
+  if (!query) {
+    console.error('Usage: zuey search <query>');
+    process.exit(1);
+  }
+  // No full-text search endpoint is exposed yet: match the article index (titles, excerpts, tags) locally.
+  const words = query.split(/\s+/);
+  const hits = (await fetchArticles()).filter(a => {
+    const hay = `${a.title || ''} ${a.excerpt || ''} ${(a.tags || []).join(' ')} ${a.slug || ''}`.toLowerCase();
+    return words.every(w => hay.includes(w));
+  });
+  console.log(`Matches in article titles, excerpts and tags (body text is not searched): ${hits.length}\n`);
+  printArticleList(hits);
+}
+
+async function cmdChat(args) {
+  requireKey();
+  const message = positional(args, 1).join(' ').trim();
+  if (!message) {
+    console.error('Usage: zuey chat "<message>" [--session <id>]');
+    process.exit(1);
+  }
+  let sessionId = flag(args, '--session');
+  if (!sessionId) {
+    const created = await requestApi('/api/v1/chat/sessions', 'POST', { title: message.slice(0, 80) });
+    sessionId = created && created.data && created.data.id;
+    if (!sessionId) throw new ApiError(0, 'bad_response', 'The server did not return a chat session id', null);
+  }
+
+  const config = loadConfig();
+  const abort = new AbortController();
+  process.once('SIGINT', () => abort.abort());
+  let res;
+  try {
+    res = await fetch(`${config.apiUrl}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', 'User-Agent': `zuey-cli/${VERSION}`, Authorization: `Bearer ${config.apiKey}` },
+      body: JSON.stringify({ message }),
+      signal: abort.signal,
+    });
+  } catch (err) {
+    throw new ApiError(0, 'network_error', `Cannot reach ${config.apiUrl}: ${err.message}`, null);
+  }
+  if (!res.ok) {
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    const e = data && typeof data.error === 'object' && data.error ? data.error : {};
+    throw new ApiError(res.status, typeof e.code === 'string' ? e.code : `http_${res.status}`, typeof e.message === 'string' ? e.message : res.statusText, res.headers.get('x-request-id'));
+  }
+
+  // SSE: `sources`, `delta`*, then `done` or `error`.
+  const decoder = new TextDecoder();
+  let buf = '';
+  let sources = [];
+  let failed = null;
+  try {
+    for await (const chunk of res.body) {
+      buf += decoder.decode(chunk, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const event = (frame.match(/^event: (.+)$/m) || [])[1];
+        const raw = (frame.match(/^data: (.+)$/m) || [])[1];
+        if (!event || !raw) continue;
+        const data = JSON.parse(raw);
+        if (event === 'sources') sources = Array.isArray(data.sources) ? data.sources : [];
+        else if (event === 'delta') process.stdout.write(data.text || '');
+        else if (event === 'error') failed = data;
+      }
+    }
+  } catch (err) {
+    if (!abort.signal.aborted) throw err;
+  }
+  process.stdout.write('\n');
+  if (sources.length) {
+    console.log('\nSources:');
+    for (const s of sources) console.log(`  - ${s.title || s.slug || ''}${s.url ? ` ${s.url}` : ''}`);
+  }
+  console.error(`\nSession: ${sessionId} (continue with --session ${sessionId})`);
+  if (failed) {
+    console.error(`Error (${failed.code}): ${failed.message}`);
+    process.exit(1);
+  }
+}
+
+async function cmdPlans() {
+  const { data } = await requestApi('/api/v1/plans', 'GET', null, { auth: false });
+  for (const p of data.plans || []) {
+    console.log(`${p.id} — ${p.name}: $${(p.price_usd_cents / 100).toFixed(2)}/month`);
+    if (p.tagline) console.log(`  ${p.tagline}`);
+    for (const price of p.prices || []) {
+      if (typeof price.amount_vnd === 'number') console.log(`  ${price.months} month(s): ${price.amount_vnd.toLocaleString('vi-VN')} ₫`);
+    }
+    console.log('');
+  }
+  if (!data.billing_configured) console.log('Note: bank-transfer checkout is not configured on this server right now.');
+  console.log('Subscribe: zuey subscribe <plan> --months <1|3|6|12>');
+}
+
+async function cmdSubscribe(args) {
+  requireKey();
+  const plan = positional(args, 1)[0];
+  const months = Number(flag(args, '--months') || '1');
+  if (!plan || !Number.isInteger(months) || ![1, 3, 6, 12].includes(months)) {
+    console.error('Usage: zuey subscribe <plan> --months <1|3|6|12>   (see "zuey plans")');
+    process.exit(1);
+  }
+  const { data } = await requestApi('/api/v1/billing/orders', 'POST', { plan, months });
+  console.log(`Order ${data.code}: ${data.plan_name} × ${data.months} month(s) — ${Number(data.amount_vnd).toLocaleString('vi-VN')} ₫`);
+  console.log(`Pay before: ${fmtDate(data.expires_at)} (Asia/Ho_Chi_Minh)`);
+  const t = data.transfer;
+  if (t) {
+    console.log('\nBank transfer (VietQR):');
+    console.log(`  Bank:            ${t.bank_code}`);
+    console.log(`  Account:         ${t.bank_account}`);
+    console.log(`  Amount:          ${Number(t.amount).toLocaleString('vi-VN')} ₫`);
+    console.log(`  Transfer content: ${t.transfer_content}   (must match exactly)`);
+    console.log(`  QR image:        ${t.qr_url}`);
+  }
+  console.log(`\nThe plan activates automatically when the transfer arrives. Status: ${loadConfig().apiUrl}/billing/${encodeURIComponent(data.code)}`);
+}
+
+function cmdKeys() {
+  const { apiUrl } = loadConfig();
+  console.log(`Personal API keys are created, rotated and revoked in the browser only (keys can never mint keys):
+  ${apiUrl}/account#keys
+
+Then run "zuey login" and paste the key, or export ZUEY_API_KEY=<key>.`);
+}
+
+function cmdMcpConfig() {
+  const { apiUrl } = loadConfig();
+  const url = `${apiUrl}/mcp`;
+  console.log(`# Remote MCP over OAuth (recommended: sign in and approve in the browser, no key on disk)
+{
+  "mcpServers": {
+    "zuey": { "type": "http", "url": "${url}" }
+  }
+}
+
+# Claude Code
+claude mcp add --transport http zuey ${url}
+
+# Header auth with a personal key (clients without OAuth support)
+{
+  "mcpServers": {
+    "zuey": {
+      "type": "http",
+      "url": "${url}",
+      "headers": { "Authorization": "Bearer <YOUR_ZK_KEY>" }
+    }
+  }
+}
+
+Manage connected apps: ${apiUrl}/account#connected-apps`);
+}
+
+async function startStdioMcp() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
   rl.on('line', async (line) => {
     if (!line.trim()) return;
+    let id = null;
     try {
       const rpcReq = JSON.parse(line);
+      id = rpcReq && rpcReq.id !== undefined ? rpcReq.id : null;
       const res = await requestApi('/api/mcp', 'POST', rpcReq);
       process.stdout.write(JSON.stringify(res) + '\n');
     } catch (err) {
-      process.stdout.write(JSON.stringify({
-        jsonrpc: '2.0',
-        error: { code: -32603, message: err.message },
-        id: null,
-      }) + '\n');
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: err.message }, id }) + '\n');
     }
   });
 }
@@ -109,26 +511,27 @@ async function main() {
   const cmd = args[0];
 
   if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
-    console.log('zuey-cli v1.0.0');
+    console.log(`zuey-cli v${VERSION}`);
     return;
   }
 
-  if (cmd === 'login') {
-    const keyIdx = args.indexOf('--key');
-    const urlIdx = args.indexOf('--url');
-    if (keyIdx === -1 || !args[keyIdx + 1]) {
-      console.error('Error: --key <API_KEY> is required.');
-      process.exit(1);
-    }
-    const apiKey = args[keyIdx + 1];
-    const apiUrl = urlIdx !== -1 ? args[urlIdx + 1] : (process.env.ZUEY_API_URL || 'https://zuey.me');
-    saveConfig({ apiKey, apiUrl });
-    console.log('✓ Successfully logged in to Zuey.me API!');
-    console.log(`Config saved to: ${CONFIG_FILE}`);
+  if (cmd === 'login') return cmdLogin(args);
+  if (cmd === 'logout') {
+    if (fs.existsSync(CONFIG_FILE)) fs.rmSync(CONFIG_FILE);
+    if (fs.existsSync(LEGACY_CONFIG_FILE)) fs.rmSync(LEGACY_CONFIG_FILE);
+    console.log('Saved key removed. Revoke it at https://zuey.me/account#keys if it may have leaked.');
     return;
   }
+  if (cmd === 'whoami') return cmdWhoami();
+  if (cmd === 'articles') return cmdArticles(args);
+  if (cmd === 'search') return cmdSearch(args);
+  if (cmd === 'chat') return cmdChat(args);
+  if (cmd === 'plans') return cmdPlans();
+  if (cmd === 'subscribe') return cmdSubscribe(args);
+  if (cmd === 'keys') return cmdKeys();
 
   if (cmd === 'mcp') {
+    if (args[1] === 'config') return cmdMcpConfig();
     await startStdioMcp();
     return;
   }
@@ -166,8 +569,7 @@ async function main() {
     const sub = args[1] || 'list';
     if (sub === 'list') {
       const res = await requestApi('/api/v1/links');
-      const secIdx = args.indexOf('--section');
-      const targetSec = secIdx !== -1 ? args[secIdx + 1] : null;
+      const targetSec = flag(args, '--section');
       const list = targetSec ? res.data.filter(l => l.section === targetSec) : res.data;
 
       console.log(`\n--- LINKS (${list.length}) ---`);
@@ -206,7 +608,7 @@ async function main() {
         console.error('Error: Link ID required.');
         process.exit(1);
       }
-      await requestApi(`/api/v1/links/${id}`, 'DELETE');
+      await requestApi(`/api/v1/links/${encodeURIComponent(id)}`, 'DELETE');
       console.log('✓ Link card deleted successfully:', id);
       return;
     }
@@ -247,6 +649,10 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('Error:', err.message);
+  if (err instanceof ApiError) {
+    console.error(`Error ${err.status ? `${err.status} ` : ''}${err.code}: ${err.message}${err.requestId ? ` (request id ${err.requestId})` : ''}`);
+  } else {
+    console.error('Error:', err.message);
+  }
   process.exit(1);
 });

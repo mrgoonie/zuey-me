@@ -1,0 +1,97 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { AppError } from '../../lib/http';
+import { getPublicWorkflow } from '../../lib/workflows/store';
+import type { PublicWorkflow } from '../../lib/workflows/store';
+
+const d1 = Astro.locals.runtime?.env?.DB;
+const slug = Astro.params.slug ?? '';
+let workflow: PublicWorkflow | null = null;
+try {
+  workflow = await getPublicWorkflow(slug, d1);
+} catch (err) {
+  // Unknown slug, draft-only, deleted or malformed slug all render as 404.
+  if (!(err instanceof AppError) || (err.status !== 404 && err.status !== 400)) throw err;
+  Astro.response.status = 404;
+}
+---
+
+<Layout
+  title={workflow ? `${workflow.name} — Zuey's AI Workflows` : 'Workflow not found — zuey.me'}
+  description={workflow?.summary ?? 'This workflow does not exist or is not published.'}
+  url={`https://zuey.me/workflows/${slug}`}
+>
+  <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6 z-10">
+    <article class="w-full max-w-[720px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] md:rounded-[40px] border border-stone-200/90 shadow-floating-card px-3.5 py-6 sm:px-6 sm:py-8 md:p-10">
+      <nav class="flex items-center justify-between gap-2 mb-5 text-xs font-semibold">
+        <a href="/workflows" class="text-stone-500 hover:text-stone-900">&larr; All workflows</a>
+        {workflow && (
+          <a href={`/workflows/${workflow.slug}.md`} class="px-3 py-1.5 rounded-full bg-white/90 border border-stone-300/80 text-stone-700 hover:text-stone-900">Markdown</a>
+        )}
+      </nav>
+
+      {!workflow && (
+        <div class="text-center py-10">
+          <h1 class="font-serif text-2xl font-bold text-stone-900">Workflow not found</h1>
+          <p class="text-sm text-stone-600 mt-2">It may not be published yet.</p>
+        </div>
+      )}
+
+      {workflow && (
+        <>
+          <h1 class="font-serif text-2xl sm:text-3xl md:text-4xl font-bold text-stone-900 break-words">{workflow.name}</h1>
+          <p class="text-stone-700 mt-2 break-words">{workflow.summary}</p>
+
+          <section class="mt-6 rounded-2xl bg-white/90 border border-stone-300/70 p-4">
+            <h2 class="text-[11px] uppercase tracking-widest font-bold text-stone-500">Trigger</h2>
+            <p class="text-sm text-stone-800 mt-1 whitespace-pre-line break-words">{workflow.trigger}</p>
+          </section>
+
+          <section class="mt-6">
+            <h2 class="text-[11px] uppercase tracking-widest font-bold text-stone-500 mb-3">Steps</h2>
+            <ol class="space-y-2.5">
+              {workflow.steps.map((s, i) => (
+                <li class="flex gap-3 rounded-2xl bg-white/80 border border-stone-300/60 p-3 sm:p-4 min-w-0">
+                  <span class="shrink-0 w-7 h-7 rounded-full bg-stone-900 text-amber-300 text-xs font-bold flex items-center justify-center">{i + 1}</span>
+                  <div class="min-w-0">
+                    <p class="font-semibold text-stone-900 break-words">{s.title}</p>
+                    {s.detail && <p class="text-sm text-stone-600 mt-1 whitespace-pre-line break-words">{s.detail}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          {workflow.tools.length > 0 && (
+            <section class="mt-6">
+              <h2 class="text-[11px] uppercase tracking-widest font-bold text-stone-500 mb-2">Tools</h2>
+              <div class="flex flex-wrap gap-1.5">
+                {workflow.tools.map(t => <span class="text-xs font-mono px-2.5 py-1 rounded-full bg-stone-900 text-stone-100 break-all">{t}</span>)}
+              </div>
+            </section>
+          )}
+
+          {workflow.metrics.length > 0 && (
+            <section class="mt-6">
+              <h2 class="text-[11px] uppercase tracking-widest font-bold text-stone-500 mb-2">Metrics</h2>
+              <dl class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {workflow.metrics.map(m => (
+                  <div class="rounded-2xl bg-white/80 border border-stone-300/60 p-3 min-w-0">
+                    <dt class="text-xs text-stone-500 break-words">{m.label}</dt>
+                    <dd class="font-serif text-lg font-bold text-stone-900 break-words">{m.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
+
+          {workflow.tags.length > 0 && (
+            <div class="mt-6 flex flex-wrap gap-1.5">
+              {workflow.tags.map(t => <span class="text-xs text-stone-600 bg-stone-200/70 rounded-full px-2.5 py-0.5 break-all">#{t}</span>)}
+            </div>
+          )}
+        </>
+      )}
+    </article>
+  </main>
+</Layout>

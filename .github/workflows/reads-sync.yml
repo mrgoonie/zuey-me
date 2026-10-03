@@ -1,0 +1,17 @@
+name: Zuey Reads sync
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Trigger /api/v1/reads/sync
+        env:
+          SITE_URL: ${{ vars.SITE_URL || 'https://zuey.me' }}
+        run: |
+          curl -fsS --max-time 600 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer ${{ secrets.ZUEY_ADMIN_API_KEY }}" -H "Content-Type: application/json" -d '{}'

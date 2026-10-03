@@ -5,7 +5,11 @@ export interface D1PreparedStatementLike {
   bind(...values: unknown[]): D1PreparedStatementLike;
   first<T = Record<string, unknown>>(): Promise<T | null>;
   all<T = Record<string, unknown>>(): Promise<{ results?: T[] }>;
-  run(): Promise<unknown>;
+  run(): Promise<D1RunResultLike>;
+}
+
+export interface D1RunResultLike {
+  meta?: { changes?: number; last_row_id?: number };
 }
 
 export interface D1DatabaseLike {
@@ -273,26 +277,31 @@ export async function createApiKey(name: string, role: 'admin' | 'read' = 'admin
   return { key: rawToken, record };
 }
 
-export async function verifyApiKey(token: string, d1?: D1DatabaseLike): Promise<boolean> {
-  if (!token) return false;
+export async function getApiKeyRole(token: string, d1?: D1DatabaseLike): Promise<ApiKey['role'] | null> {
+  if (!token) return null;
   const hash = await hashString(token);
 
   if (d1) {
     try {
-      const res = await d1.prepare('SELECT id FROM api_keys WHERE key_hash = ?').bind(hash).first<{ id: string }>();
+      const res = await d1.prepare('SELECT id, role FROM api_keys WHERE key_hash = ?').bind(hash).first<{ id: string; role: string }>();
       if (res) {
         d1.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?')
           .bind(new Date().toISOString(), res.id)
           .run()
           .catch(() => {});
-        return true;
+        return res.role === 'read' ? 'read' : 'admin';
       }
     } catch (e) {
-      console.warn('D1 verifyApiKey fallback:', e);
+      console.warn('D1 getApiKeyRole fallback:', e);
     }
   }
 
-  return memoryApiKeys.some(k => k.key_hash === hash);
+  const mem = memoryApiKeys.find(k => k.key_hash === hash);
+  return mem ? mem.role : null;
+}
+
+export async function verifyApiKey(token: string, d1?: D1DatabaseLike): Promise<boolean> {
+  return (await getApiKeyRole(token, d1)) !== null;
 }
 
 export async function revokeApiKey(id: string, d1?: D1DatabaseLike): Promise<boolean> {

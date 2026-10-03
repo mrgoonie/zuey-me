@@ -334,6 +334,17 @@ describe('Zuey.me API Route Handlers', () => {
     expect(deleteRes.status).toBe(200);
   });
 
+  it('read-only API keys can neither mint keys nor change the profile', async () => {
+    const { key } = await createApiKey('Read Only', 'read');
+    const readHeaders = { Authorization: `Bearer ${key}` };
+    const mint = await postKeysApi(mockContext({ method: 'POST', headers: readHeaders, body: { name: 'escalate', role: 'admin' } }));
+    expect(mint.status).toBe(403);
+    const list = await getKeysApi(mockContext({ headers: readHeaders }));
+    expect(list.status).toBe(403);
+    const anon = await postKeysApi(mockContext({ method: 'POST', body: { name: 'anon' } }));
+    expect(anon.status).toBe(401);
+  });
+
   it('MCP Server endpoint should handle JSON-RPC initialize and tools/list', async () => {
     // initialize
     const initRes = await mcpApi(mockContext({

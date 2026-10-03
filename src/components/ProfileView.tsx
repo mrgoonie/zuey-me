@@ -1,48 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Share2, QrCode, Settings } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import { LinkCard } from './LinkCard';
 import { ShareModal } from './ShareModal';
 import { QrCodeModal } from './QrCodeModal';
-import { LanguageSwitch } from './LanguageSwitch';
 import { trackEvent } from '../lib/posthog';
 import type { Profile, LinkItem } from '../db/types';
+import type { Locale } from '../lib/i18n/locales';
+import { homeStrings, profileContentLocale } from './home/home-i18n';
 
 interface ProfileViewProps {
   initialProfile: Profile;
   initialLinks: LinkItem[];
-  defaultLang?: 'en' | 'vi';
+  /** Site locale; profile content exists in en/vi only, other locales read English with a note. */
+  locale: Locale;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   initialProfile,
   initialLinks,
-  defaultLang = 'en',
+  locale,
 }) => {
-  const [lang, setLang] = useState<'en' | 'vi'>(defaultLang);
+  const lang = profileContentLocale(locale);
+  const fallbackNote = locale === lang ? null : homeStrings(locale).profileFallback;
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isQrOpen, setIsQrOpen] = useState(false);
-
-  // Sync lang from URL search param on mount if present
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const urlLang = params.get('lang');
-      if (urlLang === 'vi' || urlLang === 'en') {
-        setLang(urlLang);
-      }
-    }
-  }, []);
-
-  const handleLangChange = (newLang: 'en' | 'vi') => {
-    setLang(newLang);
-    trackEvent('language_changed', { language: newLang });
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.set('lang', newLang);
-      window.history.replaceState({}, '', url.toString());
-    }
-  };
 
   const blogs = initialLinks.filter(l => l.section === 'blogs' && l.is_active);
   const companies = initialLinks.filter(l => l.section === 'companies' && l.is_active);
@@ -60,8 +42,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     { name: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },
   ];
 
+  const exploreLinks = [
+    { href: '/articles', en: 'Articles', vi: 'Bài viết', descEn: 'Notes, charts and surveys', descVi: 'Ghi chép, biểu đồ, khảo sát' },
+    { href: '/reads', en: 'Zuey Reads', vi: 'Zuey đang đọc', descEn: 'What I am reading, summarized', descVi: 'Tóm tắt những gì mình đọc' },
+    { href: '/workflows', en: 'AI Workflows', vi: 'Workflow AI', descEn: 'How I work with AI', descVi: 'Cách mình làm việc với AI' },
+    { href: '/business', en: 'For Business', vi: 'Cho doanh nghiệp', descEn: '1:1 consultation · $1,999', descVi: 'Tư vấn 1:1 · $1,999' },
+  ];
+
   return (
-    <main className="relative min-h-screen w-full flex flex-col items-center justify-start py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6 z-10 selection:bg-amber-200">
+    <div className="relative w-full flex flex-col items-center justify-start selection:bg-amber-200" lang={lang}>
       {/* Floating Center Card with Rounded Frame and Drop Shadow (Matching sample 01) */}
       <div className="w-full max-w-[540px] sm:max-w-[580px] bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] md:rounded-[40px] border border-stone-200/90 shadow-floating-card px-3.5 py-6 sm:px-6 sm:py-8 md:p-8 flex flex-col items-center relative transition-all duration-300">
 
@@ -86,8 +75,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2">
-            <LanguageSwitch currentLang={lang} onChange={handleLangChange} />
-
             <button
               onClick={() => setIsQrOpen(true)}
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/90 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-700 hover:text-stone-900 transition-all hover:scale-105 active:scale-95"
@@ -107,6 +94,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </button>
           </div>
         </header>
+
+        {fallbackNote && (
+          <p className="w-full -mt-3 mb-5 rounded-full bg-amber-100/80 border border-amber-300/70 px-3 py-1.5 text-center text-[11px] font-semibold text-amber-900" lang={locale}>
+            {fallbackNote}
+          </p>
+        )}
 
         {/* Profile Avatar & Bio (Matching sample 01) */}
         <section className="flex flex-col items-center text-center px-4 w-full">
@@ -153,6 +146,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
         {/* Sections & Link Cards */}
         <div className="w-full mt-8 space-y-8">
+          {/* 0. Explore: articles, reads, workflows, business booking */}
+          <nav aria-label={lang === 'vi' ? 'Khám phá' : 'Explore'} className="w-full">
+            <ul className="grid grid-cols-2 gap-2">
+              {exploreLinks.map((item) => (
+                <li key={item.href} className="min-w-0">
+                  <a
+                    href={item.href}
+                    className="group h-full flex flex-col gap-0.5 rounded-2xl border border-stone-300/80 bg-white/80 hover:bg-white px-3 py-2.5 shadow-card hover:shadow-card-hover transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500"
+                    onClick={() => trackEvent('explore_clicked', { target: item.href })}
+                  >
+                    <span className="text-[13px] sm:text-sm font-bold text-stone-900 font-serif leading-tight">{lang === 'vi' ? item.vi : item.en}</span>
+                    <span className="text-[11px] text-stone-600 leading-snug">{lang === 'vi' ? item.descVi : item.descEn}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+
           {/* 1. Blogs Section */}
           {blogs.length > 0 && (
             <section className="w-full">
@@ -206,6 +217,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <a href="/docs" className="hover:text-black font-medium underline underline-offset-2">API Docs</a>
             <span className="text-stone-300">•</span>
             <a href="/llms.txt" className="hover:text-black font-medium underline underline-offset-2">llms.txt</a>
+            <span className="text-stone-300">•</span>
+            <a href="/privacy" className="hover:text-black font-medium underline underline-offset-2">{lang === 'vi' ? 'Quyền riêng tư' : 'Privacy'}</a>
           </div>
 
           <p className="mt-4 text-[11px] text-stone-500 max-w-xs leading-relaxed">
@@ -232,6 +245,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         onClose={() => setIsQrOpen(false)}
         lang={lang}
       />
-    </main>
+    </div>
   );
 };

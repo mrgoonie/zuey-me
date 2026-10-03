@@ -1,0 +1,335 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
+
+// Vietnamese is the authoritative version; every other locale reads the English translation.
+const locale = resolveLocale(Astro.request);
+const lang: 'vi' | 'en' = locale === 'vi' ? 'vi' : 'en';
+Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
+
+const EFFECTIVE = '2026-10-02';
+const CONTACT = 'hi@zuey.me';
+
+interface Section {
+  id: string;
+  title: string;
+  paras?: string[];
+  items?: string[];
+}
+
+interface Processor {
+  name: string;
+  purpose: string;
+  data: string;
+}
+
+const content: Record<'vi' | 'en', {
+  title: string;
+  intro: string;
+  effective: string;
+  authoritative: string;
+  pledgeTitle: string;
+  pledges: string[];
+  sections: Section[];
+  processorsTitle: string;
+  processorsIntro: string;
+  processorsHead: [string, string, string];
+  processors: Processor[];
+  processorsNote: string;
+  retentionTitle: string;
+  retention: string[];
+  rightsTitle: string;
+  rights: string[];
+  contactTitle: string;
+  contact: string;
+  back: string;
+  pending: string;
+}> = {
+  vi: {
+    title: 'Chính sách quyền riêng tư',
+    intro: 'zuey.me là trang cá nhân của Duy Nguyen (Zuey), gồm hồ sơ, bài viết Knowledges, trợ lý Zuey AI, gói thành viên, cộng đồng và tư vấn doanh nghiệp. Trang này giải thích dữ liệu nào được thu thập, dùng để làm gì, ai xử lý và bạn có quyền gì.',
+    effective: 'Hiệu lực từ',
+    authoritative: 'Bản tiếng Việt là bản gốc. Bản tiếng Anh là bản dịch.',
+    pledgeTitle: 'Cam kết chính',
+    pledges: [
+      'KHÔNG sử dụng dữ liệu cá nhân của bạn cho mục đích nào khác ngoài các mục đích nêu trong chính sách này.',
+      'Không bán, cho thuê hay trao đổi dữ liệu cá nhân.',
+      'Không dùng dữ liệu của bạn để quảng cáo nhắm mục tiêu.',
+      'Không dùng nội dung của bạn (kể cả các cuộc chat với Zuey AI) để huấn luyện mô hình AI khi chưa có sự đồng ý rõ ràng của bạn.',
+      'Dữ liệu được cách ly theo từng người dùng: mỗi tài khoản chỉ xem được dữ liệu của chính mình.',
+    ],
+    sections: [
+      {
+        id: 'collect',
+        title: 'Dữ liệu được thu thập',
+        items: [
+          'Tài khoản: email, tên hiển thị và ảnh đại diện từ Google hoặc GitHub khi bạn đăng nhập; trạng thái xác minh email; cookie phiên đăng nhập.',
+          'Gói thành viên và thanh toán: gói đã chọn, thời hạn, trạng thái và mã giao dịch. Số thẻ và thông tin ngân hàng do bên thanh toán xử lý; zuey.me không lưu số thẻ.',
+          'Khoá API cá nhân: tên khoá, phạm vi quyền và thông tin sử dụng để bạn quản lý và thu hồi khoá.',
+          'Zuey AI: câu hỏi bạn gửi và câu trả lời được tạo ra, lưu theo tài khoản để bạn xem lại lịch sử.',
+          'Đặt lịch tư vấn: tên, email, bối cảnh bạn cung cấp và thời gian buổi hẹn.',
+          'Cộng đồng Telegram (gói Cộng đồng): link mời một lần dùng, Telegram user ID khi bạn vào nhóm bằng link đó, và trạng thái thành viên để mời hoặc gỡ khỏi nhóm theo hiệu lực gói.',
+          'Thời tiết (chỉ khi bạn bật): tên thành phố hoặc toạ độ đã làm tròn tới 1 chữ số thập phân (khoảng 11 km). Lựa chọn này chỉ lưu trong trình duyệt của bạn; máy chủ chỉ chuyển truy vấn tới Open-Meteo, không gắn với tài khoản.',
+          'Lưu trữ trên trình duyệt: cookie ngôn ngữ (zuey_locale) và localStorage cho vị trí và trạng thái linh vật, thông báo đã đóng, lệnh gần đây và tuỳ chọn thời tiết. Bạn có thể xoá bất cứ lúc nào trong cài đặt trình duyệt.',
+          'Thống kê sử dụng: lượt xem trang và một số sự kiện thao tác (ví dụ bấm liên kết, đổi ngôn ngữ) qua PostHog.',
+          'Nhật ký kỹ thuật: địa chỉ IP, user agent và thông tin yêu cầu do Cloudflare ghi nhận để vận hành và chống lạm dụng.',
+        ],
+      },
+      {
+        id: 'use',
+        title: 'Mục đích sử dụng',
+        items: [
+          'Cung cấp tài khoản, nội dung trả phí, Zuey AI, MCP/API, đặt lịch và cộng đồng mà bạn đã chọn dùng.',
+          'Xử lý thanh toán, gia hạn, hoàn tiền và gửi email giao dịch (xác minh, hoá đơn, nhắc lịch).',
+          'Bảo mật, chống gian lận và lạm dụng, giới hạn tần suất.',
+          'Hiểu cách trang được sử dụng ở mức tổng hợp để cải thiện sản phẩm.',
+          'Tuân thủ nghĩa vụ pháp lý.',
+        ],
+      },
+      {
+        id: 'isolation',
+        title: 'Cách ly dữ liệu và quyền truy cập của quản trị viên',
+        paras: [
+          'Mỗi yêu cầu tới API và MCP đều được kiểm tra quyền theo phiên đăng nhập hoặc khoá API của chính bạn; dữ liệu của tài khoản này không hiển thị cho tài khoản khác.',
+          'Quản trị viên (Duy) có quyền kỹ thuật truy cập các cuộc chat đã lưu và dữ liệu tài khoản. Quyền này chỉ được dùng khi cần hỗ trợ theo yêu cầu của bạn, điều tra sự cố bảo mật hoặc lạm dụng, hoặc khi pháp luật yêu cầu. Việc quản trị viên truy cập cuộc chat được ghi nhật ký kiểm toán.',
+        ],
+      },
+      {
+        id: 'ai',
+        title: 'Zuey AI và nhà cung cấp mô hình',
+        paras: [
+          'Để tạo câu trả lời, câu hỏi của bạn cùng các đoạn nội dung liên quan được gửi qua Dewee gateway tới nhà cung cấp mô hình AI. Các bên này xử lý dữ liệu để trả lời và có thể lưu giữ theo chính sách riêng của họ; zuey.me không cam kết rằng dữ liệu không bao giờ được lưu ở phía nhà cung cấp.',
+          'Không nhập mật khẩu, khoá bí mật hoặc thông tin nhạy cảm vào khung chat.',
+        ],
+      },
+    ],
+    processorsTitle: 'Các bên xử lý dữ liệu',
+    processorsIntro: 'zuey.me dùng các dịch vụ sau. Mỗi bên chỉ nhận phần dữ liệu cần cho chức năng tương ứng.',
+    processorsHead: ['Bên xử lý', 'Mục đích', 'Dữ liệu liên quan'],
+    processors: [
+      { name: 'Cloudflare', purpose: 'Lưu trữ trang, cơ sở dữ liệu (D1), CDN, bảo mật', data: 'Toàn bộ dữ liệu được lưu, nhật ký yêu cầu' },
+      { name: 'Resend', purpose: 'Gửi email giao dịch', data: 'Email, nội dung email giao dịch' },
+      { name: 'SePay', purpose: 'Thanh toán chuyển khoản ngân hàng Việt Nam', data: 'Số tiền, nội dung chuyển khoản, mã giao dịch' },
+      { name: 'Polar', purpose: 'Thanh toán thẻ quốc tế', data: 'Email, thông tin thanh toán do Polar thu thập' },
+      { name: 'Dewee gateway và nhà cung cấp mô hình AI', purpose: 'Tạo câu trả lời của Zuey AI', data: 'Câu hỏi, ngữ cảnh nội dung liên quan' },
+      { name: 'Google', purpose: 'Đăng nhập; Google Calendar/Meet cho lịch tư vấn; Google Fonts', data: 'Hồ sơ đăng nhập cơ bản; tên, email người đặt lịch; địa chỉ IP khi tải font' },
+      { name: 'GitHub', purpose: 'Đăng nhập; hiển thị hoạt động công khai của @mrgoonie', data: 'Hồ sơ đăng nhập cơ bản. Mục hoạt động chỉ dùng sự kiện công khai, không dùng dữ liệu của bạn' },
+      { name: 'Telegram', purpose: 'Nhóm cộng đồng của gói Cộng đồng', data: 'Link mời, Telegram user ID, trạng thái thành viên' },
+      { name: 'Open-Meteo', purpose: 'Thời tiết cho hiệu ứng nền (tuỳ chọn)', data: 'Tên thành phố hoặc toạ độ đã làm tròn' },
+      { name: 'PostHog', purpose: 'Thống kê sử dụng', data: 'Lượt xem trang, sự kiện thao tác, định danh thiết bị' },
+    ],
+    processorsNote: 'Nếu thêm bên thanh toán hoặc bên xử lý mới, danh sách này sẽ được cập nhật trước khi dịch vụ đó được dùng cho dữ liệu của bạn.',
+    retentionTitle: 'Lưu giữ, sao lưu và xoá dữ liệu',
+    retention: [
+      'Dữ liệu tài khoản, gói thành viên và lịch sử chat được giữ trong thời gian tài khoản còn hoạt động hoặc tới khi bạn yêu cầu xoá.',
+      'Thời hạn lưu giữ cụ thể cho từng loại dữ liệu (lịch sử chat, nhật ký kỹ thuật, dữ liệu thống kê) đang được hoàn thiện và sẽ được công bố tại đây.',
+      'Bản sao lưu của hạ tầng có thể còn chứa dữ liệu đã xoá trong một khoảng thời gian trước khi bị ghi đè; thời hạn cụ thể đang được hoàn thiện.',
+      'Hồ sơ thanh toán có thể phải giữ lâu hơn để đáp ứng nghĩa vụ kế toán và thuế.',
+      'Bạn có thể yêu cầu xoá tài khoản và dữ liệu bằng cách gửi email tới hi@zuey.me. Quy trình xoá tự phục vụ đang được hoàn thiện.',
+    ],
+    rightsTitle: 'Quyền của bạn',
+    rights: [
+      'Yêu cầu xem, xuất hoặc sửa dữ liệu cá nhân của bạn.',
+      'Yêu cầu xoá dữ liệu hoặc rút lại sự đồng ý (ví dụ tắt thời tiết, xoá dữ liệu trình duyệt).',
+      'Thu hồi khoá API và đăng xuất các phiên đăng nhập trong trang tài khoản.',
+      'Khiếu nại với cơ quan bảo vệ dữ liệu có thẩm quyền.',
+    ],
+    contactTitle: 'Liên hệ và thay đổi',
+    contact: 'Mọi yêu cầu về quyền riêng tư xin gửi tới hi@zuey.me. Khi chính sách thay đổi đáng kể, ngày hiệu lực ở đầu trang sẽ được cập nhật và thay đổi sẽ được thông báo trên trang.',
+    back: '← zuey.me',
+    pending: 'đang hoàn thiện',
+  },
+  en: {
+    title: 'Privacy policy',
+    intro: 'zuey.me is the personal site of Duy Nguyen (Zuey): profile, Knowledges articles, the Zuey AI assistant, memberships, the community and business consulting. This page explains what data is collected, why, who processes it and what rights you have.',
+    effective: 'Effective',
+    authoritative: 'The Vietnamese version is authoritative. This English text is a translation.',
+    pledgeTitle: 'Key commitments',
+    pledges: [
+      'Your personal data is NOT used for any purpose other than those described in this policy.',
+      'Personal data is never sold, rented or traded.',
+      'Your data is not used for targeted advertising.',
+      'Your content (including chats with Zuey AI) is not used to train AI models without your explicit consent.',
+      'Data is isolated per user: each account can only see its own data.',
+    ],
+    sections: [
+      {
+        id: 'collect',
+        title: 'Data collected',
+        items: [
+          'Account: email, display name and avatar from Google or GitHub when you sign in; email verification status; a session cookie.',
+          'Membership and payments: chosen plan, term, status and transaction reference. Card and bank details are handled by the payment providers; zuey.me does not store card numbers.',
+          'Personal API keys: key name, scopes and usage details so you can manage and revoke keys.',
+          'Zuey AI: the questions you send and the generated answers, stored per account so you can see your history.',
+          'Consultation booking: name, email, the context you provide and the meeting time.',
+          'Telegram community (Community plan): single-use invite links, your Telegram user ID once you join through such a link, and membership status so access follows your plan.',
+          'Weather (only if you turn it on): a city name or coordinates rounded to 1 decimal place (about 11 km). The choice is stored in your browser only; the server just forwards the query to Open-Meteo and does not link it to your account.',
+          'Browser storage: a locale cookie (zuey_locale) and localStorage for the companion position and state, dismissed notices, recent commands and weather preference. You can clear these at any time in your browser settings.',
+          'Usage analytics: page views and some interaction events (such as link clicks and language changes) via PostHog.',
+          'Technical logs: IP address, user agent and request details recorded by Cloudflare to operate the service and prevent abuse.',
+        ],
+      },
+      {
+        id: 'use',
+        title: 'How data is used',
+        items: [
+          'To provide the account, paid content, Zuey AI, MCP/API, booking and community features you choose to use.',
+          'To process payments, renewals and refunds and send transactional email (verification, receipts, reminders).',
+          'For security, fraud and abuse prevention, and rate limiting.',
+          'To understand aggregate usage and improve the product.',
+          'To meet legal obligations.',
+        ],
+      },
+      {
+        id: 'isolation',
+        title: 'Per-user isolation and administrator access',
+        paras: [
+          'Every API and MCP request is authorised against your own session or API key; one account’s data is not shown to another account.',
+          'The administrator (Duy) has technical access to stored chats and account data. It is used only to provide support you ask for, to investigate security incidents or abuse, or when required by law. Administrator access to chats is recorded in an audit log.',
+        ],
+      },
+      {
+        id: 'ai',
+        title: 'Zuey AI and model providers',
+        paras: [
+          'To generate answers, your question and relevant content excerpts are sent through the Dewee gateway to an AI model provider. These parties process the data to answer and may retain it under their own policies; zuey.me does not promise that providers never retain data.',
+          'Do not enter passwords, secret keys or other sensitive information in the chat.',
+        ],
+      },
+    ],
+    processorsTitle: 'Processors',
+    processorsIntro: 'zuey.me relies on the services below. Each receives only the data its function needs.',
+    processorsHead: ['Processor', 'Purpose', 'Data involved'],
+    processors: [
+      { name: 'Cloudflare', purpose: 'Hosting, database (D1), CDN, security', data: 'All stored data, request logs' },
+      { name: 'Resend', purpose: 'Transactional email', data: 'Email address, transactional email content' },
+      { name: 'SePay', purpose: 'Vietnamese bank-transfer payments', data: 'Amount, transfer memo, transaction reference' },
+      { name: 'Polar', purpose: 'International card payments', data: 'Email, payment details collected by Polar' },
+      { name: 'Dewee gateway and AI model provider', purpose: 'Generating Zuey AI answers', data: 'Questions, relevant content context' },
+      { name: 'Google', purpose: 'Sign-in; Google Calendar/Meet for consultations; Google Fonts', data: 'Basic sign-in profile; booker name and email; IP address when fonts load' },
+      { name: 'GitHub', purpose: 'Sign-in; showing public activity of @mrgoonie', data: 'Basic sign-in profile. The activity section uses public events only, not your data' },
+      { name: 'Telegram', purpose: 'Community plan groups', data: 'Invite links, Telegram user ID, membership status' },
+      { name: 'Open-Meteo', purpose: 'Weather for background effects (optional)', data: 'City name or rounded coordinates' },
+      { name: 'PostHog', purpose: 'Usage analytics', data: 'Page views, interaction events, device identifier' },
+    ],
+    processorsNote: 'If a new payment provider or processor is added, this list is updated before that service handles your data.',
+    retentionTitle: 'Retention, backups and deletion',
+    retention: [
+      'Account, membership and chat history data are kept while your account is active or until you ask for deletion.',
+      'Specific retention periods for each data type (chat history, technical logs, analytics) are to be finalised and will be published here.',
+      'Infrastructure backups may still contain deleted data for a period before being overwritten; the exact period is to be finalised.',
+      'Payment records may need to be kept longer to meet accounting and tax obligations.',
+      'You can request deletion of your account and data by emailing hi@zuey.me. A self-service deletion flow is to be finalised.',
+    ],
+    rightsTitle: 'Your rights',
+    rights: [
+      'Ask to access, export or correct your personal data.',
+      'Ask for deletion or withdraw consent (for example turn weather off or clear browser data).',
+      'Revoke API keys and sign out sessions from your account page.',
+      'Complain to the competent data protection authority.',
+    ],
+    contactTitle: 'Contact and changes',
+    contact: 'Send any privacy request to hi@zuey.me. When this policy changes materially, the effective date above is updated and the change is announced on the site.',
+    back: '← zuey.me',
+    pending: 'to be finalised',
+  },
+};
+
+const c = content[lang];
+const fallback = lang !== locale;
+---
+
+<Layout
+  title={`${c.title} — zuey.me`}
+  description={c.intro}
+  url="https://zuey.me/privacy"
+  lang={LOCALE_LABELS[lang].htmlLang}
+>
+  <main class="relative min-h-screen w-full flex flex-col items-center py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <article
+      class="w-full max-w-[760px] bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 shadow-floating-card px-4 py-7 sm:p-10 text-stone-900"
+      aria-labelledby="privacy-title"
+    >
+      <a href="/" class="text-xs font-semibold text-stone-600 hover:text-stone-900 underline-offset-2 hover:underline">{c.back}</a>
+      <h1 id="privacy-title" class="mt-4 text-3xl sm:text-4xl font-bold font-serif tracking-tight">{c.title}</h1>
+      <p class="mt-2 text-xs text-stone-600">
+        {c.effective}: <time datetime={EFFECTIVE}>{EFFECTIVE}</time> · {c.authoritative}
+        {fallback && <span> · {LOCALE_LABELS[locale].native}: English</span>}
+        {lang === 'en' ? <span> · <a class="underline underline-offset-2" href="?lang=vi" hreflang="vi">Tiếng Việt</a></span> : <span> · <a class="underline underline-offset-2" href="?lang=en" hreflang="en">English</a></span>}
+      </p>
+      <p class="mt-4 text-[15px] leading-relaxed text-stone-800">{c.intro}</p>
+
+      <nav class="mt-6 rounded-2xl bg-white/70 border border-stone-200 p-4" aria-label={c.title}>
+        <ol class="grid gap-1 text-sm list-decimal pl-5">
+          <li><a class="underline underline-offset-2 hover:text-black" href="#pledges">{c.pledgeTitle}</a></li>
+          {c.sections.map(sec => <li><a class="underline underline-offset-2 hover:text-black" href={`#${sec.id}`}>{sec.title}</a></li>)}
+          <li><a class="underline underline-offset-2 hover:text-black" href="#processors">{c.processorsTitle}</a></li>
+          <li><a class="underline underline-offset-2 hover:text-black" href="#retention">{c.retentionTitle}</a></li>
+          <li><a class="underline underline-offset-2 hover:text-black" href="#rights">{c.rightsTitle}</a></li>
+          <li><a class="underline underline-offset-2 hover:text-black" href="#contact">{c.contactTitle}</a></li>
+        </ol>
+      </nav>
+
+      <section id="pledges" class="mt-8 rounded-2xl bg-[#1c1917] text-[#f5efeb] p-5 sm:p-6">
+        <h2 class="text-xl font-bold font-serif">{c.pledgeTitle}</h2>
+        <ul class="mt-3 grid gap-2 text-[15px] leading-relaxed list-disc pl-5">
+          {c.pledges.map(p => <li>{p}</li>)}
+        </ul>
+      </section>
+
+      {c.sections.map(sec => (
+        <section id={sec.id} class="mt-8">
+          <h2 class="text-xl font-bold font-serif">{sec.title}</h2>
+          {sec.paras?.map(p => <p class="mt-3 text-[15px] leading-relaxed text-stone-800">{p}</p>)}
+          {sec.items && (
+            <ul class="mt-3 grid gap-2 text-[15px] leading-relaxed text-stone-800 list-disc pl-5">
+              {sec.items.map(i => <li>{i}</li>)}
+            </ul>
+          )}
+        </section>
+      ))}
+
+      <section id="processors" class="mt-8">
+        <h2 class="text-xl font-bold font-serif">{c.processorsTitle}</h2>
+        <p class="mt-3 text-[15px] leading-relaxed text-stone-800">{c.processorsIntro}</p>
+        <div class="mt-3 overflow-x-auto rounded-2xl border border-stone-200 bg-white/80">
+          <table class="w-full min-w-[560px] text-left text-sm">
+            <thead class="bg-stone-100 text-stone-700">
+              <tr>{c.processorsHead.map(h => <th scope="col" class="px-3 py-2 font-semibold">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {c.processors.map(p => (
+                <tr class="border-t border-stone-200 align-top">
+                  <th scope="row" class="px-3 py-2 font-semibold">{p.name}</th>
+                  <td class="px-3 py-2">{p.purpose}</td>
+                  <td class="px-3 py-2 text-stone-700">{p.data}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p class="mt-3 text-sm text-stone-600">{c.processorsNote}</p>
+      </section>
+
+      <section id="retention" class="mt-8">
+        <h2 class="text-xl font-bold font-serif">{c.retentionTitle} <span class="ml-1 align-middle rounded-full bg-amber-100 border border-amber-300 px-2 py-0.5 text-[11px] font-bold text-amber-900">{c.pending}</span></h2>
+        <ul class="mt-3 grid gap-2 text-[15px] leading-relaxed text-stone-800 list-disc pl-5">
+          {c.retention.map(i => <li>{i}</li>)}
+        </ul>
+      </section>
+
+      <section id="rights" class="mt-8">
+        <h2 class="text-xl font-bold font-serif">{c.rightsTitle}</h2>
+        <ul class="mt-3 grid gap-2 text-[15px] leading-relaxed text-stone-800 list-disc pl-5">
+          {c.rights.map(i => <li>{i}</li>)}
+        </ul>
+      </section>
+
+      <section id="contact" class="mt-8">
+        <h2 class="text-xl font-bold font-serif">{c.contactTitle}</h2>
+        <p class="mt-3 text-[15px] leading-relaxed text-stone-800">{c.contact}</p>
+        <p class="mt-3"><a class="font-semibold underline underline-offset-2" href={`mailto:${CONTACT}`}>{CONTACT}</a></p>
+      </section>
+    </article>
+  </main>
+</Layout>

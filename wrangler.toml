@@ -7,10 +7,14 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "zuey_me_db"
-database_id = "b261c16b-0eed-4af6-82e5-4e24d42b972c"
+database_id = "01a32241-371e-4e12-b848-2e8bcba189c4"
 
 # Environment variables
 [vars]
 PUBLIC_SITE_URL = "https://zuey.me"
 PUBLIC_POSTHOG_KEY = "phc_zTPJwFiZZekHoxSj5PRg8ey4Ja7sKL7GXEGxjSKtZMPk"
 PUBLIC_POSTHOG_HOST = "https://us.i.posthog.com"
+
+# Workers AI binding (Zuey Reads summaries)
+[ai]
+binding = "AI"
