@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zuey Layout Proposal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#181513; --bg-2:#221e1b; --line:#3a332e; --ink-inv:#f5efeb; --muted-inv:#b9ada4;
+  --card:#f5efeb; --card-2:#ebe3dc; --ink:#231f1c; --muted:#6f645c; --hair:#d9cfc6;
+  --accent:#d9653b; --accent-ink:#fff; --ok:#3f7d58;
+  --r:14px; --r-sm:8px; --pill:999px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:72px;
+  --serif:Fraunces,Georgia,serif; --sans:"Plus Jakarta Sans",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink-inv);font:15px/1.55 var(--sans)}
+a{color:inherit}
+.wrap{max-width:1240px;margin:0 auto;padding:var(--s7) var(--s4)}
+header.top h1{font:700 clamp(30px,4vw,48px)/1.1 var(--serif);letter-spacing:-.01em}
+header.top p{color:var(--muted-inv);max-width:70ch;margin-top:var(--s3)}
+.problems{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--s3);margin-top:var(--s5)}
+.problems div{border:1px solid var(--line);border-radius:var(--r);padding:var(--s4);background:var(--bg-2);font-size:14px;color:var(--muted-inv)}
+.problems b{display:block;color:var(--ink-inv);margin-bottom:var(--s1)}
+nav.tabs{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;gap:var(--s2);flex-wrap:wrap;padding:var(--s4) 0;margin-top:var(--s6);border-bottom:1px solid var(--line)}
+nav.tabs button{font:600 14px var(--sans);min-height:44px;padding:0 var(--s4);border-radius:var(--pill);border:1px solid var(--line);background:transparent;color:var(--ink-inv);cursor:pointer}
+nav.tabs button[aria-selected=true]{background:var(--card);color:var(--ink);border-color:var(--card)}
+nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tag{font:600 11px var(--sans);text-transform:uppercase;letter-spacing:.08em;padding:2px 8px;border-radius:var(--pill);background:var(--accent);color:var(--accent-ink);margin-left:6px;vertical-align:middle}
+section.opt{display:none;padding-top:var(--s6)}
+section.opt.on{display:block}
+.opt h2{font:700 30px/1.15 var(--serif)}
+.opt .lede{color:var(--muted-inv);max-width:72ch;margin-top:var(--s2)}
+.frames{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:var(--s5);margin-top:var(--s5);align-items:start}
+@media (max-width:900px){.frames{grid-template-columns:1fr}.phone{max-width:320px;margin:0 auto}}
+.label{font:600 12px var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted-inv);margin-bottom:var(--s2)}
+.screen{border:1px solid var(--line);border-radius:var(--r);background:#120f0d;padding:var(--s3);overflow:hidden}
+.bar{display:flex;align-items:center;gap:var(--s2);font-size:11px;color:var(--muted-inv);padding:0 var(--s1) var(--s3)}
+.bar .logo{font-weight:700;color:var(--ink-inv)}
+.bar .sp{flex:1}
+.bar i{font-style:normal;border:1px solid var(--line);border-radius:var(--pill);padding:2px 8px}
+/* mock primitives */
+.c{background:var(--card);color:var(--ink);border-radius:10px;padding:10px;min-width:0}
+.c.soft{background:var(--card-2)}
+.c.dark{background:var(--bg-2);color:var(--ink-inv);border:1px solid var(--line)}
+.c h4{font:700 13px/1.2 var(--serif)}
+.c h3{font:700 18px/1.15 var(--serif)}
+.k{font:600 9px var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.c.dark .k{color:var(--muted-inv)}
+.t{font-size:10px;color:var(--muted);line-height:1.4}
+.c.dark .t{color:var(--muted-inv)}
+.ln{height:6px;border-radius:3px;background:var(--hair);margin-top:5px}
+.c.dark .ln{background:var(--line)}
+.w60{width:60%}.w80{width:80%}.w40{width:40%}
+.av{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#e7b48f,#8a5a3c);flex:none}
+.av.lg{width:56px;height:56px}
+.row{display:flex;gap:8px;align-items:center}
+.btn{display:inline-block;font:600 9px var(--sans);padding:4px 9px;border-radius:var(--pill);background:var(--ink);color:var(--card)}
+.btn.acc{background:var(--accent);color:#fff}
+.btn.ghost{background:transparent;color:inherit;border:1px solid var(--hair)}
+.input{border:1px solid var(--hair);background:#fff;border-radius:var(--pill);padding:7px 10px;font-size:10px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.input .sp{flex:1}
+.chip{font-size:9px;border:1px solid var(--hair);border-radius:var(--pill);padding:2px 7px;color:var(--muted)}
+.c.dark .chip{border-color:var(--line);color:var(--muted-inv)}
+.g{display:grid;gap:8px}
+.thumb{height:44px;border-radius:6px;background:linear-gradient(135deg,var(--card-2),var(--hair))}
+.dot{width:16px;height:16px;border-radius:5px;background:var(--hair);flex:none}
+.why{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--s4);margin-top:var(--s5)}
+.why div{border-top:1px solid var(--line);padding-top:var(--s3)}
+.why h5{font:600 13px var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--muted-inv);margin-bottom:var(--s2)}
+.why ul{padding-left:18px;color:var(--ink-inv);font-size:14px}
+.why li+li{margin-top:4px}
+.score{margin-top:var(--s5);border:1px solid var(--line);border-radius:var(--r);overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--muted-inv);font-weight:600}
+td.best{color:var(--accent);font-weight:700}
+footer{color:var(--muted-inv);font-size:13px;margin-top:var(--s7)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <h1>Bố cục mới cho zuey.me: 3 phương án</h1>
+  <p>Trang chủ hiện tại dùng ba cột ngang hàng: Zuey AI bên trái, thẻ profile dài ở giữa, Knowledges bên phải. Ba phương án dưới đây giữ nguyên nền tối, thẻ màu kem và cặp font Fraunces + Plus Jakarta Sans, chỉ thay đổi bố cục, thứ tự và kích thước các thành phần. Mỗi phương án có mockup desktop (1440) và mobile (375).</p>
+  <div class="problems">
+    <div><b>Ba cột cạnh tranh nhau</b>Mắt không biết nhìn vào đâu trước. Hai cột hai bên hẹp và thường chỉ hiện "Loading…".</div>
+    <div><b>Sản phẩm trả phí bị chìm</b>Articles, Reads, AI và Business chỉ là bốn ô nhỏ nằm giữa danh sách link.</div>
+    <div><b>Thẻ giữa quá dài</b>Blogs, ventures và 12 sản phẩm xếp dọc thành một cột hẹp, phải cuộn rất lâu.</div>
+    <div><b>Mobile mất ngữ cảnh</b>Dùng tab để chuyển AI / Profile / Knowledges nên người dùng không thấy hết những gì trang có.</div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Phương án">
+  <button role="tab" aria-selected="true" aria-controls="a" id="ta">A · Editorial hub <span class="tag">Đề xuất</span></button>
+  <button role="tab" aria-selected="false" aria-controls="b" id="tb">B · AI-first</button>
+  <button role="tab" aria-selected="false" aria-controls="c" id="tc">C · Bento</button>
+</nav>
+
+<!-- OPTION A -->
+<section class="opt on" id="a" role="tabpanel" aria-labelledby="ta">
+  <h2>A. Editorial hub: nội dung là nhân vật chính</h2>
+  <p class="lede">Một hero ngang ngắn giới thiệu Zuey, ngay dưới là bốn "cửa" sản phẩm cùng kích thước. Phần chính chia 8/4: cột trái rộng là luồng Knowledges và Reads, cột phải là Zuey AI dính khi cuộn. Ventures và Products được gom thành lưới gọn ở cuối trang.</p>
+  <div class="frames">
+    <div>
+      <div class="label">Desktop 1440</div>
+      <div class="screen">
+        <div class="bar"><span class="logo">zuey.me</span><span class="sp"></span><i>Articles</i><i>Reads</i><i>Pricing</i><i>⌘K</i><i>Account</i></div>
+        <div class="c" style="padding:16px">
+          <div class="row" style="gap:14px"><div class="av lg"></div><div style="flex:1"><h3>Duy Nguyen /zuey/</h3><div class="t">CTO/Co-founder TOPGROUP, DIGITOP · AgentKit · Build in Public VN</div><div class="row" style="margin-top:6px"><span class="chip">Substack EN</span><span class="chip">Solo Playbook VI</span><span class="chip">● ● ● ● ● socials</span></div></div><span class="btn acc">Xem gói thành viên</span></div>
+        </div>
+        <div class="g" style="grid-template-columns:repeat(4,1fr);margin-top:8px">
+          <div class="c"><div class="k">Articles</div><h4>Ghi chú, chart, survey</h4><div class="ln w60"></div></div>
+          <div class="c"><div class="k">Zuey Reads</div><h4>Đang đọc gì</h4><div class="ln w60"></div></div>
+          <div class="c"><div class="k">AI Workflows</div><h4>Cách tôi làm với AI</h4><div class="ln w60"></div></div>
+          <div class="c"><div class="k">For Business</div><h4>Tư vấn 1:1 · $1,999</h4><div class="ln w60"></div></div>
+        </div>
+        <div class="g" style="grid-template-columns:2fr 1fr;margin-top:8px;align-items:start">
+          <div class="c">
+            <div class="row"><h4 style="flex:1">Zuey's Knowledges</h4><span class="chip">Tất cả</span><span class="chip">AI</span><span class="chip">Product</span><span class="chip">🔍</span></div>
+            <div class="g" style="grid-template-columns:1fr 1fr;margin-top:8px">
+              <div class="c soft"><div class="thumb"></div><h4 style="margin-top:6px">Bài viết mới nhất</h4><div class="ln w80"></div><div class="ln w40"></div></div>
+              <div class="c soft"><div class="thumb"></div><h4 style="margin-top:6px">Bài viết thứ hai</h4><div class="ln w80"></div><div class="ln w40"></div></div>
+            </div>
+            <div class="g" style="margin-top:8px">
+              <div class="row"><div class="dot"></div><div style="flex:1"><div class="ln w80"></div></div><span class="k">Preview</span></div>
+              <div class="row"><div class="dot"></div><div style="flex:1"><div class="ln w60"></div></div><span class="k">Free</span></div>
+              <div class="row"><div class="dot"></div><div style="flex:1"><div class="ln w80"></div></div><span class="k">Reads</span></div>
+            </div>
+          </div>
+          <div class="c dark" style="position:sticky;top:0">
+            <div class="k">Zuey AI</div><h4>Hỏi từ những gì Zuey đã viết</h4>
+            <div class="g" style="margin-top:8px"><div class="ln w80"></div><div class="ln w60"></div></div>
+            <div class="row" style="flex-wrap:wrap;margin-top:8px"><span class="chip">Chọn stack AI?</span><span class="chip">Build in public?</span></div>
+            <div class="input" style="margin-top:8px;background:var(--bg)"><span class="sp">Hỏi Zuey AI…</span><span class="btn acc">↑</span></div>
+          </div>
+        </div>
+        <div class="g" style="grid-template-columns:1fr 1fr;margin-top:8px">
+          <div class="c"><div class="k">Found by me</div><div class="g" style="grid-template-columns:repeat(3,1fr);margin-top:6px"><div class="row"><div class="dot"></div><div class="t">TOP</div></div><div class="row"><div class="dot"></div><div class="t">Xin Chào</div></div><div class="row"><div class="dot"></div><div class="t">Digitop</div></div><div class="row"><div class="dot"></div><div class="t">NLB</div></div><div class="row"><div class="dot"></div><div class="t">TOSE</div></div><div class="row"><div class="dot"></div><div class="t">#bip</div></div></div></div>
+          <div class="c"><div class="k">Products & Tools</div><div class="g" style="grid-template-columns:repeat(4,1fr);margin-top:6px"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><div class="t" style="margin-top:6px">12 sản phẩm · hover xem mô tả</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="label">Mobile 375</div>
+      <div class="screen">
+        <div class="bar"><span class="logo">zuey.me</span><span class="sp"></span><i>⌘K</i><i>☰</i></div>
+        <div class="c"><div class="row"><div class="av"></div><div><h4>Duy Nguyen /zuey/</h4><div class="t">CTO · AgentKit · #bip</div></div></div><div class="row" style="margin-top:6px"><span class="chip">EN</span><span class="chip">VI</span><span class="chip">socials</span></div></div>
+        <div class="g" style="grid-template-columns:1fr 1fr;margin-top:8px">
+          <div class="c"><div class="k">Articles</div></div><div class="c"><div class="k">Reads</div></div><div class="c"><div class="k">AI Workflows</div></div><div class="c"><div class="k">Business</div></div>
+        </div>
+        <div class="c" style="margin-top:8px"><h4>Knowledges</h4><div class="thumb" style="margin-top:6px"></div><div class="ln w80"></div><div class="ln w60"></div><div class="ln w80" style="margin-top:8px"></div></div>
+        <div class="c" style="margin-top:8px"><div class="k">Found by me · Products</div><div class="row" style="margin-top:6px"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><span class="t">+12</span></div></div>
+        <div class="input" style="margin-top:10px;background:var(--bg-2);border-color:var(--line);color:var(--muted-inv)"><span class="sp">✦ Hỏi Zuey AI…</span><span class="btn acc">↑</span></div>
+        <div class="t" style="color:var(--muted-inv);margin-top:4px;text-align:center">Thanh hỏi AI dính đáy màn hình, mở thành sheet</div>
+      </div>
+    </div>
+  </div>
+  <div class="why">
+    <div><h5>Thay đổi chính</h5><ul><li>Profile từ cột giữa dài thành hero ngang cao khoảng 140px.</li><li>Bốn sản phẩm thành hàng thẻ bằng nhau, ngay trên màn hình đầu tiên.</li><li>Knowledges chiếm 2/3 chiều ngang, AI 1/3 và dính khi cuộn.</li><li>Ventures và Products thành lưới 3–4 cột, rút ngắn chiều cao khoảng 60%.</li></ul></div>
+    <div><h5>Vì sao tốt nhất</h5><ul><li>Phù hợp với chỗ có giá trị nhất của site: nội dung trả phí và AI dựa trên nội dung đó.</li><li>Một trục đọc rõ ràng, trên xuống dưới, không còn ba cột tranh nhau.</li><li>Mobile không cần tab; AI luôn trong tầm tay qua thanh dưới đáy.</li></ul></div>
+    <div><h5>Đánh đổi</h5><ul><li>Cần sửa <code>HomeShell</code> nhiều nhất trong ba phương án.</li><li>Khi chưa có bài viết, cột Knowledges cần một empty state đẹp (gợi ý Reads thay thế).</li></ul></div>
+  </div>
+</section>
+
+<!-- OPTION B -->
+<section class="opt" id="b" role="tabpanel" aria-labelledby="tb">
+  <h2>B. AI-first: một ô hỏi ở trung tâm</h2>
+  <p class="lede">Trang mở ra như một cuộc trò chuyện: profile gọn ở trên, ô hỏi Zuey AI lớn ở giữa kèm gợi ý câu hỏi, rồi đến các mục nội dung. Đây là cách khác biệt nhất so với một trang link-in-bio thông thường.</p>
+  <div class="frames">
+    <div>
+      <div class="label">Desktop 1440</div>
+      <div class="screen">
+        <div class="bar"><span class="logo">zuey.me</span><span class="sp"></span><i>Knowledges</i><i>Reads</i><i>Business</i><i>Account</i></div>
+        <div style="text-align:center;padding:18px 0 10px">
+          <div class="row" style="justify-content:center"><div class="av"></div><div style="text-align:left"><h4 style="font:700 13px var(--serif);color:var(--ink-inv)">Duy Nguyen /zuey/</h4><div class="t" style="color:var(--muted-inv)">CTO · AgentKit · Build in Public VN</div></div></div>
+          <h3 style="font:700 26px/1.15 var(--serif);color:var(--ink-inv);margin-top:14px">Hỏi tôi bất cứ điều gì về AI, sản phẩm và build in public.</h3>
+          <div class="input" style="max-width:560px;margin:14px auto 0;padding:12px 14px"><span class="sp">Bạn đang xây gì?</span><span class="btn acc">Hỏi ↑</span></div>
+          <div class="row" style="justify-content:center;flex-wrap:wrap;margin-top:8px"><span class="chip" style="color:var(--muted-inv);border-color:var(--line)">Chọn agent framework</span><span class="chip" style="color:var(--muted-inv);border-color:var(--line)">Định giá SaaS</span><span class="chip" style="color:var(--muted-inv);border-color:var(--line)">Workflow AI hằng ngày</span></div>
+          <div class="t" style="color:var(--muted-inv);margin-top:6px">Trả lời có trích nguồn từ bài viết · cần đăng nhập</div>
+        </div>
+        <div class="g" style="grid-template-columns:repeat(3,1fr);margin-top:6px">
+          <div class="c"><div class="k">Knowledges mới</div><div class="thumb" style="margin-top:6px"></div><div class="ln w80"></div><div class="ln w60"></div></div>
+          <div class="c"><div class="k">Zuey Reads</div><div class="thumb" style="margin-top:6px"></div><div class="ln w80"></div><div class="ln w60"></div></div>
+          <div class="c"><div class="k">AI Workflows</div><div class="thumb" style="margin-top:6px"></div><div class="ln w80"></div><div class="ln w60"></div></div>
+        </div>
+        <div class="c dark" style="margin-top:8px"><div class="row"><div style="flex:1"><div class="k">For Business</div><h4>Tư vấn 1:1 với Zuey · $1,999</h4></div><span class="btn acc">Đặt lịch</span></div></div>
+        <div class="g" style="grid-template-columns:1fr 1fr;margin-top:8px">
+          <div class="c soft"><div class="k">Found by me</div><div class="ln w80"></div><div class="ln w60"></div></div>
+          <div class="c soft"><div class="k">Products & Tools</div><div class="ln w80"></div><div class="ln w60"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="label">Mobile 375</div>
+      <div class="screen">
+        <div class="bar"><span class="logo">zuey.me</span><span class="sp"></span><i>☰</i></div>
+        <div class="row"><div class="av"></div><div><h4 style="font:700 13px var(--serif)">Duy Nguyen /zuey/</h4><div class="t" style="color:var(--muted-inv)">CTO · AgentKit</div></div></div>
+        <h3 style="font:700 19px/1.2 var(--serif);margin-top:10px">Hỏi tôi về AI, sản phẩm và build in public.</h3>
+        <div class="input" style="margin-top:8px"><span class="sp">Bạn đang xây gì?</span><span class="btn acc">↑</span></div>
+        <div class="row" style="flex-wrap:wrap;margin-top:6px"><span class="chip" style="color:var(--muted-inv);border-color:var(--line)">Agent framework</span><span class="chip" style="color:var(--muted-inv);border-color:var(--line)">Định giá</span></div>
+        <div class="row" style="overflow:hidden;margin-top:10px"><div class="c" style="min-width:150px"><div class="k">Knowledges</div><div class="thumb" style="margin-top:6px"></div></div><div class="c" style="min-width:150px"><div class="k">Reads</div><div class="thumb" style="margin-top:6px"></div></div></div>
+        <div class="t" style="color:var(--muted-inv);margin-top:4px">Carousel vuốt ngang</div>
+        <div class="c dark" style="margin-top:8px"><div class="k">Business</div><h4>Tư vấn 1:1 · $1,999</h4></div>
+      </div>
+    </div>
+  </div>
+  <div class="why">
+    <div><h5>Thay đổi chính</h5><ul><li>Ô hỏi AI rộng 560px thành tâm điểm, không còn là cột phụ hẹp.</li><li>Nội dung xếp thành ba thẻ bằng nhau phía dưới.</li><li>Business thành dải CTA tối, nổi bật.</li></ul></div>
+    <div><h5>Điểm mạnh</h5><ul><li>Gây ấn tượng mạnh, đẩy chuyển đổi gói AI.</li><li>Gợi ý câu hỏi giúp người mới biết nên hỏi gì.</li></ul></div>
+    <div><h5>Đánh đổi</h5><ul><li>AI cần đăng nhập, nên khách vãng lai gặp tường đăng nhập ngay ở hành động đầu tiên.</li><li>Profile và link bị đẩy xuống; người tìm link mạng xã hội phải cuộn.</li></ul></div>
+  </div>
+</section>
+
+<!-- OPTION C -->
+<section class="opt" id="c" role="tabpanel" aria-labelledby="tc">
+  <h2>C. Bento: mọi thứ trong một màn hình</h2>
+  <p class="lede">Lưới bento 12 cột với các ô có kích thước theo tầm quan trọng: profile và AI là hai ô lớn, Knowledges và Reads là ô vừa, Business, ventures và products là ô nhỏ. Toàn bộ trang chủ gói gọn trong khoảng 1,3 màn hình desktop.</p>
+  <div class="frames">
+    <div>
+      <div class="label">Desktop 1440</div>
+      <div class="screen">
+        <div class="bar"><span class="logo">zuey.me</span><span class="sp"></span><i>⌘K</i><i>Account</i></div>
+        <div class="g" style="grid-template-columns:repeat(12,1fr);grid-auto-rows:46px">
+          <div class="c" style="grid-column:span 5;grid-row:span 3"><div class="row"><div class="av lg"></div><div><h3>Duy Nguyen</h3><div class="t">/zuey/ · CTO · AgentKit</div></div></div><div class="ln w80" style="margin-top:10px"></div><div class="ln w60"></div><div class="row" style="margin-top:10px"><span class="chip">Substack</span><span class="chip">Playbook</span><span class="chip">socials</span></div></div>
+          <div class="c dark" style="grid-column:span 7;grid-row:span 3"><div class="k">Zuey AI</div><h4>Hỏi từ những gì Zuey đã viết</h4><div class="ln w60"></div><div class="ln w40"></div><div class="input" style="margin-top:10px;background:var(--bg)"><span class="sp">Hỏi Zuey AI…</span><span class="btn acc">↑</span></div></div>
+          <div class="c" style="grid-column:span 7;grid-row:span 3"><div class="row"><h4 style="flex:1">Knowledges</h4><span class="chip">🔍</span></div><div class="g" style="grid-template-columns:1fr 1fr 1fr;margin-top:6px"><div class="thumb"></div><div class="thumb"></div><div class="thumb"></div></div><div class="ln w60"></div></div>
+          <div class="c" style="grid-column:span 5;grid-row:span 2"><div class="k">Zuey Reads</div><div class="ln w80"></div><div class="ln w60"></div><div class="ln w80"></div></div>
+          <div class="c" style="grid-column:span 5;grid-row:span 1;background:var(--accent);color:#fff"><div class="row"><b style="font-size:11px;flex:1">For Business · 1:1 · $1,999</b><span class="btn">Đặt lịch</span></div></div>
+          <div class="c soft" style="grid-column:span 3;grid-row:span 2"><div class="k">AI Workflows</div><div class="ln w80"></div><div class="ln w60"></div></div>
+          <div class="c soft" style="grid-column:span 4;grid-row:span 2"><div class="k">Found by me</div><div class="row" style="margin-top:6px"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>
+          <div class="c soft" style="grid-column:span 5;grid-row:span 2"><div class="k">Products & Tools</div><div class="row" style="margin-top:6px;flex-wrap:wrap"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="label">Mobile 375</div>
+      <div class="screen">
+        <div class="bar"><span class="logo">zuey.me</span><span class="sp"></span><i>☰</i></div>
+        <div class="g" style="grid-template-columns:1fr 1fr">
+          <div class="c" style="grid-column:span 2"><div class="row"><div class="av"></div><div><h4>Duy Nguyen</h4><div class="t">CTO · AgentKit</div></div></div></div>
+          <div class="c dark" style="grid-column:span 2"><div class="k">Zuey AI</div><div class="input" style="margin-top:6px;background:var(--bg)"><span class="sp">Hỏi…</span><span class="btn acc">↑</span></div></div>
+          <div class="c" style="grid-column:span 2"><h4>Knowledges</h4><div class="thumb" style="margin-top:6px"></div></div>
+          <div class="c"><div class="k">Reads</div><div class="ln"></div></div>
+          <div class="c" style="background:var(--accent);color:#fff"><div class="k" style="color:#fff">Business</div><div class="t" style="color:#fff">$1,999</div></div>
+          <div class="c soft"><div class="k">Workflows</div></div>
+          <div class="c soft"><div class="k">Products</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="why">
+    <div><h5>Thay đổi chính</h5><ul><li>Kích thước ô tỉ lệ với tầm quan trọng: 5–7 cột cho phần chính, 3–4 cột cho phần phụ.</li><li>Mobile chuyển thành lưới 2 cột, ô quan trọng chiếm trọn chiều ngang.</li></ul></div>
+    <div><h5>Điểm mạnh</h5><ul><li>Nhìn một lần thấy hết, rất hợp phong cách "founder portfolio".</li><li>Dễ thêm ô mới (ví dụ cộng đồng Telegram).</li></ul></div>
+    <div><h5>Đánh đổi</h5><ul><li>Ô cố định chiều cao nên nội dung dài (AI chat, danh sách bài) phải mở sang trang riêng.</li><li>Nhiều ô cùng nổi bật dễ làm mất thứ bậc nếu không giữ kỷ luật màu.</li></ul></div>
+  </div>
+</section>
+
+<div class="score">
+  <table>
+    <thead><tr><th>Tiêu chí</th><th>A · Editorial</th><th>B · AI-first</th><th>C · Bento</th></tr></thead>
+    <tbody>
+      <tr><td>Thứ bậc rõ ràng</td><td class="best">Cao</td><td>Cao</td><td>Trung bình</td></tr>
+      <tr><td>Đẩy gói trả phí (Knowledges, AI)</td><td class="best">Cao</td><td>Cao (riêng AI)</td><td>Trung bình</td></tr>
+      <tr><td>Khách vãng lai tìm link / profile</td><td>Tốt</td><td>Yếu</td><td class="best">Rất tốt</td></tr>
+      <tr><td>Trải nghiệm mobile</td><td class="best">Tốt, không cần tab</td><td>Tốt</td><td>Khá</td></tr>
+      <tr><td>Khi chưa có nhiều bài viết</td><td>Cần empty state</td><td class="best">Ổn</td><td>Ô trống dễ lộ</td></tr>
+      <tr><td>Khối lượng sửa <code>HomeShell</code></td><td>Lớn</td><td class="best">Vừa</td><td>Lớn</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>Đề xuất: <b>phương án A</b>, có thể mượn từ B dải ô hỏi AI kèm gợi ý câu hỏi. Mockup chỉ thể hiện bố cục và tỉ lệ; nội dung thật lấy từ D1 khi triển khai.</footer>
+</div>
+<script>
+document.querySelectorAll('[role=tab]').forEach(function(t){
+  t.addEventListener('click',function(){
+    document.querySelectorAll('[role=tab]').forEach(function(x){x.setAttribute('aria-selected',x===t)});
+    document.querySelectorAll('.opt').forEach(function(s){s.classList.toggle('on',s.id===t.getAttribute('aria-controls'))});
+  });
+});
+</script>
+</body>
+</html>

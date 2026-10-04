@@ -1,5 +1,6 @@
 import type { ArticleAccess, ArticleDocument, Block } from './schema';
 import { inlineToPlain } from './inline';
+import { documentText, wordCount } from '../search/text';
 
 export interface Viewer {
   isAdmin: boolean;
@@ -12,7 +13,38 @@ export interface Viewer {
 /** Entitlement granted by the Knowledges, Kết hợp and Cộng đồng plans. AI-only does not include it. */
 export const READ_FULL_ENTITLEMENT = 'read_full';
 
-export interface PaywallResult { doc: ArticleDocument; truncated: boolean }
+/** A withheld top-level heading: plain text and level only, never the body under it. */
+export interface LockedHeading { level: 1 | 2 | 3; text: string }
+
+/**
+ * What a non-entitled reader may know about the withheld part: its top-level headings and its size.
+ * No other withheld text is ever exposed.
+ */
+export interface LockedOutline {
+  headings: LockedHeading[];
+  /** Number of withheld top-level blocks. */
+  blocks: number;
+  /** Approximate number of withheld words. */
+  words: number;
+}
+
+export interface PaywallResult {
+  doc: ArticleDocument;
+  truncated: boolean;
+  /** Present only when truncated. */
+  outline?: LockedOutline;
+}
+
+/** Outline of withheld blocks: top-level heading text + level and the withheld size, nothing else. */
+export function lockedOutline(withheld: Block[]): LockedOutline {
+  const headings: LockedHeading[] = [];
+  for (const b of withheld) {
+    if (b.type !== 'heading') continue;
+    const text = inlineToPlain(b.text).trim();
+    if (text) headings.push({ level: b.level, text });
+  }
+  return { headings, blocks: withheld.length, words: wordCount(documentText({ version: 1, blocks: withheld })) };
+}
 
 /** Whether the viewer may read paid ('knowledges' access) articles in full. */
 export function canReadFull(viewer: Viewer): boolean {
@@ -69,5 +101,7 @@ export function applyPaywall(doc: ArticleDocument, access: ArticleAccess, viewer
     keep += 1;
   }
   if (blocks.length > 1) keep = Math.min(keep, blocks.length - 1);
-  return { doc: { version: 1, blocks: blocks.slice(0, keep) }, truncated: keep < blocks.length };
+  const kept: ArticleDocument = { version: 1, blocks: blocks.slice(0, keep) };
+  if (keep >= blocks.length) return { doc: kept, truncated: false };
+  return { doc: kept, truncated: true, outline: lockedOutline(blocks.slice(keep)) };
 }

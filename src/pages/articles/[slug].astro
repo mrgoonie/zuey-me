@@ -9,6 +9,7 @@ import { getArticleView, resolveViewer } from '../../lib/blocks/articles';
 import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
 import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
+import { readingMinutes } from '../../lib/search/text';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
@@ -42,6 +43,7 @@ const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, 'http
 const translations = view ? view.available_locales.filter(l => l !== view?.locale) : [];
 const dateText = view ? formatKnowledgeDate(view.published_at, view.locale) : '';
 const paywallClass = PAYWALL_SELECTOR.slice(1);
+const lockedHeadings = view?.locked_outline?.headings ?? [];
 const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.truncated && !view.preview && canReadFull(viewer));
 ---
 
@@ -115,14 +117,33 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
           <BlockRenderer client:load doc={view.document} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
 
           {view.truncated && (
-            <section class={`zb-locked ${paywallClass}`} aria-labelledby="locked-title">
-              <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">{t.lockedTitle}</p>
-              <p class="mt-2 text-sm text-stone-600">{t.lockedBody}</p>
-              <div class="mt-4 flex flex-wrap gap-2">
-                <a href="/pricing" class="inline-flex rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">{t.seePlans}</a>
-                <a href={`/login?next=${encodeURIComponent(articlePath(view.slug, view.locale))}`} class="inline-flex rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800 hover:bg-stone-50">{t.signIn}</a>
+            <div class="zb-lock-wrap">
+              {/* Withheld part: only its real headings (readable to assistive tech, visually blurred) and decorative skeleton lines. */}
+              <div class={`zb-lock-outline ${paywallClass}`}>
+                {lockedHeadings.map(h => {
+                  const Tag = h.level === 1 ? 'h2' : h.level === 2 ? 'h3' : 'h4';
+                  return (
+                    <div class="zb-lock-section">
+                      <Tag class={`zb-h zb-h${h.level} zb-lock-h`}><span class="zb-sr-only">{t.lockedSection}: </span><span class="zb-lock-blur">{h.text}</span></Tag>
+                      <div class="zb-lock-lines" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+                    </div>
+                  );
+                })}
+                {lockedHeadings.length === 0 && <div class="zb-lock-lines" aria-hidden="true"><span></span><span></span><span></span><span></span></div>}
               </div>
-            </section>
+              <section class="zb-lockbox" aria-labelledby="locked-title">
+                <span class="zb-lockbox-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                </span>
+                <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">{t.lockedTitle}</p>
+                {view.locked_outline && <p class="mt-1 text-sm font-semibold text-amber-900">{t.lockedMore(lockedHeadings.length, readingMinutes(view.locked_outline.words))}</p>}
+                <p class="mt-2 text-sm text-stone-700">{t.lockedBody}</p>
+                <div class="mt-4 flex flex-wrap justify-center gap-2">
+                  <a href="/pricing" class="zb-lockbox-btn inline-flex min-h-[44px] items-center rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">{t.seePlans}</a>
+                  <a href={`/login?next=${encodeURIComponent(articlePath(view.slug, view.locale))}`} class="zb-lockbox-btn inline-flex min-h-[44px] items-center rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800 hover:bg-stone-50">{t.signIn}</a>
+                </div>
+              </section>
+            </div>
           )}
         </>
       ) : (

@@ -1,5 +1,6 @@
 /** Client-side fetch + validation for the homepage endpoints. Responses are untrusted JSON. */
 import type { ActivityEvent, ActivityResult } from '../../lib/experience/github-activity';
+import type { CalendarDay, ContributionCalendar } from '../../lib/experience/github-calendar';
 import type { PublicNotice } from '../../lib/experience/notices';
 import type { WeatherCondition, WeatherReport } from '../../lib/experience/weather';
 import type { CommunityStatus, MembershipView } from '../../lib/experience/community';
@@ -113,6 +114,37 @@ export function parseActivity(v: unknown): ActivityResult | null {
       }
       : null,
   };
+}
+
+const LEVELS: readonly CalendarDay['level'][] = [0, 1, 2, 3, 4];
+
+function parseCalendarDay(v: unknown): CalendarDay | null {
+  if (!isRecord(v)) return null;
+  const date = str(v.date);
+  const level = LEVELS.find(l => l === v.level);
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || level === undefined) return null;
+  const count = num(v.count);
+  return { date, level, count: count !== null && count >= 0 ? Math.floor(count) : null };
+}
+
+export function parseCalendar(v: unknown): ContributionCalendar | null {
+  if (!isRecord(v) || !Array.isArray(v.days) || !str(v.fetched_at)) return null;
+  const e = isRecord(v.error) ? v.error : null;
+  const total = num(v.total);
+  const calendar: ContributionCalendar = {
+    user: str(v.user) ?? 'mrgoonie',
+    total: total !== null && total >= 0 ? total : null,
+    days: v.days.map(parseCalendarDay).filter((x): x is CalendarDay => x !== null).sort((a, b) => a.date.localeCompare(b.date)),
+    fetched_at: str(v.fetched_at) ?? '',
+  };
+  if (e) {
+    calendar.error = {
+      code: e.code === 'github_rate_limited' ? 'github_rate_limited' : 'github_unavailable',
+      message: str(e.message) ?? '',
+      retry_after_seconds: num(e.retry_after_seconds),
+    };
+  }
+  return calendar;
 }
 
 const EXPRESSIONS = ['idle', 'wave', 'talking', 'thinking', 'happy', 'surprised'] as const;

@@ -1,17 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, GitBranch, RefreshCw } from 'lucide-react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ExternalLink, GitBranch, RefreshCw, X } from 'lucide-react';
 import type { ActivityResult } from '../../lib/experience/github-activity';
-import { countEventsByDay, localDate } from '../../lib/experience/activity-days';
+import { localDate } from '../../lib/experience/activity-days';
 import type { Locale } from '../../lib/i18n/locales';
 import { LOCALE_LABELS } from '../../lib/i18n/locales';
 import type { HomeStrings } from './home-i18n';
 import { fmt } from './home-i18n';
 import { apiFetch, parseActivity } from './api-client';
-import { loadGsap, prefersReducedMotion } from './motion';
+import { ContributionGraph, useContributionCalendar } from './ContributionGraph';
 
 interface GithubActivityProps {
   strings: HomeStrings['activity'];
   locale: Locale;
+  /** `window`: no card chrome and loads immediately (hosted in a Zuey OS window). Default `section`. */
+  variant?: 'section' | 'window';
 }
 
 type LoadState =
@@ -21,7 +23,6 @@ type LoadState =
   | { kind: 'offline' }
   | { kind: 'failed' };
 
-const TIME_ZONE = 'Asia/Saigon';
 const LIST_LIMIT = 12;
 
 function eventTitle(e: ActivityResult['snapshot']['events'][number], s: HomeStrings['activity']): string {
@@ -35,18 +36,23 @@ function eventTitle(e: ActivityResult['snapshot']['events'][number], s: HomeStri
   return e.repo;
 }
 
+const rateLimitedMinutes = (retryAfter: number | null) => Math.max(1, Math.ceil((retryAfter ?? 900) / 60));
+
 /**
- * "What Zuey is doing": public GitHub events of @mrgoonie as a per-day bar graph (public events
- * only, not a contribution calendar) plus a dated event list. Loads when scrolled near.
+ * "What Zuey is doing": the GitHub contribution calendar of @mrgoonie (53 weeks) above the list of
+ * recent public events. Picking a day filters the list to that date in the viewer's time zone.
+ * The section variant loads when scrolled near.
  */
-export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale }) => {
+export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale, variant = 'section' }) => {
   const [state, setState] = useState<LoadState>({ kind: 'idle' });
+  const [started, setStarted] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const rootRef = useRef<HTMLElement>(null);
-  const graphRef = useRef<HTMLDivElement>(null);
   const startedRef = useRef(false);
+  const titleId = useId();
   const lang = LOCALE_LABELS[locale].htmlLang;
+  const calendar = useContributionCalendar(started);
 
   const load = useCallback(async () => {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -61,16 +67,17 @@ export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale 
     else setState({ kind: 'failed' });
   }, []);
 
-  // Lazy: fetch once the section is near the viewport (or immediately via the #activity hash).
+  // Lazy: fetch once the section is near the viewport (or immediately via #activity / in a window).
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const start = () => {
       if (startedRef.current) return;
       startedRef.current = true;
+      setStarted(true);
       void load();
     };
-    if (!('IntersectionObserver' in window) || window.location.hash === '#activity') {
+    if (variant === 'window' || !('IntersectionObserver' in window) || window.location.hash === '#activity') {
       start();
       return;
     }
@@ -87,61 +94,52 @@ export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale 
       io.disconnect();
       window.removeEventListener('hashchange', onHash);
     };
-  }, [load]);
+  }, [load, variant]);
 
+  const calendarOffline = calendar.error?.status === 0 && !calendar.data;
+  const reloadCalendar = calendar.reload;
   useEffect(() => {
-    if (state.kind !== 'offline') return;
-    const onOnline = () => void load();
+    if (state.kind !== 'offline' && !calendarOffline) return;
+    const onOnline = () => {
+      if (state.kind === 'offline') void load();
+      if (calendarOffline) reloadCalendar();
+    };
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
-  }, [state.kind, load]);
+  }, [state.kind, calendarOffline, load, reloadCalendar]);
 
   const result = state.kind === 'ready' ? state.result : null;
-  const days = useMemo(
-    () => (result ? countEventsByDay(result.snapshot.events, TIME_ZONE, result.snapshot.fetched_at) : []),
-    [result],
-  );
-  const max = Math.max(1, ...days.map(d => d.count));
+  // The viewer's own zone: calendar days are compared with event times as the viewer sees them.
+  const viewerTz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  const dayFmt = useMemo(() => new Intl.DateTimeFormat(lang, { timeZone: 'UTC', day: 'numeric', month: 'short' }), [lang]);
+  const shortFmt = useMemo(() => new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'short' }), [lang]);
+  const timeFmt = useMemo(() => new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), [lang]);
+  const dayLabel = (date: string) => dayFmt.format(new Date(`${date}T00:00:00Z`));
 
-  // Bars grow in once per load.
-  useEffect(() => {
-    if (!result || prefersReducedMotion()) return;
-    let cancelled = false;
-    void loadGsap().then(gsap => {
-      const bars = graphRef.current?.querySelectorAll('.home-bar span');
-      if (cancelled || !gsap || !bars || bars.length === 0) return;
-      gsap.from(bars, { scaleY: 0, duration: 0.5, ease: 'power2.out', stagger: { amount: 0.5 } });
-    });
-    return () => { cancelled = true; };
-  }, [result]);
-
-  const dateFmt = useMemo(() => new Intl.DateTimeFormat(lang, { timeZone: TIME_ZONE, day: 'numeric', month: 'short' }), [lang]);
-  const timeFmt = useMemo(() => new Intl.DateTimeFormat(lang, { timeZone: TIME_ZONE, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), [lang]);
-  const dayLabel = (date: string) => dateFmt.format(new Date(`${date}T12:00:00+07:00`));
-
-  const events = result
-    ? result.snapshot.events.filter(e => !selected || localDate(e.created_at, TIME_ZONE) === selected)
-    : [];
+  const allEvents = result ? result.snapshot.events : [];
+  const events = selected ? allEvents.filter(e => localDate(e.created_at, viewerTz) === selected) : allEvents;
   const shown = selected || expanded ? events : events.slice(0, LIST_LIMIT);
+  const calendarDays = calendar.data?.days ?? [];
 
-  const onGraphKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) || days.length === 0) return;
-    e.preventDefault();
-    const current = selected ? days.findIndex(d => d.date === selected) : days.length - 1;
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? days.length - 1
-      : Math.max(0, Math.min(days.length - 1, current + (e.key === 'ArrowRight' ? 1 : -1)));
-    setSelected(days[next].date);
-    graphRef.current?.querySelector<HTMLButtonElement>(`[data-day="${days[next].date}"]`)?.focus();
-  };
-
-  const focusDay = selected ?? days[days.length - 1]?.date ?? null;
+  const retryButton = (onClick: () => void) => (
+    <button type="button" className="home-cta home-cta--ghost !min-h-[36px]" onClick={onClick} data-press>
+      <RefreshCw aria-hidden="true" className="w-4 h-4" />{strings.retry}
+    </button>
+  );
 
   return (
-    <section ref={rootRef} id="activity" className="home-side-card home-card home-reveal" aria-labelledby="activity-title" tabIndex={-1} data-mascot-avoid>
+    <section
+      ref={rootRef}
+      id={variant === 'section' ? 'activity' : undefined}
+      className={variant === 'section' ? 'home-side-card home-card home-reveal' : 'p-4 sm:p-5'}
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      data-mascot-avoid
+    >
       <div className="home-activity-head">
         <div>
           <p className="home-eyebrow flex items-center gap-1.5"><GitBranch aria-hidden="true" className="w-3.5 h-3.5" />{strings.subtitle}</p>
-          <h2 id="activity-title" className="mt-1">{strings.title}</h2>
+          <h2 id={titleId} className="mt-1">{strings.title}</h2>
         </div>
         {result && (
           <p className="home-activity-meta">
@@ -150,10 +148,43 @@ export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale 
         )}
       </div>
 
+      <div className="mt-4" aria-busy={!calendar.data && !calendar.error}>
+        {calendar.data && calendarDays.length > 0 ? (
+          <>
+            {calendar.data.error && (
+              <div className="home-notice-line !mt-0 mb-3">
+                <span>{fmt(strings.calendar.stale, { time: timeFmt.format(new Date(calendar.data.fetched_at)) })}</span>
+                {retryButton(calendar.reload)}
+              </div>
+            )}
+            <ContributionGraph
+              days={calendarDays}
+              total={calendar.data.total}
+              locale={locale}
+              strings={strings.calendar}
+              selected={selected}
+              onSelect={date => { setSelected(date); setExpanded(false); }}
+            />
+          </>
+        ) : calendar.error ? (
+          <div className="home-notice-line !mt-0">
+            <span>
+              {calendar.error.status === 0 ? strings.offline
+                : calendar.error.code === 'github_rate_limited' ? fmt(strings.rateLimited, { min: rateLimitedMinutes(calendar.error.retryAfter) })
+                : strings.calendar.failed}
+            </span>
+            {calendar.error.status !== 0 && retryButton(calendar.reload)}
+          </div>
+        ) : (
+          <div role="status" aria-label={strings.loading}>
+            <div className="home-skeleton h-[112px]" />
+          </div>
+        )}
+      </div>
+
       <div aria-live="polite" aria-busy={state.kind === 'loading' || state.kind === 'idle'}>
         {(state.kind === 'idle' || state.kind === 'loading') && (
           <div aria-label={strings.loading} role="status">
-            <div className="home-skeleton mt-[18px] h-[112px]" />
             <div className="home-skeleton mt-4 h-5 w-2/3" />
             <div className="home-skeleton mt-2 h-5 w-1/2" />
             <span className="sr-only">{strings.loading}</span>
@@ -164,14 +195,10 @@ export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale 
           <div className="home-notice-line">
             <span>
               {state.kind === 'rateLimited'
-                ? fmt(strings.rateLimited, { min: Math.max(1, Math.ceil((state.retryAfter ?? 900) / 60)) })
+                ? fmt(strings.rateLimited, { min: rateLimitedMinutes(state.retryAfter) })
                 : state.kind === 'offline' ? strings.offline : strings.failed}
             </span>
-            {state.kind !== 'offline' && (
-              <button type="button" className="home-cta home-cta--ghost !min-h-[36px]" onClick={() => void load()} data-press>
-                <RefreshCw aria-hidden="true" className="w-4 h-4" />{strings.retry}
-              </button>
-            )}
+            {state.kind !== 'offline' && retryButton(() => void load())}
           </div>
         )}
 
@@ -180,64 +207,44 @@ export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale 
             {result.error && (
               <div className="home-notice-line">
                 <span>{fmt(strings.stale, { time: timeFmt.format(new Date(result.snapshot.fetched_at)) })}</span>
-                <button type="button" className="home-cta home-cta--ghost !min-h-[36px]" onClick={() => void load()} data-press>
-                  <RefreshCw aria-hidden="true" className="w-4 h-4" />{strings.retry}
-                </button>
+                {retryButton(() => void load())}
               </div>
             )}
 
-            {days.length > 0 ? (
-              <>
-                <p className="mt-4 text-[13px] text-stone-600">
-                  {fmt(strings.window, { count: result.snapshot.events.length, from: dayLabel(days[0].date), to: dayLabel(days[days.length - 1].date) })}
-                </p>
-                <div
-                  ref={graphRef}
-                  className="home-graph"
-                  data-sparse={days.length <= 21}
-                  role="radiogroup"
-                  aria-label={strings.graphLabel}
-                  onKeyDown={onGraphKey}
-                >
-                  {days.map(d => (
-                    <button
-                      key={d.date}
-                      type="button"
-                      role="radio"
-                      className="home-bar"
-                      data-day={d.date}
-                      data-zero={d.count === 0}
-                      aria-checked={selected === d.date}
-                      tabIndex={d.date === focusDay ? 0 : -1}
-                      aria-label={fmt(strings.dayEvents, { count: d.count, date: dayLabel(d.date) })}
-                      title={fmt(strings.dayEvents, { count: d.count, date: dayLabel(d.date) })}
-                      onClick={() => setSelected(cur => (cur === d.date ? null : d.date))}
-                    >
-                      <span style={{ height: `${Math.max(3, (d.count / max) * 100)}%` }} />
-                    </button>
-                  ))}
-                </div>
-                <div className="home-graph-axis" aria-hidden="true">
-                  <span>{dayLabel(days[0].date)}</span>
-                  <span>{dayLabel(days[days.length - 1].date)}</span>
-                </div>
-              </>
-            ) : (
-              <p className="mt-4 text-sm text-stone-600">{strings.empty}</p>
+            {allEvents.length > 0 && !selected && (
+              <p className="mt-4 text-[13px] text-stone-600">
+                {fmt(strings.window, {
+                  count: allEvents.length,
+                  from: shortFmt.format(new Date(allEvents[allEvents.length - 1].created_at)),
+                  to: shortFmt.format(new Date(allEvents[0].created_at)),
+                })}
+              </p>
             )}
 
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[13px]">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[13px]">
               <span className="font-semibold text-stone-700" role="status">
                 {selected
                   ? fmt(strings.dayEvents, { count: events.length, date: dayLabel(selected) })
                   : fmt(strings.showing, { count: shown.length })}
               </span>
               {selected && (
-                <button type="button" className="home-cta home-cta--ghost !min-h-[36px]" onClick={() => setSelected(null)} data-press>
-                  {strings.allDays}
+                <button
+                  type="button"
+                  className="home-cta home-cta--ghost !min-h-[36px]"
+                  onClick={() => setSelected(null)}
+                  aria-label={`${strings.calendar.clear}: ${dayLabel(selected)}`}
+                  data-press
+                >
+                  {dayLabel(selected)}
+                  <X aria-hidden="true" className="w-4 h-4" />
                 </button>
               )}
             </div>
+
+            {allEvents.length === 0 && <p className="mt-4 text-sm text-stone-600">{strings.empty}</p>}
+            {selected && events.length === 0 && allEvents.length > 0 && (
+              <p className="mt-3 text-sm text-stone-600">{strings.calendar.noEventsDay}</p>
+            )}
 
             <ol className="home-events">
               {shown.map(e => (

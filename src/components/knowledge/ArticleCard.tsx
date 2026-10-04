@@ -1,3 +1,4 @@
+import { ExternalLink } from 'lucide-react';
 import type { DiscoveryItem } from '../../lib/blocks/discovery';
 import type { Locale } from '../../lib/i18n/locales';
 import { articlePath } from '../../lib/blocks/seo';
@@ -38,7 +39,21 @@ export function ArticleCard({ article: a, uiLocale, compact = false, headingLeve
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wider text-stone-500">
           <span className="truncate">{meta}</span>
-          <EntitlementIcon access={a.access} paidLabel={t.paidAria} freeLabel={t.freeAria} />
+          <span className="flex flex-none items-center gap-1">
+            <EntitlementIcon access={a.access} paidLabel={t.paidAria} freeLabel={t.freeAria} />
+            {/* Sibling of the title link (no nested <a>), raised above its ::after overlay; 44px touch target on phones. */}
+            <a
+              href={href}
+              hrefLang={a.locale}
+              target="_blank"
+              rel="noopener"
+              aria-label={`${t.openInNewTab}: ${a.title}`}
+              title={t.openInNewTab}
+              className="relative z-10 -my-3 -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 hover:text-stone-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-600 sm:-my-1.5 sm:-mr-1 sm:h-8 sm:w-8"
+            >
+              <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
+            </a>
+          </span>
         </div>
         <H className={`font-serif ${compact ? 'text-base' : 'text-lg sm:text-xl'} font-bold text-stone-900 leading-snug break-words`}>
           {/* The whole card is clickable through this link's ::after overlay; tag links stay above it. */}

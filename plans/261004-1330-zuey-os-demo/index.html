@@ -1,0 +1,91 @@
+<title>Zuey OS Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,900&family=JetBrains+Mono:wght@500&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bg:#181513;--ink:#fdf8f3;--muted:#b9ada4;--line:#3a332e;--acc:#f2b48a;--card:#fffaf5;--serif:Fraunces,Georgia,serif;--sans:"Plus Jakarta Sans",system-ui,sans-serif;--mono:"JetBrains Mono",ui-monospace,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+.wrap{max-width:1500px;margin:0 auto;padding-block:40px;padding-inline:16px;display:grid;gap:28px}
+h1{font:900 clamp(30px,4.6vw,54px)/1.05 var(--serif);letter-spacing:-.03em;text-wrap:balance}
+.lede{color:var(--muted);max-width:80ch;margin-top:12px}
+.cta{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.cta a{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;font-weight:700;font-size:14px;text-decoration:none;color:#1c1917;background:var(--card)}
+.cta a.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.cta a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.frames{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:20px;align-items:start}
+.frame{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#000;min-width:0}
+.frame .bar{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);background:#120f0d}
+.frame .bar a{color:var(--ink)}
+.desk{position:relative;width:100%;aspect-ratio:1440/900;overflow:hidden}
+.desk iframe{position:absolute;top:0;left:0;width:1440px;height:900px;border:0;transform-origin:0 0}
+.phone iframe{width:375px;max-width:100%;height:760px;border:0;display:block;margin:0 auto}
+h2{font:800 26px/1.15 var(--serif);text-wrap:balance}
+.k{font:700 11px var(--sans);text-transform:uppercase;letter-spacing:.14em;color:var(--acc)}
+.how{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.how>div{min-width:0;border-top:1px solid var(--line);padding-top:14px;display:grid;gap:6px;align-content:start}
+.how p{color:var(--muted);font-size:14px}
+code{font:500 12.5px var(--mono);background:rgba(255,255,255,.07);border-radius:6px;padding:1px 6px;color:var(--ink)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.card{border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;gap:8px;align-content:start;min-width:0}
+.card h3{font:800 17px var(--serif);display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.card h3 a{font:600 12px var(--mono);color:var(--acc);text-decoration:none;white-space:nowrap}
+.card h3 a:hover{text-decoration:underline}
+.card ul{padding-left:18px;display:grid;gap:3px;color:var(--muted);font-size:13.5px}
+.card .src{font:500 11.5px var(--mono);color:#8f837a}
+.notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.notes>div{min-width:0;display:grid;gap:8px;align-content:start}
+.notes ul{padding-left:18px;display:grid;gap:4px;color:var(--muted);font-size:14px}
+@media (max-width:1000px){.frames,.how,.notes{grid-template-columns:1fr}}
+</style>
+<div class="wrap">
+  <header>
+    <p class="k">Phương án 1 · Zuey OS · demo tương tác</p>
+    <h1>zuey.me dưới dạng một màn hình desktop</h1>
+    <p class="lede">Mỗi tính năng trên trang chủ zuey.me và các trang nó dẫn tới (/chat, /knowledges, /account, /docs…) là một cửa sổ kéo được, đổi kích thước ở mọi cạnh, chia đôi màn hình, thu vào Dock và điều khiển trọn bằng phím tắt. Mascot Zuey vẫn đi lại trên màn hình. Dữ liệu hồ sơ, link, Zuey Reads, gói giá và hoạt động GitHub lấy từ zuey.me ngày 4/10/2026. Các phần cần server như AI trả lời, thanh toán hay đăng nhập đều được mô phỏng để bạn đi hết từng luồng.</p>
+    <div class="cta">
+      <a href="zuey-os.html" target="_blank">Mở demo toàn màn hình ↗</a>
+      <a class="ghost" href="zuey-os.html#ai" target="_blank">Mở thẳng Zuey AI ↗</a>
+      <a class="ghost" href="zuey-os.html#pricing" target="_blank">Mở thẳng Gói & giá ↗</a>
+    </div>
+  </header>
+
+  <div class="frames">
+    <div class="frame"><div class="bar"><span>Desktop 1440 × 900 (thu nhỏ cho vừa khung)</span><a href="zuey-os.html" target="_blank">Toàn màn hình ↗</a></div><div class="desk" id="desk"><iframe id="fd" src="zuey-os.html" title="Zuey OS desktop"></iframe></div></div>
+    <div class="frame phone"><div class="bar"><span>Mobile 375 · màn hình chính + sheet</span></div><iframe src="zuey-os.html" title="Zuey OS mobile"></iframe></div>
+  </div>
+
+  <section class="how">
+    <div><p class="k">1 · Đổi vai trò</p><h2>Nút “Trạng thái demo”</h2><p>Nằm trên thanh menu, viền nét đứt. Chọn vai trò (khách, thành viên, admin), gói, chế độ AI (bình thường, lỗi timeout, hết lượt, hết ngân sách) và bật bài viết mẫu. Mọi cửa sổ cập nhật ngay.</p></div>
+    <div><p class="k">2 · Điều hướng</p><h2>⌘K · ? · Alt 1–0</h2><p>Spotlight gom lệnh, câu hỏi cho Zuey AI, bài viết, sản phẩm và Zuey Reads. Nhấn <code>?</code> để xem toàn bộ phím tắt; <code>Alt 1–0</code> mở thẳng từng ứng dụng (macOS: ⌥ Option). Ngoài ra có Dock logo dưới đáy (chuột phải để mở menu) và link sâu <code>#ai</code>, <code>#pricing</code>, <code>#account</code>…</p></div>
+    <div><p class="k">3 · Làm lại từ đầu</p><h2>“Đặt lại demo”</h2><p>Trạng thái được lưu trong trình duyệt của bạn (vị trí cửa sổ, phiên chat, đơn hàng, key). “Đặt lại demo” trong bảng Trạng thái demo xoá sạch. Hai khung xem trước ở trên dùng chung trạng thái này.</p></div>
+  </section>
+
+  <section style="display:grid;gap:14px">
+    <div><p class="k">Phạm vi</p><h2>Có gì trong demo · 12 cửa sổ + hệ thống</h2></div>
+    <div class="grid">
+      <div class="card"><h3>Giới thiệu (hồ sơ) <a href="zuey-os.html#about" target="_blank">#about ↗</a></h3><ul><li>Avatar, tick, tên, handle, copy email, bio vi/en</li><li>7 mạng xã hội, 4 ô lối tắt, 2 blog dạng LinkCard</li><li>QR, chia sẻ 7 kênh, nút Studio (chỉ admin)</li></ul><p class="src">trang chủ · ProfileView</p></div>
+      <div class="card"><h3>Zuey AI <a href="zuey-os.html#ai" target="_blank">#ai ↗</a></h3><ul><li>Các cổng: khách, chưa có gói, chưa xác nhận email, hết lượt, hết ngân sách AI</li><li>Pill lượt còn lại + ngân sách $, admin không giới hạn</li><li>Danh sách phiên chat: tạo, đổi tên, xoá, xuất JSON</li><li>Trạng thái suy nghĩ → stream chữ → dừng (Esc), lỗi timeout và thử lại</li><li>Nguồn trích từ Zuey Reads, khối artifact chạy trong sandbox</li></ul><p class="src">trang chủ · /chat</p></div>
+      <div class="card"><h3>Bài viết (Knowledges) <a href="zuey-os.html#knowledges" target="_blank">#knowledges ↗</a></h3><ul><li>Trạng thái trống giống bản thật; bật “bài mẫu” để xem đủ luồng</li><li>Tìm kiếm có highlight, lọc chuyên mục và nhãn, sắp xếp</li><li>Trình đọc có TL;DR, mục lục, biểu đồ, sơ đồ, khảo sát, ý chính, FAQ</li><li>Paywall một phần: mở đoạn đầu, phần khoá chỉ gửi tiêu đề + làm mờ, nút theo vai trò</li><li>Nút “Mở ở tab mới” → <a href="article.html#k2" target="_blank">trang bài viết riêng ↗</a> có SEO/GEO (meta, JSON-LD BlogPosting/FAQ/Breadcrumb, isAccessibleForFree)</li></ul><p class="src">/knowledges</p></div>
+      <div class="card"><h3>Zuey Reads <a href="zuey-os.html#reads" target="_blank">#reads ↗</a></h3><ul><li>8 bài thật kèm ảnh bìa, lọc theo nguồn (Web, X, YouTube)</li><li>Tóm tắt mở rộng, link bài gốc, “Hỏi Zuey AI”</li></ul><p class="src">/reads</p></div>
+      <div class="card"><h3>Gói thành viên <a href="zuey-os.html#pricing" target="_blank">#pricing ↗</a></h3><ul><li>Kỳ hạn 1/3/6/12 tháng, giảm 5/10/20%</li><li>4 gói: giá USD/tháng, tổng VND, ngân sách AI</li><li>Đơn VietQR: mã QR mẫu, thông tin ngân hàng ẩn, mô phỏng nhận tiền → kích hoạt gói</li></ul><p class="src">/membership</p></div>
+      <div class="card"><h3>Doanh nghiệp · đặt lịch <a href="zuey-os.html#business" target="_blank">#business ↗</a></h3><ul><li>4 bước: lịch (60 ngày, đổi múi giờ) → thông tin → thanh toán → xác nhận</li><li>Kiểm tra form, chọn SePay hoặc PayPal</li><li>Giữ chỗ 15 phút có đếm ngược, trạng thái hết hạn</li></ul><p class="src">/business · /api/v1/booking</p></div>
+      <div class="card"><h3>GitHub · Zuey đang làm gì <a href="zuey-os.html#github" target="_blank">#github ↗</a></h3><ul><li>Lịch đóng góp kiểu GitHub profile: 365 ngày, 5 mức màu, chọn ô để lọc</li><li>300 sự kiện thật (1–4/10), loại sự kiện đã dịch, “xem tất cả”</li></ul><p class="src">trang chủ · GitHub activity</p></div>
+      <div class="card"><h3>Exposé · tất cả cửa sổ</h3><ul><li>Nút trên Dock hoặc Alt O: thu mọi cửa sổ thành thumbnail có nhãn (kể cả cửa sổ đã thu nhỏ)</li><li>Click thumbnail để kích hoạt và phóng to như bình thường; Esc để thoát</li></ul><p class="src">mới · shell</p></div>
+      <div class="card"><h3>Giao diện & hình nền <a href="zuey-os.html#appearance" target="_blank">#appearance ↗</a></h3><ul><li>Tối / sáng / theo hệ thống (Alt T), 6 màu nhấn, chuyển cảnh dạng vòng tròn</li><li>8 hình nền (gradient, aurora động, video…) + tải ảnh lên hoặc kéo thả, chỉnh độ tối</li><li>Chuột phải trên desktop: đổi hình nền, theme, sắp xếp cửa sổ</li></ul><p class="src">mới · lưu trên thiết bị</p></div>
+      <div class="card"><h3>MCP & API <a href="zuey-os.html#mcp" target="_blank">#mcp ↗</a></h3><ul><li>5 tab cấu hình (Claude Code, Claude, ChatGPT, Cursor, API key) có nút copy</li><li>Chỉ dùng placeholder <code>&lt;YOUR_ZUEY_API_KEY&gt;</code>, OAuth, link /docs</li></ul><p class="src">/docs · /api/mcp</p></div>
+      <div class="card"><h3>Đăng nhập <a href="zuey-os.html#login" target="_blank">#login ↗</a></h3><ul><li>Magic link (trạng thái đã gửi), Google, GitHub: tất cả mô phỏng</li><li>Dòng đồng ý điều khoản</li></ul><p class="src">/login</p></div>
+      <div class="card"><h3>Tài khoản <a href="zuey-os.html#account" target="_blank">#account ↗</a></h3><ul><li>7 tab: hồ sơ, đổi email, gói (lời mời Telegram, lịch sử đơn), API key, thiết bị, hoạt động, dữ liệu</li><li>Key hiển thị dạng che <code>zk_demo_••••</code>; xoá tài khoản phải gõ “XOÁ”</li></ul><p class="src">/account</p></div>
+      <div class="card"><h3>Launchpad · Workflows <a href="zuey-os.html#launchpad" target="_blank">#launchpad ↗</a></h3><ul><li>Tìm kiếm qua 12 sản phẩm, 6 công ty, blog</li><li>AI Workflows: trạng thái trống giống bản thật</li></ul><p class="src">trang chủ · /workflows</p></div>
+      <div class="card"><h3>Hệ thống</h3><ul><li>Cửa sổ: đổi kích thước 8 hướng, kéo ra mép để chia đôi hoặc lên đỉnh để phóng to, kéo ra khỏi trạng thái chia đôi, thu vào Dock kiểu “genie”, nhớ bố cục; nội dung tự xếp lại theo bề rộng cửa sổ</li><li>Phím tắt: 28 tổ hợp cho mở app, quản lý cửa sổ, AI, ngôn ngữ; bảng tra <code>?</code>, nhãn phím trong menu và tooltip, thông báo nhỏ khi bấm</li><li>Dock: logo thật của sản phẩm và công ty, phóng to theo con trỏ, nảy khi mở app, tự gom thành nhóm khi màn hẹp</li><li>Thanh menu tự thu gọn theo bề rộng; màn khởi động một lần mỗi phiên; tôn trọng “giảm chuyển động”</li><li>Mascot, thời tiết (7 hiệu ứng), 5 ngôn ngữ, chuông thông báo; mobile dạng app với sheet vuốt xuống để đóng</li></ul><p class="src">toàn site</p></div>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div><p class="k">Ranh giới demo</p><h2>Phần nào là mô phỏng</h2><ul><li>Câu trả lời AI được viết sẵn, dựa trên Zuey Reads thật; không gọi model.</li><li>Thanh toán, đăng nhập, gửi email và đặt lịch chỉ đổi trạng thái trong trình duyệt. Không có tiền hay dữ liệu nào rời khỏi trang.</li><li>Thông tin ngân hàng và API key không hiển thị; mã QR chỉ chứa mã đơn mẫu.</li><li>Thời tiết theo thành phố hoặc vị trí cũng là mô phỏng; popover Thời tiết có mục demo để chọn thẳng từng kiểu thời tiết.</li></ul></div>
+    <div><p class="k">Khi duyệt</p><h2>Nên góp ý điều gì</h2><ul><li>Mô hình cửa sổ có hợp với khách lần đầu ghé không, hay mở sẵn 3 cửa sổ là quá nhiều?</li><li>Thứ tự Dock và biểu tượng: những gì nên luôn nằm trong tầm tay.</li><li>Trên mobile: màn hình chính dạng app so với trang cuộn dài hiện tại.</li><li>Những luồng cần giữ nguyên tuyệt đối khi triển khai thật (giá, paywall, cổng AI).</li></ul></div>
+  </section>
+</div>
+<script>
+var fd=document.getElementById('fd'),desk=document.getElementById('desk');
+function fit(){fd.style.transform='scale('+desk.clientWidth/1440+')'}
+addEventListener('resize',fit);fit();
+</script>

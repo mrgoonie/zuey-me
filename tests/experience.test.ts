@@ -20,12 +20,14 @@ import { AppError } from '../src/lib/http';
 import { HOME_STRINGS, profileContentLocale } from '../src/components/home/home-i18n';
 import { framePosition, parseMascotManifest } from '../src/components/home/mascot-manifest';
 import { addDismissed, nextNoticeChange, parseDismissed, pickNotice } from '../src/components/home/notice-queue';
-import { parseActivity, parseArticleHits, parseCommunity, parseNotices, parseWeather } from '../src/components/home/api-client';
+import { parseActivity, parseArticleHits, parseCalendar, parseCommunity, parseNotices, parseWeather } from '../src/components/home/api-client';
 import type { PublicNotice } from '../src/lib/experience/notices';
 import { GET as noticesListApi, POST as noticesCreateApi } from '../src/pages/api/v1/notices/index';
 import { GET as noticesActiveApi } from '../src/pages/api/v1/notices/active';
 import { POST as noticeExpireApi } from '../src/pages/api/v1/notices/[id]/expire';
 import { GET as githubActivityApi } from '../src/pages/api/v1/github/activity';
+import { GET as githubCalendarApi } from '../src/pages/api/v1/github/calendar';
+import { parseContributionCalendar } from '../src/lib/experience/github-calendar';
 import { GET as weatherApi } from '../src/pages/api/v1/weather/index';
 import { GET as communityStatusApi } from '../src/pages/api/v1/community/index';
 import { POST as communityInviteApi } from '../src/pages/api/v1/community/invite';
@@ -251,7 +253,7 @@ describe('Duy notices', () => {
     expect(field(await experienceMcpModule.call('notice_expire', { id }, admin), 'status')).toBe('expired');
     expect(MCP_FEATURE_MODULES).toContain(experienceMcpModule);
     expect(OPENAPI_FRAGMENTS).toContain(experienceOpenApi);
-    for (const path of ['/api/v1/notices', '/api/v1/notices/active', '/api/v1/github/activity', '/api/v1/weather', '/api/v1/community/invite', '/api/v1/community/sweep']) {
+    for (const path of ['/api/v1/notices', '/api/v1/notices/active', '/api/v1/github/activity', '/api/v1/github/calendar', '/api/v1/weather', '/api/v1/community/invite', '/api/v1/community/sweep']) {
       expect(Object.keys(experienceOpenApi.paths)).toContain(path);
     }
   });
@@ -352,6 +354,123 @@ describe('public GitHub activity', () => {
     );
     // 18:00Z on Oct 1 is Oct 2 in Saigon (UTC+7).
     expect(days).toEqual([{ date: '2026-10-02', count: 1 }, { date: '2026-10-03', count: 2 }, { date: '2026-10-04', count: 0 }]);
+  });
+});
+
+interface FixtureDay { date: string; level: number; count: number | null }
+
+/** Mirrors github.com/users/<u>/contributions: cells, detached <tool-tip>s and the yearly heading. */
+function ghCalendarHtml(days: FixtureDay[], heading: string | null = '1,234'): string {
+  const id = (i: number) => `contribution-day-component-${i % 7}-${Math.floor(i / 7)}`;
+  const cells = days.map((d, i) =>
+    `<td tabindex="0" data-ix="${Math.floor(i / 7)}" aria-selected="false" aria-describedby="contribution-graph-legend-level-${d.level}" style="width: 10px" data-date="${d.date}" id="${id(i)}" data-level="${d.level}" role="gridcell" data-view-component="true" class="ContributionCalendar-day"></td>`);
+  const tips = days.flatMap((d, i) => (d.count === null ? [] : [
+    `<tool-tip id="tooltip-${i}" for="${id(i)}" popover="manual" data-direction="n" data-type="label" data-view-component="true" class="sr-only position-absolute">${d.count === 0 ? 'No contributions' : `${d.count.toLocaleString('en-US')} contribution${d.count === 1 ? '' : 's'}`} on ${d.date}.</tool-tip>`,
+  ]));
+  const h2 = heading === null ? '' : `<h2 id="js-contribution-activity-description" class="f4 text-normal mb-2">\n      ${heading}\n      contributions\n        in the last year\n    </h2>`;
+  return `<div class="js-yearly-contributions">${h2}<table class="ContributionCalendar-grid js-calendar-graph-table"><tbody><tr style="height: 10px"><td class="ContributionCalendar-label"><span class="sr-only">Sunday</span></td>${cells.join('\n')}</tr></tbody></table>\n${tips.join('\n')}</div>`;
+}
+
+function calendarDays(n: number, endDate = '2026-10-05'): FixtureDay[] {
+  const end = Date.parse(`${endDate}T00:00:00Z`);
+  return Array.from({ length: n }, (_, i) => {
+    const date = new Date(end - (n - 1 - i) * 24 * HOUR).toISOString().slice(0, 10);
+    return { date, level: i % 5, count: i % 5 === 0 ? 0 : i % 5 * 3 };
+  });
+}
+
+describe('GitHub contribution calendar', () => {
+  const call = async () => githubCalendarApi(ctx({ path: '/api/v1/github/calendar' }));
+  const SOURCE = 'https://github.com/users/mrgoonie/contributions';
+
+  it('parses cells, tool-tip counts and the yearly total from GitHub HTML', () => {
+    const html = [
+      '<h2 id="js-contribution-activity-description" class="f4 text-normal mb-2">',
+      '      1,234', '      contributions', '        in the last year', '    </h2>',
+      // Attribute order differs between cells; a later cell comes first in the markup.
+      '<td data-level="4" id="c-2" data-date="2026-10-03" class="ContributionCalendar-day" role="gridcell"></td>',
+      '<td tabindex="-1" data-date="2026-10-01" id="c-0" data-level="0" class="ContributionCalendar-day"></td>',
+      "<td data-date='2026-10-02' id='c-1' data-level='1'></td>",
+      '<td data-date="2026-10-04" id="c-3" data-level="2"></td>',
+      '<td data-date="not-a-date" id="c-9" data-level="3"></td>',
+      '<tool-tip id="t0" for="c-0" popover="manual" class="sr-only">No contributions on October 1st.</tool-tip>',
+      '<tool-tip id="t1" for="c-1" popover="manual">1 contribution on October 2nd.</tool-tip>',
+      '<tool-tip id="t2" for="c-2" popover="manual">1,024 contributions on October 3rd.</tool-tip>',
+    ].join('\n');
+    const parsed = parseContributionCalendar(html);
+    expect(parsed.total).toBe(1234);
+    expect(parsed.days).toEqual([
+      { date: '2026-10-01', count: 0, level: 0 },
+      { date: '2026-10-02', count: 1, level: 1 },
+      { date: '2026-10-03', count: 1024, level: 4 },
+      // No tool-tip for this cell: level only.
+      { date: '2026-10-04', count: null, level: 2 },
+    ]);
+  });
+
+  it('sums counts without a heading, falls back to level-only and keeps the last 53 weeks', () => {
+    const days = calendarDays(10);
+    const summed = parseContributionCalendar(ghCalendarHtml(days, null));
+    expect(summed.total).toBe(days.reduce((s, d) => s + (d.count ?? 0), 0));
+
+    const levelOnly = parseContributionCalendar(ghCalendarHtml(days.map(d => ({ ...d, count: null })), null));
+    expect(levelOnly.total).toBeNull();
+    expect(levelOnly.days.map(d => Number(d.level))).toEqual(days.map(d => d.level));
+    expect(levelOnly.days.every(d => d.count === null)).toBe(true);
+
+    const year = parseContributionCalendar(ghCalendarHtml(calendarDays(400)));
+    expect(year.days.length).toBe(371);
+    expect(year.days[370].date).toBe('2026-10-05');
+    expect(year.days[0].date < year.days[1].date).toBe(true);
+    expect(parseContributionCalendar('<html>nothing here</html>')).toEqual({ total: null, days: [] });
+  });
+
+  it('serves the calendar with cache headers and caches it for 6 hours', async () => {
+    routes.push(url => (url === SOURCE ? new Response(ghCalendarHtml(calendarDays(371), '2,345'), { headers: { 'Content-Type': 'text/html' } }) : null));
+    const res = await call();
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=3600, stale-while-revalidate=21600');
+    const first = await read(res);
+    expect(first.status).toBe(200);
+    expect(field(first.data, 'user')).toBe('mrgoonie');
+    expect(field(first.data, 'total')).toBe(2345);
+    expect(list(field(first.data, 'days')).length).toBe(371);
+    expect(list(field(first.data, 'days'))[370]).toEqual({ date: '2026-10-05', count: 0, level: 0 });
+    expect(field(first.data, 'error')).toBeUndefined();
+    expect(fetchLog.length).toBe(1);
+
+    now += 5 * HOUR;
+    expect(field((await read(await call())).data, 'total')).toBe(2345);
+    expect(fetchLog.length).toBe(1);
+
+    // Past 6 hours GitHub is down: the last good calendar is served with an error.
+    now += 2 * HOUR;
+    routes.unshift(() => new Response('boom', { status: 500 }));
+    const staleRes = await call();
+    expect(staleRes.headers.get('Cache-Control')).toBe('public, max-age=60');
+    const stale = await read(staleRes);
+    expect(stale.status).toBe(200);
+    expect(field(stale.data, 'error', 'code')).toBe('github_unavailable');
+    expect(list(field(stale.data, 'days')).length).toBe(371);
+    expect(fetchLog.length).toBe(2);
+  });
+
+  it('reports rate limits and outages when nothing is cached, and remembers the block', async () => {
+    routes.push(() => new Response('slow down', { status: 429, headers: { 'retry-after': '120' } }));
+    const limited = await read(await call());
+    expect(limited.status).toBe(429);
+    expect(limited.code).toBe('github_rate_limited');
+    expect(limited.extra.retry_after_seconds).toBe(120);
+    const before = fetchLog.length;
+    expect((await read(await call())).status).toBe(429);
+    expect(fetchLog.length).toBe(before);
+
+    now += 3 * 60 * 1000;
+    routes.unshift(() => new Response('<html>no calendar</html>', { status: 200 }));
+    const empty = await call();
+    expect(empty.headers.get('Cache-Control')).toBe('no-store');
+    const down = await read(empty);
+    expect(down.status).toBe(503);
+    expect(down.code).toBe('github_unavailable');
   });
 });
 
@@ -583,6 +702,23 @@ describe('homepage client helpers', () => {
     });
     expect(activity?.snapshot.events.map(e => e.id)).toEqual(['1']);
     expect(activity?.error?.retry_after_seconds).toBe(120);
+
+    const cal = parseCalendar({
+      user: 'mrgoonie', total: 42, fetched_at: new Date(T0).toISOString(),
+      error: { code: 'github_rate_limited', message: 'x', retry_after_seconds: 60 },
+      days: [
+        { date: '2026-10-02', count: 3, level: 2 },
+        { date: '2026-10-01', count: null, level: 0 },
+        { date: '2026-10-03', count: 1, level: 7 },
+        { date: '<b>', count: 1, level: 1 },
+        'junk',
+      ],
+    });
+    expect(cal?.days).toEqual([{ date: '2026-10-01', count: null, level: 0 }, { date: '2026-10-02', count: 3, level: 2 }]);
+    expect(cal?.total).toBe(42);
+    expect(cal?.error?.code).toBe('github_rate_limited');
+    expect(parseCalendar({ user: 'x', days: [] })).toBeNull();
+    expect(parseCalendar({ user: 'x', total: null, fetched_at: 'now', days: [] })?.error).toBeUndefined();
 
     expect(parseNotices({ notices: [notice('a', -1, 1), { id: 'bad' }] })?.map(n => n.id)).toEqual(['a']);
 

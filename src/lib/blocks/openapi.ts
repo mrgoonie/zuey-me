@@ -190,6 +190,19 @@ export const articlesOpenApi: OpenApiFragment = {
         properties: {
           document: ref('ArticleDocument'),
           truncated: { type: 'boolean', description: 'True when the paid remainder was withheld for this viewer' },
+          locked_outline: {
+            type: 'object',
+            description: 'Only when truncated: the withheld top-level headings (plain text + level) and the withheld size. No other withheld text is returned.',
+            required: ['headings', 'blocks', 'words'],
+            properties: {
+              headings: {
+                type: 'array',
+                items: { type: 'object', required: ['level', 'text'], properties: { level: { type: 'integer', enum: [1, 2, 3] }, text: { type: 'string' } } },
+              },
+              blocks: { type: 'integer', description: 'Number of withheld top-level blocks' },
+              words: { type: 'integer', description: 'Approximate number of withheld words' },
+            },
+          },
           preview: { type: 'boolean' },
           locale_fallback: { type: 'boolean', description: 'The requested locale had no edition; another edition is returned' },
         },

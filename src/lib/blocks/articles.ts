@@ -5,7 +5,7 @@ import type { ArticleAccess, ArticleDocument, ArticleStatus, Block } from './sch
 import { emptyDocument, walkBlocks } from './schema';
 import { validateDocument } from './validate';
 import { applyPaywall } from './paywall';
-import type { Viewer } from './paywall';
+import type { LockedOutline, Viewer } from './paywall';
 import type { RuntimeEnv } from '../../env';
 import type { Principal } from '../members/policy';
 import { resolvePrincipal, viewerFromPrincipal } from '../members/policy';
@@ -79,6 +79,8 @@ export interface ArticleRecord extends ArticleSummary {
 export interface ArticleView extends ArticleSummary {
   document: ArticleDocument;
   truncated: boolean;
+  /** Only when truncated: withheld top-level headings (text + level) and withheld size; no other paid text. */
+  locked_outline?: LockedOutline;
   preview: boolean;
   /** True when the requested locale had no edition and another edition is shown instead. */
   locale_fallback: boolean;
@@ -505,8 +507,8 @@ export async function getArticleView(
   const publicSummary: ArticleSummary = viewer.isAdmin ? summary : { ...summary, editions: undefined };
   if (draft) return { ...publicSummary, document: rec.draft, truncated: false, preview: true, locale_fallback };
   if (!rec.published) return null;
-  const { doc, truncated } = applyPaywall(rec.published, rec.access, viewer);
-  return { ...publicSummary, document: doc, truncated, preview: false, locale_fallback };
+  const { doc, truncated, outline } = applyPaywall(rec.published, rec.access, viewer);
+  return { ...publicSummary, document: doc, truncated, ...(outline ? { locked_outline: outline } : {}), preview: false, locale_fallback };
 }
 
 // ---------- Writes ----------

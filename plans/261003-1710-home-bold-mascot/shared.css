@@ -1,0 +1,62 @@
+/* Shared tokens and real zuey.me components used by all three proposals. */
+:root{
+  --bg:#181513; --bg-2:#211c19; --bg-3:#2a2420; --line:rgba(245,239,235,.12);
+  --ink-inv:#f5efeb; --muted-inv:#b9ada4;
+  --card:#f5efeb; --card-2:#ebe3dc; --card-3:#e1d7cd; --ink:#231f1c; --muted:#6f645c; --hair:#ddd2c8;
+  --accent:#c4532a; --accent-soft:#f2a07a; --ok:#3f9d6a; --accent-ink:#a3401c; --ok-ink:#2d7a50;
+  --r-sm:10px; --r:16px; --r-lg:24px; --pill:999px;
+  --serif:Fraunces,Georgia,serif; --sans:"Plus Jakarta Sans",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+  --shadow:0 1px 0 rgba(255,255,255,.5) inset,0 24px 48px -24px rgba(0,0,0,.55);
+  --ease:cubic-bezier(.2,.8,.2,1);
+}
+*{box-sizing:border-box;margin:0}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent-soft);outline-offset:2px;border-radius:8px}
+img{display:block}
+
+/* top bar: same controls as the live HomeShell */
+.zt{display:flex;align-items:center;gap:8px;padding:12px 20px}
+.zt .wm{font:800 17px var(--serif);display:flex;align-items:baseline;gap:8px;margin-right:auto;color:var(--ink-inv)}
+.zt .wm small{font:600 10px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-inv)}
+.zt .chip{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border-radius:var(--pill);border:1px solid var(--line);background:rgba(24,21,19,.55);backdrop-filter:blur(10px);color:var(--ink-inv);font:600 12px var(--sans)}
+.zt .chip:hover{border-color:rgba(245,239,235,.3)}
+.zt .chip[aria-pressed=true]{background:var(--ink-inv);color:var(--ink)}
+.zt kbd{font:600 10px var(--mono);background:rgba(245,239,235,.12);border-radius:5px;padding:1px 5px}
+.zt svg{width:15px;height:15px}
+@media (max-width:700px){.zt .lbl,.zt kbd,.zt .wm small{display:none}.zt{padding:10px 12px;gap:6px}.zt .chip{padding:0 10px;min-width:36px;justify-content:center}}
+
+/* brand icons: same shapes as src/components/BrandIcons.tsx */
+.bi{display:grid;place-items:center;border-radius:50%;flex:none;color:#fff;font-weight:900;line-height:1;text-align:center;overflow:hidden}
+
+/* mascot sprite (public/mascot/zuey-mascot.webp, 4x4 cells of 256px) */
+.mascot{background:url(zuey-mascot.webp) no-repeat;image-rendering:auto;flex:none}
+
+/* rain backdrop toggled by the Weather chip */
+.rain{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.rain i{position:absolute;top:-20px;width:1px;height:18px;background:linear-gradient(transparent,rgba(245,239,235,.45));animation:fall linear infinite}
+@keyframes fall{to{transform:translateY(110vh)}}
+@media (prefers-reduced-motion:reduce){.rain i{animation:none;opacity:.25}}
+
+/* heatmap */
+.heat{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,1fr);gap:3px}
+.heat span{width:100%;aspect-ratio:1;border-radius:3px;background:var(--card-3)}
+.heat span[data-l="1"]{background:#f3c9a8}.heat span[data-l="2"]{background:#e99566}.heat span[data-l="3"]{background:#d06a37}.heat span[data-l="4"]{background:#9c3f17}
+.dark .heat span{background:rgba(245,239,235,.08)}
+
+.cover-fallback{display:block;width:100%;height:100%;min-height:40px;background:linear-gradient(135deg,#e9c3a5,#c4532a 60%,#5b2a17)}
+
+/* command palette (Ctrl/⌘K) */
+.pal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;justify-content:center;align-items:flex-start;padding-top:16vh;z-index:90}
+.pal.on{display:flex}
+.pal .box{width:min(560px,92vw);background:var(--card);color:var(--ink);border-radius:20px;overflow:hidden;box-shadow:var(--shadow)}
+.pal input{width:100%;border:0;border-bottom:1px solid var(--hair);padding:18px 20px;font:500 17px var(--sans);outline:none;background:none;color:var(--ink)}
+.pal a{display:flex;justify-content:space-between;padding:12px 20px;font-weight:600}
+.pal a:hover,.pal a:focus{background:var(--card-2)}
+.pal a span{color:var(--muted);font-weight:500;font-size:13px}
+.hidden-mascot .mascot{visibility:hidden}
+.src{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.src a{font:600 10px var(--mono);border:1px solid var(--hair);background:var(--card);color:var(--ink);border-radius:var(--pill);padding:3px 8px}
+.dots span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-right:3px;animation:zdot 1.1s infinite}
+.dots span:nth-child(2){animation-delay:.15s}.dots span:nth-child(3){animation-delay:.3s}
+@keyframes zdot{30%{transform:translateY(-3px);opacity:1}0%,60%,100%{opacity:.3}}

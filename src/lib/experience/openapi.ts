@@ -28,7 +28,7 @@ export const experienceOpenApi: OpenApiFragment = {
     name: TAG,
     description: [
       'Visitor notices from Duy (shown in the mascot bubble), Telegram community access for the $29 plan,',
-      'public GitHub activity of mrgoonie and an Open-Meteo weather proxy. Weather uses coarse coordinates (1 decimal) or a city name;',
+      'public GitHub activity and contribution calendar of mrgoonie and an Open-Meteo weather proxy. Weather uses coarse coordinates (1 decimal) or a city name;',
       'nothing about the caller is stored server-side.',
     ].join(' '),
   },
@@ -74,6 +74,17 @@ export const experienceOpenApi: OpenApiFragment = {
           '200': ok('Activity', ref('GithubActivity')),
           '429': err('`github_rate_limited` with retry_after_seconds (no cached snapshot yet)'),
           '503': err('`github_unavailable` (no cached snapshot yet)'),
+        },
+      },
+    },
+    '/api/v1/github/calendar': {
+      get: {
+        tags: [TAG], summary: 'GitHub contribution calendar of mrgoonie',
+        description: 'The last 53 weeks of the public profile contribution graph (per-day count and level 0–4), read from github.com/users/mrgoonie/contributions. Cached 6 hours; when GitHub is rate limited or down the last good calendar is returned with an `error`.',
+        responses: {
+          '200': ok('Calendar', ref('GithubCalendar')),
+          '429': err('`github_rate_limited` with retry_after_seconds (no cached calendar yet)'),
+          '503': err('`github_unavailable` (no cached calendar yet)'),
         },
       },
     },
@@ -205,6 +216,26 @@ export const experienceOpenApi: OpenApiFragment = {
             },
           },
         },
+      },
+    },
+    GithubCalendar: {
+      type: 'object',
+      properties: {
+        user: { type: 'string' },
+        total: { type: 'integer', nullable: true, description: 'Contributions in the last year' },
+        fetched_at: { type: 'string', format: 'date-time' },
+        days: {
+          type: 'array', maxItems: 371,
+          items: {
+            type: 'object',
+            properties: {
+              date: { type: 'string', format: 'date' },
+              count: { type: 'integer', nullable: true, description: 'Null when GitHub exposed only the level' },
+              level: { type: 'integer', minimum: 0, maximum: 4 },
+            },
+          },
+        },
+        error: { type: 'object', description: 'Only when serving a stale calendar', properties: { code: { type: 'string', enum: ['github_rate_limited', 'github_unavailable'] }, message: { type: 'string' }, retry_after_seconds: { type: 'integer', nullable: true } } },
       },
     },
     Weather: {

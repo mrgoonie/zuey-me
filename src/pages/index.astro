@@ -1,19 +1,47 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { HomeShell } from '../components/home/HomeShell';
+import { ZueyOS } from '../components/os/ZueyOS';
+import { LOOK_BOOT_SCRIPT } from '../components/os/look';
 import { ZueyAiPanel } from '../components/ai/ZueyAiPanel';
 import { KnowledgesPanel } from '../components/knowledge/KnowledgesPanel';
+import { ReadsBrowser } from '../components/reads/ReadsBrowser';
+import { PricingTable } from '../components/members/PricingTable';
+import { BookingWidget } from '../components/booking/BookingWidget';
+import BusinessIntro from '../components/booking/BusinessIntro.astro';
+import { AccountApp } from '../components/members/AccountApp';
+import { LoginForm } from '../components/members/MemberAuth';
+import { ConnectedApps } from '../components/account/ConnectedApps';
+import { CommunityAccess } from '../components/home/CommunityAccess';
 import { getProfile, getLinks } from '../db/store';
 import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
+import { plansCatalog } from '../lib/members/account';
+import { USER_KEY_SCOPES } from '../lib/members/api-keys';
+import { resolveMemberSession } from '../lib/members/session';
+import { configuredPaymentMethods } from '../lib/booking/store';
+import { getLastSyncedAt, listReads, listReadSources } from '../lib/reads/store';
 
-// Retrieve D1 database if running on Cloudflare Pages
-const d1 = Astro.locals.runtime?.env?.DB;
+/** Reads shown in the desktop window; the full archive lives on /reads. */
+const HOME_READS_LIMIT = 60;
 
-const profile = await getProfile(d1);
-const links = await getLinks(d1);
+const runtimeEnv = Astro.locals.runtime?.env ?? {};
+const d1 = runtimeEnv.DB;
+
+const [profile, links, reads, readSources, readsSyncedAt, member] = await Promise.all([
+  getProfile(d1),
+  getLinks(d1),
+  // A reads query failure must not take the homepage down: the window shows its empty state.
+  listReads(d1, { limit: HOME_READS_LIMIT }).catch(() => ({ items: [], total: 0 })),
+  listReadSources(d1).catch(() => []),
+  getLastSyncedAt(d1).catch(() => null),
+  resolveMemberSession(Astro.request, d1).catch(() => null),
+]);
+const catalog = plansCatalog(runtimeEnv);
+const paymentMethods = configuredPaymentMethods(runtimeEnv);
 const locale = resolveLocale(Astro.request);
-// The locale comes from ?lang, the locale cookie or Accept-Language, so caches must key on them.
+// The locale comes from ?lang, the locale cookie or Accept-Language, and the account window
+// depends on the session cookie, so caches must key on them (and never store a member's page).
 Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
+if (member) Astro.response.headers.set('Cache-Control', 'private, no-store');
 const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
 ---
 
@@ -22,25 +50,40 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
   description={description}
   image="https://zuey.me/og.png"
   lang={LOCALE_LABELS[locale].htmlLang}
+  ambient={false}
 >
-  <script is:inline>
-    // Runs before the shell paints: pick the tab from the URL hash and arm the entrance
-    // choreography (CSS reveals everything after ~1s even if scripts never load).
-    (function () {
-      var root = document.documentElement;
-      var hash = location.hash.slice(1);
-      if (hash === 'ai' || hash === 'profile' || hash === 'knowledges') root.setAttribute('data-home-tab', hash);
-      try {
-        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) root.classList.add('home-motion-pending');
-      } catch (e) {}
-    })();
-  </script>
-  <HomeShell client:load locale={locale} profile={profile} links={links}>
-    <div slot="aiPanel" class="home-ai-panel min-w-0">
+  <script is:inline slot="head" set:html={LOOK_BOOT_SCRIPT} />
+  <ZueyOS client:load locale={locale} profile={profile} links={links} signedIn={member !== null}>
+    <div slot="ai" class="min-w-0 h-full">
       <ZueyAiPanel client:visible locale={locale} />
     </div>
-    <div slot="knowledgePanel" class="home-side-card home-knowledge-panel min-w-0 p-4 sm:p-6">
+    <div slot="knowledges" class="min-w-0">
       <KnowledgesPanel client:visible locale={locale} />
     </div>
-  </HomeShell>
+    <div slot="reads" class="min-w-0">
+      <ReadsBrowser client:visible items={reads.items} sources={readSources} lastSyncedAt={readsSyncedAt} />
+    </div>
+    <div slot="pricing" class="min-w-0 flex flex-col items-center gap-4">
+      <PricingTable client:visible catalog={catalog} initialPlan={null} initialMonths={1} />
+      <p class="text-xs text-stone-300"><a href="/pricing" class="underline hover:text-white">zuey.me/pricing</a> · <a href="/account#billing" class="underline hover:text-white">Gói của tôi</a></p>
+    </div>
+    <div slot="business" class="min-w-0 flex flex-col items-center gap-6">
+      <BusinessIntro />
+      <BookingWidget client:visible methods={paymentMethods} />
+    </div>
+    <div slot="account" class="min-w-0 mx-auto w-full max-w-[720px]">
+      {member ? (
+        <>
+          <AccountApp client:visible keyScopes={[...USER_KEY_SCOPES]} />
+          <div id="community" class="mt-4"><CommunityAccess client:visible locale={locale} /></div>
+          <ConnectedApps client:visible />
+        </>
+      ) : (
+        <div class="flex flex-col items-center gap-4">
+          <LoginForm client:visible next="/#account" error={null} />
+          <a href="/pricing" class="text-xs font-semibold text-stone-200 hover:text-white underline">Xem các gói thành viên</a>
+        </div>
+      )}
+    </div>
+  </ZueyOS>
 </Layout>

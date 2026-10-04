@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23c4532a%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2216%22 font-family=%22monospace%22 font-weight=%22700%22 fill=%22%23fff%22 text-anchor=%22middle%22%3E/z%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Zuey OS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="zuey-os.css">
+</head>
+<body>
+<div class="desk" id="desk" aria-hidden="true"><div class="wordmark">/zuey/</div></div>
+<div class="wx" id="wx" aria-hidden="true"></div>
+
+<header class="menubar" id="menubar"></header>
+<nav class="icons" id="icons" aria-label="Biểu tượng trên màn hình"></nav>
+<main class="home" id="home" aria-label="Màn hình chính"></main>
+<div class="screen" id="screen"></div>
+<nav class="dock" id="dock" aria-label="Dock"></nav>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="data.js"></script>
+<script src="os-core.js"></script>
+<script src="articles.js"></script>
+<script src="os-apps.js"></script>
+<script src="os-shell.js"></script>
+</body>
+</html>

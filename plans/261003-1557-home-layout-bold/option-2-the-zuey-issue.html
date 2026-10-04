@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Zuey Issue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,900;1,9..144,400;1,9..144,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f3ece4; --paper-2:#e8dfd4; --ink:#1b1714; --muted:#6b5f56; --rule:#1b1714;
+  --night:#181513; --night-ink:#f5efeb; --night-muted:#b9ada4;
+  --red:#ad3716; --red-ink:#fff;
+  --serif:Fraunces,Georgia,serif; --sans:"Plus Jakarta Sans",system-ui,sans-serif; --mono:"JetBrains Mono",monospace;
+  --g:clamp(16px,3vw,40px);
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--paper);color:var(--ink);font:16px/1.6 var(--sans);overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--red);outline-offset:3px}
+.mono{font:500 11px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.12em}
+
+/* masthead bar */
+.top{display:flex;align-items:center;gap:20px;padding:12px var(--g);border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--paper);z-index:20}
+.top .logo{font:900 20px var(--serif);letter-spacing:-.02em}
+.top nav{display:flex;gap:18px;font-size:14px;font-weight:500}
+.top nav a:hover{color:var(--red)}
+.top .sp{flex:1}
+.top .sub{background:var(--red);color:var(--red-ink);font-weight:700;font-size:13px;padding:9px 16px;border-radius:999px;min-height:40px;display:inline-flex;align-items:center}
+.top .in{font-size:14px;font-weight:600}
+
+/* cover */
+.cover{position:relative;padding:20px var(--g) 0;min-height:calc(100vh - 62px);display:grid;grid-template-rows:auto 1fr auto;overflow:hidden}
+.issue{display:flex;justify-content:space-between;border-bottom:1px solid var(--rule);padding-bottom:10px}
+.mast{position:relative;font:900 clamp(120px,27vw,430px)/.78 var(--serif);letter-spacing:-.07em;margin:2vh 0 0 -.04em;color:var(--ink);z-index:1}
+.mast .sl{color:var(--red);font-style:italic;font-weight:300}
+.portrait{position:absolute;z-index:2;right:12vw;top:21vh;width:clamp(200px,26vw,400px);aspect-ratio:3/4;border-radius:200px 200px 16px 16px;overflow:hidden;box-shadow:0 40px 80px -30px rgba(27,23,20,.55);rotate:3deg}
+.portrait img{width:100%;height:100%;object-fit:cover;filter:contrast(1.05) saturate(.9)}
+.sticker{position:absolute;z-index:3;right:calc(12vw - 46px);top:calc(21vh + clamp(200px,26vw,400px)*1.15);width:118px;height:118px;border-radius:50%;background:var(--red);color:#fff;display:grid;place-items:center;text-align:center;font:600 13px/1.15 var(--serif);rotate:-12deg;padding:10px}
+.sticker b{display:block;font:900 30px/1 var(--serif)}
+@media (prefers-reduced-motion:no-preference){.sticker{animation:spin 18s linear infinite}@keyframes spin{to{rotate:348deg}}}
+.lines{position:relative;z-index:3;display:grid;grid-template-columns:repeat(3,minmax(0,280px));gap:var(--g);padding:28px 0 32px;align-self:end}
+.lines a{border-top:3px solid var(--ink);padding-top:10px}
+.lines a:hover h3{color:var(--red)}
+.lines h3{font:600 clamp(19px,1.8vw,24px)/1.15 var(--serif);margin-top:6px}
+.lines p{font-size:14px;color:var(--muted);margin-top:6px}
+.bio{position:absolute;left:var(--g);top:calc(2vh + clamp(120px,27vw,430px)*.86 + 60px);max-width:420px;font:italic 400 clamp(18px,1.6vw,22px)/1.4 var(--serif);z-index:3}
+
+/* ticker */
+.ticker{background:var(--ink);color:var(--paper);overflow:hidden;white-space:nowrap;border-block:1px solid var(--ink)}
+.ticker .row{display:inline-flex;gap:46px;padding:16px 0;font:600 clamp(22px,2.6vw,34px)/1 var(--serif)}
+.ticker .row span:nth-child(even){color:#f2a07a;font-style:italic;font-weight:400}
+@media (prefers-reduced-motion:no-preference){.ticker .row{animation:mq 40s linear infinite}@keyframes mq{to{transform:translateX(-50%)}}}
+
+/* contents */
+.sec{padding:clamp(56px,9vw,120px) var(--g)}
+.sec-h{display:flex;justify-content:space-between;align-items:end;border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:8px}
+.sec-h h2{font:900 clamp(40px,6vw,88px)/.9 var(--serif);letter-spacing:-.04em}
+.toc{list-style:none;padding:0}
+.toc li{border-bottom:1px solid var(--rule)}
+.toc a{display:grid;grid-template-columns:90px 1fr auto;gap:var(--g);align-items:baseline;padding:22px 0;position:relative}
+.toc .n{font:300 clamp(36px,4vw,56px)/1 var(--serif);color:var(--red)}
+.toc h3{font:600 clamp(28px,3.6vw,52px)/1 var(--serif);letter-spacing:-.02em;transition:transform .3s cubic-bezier(.2,.8,.2,1)}
+.toc p{font-size:15px;color:var(--muted);margin-top:8px;max-width:52ch}
+.toc .tag{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.1em;border:1px solid var(--ink);border-radius:999px;padding:5px 11px;white-space:nowrap}
+.toc .tag.paid{background:var(--ink);color:var(--paper)}
+.toc a:hover h3{transform:translateX(14px);font-style:italic}
+.toc .peek{position:absolute;right:18%;top:50%;width:220px;aspect-ratio:4/3;object-fit:cover;border-radius:10px;transform:translateY(-50%) rotate(-4deg) scale(.8);opacity:0;pointer-events:none;transition:.3s cubic-bezier(.2,.8,.2,1);box-shadow:0 30px 60px -20px rgba(0,0,0,.5)}
+.toc a:hover .peek{opacity:1;transform:translateY(-50%) rotate(-4deg) scale(1)}
+
+/* reads spread */
+.spread{display:grid;grid-template-columns:1.3fr 1fr 1fr;grid-template-rows:auto auto;gap:var(--g)}
+.feat{grid-row:span 2}
+.card img{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:4px;background:var(--paper-2);display:block}
+.feat img{aspect-ratio:4/3}
+.card .mono{color:var(--red);margin-top:12px;display:block}
+.card h3{font:600 22px/1.15 var(--serif);margin-top:6px}
+.feat h3{font-size:clamp(28px,3vw,40px);letter-spacing:-.02em}
+.card p{font-size:14px;color:var(--muted);margin-top:8px}
+.card:hover h3{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}
+
+/* ask the editor */
+.ask{background:var(--night);color:var(--night-ink)}
+.ask .sec-h{border-color:rgba(245,239,235,.25)}
+.ask-grid{display:grid;grid-template-columns:1fr 1.2fr;gap:clamp(32px,6vw,96px);margin-top:40px}
+.ask .letter{font:italic 400 clamp(24px,2.6vw,36px)/1.3 var(--serif)}
+.ask .letter b{font-style:normal;font-weight:900;color:#f2a07a}
+.ask .reply{border-left:3px solid var(--red);padding-left:24px;margin-top:28px;color:var(--night-muted);font-size:16px}
+.ask .reply .mono{color:#f2a07a;display:block;margin-bottom:8px}
+.ask .src{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.ask .src a{font:500 11px var(--mono);border:1px solid rgba(245,239,235,.25);border-radius:999px;padding:5px 10px}
+.box{background:rgba(245,239,235,.05);border:1px solid rgba(245,239,235,.18);border-radius:18px;padding:24px}
+.box label{font:600 13px var(--sans);color:var(--night-muted)}
+.box textarea{width:100%;min-height:150px;margin-top:10px;background:transparent;border:0;border-bottom:1px solid rgba(245,239,235,.3);color:var(--night-ink);font:400 24px/1.4 var(--serif);resize:none;outline:none}
+.box textarea::placeholder{color:rgba(245,239,235,.35);font-style:italic}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.chips button{font:500 13px var(--sans);color:var(--night-ink);background:transparent;border:1px solid rgba(245,239,235,.25);border-radius:999px;padding:8px 14px;min-height:40px;cursor:pointer}
+.chips button:hover{border-color:#f2a07a;color:#f2a07a}
+.box .go{display:flex;justify-content:space-between;align-items:center;margin-top:20px;gap:12px;flex-wrap:wrap}
+.box .go small{color:var(--night-muted)}
+.box .go button{background:var(--red);color:#fff;border:0;border-radius:999px;font:700 15px var(--sans);padding:12px 22px;min-height:48px;cursor:pointer}
+
+/* subscribe coupon */
+.subs{display:grid;grid-template-columns:repeat(4,1fr);border:2px dashed var(--ink);border-radius:20px;overflow:hidden}
+.plan{padding:28px 24px;border-right:2px dashed var(--ink);display:flex;flex-direction:column;gap:10px}
+.plan:last-child{border-right:0}
+.plan .mono{color:var(--muted)}
+.plan h3{font:600 26px/1 var(--serif)}
+.plan .p{font:900 56px/1 var(--serif);letter-spacing:-.04em}
+.plan .p small{font:500 14px var(--sans);letter-spacing:0;color:var(--muted)}
+.plan ul{padding-left:18px;font-size:14px;color:var(--muted);flex:1}
+.plan a{text-align:center;border:1.5px solid var(--ink);border-radius:999px;padding:11px;font-weight:700;font-size:14px;min-height:44px}
+.plan.hot{background:var(--ink);color:var(--paper)}
+.plan.hot .mono,.plan.hot ul,.plan.hot .p small{color:var(--night-muted)}
+.plan.hot a{background:var(--red);border-color:var(--red);color:#fff}
+.save{display:flex;gap:16px;align-items:center;margin-top:16px;font-size:14px;color:var(--muted);flex-wrap:wrap}
+.save b{color:var(--red)}
+
+/* colophon */
+.colo{display:grid;grid-template-columns:1fr 1fr;gap:var(--g)}
+.colo h4{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);border-bottom:1px solid var(--rule);padding-bottom:8px;margin-bottom:4px}
+.colo a{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--paper-2);font:600 18px/1.2 var(--serif)}
+.colo a span{font:400 13px var(--sans);color:var(--muted);text-align:right}
+.colo a:hover{color:var(--red)}
+footer{border-top:1px solid var(--rule);padding:20px var(--g);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+
+@media (max-width:900px){
+  .top nav{display:none}
+  .mast{font-size:31vw;margin-top:4vh}
+  .portrait{position:relative;right:auto;top:auto;width:62%;margin:-14vw 0 0 auto;rotate:3deg}
+  .sticker{right:auto;left:var(--g);top:auto;bottom:auto;position:relative;margin-top:-80px;width:100px;height:100px}
+  .bio{position:relative;left:auto;top:auto;margin-top:16px}
+  .cover{min-height:auto}
+  .lines{grid-template-columns:1fr;gap:18px}
+  .toc a{grid-template-columns:52px 1fr}
+  .toc .tag,.toc .peek{display:none}
+  .spread{grid-template-columns:1fr}
+  .feat{grid-row:auto}
+  .ask-grid{grid-template-columns:1fr}
+  .subs{grid-template-columns:1fr}
+  .plan{border-right:0;border-bottom:2px dashed var(--ink)}
+  .plan:last-child{border-bottom:0}
+  .colo{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="logo" href="#">zuey.me</a>
+  <nav><a href="#toc">Mục lục</a><a href="#reads">Reads</a><a href="#ask">Hỏi Zuey</a><a href="#subscribe">Gói</a></nav>
+  <span class="sp"></span>
+  <a class="in" href="#">Đăng nhập</a>
+  <a class="sub" href="#subscribe">Đăng ký · từ $9</a>
+</header>
+
+<section class="cover" aria-label="Bìa">
+  <div class="issue mono"><span>Số 10 · Tháng 10/2026</span><span>Sài Gòn · Build in Public</span><span>AI · Product · Engineering</span></div>
+  <h1 class="mast" aria-label="zuey">zuey<span class="sl">/</span></h1>
+  <p class="bio">Duy Nguyen: CTO, co-founder, và một người chuyên “F*ck Around &amp; Find Out” với AI agent.</p>
+  <figure class="portrait"><img src="https://cdn.zuey.me/avatar.png" alt="Duy Nguyen"></figure>
+  <a class="sticker" href="#ask"><span><b>Hỏi</b>Zuey AI<br>ngay →</span></a>
+  <div class="lines">
+    <a href="#reads"><span class="mono">Đang đọc</span><h3>MCP hay CLI? Tám bài Zuey đọc tuần này</h3><p>Tóm tắt bằng AI, chọn tay từ X, YouTube và blog.</p></a>
+    <a href="#toc"><span class="mono">Trong số này</span><h3>12 sản phẩm AI đang chạy, từ AgentKit tới Dewee</h3><p>Những gì Zuey xây, và vì sao.</p></a>
+    <a href="#subscribe"><span class="mono">Cho doanh nghiệp</span><h3>Một buổi 1:1 với Zuey, $1,999</h3><p>Chiến lược AI cho team của bạn.</p></a>
+  </div>
+</section>
+
+<div class="ticker" aria-hidden="true"><div class="row">
+  <span>TOP Group</span><span>Digitop</span><span>Xin Chào Live Music</span><span>Next Level Builder</span><span>AgentKit</span><span>Dewee</span><span>GoClaw</span><span>#bip</span><span>uupm.cc</span><span>SkillX</span><span>TOSE</span><span>IndieBoosting</span>
+  <span>TOP Group</span><span>Digitop</span><span>Xin Chào Live Music</span><span>Next Level Builder</span><span>AgentKit</span><span>Dewee</span><span>GoClaw</span><span>#bip</span><span>uupm.cc</span><span>SkillX</span><span>TOSE</span><span>IndieBoosting</span>
+</div></div>
+
+<section class="sec" id="toc">
+  <div class="sec-h"><h2>Mục lục</h2><span class="mono">06 chuyên mục</span></div>
+  <ol class="toc">
+    <li><a href="#"><span class="n">01</span><div><h3>Knowledges</h3><p>Ghi chú, biểu đồ và survey về AI engineering. Đọc trước miễn phí, đọc hết với gói Knowledges.</p></div><span class="tag paid">Preview · $9</span><img class="peek" src="https://lucumr.pocoo.org/social/2025-08-18-code-mcps-social.png" alt=""></a></li>
+    <li><a href="#reads"><span class="n">02</span><div><h3>Zuey Reads</h3><p>Zuey đang đọc gì, có tóm tắt sẵn.</p></div><span class="tag">Miễn phí</span><img class="peek" src="https://i.ytimg.com/vi/eo0As3rieA8/hqdefault.jpg" alt=""></a></li>
+    <li><a href="#ask"><span class="n">03</span><div><h3>Zuey AI</h3><p>Hỏi thẳng, nhận câu trả lời từ chính bài viết của Zuey, có trích nguồn.</p></div><span class="tag paid">$9 / tháng</span><img class="peek" src="https://mariozechner.at/posts/2025-08-15-mcp-vs-cli/media/header.jpg" alt=""></a></li>
+    <li><a href="#"><span class="n">04</span><div><h3>AI Workflows</h3><p>Cách Zuey làm việc với AI mỗi ngày: agent, skill, harness.</p></div><span class="tag">Miễn phí</span><img class="peek" src="https://earendil.com/static/og/posts/pi-durable.png" alt=""></a></li>
+    <li><a href="#"><span class="n">05</span><div><h3>For Business</h3><p>Tư vấn 1:1, đặt lịch và thanh toán qua SePay hoặc PayPal.</p></div><span class="tag">$1,999</span><img class="peek" src="https://cdn.zuey.me/avatar.png" alt=""></a></li>
+    <li><a href="#"><span class="n">06</span><div><h3>Cộng đồng</h3><p>Nhóm Telegram kín, tiếng Việt và tiếng Anh.</p></div><span class="tag paid">$29 / tháng</span><img class="peek" src="https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/media/header.png" alt=""></a></li>
+  </ol>
+</section>
+
+<section class="sec" id="reads" style="padding-top:0">
+  <div class="sec-h"><h2>Đang đọc</h2><a class="mono" href="#">Xem tất cả →</a></div>
+  <div class="spread" style="margin-top:28px">
+    <a class="card feat" href="https://m.youtube.com/watch?v=eo0As3rieA8"><img src="https://i.ytimg.com/vi/eo0As3rieA8/hqdefault.jpg" alt=""><span class="mono">YouTube · 0xSero · 4.8k từ</span><h3>Best AI agent harnesses and how I use them (pi, omp, Zcode)</h3><p>So sánh Pi, OMP và Zcode: codebase nhỏ, sub-agent, cache hit rate và cách quản lý nhiều model cùng lúc.</p></a>
+    <a class="card" href="https://lucumr.pocoo.org/2025/8/18/code-mcps/"><img src="https://lucumr.pocoo.org/social/2025-08-18-code-mcps-social.png" alt=""><span class="mono">Armin Ronacher</span><h3>Your MCP Doesn't Need 30 Tools: It Needs Code</h3></a>
+    <a class="card" href="https://mariozechner.at/posts/2025-08-15-mcp-vs-cli/"><img src="https://mariozechner.at/posts/2025-08-15-mcp-vs-cli/media/header.jpg" alt=""><span class="mono">mariozechner.at</span><h3>MCP vs CLI: Benchmarking Tools for Coding Agents</h3></a>
+    <a class="card" href="https://x.com/trq212/status/2103576349499855160"><img src="https://pbs.twimg.com/profile_images/1976939058741039104/r3GgzqRh_200x200.jpg" alt="" style="aspect-ratio:16/10"><span class="mono">X · Thariq</span><h3>Using Claude Code: Spending your effort</h3></a>
+    <a class="card" href="https://earendil.com/posts/pi-durable/"><img src="https://earendil.com/static/og/posts/pi-durable.png" alt=""><span class="mono">earendil.com</span><h3>Pi Durable</h3></a>
+  </div>
+</section>
+
+<section class="sec ask" id="ask">
+  <div class="sec-h"><h2>Hỏi Zuey</h2><span class="mono">Zuey AI · trả lời từ bài viết</span></div>
+  <div class="ask-grid">
+    <div>
+      <p class="letter">“Mình nên dùng <b>MCP</b> hay để agent tự viết <b>CLI script</b>?”</p>
+      <div class="reply"><span class="mono">Zuey AI trả lời</span>Với coding agent, nghiêng về CLI + code: model viết script ngắn thay vì gọi 30 tool rời, ít token và dễ debug. MCP hợp khi cần auth, quyền và khám phá tool cho người dùng cuối.
+        <div class="src"><a href="#">MCP vs CLI ↗</a><a href="#">Your MCP Doesn't Need 30 Tools ↗</a></div></div>
+    </div>
+    <form class="box" onsubmit="event.preventDefault();this.querySelector('small').textContent='Đăng nhập để gửi câu hỏi. Gói AI $9/tháng, 300 lượt.'">
+      <label for="q">Thư gửi Zuey</label>
+      <textarea id="q" placeholder="Bạn đang xây gì, và đang kẹt ở đâu?"></textarea>
+      <div class="chips"><button type="button">Effort trong Claude Code</button><button type="button">Harness agent nào đáng dùng</button><button type="button">Bắt đầu build in public</button></div>
+      <div class="go"><small>Có trích nguồn · nói rõ khi không đủ thông tin</small><button>Gửi câu hỏi →</button></div>
+    </form>
+  </div>
+</section>
+
+<section class="sec" id="subscribe">
+  <div class="sec-h"><h2>Đặt mua</h2><span class="mono">Hủy bất cứ lúc nào</span></div>
+  <div class="subs" style="margin-top:28px">
+    <div class="plan"><span class="mono">Đọc sâu</span><h3>Knowledges</h3><div class="p">$9<small> / tháng</small></div><ul><li>Đọc toàn bộ bài trả phí</li><li>Media &amp; interactive blocks</li><li>MCP / API đọc nguyên bài</li></ul><a href="#">Chọn Knowledges</a></div>
+    <div class="plan"><span class="mono">Cùng suy nghĩ</span><h3>Zuey AI</h3><div class="p">$9<small> / tháng</small></div><ul><li>300 lượt hỏi / tháng</li><li>Trả lời có trích nguồn</li><li>Ngân sách AI $3</li></ul><a href="#">Chọn Zuey AI</a></div>
+    <div class="plan hot"><span class="mono">Đọc &amp; hỏi · phổ biến</span><h3>Kết hợp</h3><div class="p">$19<small> / tháng</small></div><ul><li>Knowledges + Zuey AI</li><li>Ngân sách AI $5</li></ul><a href="#">Chọn Kết hợp</a></div>
+    <div class="plan"><span class="mono">Kết nối sâu hơn</span><h3>Cộng đồng</h3><div class="p">$29<small> / tháng</small></div><ul><li>Mọi quyền lợi Kết hợp</li><li>Nhóm Telegram kín VI + EN</li></ul><a href="#">Chọn Cộng đồng</a></div>
+  </div>
+  <p class="save">Trả trước qua VietQR: <b>3 tháng −5%</b> · <b>6 tháng −10%</b> · <b>12 tháng −20%</b></p>
+</section>
+
+<section class="sec" style="padding-top:0">
+  <div class="colo">
+    <div><h4>Đã xây</h4>
+      <a href="https://agentkit.best/">AgentKit.best<span>AI engineering framework</span></a>
+      <a href="https://dewee.sh/">Dewee.sh<span>Agent runtime cho team</span></a>
+      <a href="https://goclaw.sh/">GoClaw.sh<span>Go gateway cho agent</span></a>
+      <a href="https://uupm.cc/">uupm.cc<span>UI UX Pro Max skill</span></a>
+      <a href="https://skillx.sh/">SkillX.sh<span>Skill registry</span></a>
+      <a href="https://agentbrain.sh/">AgentBrain.sh<span>Shared memory</span></a>
+    </div>
+    <div><h4>Đồng sáng lập</h4>
+      <a href="https://wearetopgroup.com/">TOP Group<span>Production &amp; creative tech</span></a>
+      <a href="https://digitop.ai/">Digitop<span>Digital &amp; AI agency</span></a>
+      <a href="https://xinchao.world/">Xin Chào Live Music<span>Music platform</span></a>
+      <a href="https://nextlevelbuilder.io/">Next Level Builder<span>Venture builder</span></a>
+      <a href="https://bip.vn/">Build in Public VN<span>Cộng đồng indie hacker</span></a>
+      <a href="https://faafospecialist.substack.com/">Substack<span>EN · VI newsletter</span></a>
+    </div>
+  </div>
+</section>
+
+<footer><span>zuey.me · hi@zuey.me · API Docs · llms.txt · Privacy</span><span>X · YouTube · Instagram · TikTok · Threads · Facebook</span></footer>
+<script>
+document.querySelectorAll('img').forEach(function(i){i.addEventListener('error',function(){i.removeAttribute('src');i.style.background='linear-gradient(135deg,#c2401c,#1b1714)'})});
+document.querySelectorAll('.chips button').forEach(function(b){b.onclick=function(){document.getElementById('q').value=b.textContent+'?'}});
+</script>
+</body>
+</html>
