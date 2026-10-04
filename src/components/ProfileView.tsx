@@ -14,12 +14,15 @@ interface ProfileViewProps {
   initialLinks: LinkItem[];
   /** Site locale; profile content exists in en/vi only, other locales read English with a note. */
   locale: Locale;
+  /** false: no card chrome (hosted in a Zuey OS window, which is already a paper surface). */
+  framed?: boolean;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   initialProfile,
   initialLinks,
   locale,
+  framed = true,
 }) => {
   const lang = profileContentLocale(locale);
   const fallbackNote = locale === lang ? null : homeStrings(locale).profileFallback;
@@ -52,7 +55,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   return (
     <div className="relative w-full flex flex-col items-center justify-start selection:bg-amber-200" lang={lang}>
       {/* Floating Center Card with Rounded Frame and Drop Shadow (Matching sample 01) */}
-      <div className="w-full max-w-[540px] sm:max-w-[580px] bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] md:rounded-[40px] border border-stone-200/90 shadow-floating-card px-3.5 py-6 sm:px-6 sm:py-8 md:p-8 flex flex-col items-center relative transition-all duration-300">
+      <div className={framed ? "w-full max-w-[540px] sm:max-w-[580px] bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] md:rounded-[40px] border border-stone-200/90 shadow-floating-card px-3.5 py-6 sm:px-6 sm:py-8 md:p-8 flex flex-col items-center relative transition-all duration-300" : "w-full flex flex-col items-center relative"}>
 
         {/* Top Header Bar with Starburst Icon and Controls */}
         <header className="w-full flex items-center justify-between px-1 sm:px-2 mb-6 sm:mb-8">

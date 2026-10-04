@@ -34,8 +34,13 @@ export interface KnowledgeStrings {
   draftPreview: (revision: number) => string;
   lockedTitle: string;
   lockedBody: string;
+  /** Size of the withheld part: locked section count (0 when it has no headings) and reading minutes. */
+  lockedMore: (sections: number, minutes: number) => string;
+  /** Screen-reader note on each blurred locked heading. */
+  lockedSection: string;
   seePlans: string;
   signIn: string;
+  openInNewTab: string;
   share: string;
   copyMarkdown: string;
   copyMarkdownUrl: string;
@@ -88,6 +93,9 @@ const vi: KnowledgeStrings = {
   lockedBody: 'Bạn đang đọc khoảng một phần ba đầu bài. Các gói Knowledges, Kết hợp và Cộng đồng mở toàn bộ bài viết trả phí; gói Zuey AI chỉ đọc phần preview.',
   seePlans: 'Xem các gói',
   signIn: 'Đăng nhập',
+  lockedMore: (s, m) => (s > 0 ? `Còn ${s} phần nữa (khoảng ${m} phút đọc) dành cho thành viên` : `Còn khoảng ${m} phút đọc dành cho thành viên`),
+  lockedSection: 'Phần bị khoá',
+  openInNewTab: 'Mở trong thẻ mới',
   share: 'Chia sẻ',
   copyMarkdown: 'Sao chép Markdown',
   copyMarkdownUrl: 'Sao chép link Markdown',
@@ -140,6 +148,9 @@ const en: KnowledgeStrings = {
   lockedBody: 'You are reading roughly the first third. Knowledges, Combo and Community plans unlock paid articles in full; the Zuey AI plan reads previews only.',
   seePlans: 'See plans',
   signIn: 'Sign in',
+  lockedMore: (s, m) => (s > 0 ? `Plus ${s} more ${s === 1 ? 'section' : 'sections'} (about ${m} min) for members` : `About ${m} more min of reading for members`),
+  lockedSection: 'Locked section',
+  openInNewTab: 'Open in new tab',
   share: 'Share',
   copyMarkdown: 'Copy Markdown',
   copyMarkdownUrl: 'Copy Markdown link',
@@ -192,6 +203,9 @@ const zh: KnowledgeStrings = {
   lockedBody: '你正在阅读约前三分之一。Knowledges、组合和社区方案可阅读付费文章全文；Zuey AI 方案仅可阅读预览。',
   seePlans: '查看方案',
   signIn: '登录',
+  lockedMore: (s, m) => (s > 0 ? `另有 ${s} 个章节（约 ${m} 分钟）仅限会员` : `另有约 ${m} 分钟的内容仅限会员`),
+  lockedSection: '锁定章节',
+  openInNewTab: '在新标签页中打开',
   share: '分享',
   copyMarkdown: '复制 Markdown',
   copyMarkdownUrl: '复制 Markdown 链接',
@@ -244,6 +258,9 @@ const ko: KnowledgeStrings = {
   lockedBody: '현재 앞부분 약 3분의 1을 읽고 있습니다. Knowledges, 콤보, 커뮤니티 플랜은 유료 글 전체를 열고, Zuey AI 플랜은 미리보기만 읽습니다.',
   seePlans: '플랜 보기',
   signIn: '로그인',
+  lockedMore: (s, m) => (s > 0 ? `회원 전용 섹션 ${s}개 더(약 ${m}분)` : `회원 전용 내용 약 ${m}분 더`),
+  lockedSection: '잠긴 섹션',
+  openInNewTab: '새 탭에서 열기',
   share: '공유',
   copyMarkdown: 'Markdown 복사',
   copyMarkdownUrl: 'Markdown 링크 복사',
@@ -296,6 +313,9 @@ const ja: KnowledgeStrings = {
   lockedBody: '現在、冒頭の約3分の1を読んでいます。Knowledges・コンボ・コミュニティプランで有料記事を全文読めます。Zuey AI プランはプレビューのみです。',
   seePlans: 'プランを見る',
   signIn: 'ログイン',
+  lockedMore: (s, m) => (s > 0 ? `会員向けにあと ${s} セクション（約 ${m} 分）` : `会員向けにあと約 ${m} 分の内容`),
+  lockedSection: 'ロックされたセクション',
+  openInNewTab: '新しいタブで開く',
   share: '共有',
   copyMarkdown: 'Markdown をコピー',
   copyMarkdownUrl: 'Markdown のリンクをコピー',

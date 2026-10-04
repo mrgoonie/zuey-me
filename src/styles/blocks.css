@@ -144,11 +144,62 @@
   .zb-cell { grid-column: span var(--zl-span-lg, 1) / span var(--zl-span-lg, 1); }
 }
 
-.zb-locked {
-  margin-top: 1.5rem;
+/* Paywall: the withheld outline (real headings, blurred) fades out under a lockbox card. */
+.zb-lock-wrap { position: relative; margin-top: 1.1rem; }
+.zb-lock-outline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  /* min-height keeps the pulled-up lockbox off the readable part when few sections are locked. */
+  min-height: 12rem;
+  max-height: 26rem;
+  overflow: hidden;
+  user-select: none;
+}
+/* Fade into the article background (#F5EFEB) so the lockbox reads on a solid surface. */
+.zb-lock-outline::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(245, 239, 235, 0) 0%, rgba(245, 239, 235, 0.55) 40%, #f5efeb 88%);
+}
+.zb-lock-h { margin-top: 0; }
+.zb-lock-blur { filter: blur(4px); color: #44403c; }
+.zb-lock-lines { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.75rem; }
+.zb-lock-lines span { display: block; height: 0.7rem; border-radius: 999px; background: #e7ded6; }
+.zb-lock-lines span:nth-child(2) { width: 92%; }
+.zb-lock-lines span:nth-child(3) { width: 97%; }
+.zb-lock-lines span:nth-child(4) { width: 68%; }
+.zb-lockbox {
+  position: relative;
+  z-index: 1;
+  margin: -9rem auto 0;
+  max-width: 34rem;
   border-radius: 1.4rem;
-  padding: 1.4rem;
+  padding: 1.4rem 1.2rem;
   text-align: center;
-  background: linear-gradient(180deg, rgba(253, 246, 236, 0) 0%, #fdf6ec 28%);
-  border: 1px dashed #d6a756;
+  background: #ffffff;
+  border: 1px solid #e7d3b0;
+  box-shadow: 0 18px 40px -18px rgba(28, 25, 23, 0.35);
+}
+.zb-lockbox-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-bottom: 0.6rem;
+  border-radius: 999px;
+  background: #1c1917;
+  color: #fcd34d;
+}
+.zb-lockbox-btn { transition: background-color 0.15s ease; }
+.zb-lockbox-btn:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+@media (min-width: 768px) {
+  .zb-lockbox { padding: 1.6rem 1.8rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zb-lockbox-btn { transition: none; }
 }

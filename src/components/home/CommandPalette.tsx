@@ -21,6 +21,8 @@ interface PaletteProps {
   locale: Locale;
   onOpenMcp: () => void;
   onShowActivity: () => void;
+  /** Actions handled in place (e.g. open a Zuey OS window) instead of navigating to their page. */
+  actionOverrides?: Partial<Record<PaletteActionId, () => void>>;
 }
 
 interface Option {
@@ -69,7 +71,7 @@ function matches(hit: ArticleHit, q: string): boolean {
  * Ctrl/⌘ K command palette: combobox + listbox with active-descendant navigation, recent items,
  * article search and site actions. Uses a modal <dialog> for the focus trap and Escape handling.
  */
-export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings, locale, onOpenMcp, onShowActivity }) => {
+export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings, locale, onOpenMcp, onShowActivity, actionOverrides }) => {
   const ref = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -170,9 +172,11 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
     remember({ id, label: strings.items[id], href: ACTION_HREF[id] ?? null });
     if (id === 'mcp') return close(onOpenMcp);
     if (id === 'activity') return close(onShowActivity);
+    const override = actionOverrides?.[id];
+    if (override) return close(override);
     const href = ACTION_HREF[id];
     if (href) close(() => window.location.assign(href));
-  }, [close, onOpenMcp, onShowActivity, remember, strings.items]);
+  }, [actionOverrides, close, onOpenMcp, onShowActivity, remember, strings.items]);
 
   const openArticle = useCallback((hit: ArticleHit) => {
     const href = `/articles/${encodeURIComponent(hit.slug)}`;

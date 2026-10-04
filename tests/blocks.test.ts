@@ -143,6 +143,44 @@ describe('paywall', () => {
     expect(canReadFull({ isAdmin: false, entitlements: ['read_full'] })).toBe(true);
     expect(applyPaywall(doc, 'free', { isAdmin: false, entitlements: [] }).truncated).toBe(false);
   });
+
+  const outlined: ArticleDocument = {
+    version: 1,
+    blocks: [
+      { id: 'h0', type: 'heading', level: 1, text: 'Public intro heading' },
+      { id: 'a', type: 'paragraph', text: 'Public '.repeat(15) },
+      { id: 'b', type: 'paragraph', text: 'Public '.repeat(15) },
+      { id: 'h1', type: 'heading', level: 2, text: 'Locked **chapter** one' },
+      { id: 'c', type: 'paragraph', text: 'WITHHELD_BODY_ONE '.repeat(6) },
+      { id: 'h2', type: 'heading', level: 3, text: 'Locked chapter two' },
+      { id: 'd', type: 'list', style: 'bullet', items: ['WITHHELD_ITEM_TWO', 'WITHHELD_ITEM_THREE'] },
+    ],
+  };
+
+  it('outlines only the withheld headings (plain text + level) and the withheld size', () => {
+    const res = applyPaywall(outlined, 'knowledges', { isAdmin: false, entitlements: [] });
+    expect(res.truncated).toBe(true);
+    expect(res.doc.blocks.map(b => b.id)).toEqual(['h0', 'a', 'b']);
+    expect(res.outline?.headings).toEqual([{ level: 2, text: 'Locked chapter one' }, { level: 3, text: 'Locked chapter two' }]);
+    expect(res.outline?.blocks).toBe(4);
+    expect(res.outline?.words).toBeGreaterThan(6);
+    const outline = JSON.stringify(res.outline);
+    expect(outline).not.toContain('Public intro heading');
+    expect(outline).not.toContain('WITHHELD');
+  });
+
+  it('gives entitled viewers and free articles no outline and no truncation', () => {
+    for (const viewer of [{ isAdmin: true, entitlements: [] }, { isAdmin: false, entitlements: ['read_full'] }]) {
+      const res = applyPaywall(outlined, 'knowledges', viewer);
+      expect(res.truncated).toBe(false);
+      expect(res.outline).toBeUndefined();
+      expect(res.doc.blocks).toHaveLength(outlined.blocks.length);
+    }
+    const free = applyPaywall(outlined, 'free', { isAdmin: false, entitlements: [] });
+    expect(free.truncated).toBe(false);
+    expect(free.outline).toBeUndefined();
+    expect(free.doc.blocks).toHaveLength(outlined.blocks.length);
+  });
 });
 
 // ---------- Route-level tests against a real SQLite database with all migrations ----------
@@ -269,6 +307,34 @@ describe('articles REST, Markdown and MCP', () => {
     for (const s of PAID_SECRETS) expect(adminRest).toContain(s);
     const adminMcp = JSON.stringify(await articlesMcpModule.call('article_get', { slug: 'paid' }, mcpCtx(true)));
     expect(adminMcp).toContain(PAID_SECRETS[3]);
+  });
+
+  it('returns a locked outline of withheld headings without leaking withheld text', async () => {
+    await createAndPublish('paid-outline', 'knowledges', [
+      { type: 'heading', level: 1, text: 'Open heading' },
+      para('Free intro paragraph one with enough text to count, plus a longer lead-in sentence.'),
+      para('Free intro paragraph two with enough text to count, plus a longer lead-in sentence.'),
+      { type: 'heading', level: 2, text: 'Members chapter' },
+      ...PAID_SECRETS.map(s => para(`${s} paid paragraph with enough text to count.`)),
+      { type: 'heading', level: 3, text: 'Members appendix' },
+    ]);
+
+    const restBody = await json(await call(getApi, { params: { slug: 'paid-outline' } }));
+    const restText = JSON.stringify(restBody);
+    for (const s of PAID_SECRETS) expect(restText).not.toContain(s);
+    const data = restBody.data;
+    const outline = typeof data === 'object' && data !== null && 'locked_outline' in data ? data.locked_outline : undefined;
+    expect(outline).toEqual({ headings: [{ level: 2, text: 'Members chapter' }, { level: 3, text: 'Members appendix' }], blocks: 6, words: expect.any(Number) });
+
+    const anonMcp = JSON.stringify(await articlesMcpModule.call('article_get', { slug: 'paid-outline' }, mcpCtx(false)));
+    expect(anonMcp).toContain('Members chapter');
+    for (const s of PAID_SECRETS) expect(anonMcp).not.toContain(s);
+    const md = await (await call(mdApi, { params: { slug: 'paid-outline' }, path: '/articles/paid-outline.md' })).text();
+    for (const s of PAID_SECRETS) expect(md).not.toContain(s);
+
+    const adminText = JSON.stringify(await json(await call(getApi, { params: { slug: 'paid-outline' }, headers: { cookie: adminCookie } })));
+    expect(adminText).not.toContain('locked_outline');
+    expect(adminText).toContain(PAID_SECRETS[0]);
   });
 
   it('enforces admin on MCP writes and exposes the block schema', async () => {
