@@ -1,0 +1,106 @@
+# Curated Links Index — Duy Nguyen /zuey/
+
+## Blogs & Publications
+### [✍️ FA&FO Specialist - English](https://faafospecialist.substack.com/)
+- Description: Substack Newsletter on AI engineering, products & experiments
+- Mô tả: Bản tin Substack về kỹ nghệ AI, sản phẩm & thử nghiệm
+- URL: https://faafospecialist.substack.com/
+
+### [✍️ My Solo Playbook - Vietnamese](https://goonnguyen.substack.com/)
+- Description: Hành trình xây dựng sản phẩm và chia sẻ thực chiến
+- Mô tả: Hành trình xây dựng sản phẩm và chia sẻ thực chiến
+- URL: https://goonnguyen.substack.com/
+
+## Companies & Organizations
+### [The Outstanding Production Group (T.O.P Viet Nam)](https://wearetopgroup.com)
+- Description: Leading production & creative technology conglomerate
+- Mô tả: Tập đoàn sản xuất & công nghệ sáng tạo hàng đầu
+- URL: https://wearetopgroup.com
+
+### [Xin Chào Live Music - A Professional Music Organization Platform](https://xinchao.world)
+- Description: Connecting top Vietnamese artists and global music experiences
+- Mô tả: Kết nối nghệ sĩ Việt Nam hàng đầu và trải nghiệm âm nhạc quốc tế
+- URL: https://xinchao.world
+
+### [Digitop - Crafting Award-winning Digital Assets](https://digitop.ai)
+- Description: Digital agency & AI-driven development house
+- Mô tả: Digital agency và công ty công nghệ chuyên sâu AI
+- URL: https://digitop.ai
+
+### [NEXT LEVEL BUILDER](https://nextlevelbuilder.io)
+- Description: Venture builder turning ideas into high-velocity products
+- Mô tả: Venture builder biến ý tưởng thành sản phẩm đột phá
+- URL: https://nextlevelbuilder.io
+
+### [TOSE - Fast, Reliable Cloud Infrastructure](https://tose.sh)
+- Description: Modern hosting and developer cloud platform
+- Mô tả: Nền tảng lưu trữ và hạ tầng đám mây cho lập trình viên
+- URL: https://tose.sh
+
+### ["Build in Public VN" Community](https://bip.vn)
+- Description: The #1 community for indie hackers and makers in Vietnam
+- Mô tả: Cộng đồng #1 dành cho indie hacker và nhà sáng tạo tại Việt Nam
+- URL: https://bip.vn
+
+## Products & AI Engineering Tools
+### [AgentKit.best (formerly ClaudeKit.cc)](https://agentkit.best)
+- Description: The complete AI engineering framework to build autonomous agents
+- Mô tả: Khung kỹ nghệ AI hoàn chỉnh để xây dựng và vận hành AI agent
+- URL: https://agentkit.best
+
+### [Dewee.sh (formerly GoClaw.sh)](https://dewee.sh)
+- Description: Enterprise AI agent runtime platform for human-AI teamwork
+- Mô tả: Nền tảng runtime AI agent doanh nghiệp cho sự cộng tác người - AI
+- URL: https://dewee.sh
+
+### [GoClaw.sh](https://goclaw.sh)
+- Description: High-performance Go runtime gateway for distributed agents
+- Mô tả: Gateway runtime Go hiệu năng cao cho hệ thống agent phân tán
+- URL: https://goclaw.sh
+
+### [tose.sh](https://tose.sh)
+- Description: Edge cloud deployment and serverless orchestration
+- Mô tả: Hạ tầng deploy edge và điều phối serverless
+- URL: https://tose.sh
+
+### [IndieBoosting.com](https://indieboosting.com)
+- Description: The 1st SaaS distribution network for indie hackers
+- Mô tả: Mạng lưới phân phối SaaS số 1 cho các nhà sáng lập
+- URL: https://indieboosting.com
+
+### [uupm.cc (UI UX Pro Max Skill)](https://uupm.cc)
+- Description: AI skill that designs and crafts world-class web and mobile interfaces
+- Mô tả: Kỹ năng AI thiết kế giao diện web & mobile chuẩn quốc tế
+- URL: https://uupm.cc
+
+### [AgentWiki.cc](https://agentwiki.cc)
+- Description: Static documentation and knowledge publishing platform for AI agents
+- Mô tả: Nền tảng xuất bản tài liệu tĩnh và tri thức cho AI agents
+- URL: https://agentwiki.cc
+
+### [AgentBrain.sh](https://agentbrain.sh)
+- Description: Shared memory and semantic intelligence layer for AI swarms
+- Mô tả: Bộ nhớ dùng chung và lớp trí tuệ ngữ nghĩa cho đội ngũ AI
+- URL: https://agentbrain.sh
+
+### [SkillX.sh](https://skillx.sh)
+- Description: Open agent skill registry and instant execution runtime
+- Mô tả: Kho lưu trữ kỹ năng mở và môi trường thực thi tức thì cho agent
+- URL: https://skillx.sh
+
+### [FindYourAI.tools](https://findyourai.tools)
+- Description: Curated directory of high-productivity AI tools and prompt systems
+- Mô tả: Danh bạ tuyển chọn công cụ AI năng suất cao và hệ thống prompt
+- URL: https://findyourai.tools
+
+### [VidCap.zuey.me](https://vidcap.zuey.me)
+- Description: AI video captioning and viral subtitle generation
+- Mô tả: Tự động tạo phụ đề video và phụ đề viral bằng AI
+- URL: https://vidcap.zuey.me
+
+### [ReviewWeb.site](https://reviewweb.site)
+- Description: Automated SEO audit, backlink intelligence and site health diagnostic
+- Mô tả: Kiểm toán SEO tự động, phân tích backlink và chuẩn đoán website
+- URL: https://reviewweb.site
+
+

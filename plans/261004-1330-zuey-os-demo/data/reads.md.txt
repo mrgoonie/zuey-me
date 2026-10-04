@@ -1,0 +1,62 @@
+# Zuey Reads — Duy Nguyen /zuey/
+
+Articles, videos and posts Zuey has read and recommends, with short AI summaries.
+
+> Summaries are generated automatically by AI and may be inaccurate; every entry links to the original article. / Tóm tắt do AI tạo tự động và có thể sai; luôn có link về bài gốc.
+
+Last synced: 2026-10-04T05:37:19.741Z
+
+## [Using Claude Code: Spending your effort](https://x.com/trq212/status/2103576349499855160?s=46&t=QzAECsoGzRH54ClDrIioRA)
+- Source: x.com · x · Fri Sep 25 20:04:18 +0000 2026
+- Author: Thariq (@trq212)
+- URL: https://x.com/trq212/status/2103576349499855160?s=46&t=QzAECsoGzRH54ClDrIioRA
+
+The author of the article discusses the concept of "effort" in Claude Code, a model that can be used for various tasks, and explains how it affects the output of the model. The author found that effort level impacts the amount of verification and edge-case testing the model performs, with higher effort levels resulting in better results in areas where verification and edge-case testing are more useful, such as hardware, code review, and security. The author also notes that lower effort levels are suitable for quick responses and iterating with the model.
+
+## [Best AI agent harnesses and how I use them (pi, omp, Zcode)](https://m.youtube.com/watch?v=eo0As3rieA8&feature=youtu.be)
+- Source: YouTube · youtube
+- Author: 0xSero
+- URL: https://m.youtube.com/watch?v=eo0As3rieA8&feature=youtu.be
+
+The video discusses various AI agent harnesses, including Pi, OMP, and Zcode, and how the author, 0xSero, uses them. The author highlights the strengths of each harness, such as Pi's small codebase and low cost, OMP's ability to run sub-agents and have a high cash hit rate, and Zcode's task management capabilities. The author also discusses how they use these harnesses for tasks such as quantization, model pruning, and model benchmarking, and how they can be used to manage multiple models and tasks simultaneously.
+
+## [OpenAI Understands Something Important and Rare](https://x.com/davidgeorge83/status/2104576086101426620?s=46&t=QzAECsoGzRH54ClDrIioRA)
+- Source: x.com · x · Mon Sep 28 14:16:54 +0000 2026
+- Author: David George (@DavidGeorge83)
+- URL: https://x.com/davidgeorge83/status/2104576086101426620?s=46&t=QzAECsoGzRH54ClDrIioRA
+
+OpenAI is likely to win in the AI frontier because of their ability to create new kinds of customers and their durable distribution strategy. They excel at finding simple and obvious breakthroughs that unlock new user behavior and have a broad and well-rounded general intelligence, allowing them to cultivate user patterns and primitives. OpenAI's focus on creating a platform that can be programmed and customized by users has led to their success in creating a durable business at AI frontier scale.
+
+## [Pi Durable](https://earendil.com/posts/pi-durable/)
+- Source: Earendil · web · 2026-10-01
+- URL: https://earendil.com/posts/pi-durable/
+
+Earendil and the Pi community have released Pi Durable, a new package that builds on the Pi coding agent, which is designed for long-running, durable, and malleable agents that can run anywhere. Pi Durable is a framework for building any agentic application, including coding agents, and allows for storage, execution environments, and tool calls to be implemented in a modular and flexible way. The package aims to provide a harness that can run multiple conversations concurrently, survive crashes and restarts, and support multiple extensions and tools.
+
+## [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/)
+- Source: Anthropic · web · 2026-09-28
+- Author: Lance Martin
+- URL: https://claude.dev/blog/automating-eval-design-and-hillclimbing/
+
+The article discusses the principles of good evaluation design and hillclimbing, which are essential for optimizing the performance of applications and models. A well-designed evaluation should mirror production tasks, show performance improvement with stronger models and more thinking, have "passable" headroom at the frontier, and low run-to-run variance. The Claude API skill provides tools to automate evaluation design and hillclimbing, including the `build-eval` and `hillclimb` commands.
+
+## [What if you don't need MCP at all?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
+- Source: mariozechner.at · web
+- URL: https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/
+
+The author argues that in many situations, a MCP (Model-Controller-Proxy) server is not necessary, and instead, a simple Bash setup can be used to achieve similar results. This is illustrated by the author's own use case of using Bash scripts to interact with a browser for development and scraping tasks. The author provides a minimal set of tools, each a simple Node.js script, that can be used to start a browser, navigate to URLs, execute JavaScript, and take screenshots.
+
+## [MCP vs CLI: Benchmarking Tools for Coding Agents](https://mariozechner.at/posts/2025-08-15-mcp-vs-cli/)
+- Source: mariozechner.at · web
+- URL: https://mariozechner.at/posts/2025-08-15-mcp-vs-cli/
+
+The author compared the performance of using a Model Context Protocol (MCP) versus a Command Line Interface (CLI) for coding agents. They found that using CLI tools directly often outperforms MCPs, which can flood the context window with unnecessary output and degrade agent performance. However, MCPs can be useful for stateful tools and when there are no easy-to-use CLI tools available. The author created a custom MCP server and CLI tool to evaluate the difference, finding that the CLI tool was faster and more efficient in some cases.
+
+## [Your MCP Doesn’t Need 30 Tools: It Needs Code](https://lucumr.pocoo.org/2025/8/18/code-mcps/)
+- Source: Armin Ronacher · web · 2025-08-18T00:00:00
+- Author: Armin Ronacher
+- URL: https://lucumr.pocoo.org/2025/8/18/code-mcps/
+
+The author argues that using a Model Context Protocol (MCP) with a single tool that accepts programming code as input is a more effective approach than using a large set of command-line tools for tasks that require complex interactions. This approach allows the MCP to maintain state and guide the tool through a built-in prompt, making it easier to compose and reuse code.
+
+

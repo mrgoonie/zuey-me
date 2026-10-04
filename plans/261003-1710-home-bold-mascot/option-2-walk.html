@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zuey Walk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;0,9..144,900;1,9..144,500&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<style>
+body{background:var(--bg);color:var(--ink-inv);font:15px/1.55 var(--sans)}
+:root{--floor:110px;--gutter:300px}
+
+/* scroll-driven street: vertical scroll moves Zuey through six rooms */
+.walk{position:relative;height:calc(6 * 115vh)}
+.stage{position:sticky;top:0;height:100vh;overflow:hidden}
+.head{position:absolute;top:0;left:0;right:0;z-index:20;background:linear-gradient(var(--bg) 70%,transparent)}
+.track{display:flex;height:100%;width:600vw;will-change:transform}
+.room{position:relative;width:100vw;height:100%;flex:none;padding:132px 64px calc(var(--floor) + 30px) var(--gutter);background:var(--wall);overflow:hidden}
+.room::before{content:"";position:absolute;left:0;right:0;bottom:var(--floor);height:84px;background:rgba(0,0,0,.18);border-top:2px solid rgba(245,239,235,.06)}
+.floor{position:absolute;left:0;right:0;bottom:0;height:var(--floor);background:
+  linear-gradient(180deg,rgba(255,255,255,.08),transparent 10px),
+  repeating-linear-gradient(90deg,#5b3b27 0 178px,#3d271a 178px 180px),#5b3b27}
+.floor::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(180deg,transparent 0 36px,rgba(0,0,0,.18) 36px 37px)}
+.num{position:absolute;right:40px;top:70px;font:900 360px/1 var(--serif);color:rgba(245,239,235,.035);letter-spacing:-.06em;pointer-events:none;will-change:transform}
+.in{position:relative;height:100%;display:flex;flex-direction:column;justify-content:center}
+.eye{font:600 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent-soft)}
+h1,h2{font-family:var(--serif);letter-spacing:-.035em}
+h2{font:900 52px/1 var(--serif);letter-spacing:-.035em;margin-top:8px}
+.lead{color:var(--muted-inv);margin-top:12px;max-width:46ch;font-size:16px}
+.hd{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:22px}
+.more{display:inline-flex;align-items:center;min-height:44px;font-weight:700;color:var(--accent-soft)}
+
+/* map of rooms */
+.map{position:relative;display:flex;justify-content:space-between;max-width:860px;margin:2px auto 0;padding:0 20px 14px}
+.rail{position:absolute;left:52px;right:52px;top:15px;height:2px;background:var(--line)}
+.rail i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent-soft)}
+.map button{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;font:600 12px var(--sans);color:var(--muted-inv);min-width:64px;min-height:44px}
+.map button span{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--line);font:600 11px var(--mono)}
+.map button[aria-current=true]{color:var(--ink-inv)}
+.map button[aria-current=true] span{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* Zuey stays on the floor while the world slides past */
+.actor{position:absolute;left:44px;bottom:calc(var(--floor) - 18px);z-index:15}
+#walker{filter:drop-shadow(0 16px 14px rgba(0,0,0,.45));transition:transform .15s}
+#walker.left{transform:scaleX(-1)}
+.say{position:absolute;left:20px;bottom:calc(var(--floor) + 196px);z-index:15;width:236px;background:var(--card);color:var(--ink);border-radius:18px 18px 18px 4px;padding:12px 14px;font-weight:600;font-size:14px;line-height:1.4;box-shadow:var(--shadow);transition:opacity .25s}
+.say.swap{opacity:0;pointer-events:none}
+
+/* 01 door */
+.r1{--wall:#2b211b;background:radial-gradient(600px 500px at 78% 40%,rgba(242,160,122,.16),transparent 70%),var(--wall)}
+.two{display:grid;grid-template-columns:1.25fr 1fr;gap:56px;align-items:center;height:100%}
+.who{display:flex;align-items:center;gap:12px;margin-top:18px}
+.who img{width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid #e9a23b}
+.studio{font:600 11px var(--sans);border:1px solid var(--line);border-radius:var(--pill);padding:4px 10px;color:var(--muted-inv)}
+.r1 h1{font:900 92px/.9 var(--serif);margin-top:16px}
+.r1 h1 em{font-style:italic;font-weight:500;color:var(--accent-soft)}
+.bio{color:var(--muted-inv);margin-top:16px;max-width:52ch}
+.soc{display:flex;gap:8px;margin-top:18px}
+.soc a{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:rgba(245,239,235,.07);border:1px solid var(--line);color:var(--ink-inv)}
+.soc a:hover{background:rgba(245,239,235,.16)}
+.blogs{display:flex;gap:10px;margin-top:14px}
+.blogs a{display:flex;gap:10px;align-items:center;padding:10px 14px;border-radius:14px;background:var(--card);color:var(--ink)}
+.blogs b{font:700 14px/1.2 var(--serif);display:block}
+.blogs small{font-size:11px;color:var(--muted)}
+.door{justify-self:center;display:flex;flex-direction:column;align-items:center}
+.arch{position:relative;width:300px;height:440px;border-radius:150px 150px 0 0;background:linear-gradient(180deg,#f6c99f,#e08a55 55%,#b8532a);border:14px solid #4a3022;border-bottom:0;box-shadow:0 0 120px rgba(242,160,122,.35);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#3a1e10;text-align:center}
+.plate{background:#3a2418;color:var(--ink-inv);border-radius:12px;padding:12px 18px;font:600 12px var(--mono);line-height:1.6;box-shadow:0 10px 20px rgba(0,0,0,.25)}
+.plate b{display:block;font:700 22px var(--serif);letter-spacing:-.02em}
+.plate .ok{color:#7bd6a1}
+.hint{position:absolute;right:64px;bottom:calc(var(--floor) + 28px);font:600 13px var(--sans);color:var(--muted-inv);display:flex;gap:8px;align-items:center}
+.hint kbd{font:600 11px var(--mono);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+
+/* 02 desk */
+.desk-g{grid-template-columns:1fr 1.25fr;gap:40px}
+.r2{--wall:#1f2320}
+.desk{display:flex;flex-direction:column;align-items:center}
+.monitor{width:100%;max-width:600px;background:#111;border-radius:22px;padding:14px;box-shadow:0 40px 60px -30px rgba(0,0,0,.7)}
+.screen{background:var(--card);color:var(--ink);border-radius:12px;display:flex;flex-direction:column;height:330px}
+.sh{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--hair);font-weight:700}
+.sh i{width:10px;height:10px;border-radius:50%;background:var(--card-3)}
+.sh i:first-child{background:#e46c4f}.sh i:nth-child(2){background:#e9a23b}.sh i:nth-child(3){background:#56b07a}
+.sh b{margin-left:8px;font:700 15px var(--serif)}
+.sh small{margin-left:auto;font:600 10px var(--mono);color:var(--ok-ink)}
+.msgs{flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.m{max-width:86%;padding:9px 13px;border-radius:14px;font-size:14px}
+.m.z{background:var(--card-2);border-bottom-left-radius:4px}
+.m.u{align-self:flex-end;background:var(--ink);color:var(--card);border-bottom-right-radius:4px}
+.sug{display:flex;gap:6px;flex-wrap:wrap;padding:0 16px 10px}
+.sug button{font:500 12px var(--sans);border:1px solid var(--hair);border-radius:var(--pill);padding:6px 11px;min-height:34px}
+.sug button:hover{background:var(--ink);color:var(--card)}
+.ask{display:flex;gap:8px;margin:0 12px 12px;padding:5px 5px 5px 14px;border-radius:14px;background:#fff;border:1px solid var(--hair)}
+.ask input{flex:1;border:0;outline:none;font:15px var(--sans);background:none;color:var(--ink);min-height:40px}
+.ask button{background:var(--accent);color:#fff;border-radius:10px;font-weight:700;padding:0 16px;min-height:44px}
+.neck{width:70px;height:46px;background:linear-gradient(90deg,#222,#3a3a3a,#222)}
+.table{width:760px;height:18px;border-radius:6px;background:linear-gradient(#8a5a3a,#6b4329);box-shadow:0 14px 20px -8px rgba(0,0,0,.6)}
+.facts{list-style:none;padding:0;margin-top:20px;display:grid;gap:8px}
+.facts li{display:flex;gap:10px;align-items:center;color:var(--ink-inv)}
+.facts li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent-soft)}
+
+/* 03 bookshelf */
+.r3{--wall:#291e19}
+.note{background:#f7e3a1;color:#3b2f12;padding:14px 16px;border-radius:4px;max-width:300px;transform:rotate(2deg);box-shadow:0 12px 20px -10px rgba(0,0,0,.6);font-size:13px}
+.note b{display:block;font:700 16px var(--serif)}
+.note a{font-weight:700;text-decoration:underline}
+.shelf .row{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding:0 14px}
+.plank{height:16px;border-radius:4px;background:linear-gradient(#8a5a3a,#5e3b25);margin:0 0 18px;box-shadow:0 10px 16px -8px rgba(0,0,0,.7)}
+.book{display:flex;gap:10px;background:var(--card);color:var(--ink);border-radius:12px 12px 4px 4px;padding:8px;transition:transform .2s var(--ease)}
+.book:hover{transform:translateY(-6px) rotate(-1deg)}
+.book .cv{width:78px;height:78px;flex:none;border-radius:8px;overflow:hidden;background:var(--card-2)}
+.book .cv img,.book .cv .cover-fallback{width:100%;height:100%;object-fit:cover}
+.book .kd{font:600 9px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.book b{font:700 14px/1.25 var(--serif);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-top:2px}
+
+/* 04 workshop */
+.r4{--wall:#1d1e24}
+.frames{display:grid;grid-template-columns:repeat(6,1fr);gap:16px}
+.frame{display:flex;flex-direction:column;gap:8px;padding:16px;background:var(--card);color:var(--ink);border:8px solid #4a3022;border-radius:6px;box-shadow:0 18px 24px -14px rgba(0,0,0,.8);transition:transform .2s var(--ease)}
+.frame:nth-child(odd){transform:rotate(-1.2deg)}.frame:nth-child(even){transform:rotate(1deg)}
+.frame:hover{transform:translateY(-4px) rotate(0)}
+.frame b{font:700 15px/1.15 var(--serif)}
+.frame small{font-size:11.5px;line-height:1.35;color:var(--muted)}
+.bench{margin-top:26px;background:rgba(245,239,235,.05);border:1px solid var(--line);border-radius:18px;padding:14px}
+.bench-l{font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted-inv);margin:0 4px 10px}
+.boxes{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.box{display:flex;gap:10px;align-items:center;padding:9px 10px;border-radius:12px;background:var(--bg-3);border:1px solid var(--line);min-width:0}
+.box:hover{border-color:rgba(245,239,235,.35)}
+.box b{font:600 13px var(--sans);display:block}
+.box small{font-size:11px;color:var(--muted-inv);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 05 meeting room */
+.r5{--wall:#272019}
+.meet{display:grid;grid-template-columns:1.6fr 1fr;gap:24px;align-items:stretch}
+.board{background:#fbfaf7;color:var(--ink);border:10px solid #cfc6bd;border-radius:10px;padding:22px 24px;box-shadow:0 30px 40px -24px rgba(0,0,0,.8)}
+.board .eye{color:var(--accent-ink)}
+.board h2{font-size:36px}
+.months{display:inline-grid;grid-template-columns:repeat(4,auto);gap:4px;background:var(--card-2);padding:4px;border-radius:12px;margin-top:12px}
+.months button{border-radius:9px;padding:4px 14px;font:600 12px var(--sans);min-height:44px;color:var(--muted);line-height:1.2}
+.months button small{display:block;font:600 10px var(--mono);color:var(--accent-ink)}
+.months button[aria-pressed=true]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.cols{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+.col{border:1.5px solid var(--hair);border-radius:14px;padding:14px;display:flex;flex-direction:column}
+.col.hot{border-color:var(--accent);background:#fff5ef}
+.col b{font:700 17px var(--serif)}
+.col .p{font:900 30px/1 var(--serif);margin-top:8px}
+.col .p small{font:500 12px var(--sans);color:var(--muted)}
+.col .v{font:600 11px var(--mono);color:var(--muted);margin-top:4px}
+.col p{font-size:12.5px;color:var(--muted);margin-top:8px;flex:1}
+.col a{margin-top:10px;display:flex;justify-content:center;align-items:center;min-height:40px;border-radius:var(--pill);background:var(--ink);color:var(--card);font-weight:700;font-size:13px}
+.col.hot a{background:var(--accent);color:#fff}
+.tag{font:700 9px var(--mono);text-transform:uppercase;background:var(--accent);color:#fff;padding:2px 6px;border-radius:5px;align-self:flex-start;margin-bottom:6px}
+.biz{background:var(--bg-2);border:1px solid var(--line);border-radius:22px;padding:24px;display:flex;flex-direction:column}
+.biz .price{font:900 56px/1 var(--serif);letter-spacing:-.04em;margin-top:12px}
+.biz .price small{font:500 14px var(--sans);color:var(--muted-inv);letter-spacing:0}
+.biz p{color:var(--muted-inv);font-size:14px;margin-top:8px}
+.biz .btn{margin-top:14px;display:flex;justify-content:center;align-items:center;min-height:48px;border-radius:var(--pill);background:var(--accent);color:#fff;font-weight:700}
+.wf{margin-top:auto;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--muted-inv)}
+.wf b{color:var(--ink-inv);display:block;font:700 15px var(--serif);margin-bottom:4px}
+
+/* 06 diary */
+.r6{--wall:#201b18}
+.diary{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start}
+.cal{background:var(--card);color:var(--ink);border-radius:18px;padding:20px;position:relative}
+.cal::before{content:"";position:absolute;top:-10px;left:40px;right:40px;height:20px;background:repeating-linear-gradient(90deg,#8d8178 0 6px,transparent 6px 40px)}
+.cal b{font:700 18px var(--serif)}
+.cal .heat{grid-template-rows:repeat(7,22px);grid-auto-columns:22px;width:max-content;margin-top:12px;gap:4px}
+.cal p{font-size:13px;color:var(--muted);margin-top:10px}
+.page{background:#fbf6ee;color:var(--ink);border-radius:6px 18px 18px 6px;padding:20px 24px;background-image:repeating-linear-gradient(180deg,transparent 0 35px,#e6dccf 35px 36px);border-left:4px solid #e3a58a}
+.page div{display:flex;justify-content:space-between;gap:12px;height:36px;align-items:center;font-size:14px}
+.page div span:first-child{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.page div span:last-child{color:var(--muted);font-size:12px;white-space:nowrap}
+.foot{margin-top:22px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted-inv)}
+
+/* phones, tablets and reduced motion: the rooms stack and Zuey walks beside you */
+@media (max-width:900px),(prefers-reduced-motion:reduce){
+  :root{--floor:0px;--gutter:16px}
+  .walk{height:auto}
+  .stage{position:static;height:auto;overflow:visible}
+  .head{position:sticky;z-index:30;background:var(--bg)}
+  .track{flex-direction:column;width:100%;transform:none!important}
+  .room{width:100%;height:auto;padding:40px 16px 56px;scroll-margin-top:110px}
+  .room::before,.floor,.num,.hint{display:none}
+  .in{height:auto}
+  .two,.meet,.diary{grid-template-columns:1fr;gap:28px}
+  .actor{position:fixed;left:6px;bottom:4px}
+  .say{position:fixed;left:84px;bottom:56px;width:auto;max-width:calc(100vw - 100px);font-size:13px;padding:9px 12px;border-radius:14px 14px 14px 4px}
+  .room:last-child{padding-bottom:140px}
+  .say{bottom:24px;left:96px}
+}
+@media (max-width:900px){
+  .map{overflow-x:auto;justify-content:flex-start;gap:4px;padding:0 12px 10px;scrollbar-width:none}
+  .rail{display:none}
+  .map button{flex-direction:row;min-width:auto;padding:0 10px 0 4px;border-radius:var(--pill);border:1px solid var(--line);white-space:nowrap}
+  .map button span{width:26px;height:26px}
+  h2{font-size:38px}
+  .r1 h1{font-size:56px}
+  .soc{flex-wrap:wrap}
+  .blogs{flex-direction:column}
+  .arch{width:100%;max-width:320px;height:300px}
+  .monitor{width:100%;padding:8px;border-radius:16px}
+  .screen{height:420px}
+  .table{width:100%}
+  .hd{flex-direction:column;align-items:flex-start}
+  .shelf .row{grid-template-columns:1fr 1fr;gap:10px;padding:0 4px}
+  .book{flex-direction:column}.book .cv{width:100%;height:90px}
+  .frames,.boxes{grid-template-columns:1fr 1fr}
+  .cols{grid-template-columns:1fr 1fr}
+  .months{display:grid;grid-template-columns:repeat(4,1fr)}
+  .months button{padding:4px 0}
+  .cal .heat{grid-template-rows:repeat(7,16px);grid-auto-columns:16px;gap:3px}
+  .cal{overflow:auto}
+}
+</style>
+</head>
+<body>
+<div class="walk" id="walk">
+  <div class="stage" id="stage">
+    <div class="head">
+      <div id="top"></div>
+      <nav class="map" id="map" aria-label="Các phòng trong nhà Zuey"><div class="rail"><i id="fill"></i></div></nav>
+    </div>
+
+    <div class="track" id="track">
+      <section class="room r1" aria-label="Cửa nhà">
+        <span class="num">01</span>
+        <div class="two">
+          <div>
+            <span class="eye">01 · Cửa nhà</span>
+            <div class="who"><img src="avatar.png" alt="Duy Nguyen"><span class="studio">✳ Studio</span></div>
+            <h1>Duy Nguyen <em>/zuey/</em></h1>
+            <p class="bio" id="bio"></p>
+            <div class="soc" id="soc"></div>
+            <div class="blogs" id="blogs"></div>
+          </div>
+          <div class="door">
+            <div class="arch">
+              <div class="plate"><b>zuey.me</b>Sài Gòn · <span id="clock">--:--</span><br><span class="ok">● Zuey đang online</span></div>
+            </div>
+          </div>
+        </div>
+        <p class="hint">Cuộn hoặc bấm <kbd>→</kbd> để đi cùng Zuey</p>
+        <div class="floor"></div>
+      </section>
+
+      <section class="room r2" aria-label="Bàn làm việc">
+        <span class="num">02</span>
+        <div class="two desk-g">
+          <div>
+            <span class="eye">02 · Bàn làm việc</span>
+            <h2>Hỏi Zuey tí hon</h2>
+            <p class="lead">Trợ lý AI trả lời từ bài viết và những gì Zuey đang đọc, luôn kèm nguồn để bạn đọc tiếp.</p>
+            <ul class="facts"><li>Gói AI · $9/tháng · 300 lượt hỏi</li><li>Có sẵn trong gói Kết hợp và Cộng đồng</li><li>Nối MCP vào Claude, Cursor, Codex</li></ul>
+          </div>
+          <div class="desk">
+            <div class="monitor"><div class="screen">
+              <div class="sh"><i></i><i></i><i></i><b>Zuey AI</b><small>● online</small></div>
+              <div class="msgs" id="msgs"><div class="m z">Chào bạn 👋 Hỏi mình bất cứ điều gì Zuey đã viết hoặc đang đọc nhé.</div></div>
+              <div class="sug" id="sug"></div>
+              <form class="ask" id="ask"><input id="q" placeholder="Bạn đang xây gì?" aria-label="Câu hỏi cho Zuey AI"><button>Hỏi</button></form>
+            </div></div>
+            <div class="neck"></div><div class="table"></div>
+          </div>
+        </div>
+        <div class="floor"></div>
+      </section>
+
+      <section class="room r3" aria-label="Kệ sách">
+        <span class="num">03</span>
+        <div class="in">
+          <div class="hd">
+            <div><span class="eye">03 · Kệ sách · Knowledges &amp; Reads</span><h2>Zuey đang đọc gì</h2></div>
+            <div class="note"><b>Knowledges</b>Bài viết đầu tiên của Zuey sắp lên sóng. <a href="#">Nhận thông báo →</a></div>
+          </div>
+          <div class="shelf" id="shelf"></div>
+          <a class="more" href="#">Xem tất cả 8 bài ở Zuey Reads →</a>
+        </div>
+        <div class="floor"></div>
+      </section>
+
+      <section class="room r4" aria-label="Xưởng">
+        <span class="num">04</span>
+        <div class="in">
+          <div class="hd"><div><span class="eye">04 · Xưởng · Found by me</span><h2>Những thứ Zuey đã xây</h2></div><p class="lead" style="margin:0">6 công ty trên tường, 12 sản phẩm trên bàn.</p></div>
+          <div class="frames" id="ventures"></div>
+          <div class="bench"><div class="bench-l">Products &amp; Tools · 12</div><div class="boxes" id="products"></div></div>
+        </div>
+        <div class="floor"></div>
+      </section>
+
+      <section class="room r5" aria-label="Phòng họp">
+        <span class="num">05</span>
+        <div class="in">
+          <div class="meet">
+            <div class="board">
+              <span class="eye">05 · Phòng họp · Membership</span>
+              <h2>Chọn cách đồng hành</h2>
+              <div class="months" id="months"></div>
+              <div class="cols" id="cols"></div>
+            </div>
+            <div class="biz">
+              <span class="eye">For Business</span>
+              <h2 style="font-size:32px">Đưa AI vào công việc thật</h2>
+              <div class="price">$1,999<small> / buổi 1:1</small></div>
+              <p>Toàn bộ $1,999 được trừ vào gói đồng hành 3–6 tháng nếu hai bên đi tiếp.</p>
+              <a class="btn" href="#">Đặt lịch tư vấn</a>
+              <div class="wf"><b>AI Workflows</b>Claude Code + AgentKit · Agent team trên Dewee · UI với uupm.cc · <a href="#" style="color:var(--accent-soft);font-weight:700">Xem →</a></div>
+            </div>
+          </div>
+        </div>
+        <div class="floor"></div>
+      </section>
+
+      <section class="room r6" aria-label="Nhật ký">
+        <span class="num">06</span>
+        <div class="in">
+          <div class="hd"><div><span class="eye">06 · Nhật ký · GitHub @mrgoonie</span><h2>Zuey đang làm gì</h2></div><p class="lead" style="margin:0">Hoạt động công khai trên GitHub, cập nhật trực tiếp.</p></div>
+          <div class="diary">
+            <div class="cal"><b>12 tuần gần nhất</b><div id="heat"></div><p id="total">Đang tải…</p></div>
+            <div class="page" id="events"><div><span>Đang tải hoạt động công khai…</span></div></div>
+          </div>
+          <div class="foot"><span>zuey.me · hi@zuey.me · API Docs · llms.txt · Privacy</span><span>Crafted with ❤️ by Duy Nguyen. Hosted on Cloudflare Edge.</span></div>
+        </div>
+        <div class="floor"></div>
+      </section>
+    </div>
+
+    <div class="actor"><div id="walker"></div></div>
+    <p class="say" id="say" aria-live="polite"></p>
+  </div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+var flat = function () { return matchMedia('(max-width:900px),(prefers-reduced-motion:reduce)').matches; };
+document.getElementById('top').outerHTML = Z.topbar();
+document.getElementById('bio').textContent = Z.profile.bio;
+document.getElementById('soc').innerHTML = Z.socials.map(function (s) { return '<a href="' + s[1] + '" aria-label="' + s[2] + '">' + Z.icon(s[0], 20) + '</a>'; }).join('');
+document.getElementById('blogs').innerHTML = Z.blogs.map(function (b) { return '<a href="' + b[3] + '">' + Z.icon('substack', 22) + '<span><b>' + Z.esc(b[0]) + '</b><small>Substack · ' + b[1] + '</small></span></a>'; }).join('');
+function clock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit' }); }
+clock(); setInterval(clock, 30000);
+
+var ROOMS = [
+  ['Cửa nhà', 'wave', 'Chào bạn! Mình là Zuey tí hon. Đi dạo một vòng nhà Zuey nhé →'],
+  ['Bàn làm việc', 'talk', 'Bàn làm việc nè. Hỏi mình gì cũng được!'],
+  ['Kệ sách', 'happy', 'Zuey đang đọc 8 bài. Bấm cuốn nào cũng được.'],
+  ['Xưởng', 'surprised', '6 công ty, 12 sản phẩm. Toàn đồ Zuey tự tay làm!'],
+  ['Phòng họp', 'talk', 'Muốn đọc hết hay làm việc cùng Zuey? Ở đây nè.'],
+  ['Nhật ký', 'wave', 'Hôm nay Zuey code gì? Xem nhật ký nè.'],
+];
+var N = ROOMS.length;
+var map = document.getElementById('map');
+map.insertAdjacentHTML('beforeend', ROOMS.map(function (r, i) { return '<button data-go="' + i + '"><span>0' + (i + 1) + '</span>' + r[0] + '</button>'; }).join(''));
+
+// shelf, workshop, meeting room, diary
+var rows = [Z.reads.slice(0, 4), Z.reads.slice(4, 8)];
+document.getElementById('shelf').innerHTML = rows.map(function (row) {
+  return '<div class="row">' + row.map(function (r) { return '<a class="book" href="' + r.u + '"><span class="cv">' + Z.cover(r.img) + '</span><span style="min-width:0"><span class="kd">' + r.k + ' · ' + r.a + '</span><b>' + Z.esc(r.t) + '</b></span></a>'; }).join('') + '</div><div class="plank"></div>';
+}).join('');
+document.getElementById('ventures').innerHTML = Z.ventures.map(function (v) { return '<a class="frame" href="' + v[3] + '">' + Z.icon(v[0], 48) + '<b>' + v[1] + '</b><small>' + v[2] + '</small></a>'; }).join('');
+document.getElementById('products').innerHTML = Z.products.map(function (p) { return '<a class="box" href="' + p[3] + '">' + Z.icon(p[0], 30) + '<span style="min-width:0"><b>' + p[1] + '</b><small>' + p[2] + '</small></span></a>'; }).join('');
+var months = 1;
+function plans() {
+  document.getElementById('months').innerHTML = [1, 3, 6, 12].map(function (m) { return '<button aria-pressed="' + (m === months) + '" data-m="' + m + '">' + m + ' tháng<small>' + (Z.discount[m] ? '−' + Z.discount[m] + '%' : '&nbsp;') + '</small></button>'; }).join('');
+  document.getElementById('cols').innerHTML = Z.plans.map(function (p) { var hot = p[0] === 'combo'; return '<div class="col' + (hot ? ' hot' : '') + '">' + (hot ? '<span class="tag">Phổ biến</span>' : '') + '<b>' + p[1] + '</b><div class="p">$' + p[2] + '<small>/th</small></div><div class="v">' + Z.fmtVnd(Z.vnd(p[2], months)) + (months > 1 ? ' / ' + months + ' th' : '') + '</div><p>' + p[3] + '</p><a href="#">Chọn</a></div>'; }).join('');
+  document.querySelectorAll('#months button').forEach(function (b) { b.onclick = function () { months = +b.dataset.m; plans(); }; });
+}
+plans();
+Z.github(function (err, ev) {
+  var h = Z.heatmap(err ? [] : ev, 84);
+  document.getElementById('heat').innerHTML = h.html;
+  document.getElementById('total').textContent = err ? 'GitHub đang giới hạn truy cập, thử lại sau.' : h.total + ' sự kiện công khai trong 12 tuần';
+  document.getElementById('events').innerHTML = err ? '<div><span>Không tải được hoạt động GitHub.</span></div>' : ev.slice(0, 8).map(function (e) { return '<div><span>' + Z.esc(Z.eventLabel(e)) + '</span><span>' + Z.ago(e.created_at) + '</span></div>'; }).join('');
+});
+
+// Zuey AI on the desk
+var walker = new Z.Mascot(document.getElementById('walker'), flat() ? 88 : 200);
+var msgs = document.getElementById('msgs'), q = document.getElementById('q');
+document.getElementById('sug').innerHTML = Z.suggestions.slice(0, 3).map(function (s) { return '<button type="button">' + s + '</button>'; }).join('');
+function add(cls, html) { var d = document.createElement('div'); d.className = 'm ' + cls; d.innerHTML = html; msgs.appendChild(d); msgs.scrollTop = 1e6; return d; }
+function ask(text) {
+  if (!text.trim()) return;
+  add('u', Z.esc(text)); walker.play('thinking'); say('Để mình nghĩ chút…');
+  var d = add('z', '<span class="dots"><span></span><span></span><span></span></span>');
+  setTimeout(function () { walker.play('talk'); say('Đây, mình tìm được rồi!'); d.innerHTML = Z.answer(text); msgs.scrollTop = 1e6; }, 1300);
+}
+q.addEventListener('input', function () { if (walker.anim !== 'thinking') walker.play('thinking', 'idle'); });
+document.getElementById('ask').addEventListener('submit', function (e) { e.preventDefault(); ask(q.value); q.value = ''; });
+document.querySelectorAll('#sug button').forEach(function (b) { b.onclick = function () { ask(b.textContent); }; });
+
+// the walk
+var sayEl = document.getElementById('say'), sayTimer;
+var hideTimer;
+function say(text) {
+  sayEl.classList.add('swap'); clearTimeout(sayTimer); clearTimeout(hideTimer);
+  sayTimer = setTimeout(function () { sayEl.textContent = text; sayEl.classList.remove('swap'); }, 160);
+  // on small screens the bubble sits over content, so it steps aside after a moment
+  if (flat()) hideTimer = setTimeout(function () { sayEl.classList.add('swap'); }, 3600);
+}
+var walk = document.getElementById('walk'), track = document.getElementById('track'), fill = document.getElementById('fill');
+var nums = document.querySelectorAll('.num'), rooms = document.querySelectorAll('.room'), mapBtns = map.querySelectorAll('button');
+var last = -1, current = -1, idleTimer, ticking = false;
+function arrive(i) {
+  if (i === current) return;
+  current = i;
+  mapBtns.forEach(function (b, k) { b.setAttribute('aria-current', k === i); });
+  say(ROOMS[i][2]);
+  walker.play(ROOMS[i][1]);
+}
+function moving(dir) {
+  walker.el.classList.toggle('left', dir < 0);
+  if (walker.anim !== 'walk') walker.play('walk');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(function () { walker.el.classList.remove('left'); if (walker.anim === 'walk') walker.play('idle'); }, 180);
+}
+function update() {
+  ticking = false;
+  if (flat()) {
+    var y = scrollY; if (last >= 0 && Math.abs(y - last) > 1) moving(y - last); last = y;
+    var mid = innerHeight * 0.45, idx = 0;
+    rooms.forEach(function (r, k) { if (r.getBoundingClientRect().top < mid) idx = k; });
+    arrive(idx);
+    return;
+  }
+  var total = walk.offsetHeight - innerHeight, p = Math.min(Math.max(-walk.getBoundingClientRect().top / total, 0), 1) * (N - 1);
+  var i = Math.min(Math.floor(p), N - 2), t = p - i;
+  // Zuey lingers in each room, then walks to the next one
+  var e = t < 0.3 ? 0 : t > 0.7 ? 1 : (function (x) { return x * x * (3 - 2 * x); })((t - 0.3) / 0.4);
+  var pos = i + e, w = innerWidth;
+  track.style.transform = 'translateX(' + -pos * w + 'px)';
+  nums.forEach(function (n, k) { n.style.transform = 'translateX(' + (pos - k) * w * 0.35 + 'px)'; });
+  fill.style.width = (pos / (N - 1)) * 100 + '%';
+  if (last >= 0 && Math.abs(pos - last) > 0.0005) moving(pos - last);
+  last = pos;
+  if (e === 0 || e === 1) arrive(Math.round(pos));
+}
+addEventListener('scroll', function () { if (!ticking) { ticking = true; requestAnimationFrame(update); } }, { passive: true });
+addEventListener('resize', update);
+function go(k) {
+  k = Math.max(0, Math.min(N - 1, k));
+  if (flat()) { rooms[k].scrollIntoView({ behavior: Z.reduced ? 'auto' : 'smooth' }); return; }
+  scrollTo({ top: walk.offsetTop + (k / (N - 1)) * (walk.offsetHeight - innerHeight), behavior: 'smooth' });
+}
+mapBtns.forEach(function (b) { b.onclick = function () { go(+b.dataset.go); }; });
+addEventListener('keydown', function (e) {
+  if (e.target.closest('input')) return;
+  if (e.key === 'ArrowRight') { e.preventDefault(); go(current + 1); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); go(current - 1); }
+});
+var start = +new URLSearchParams(location.search).get('room') || 0;
+if (start) { go(start); setTimeout(update, 50); }
+update();
+setTimeout(function () { if (current === 0) walker.play('wave'); }, 400);
+
+Z.controls({ rainHost: document.getElementById('stage'), onWeather: function (on) { if (on) { walker.play('surprised', 'idle'); say('Ơ, mưa rồi kìa ☔'); } } });
+</script>
+</body>
+</html>

@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zuey Messenger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;0,9..144,900;1,9..144,500&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<style>
+body{background:var(--bg);color:var(--ink-inv);font:15px/1.5 var(--sans);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.zt{border-bottom:1px solid var(--line)}
+.app{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr) 340px}
+
+/* left: channels */
+.side{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--bg-2)}
+.me{display:flex;gap:12px;align-items:center;padding:16px}
+.me img{width:44px;height:44px;border-radius:50%;object-fit:cover}
+.me b{font:700 16px var(--serif);display:block}
+.me small{font-size:12px;color:var(--muted-inv);display:flex;align-items:center;gap:6px}
+.me small::before{content:"";width:7px;height:7px;border-radius:50%;background:#56b07a}
+.find{margin:0 12px 8px;display:flex;align-items:center;gap:8px;min-height:40px;padding:0 12px;border-radius:12px;background:rgba(245,239,235,.06);border:1px solid var(--line);color:var(--muted-inv);font-size:13px;width:calc(100% - 24px)}
+.find kbd{margin-left:auto;font:600 10px var(--mono);background:rgba(245,239,235,.1);border-radius:5px;padding:1px 5px}
+.chs{flex:1;overflow:auto;padding:8px}
+.grp{font:600 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-inv);padding:12px 10px 6px}
+.ch{display:flex;align-items:center;gap:8px;width:100%;min-height:38px;padding:0 10px;border-radius:10px;color:var(--muted-inv);font-weight:600;font-size:14px;text-align:left}
+.ch:hover{background:rgba(245,239,235,.06);color:var(--ink-inv)}
+.ch[aria-current=true]{background:var(--ink-inv);color:var(--ink)}
+.ch .h{font:600 15px var(--mono);opacity:.6}
+.ch .n{margin-left:auto;font:700 10px var(--mono);background:var(--accent);color:#fff;border-radius:var(--pill);padding:2px 7px}
+.ch .lock{margin-left:auto;font-size:11px;opacity:.7}
+.side .soc{display:flex;flex-wrap:wrap;gap:2px;padding:12px;border-top:1px solid var(--line)}
+.side .soc a{width:32px;height:44px;display:grid;place-items:center;border-radius:10px;color:var(--ink-inv)}
+.side .soc a:hover{background:rgba(245,239,235,.08)}
+
+/* center: conversation */
+.conv{display:flex;flex-direction:column;min-height:0;position:relative;background:
+  radial-gradient(700px 400px at 30% 100%,rgba(196,83,42,.14),transparent 70%),var(--bg)}
+.ch-h{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.ch-h b{font:700 18px var(--serif)}
+.ch-h small{color:var(--muted-inv);font-size:13px}
+.ch-h .st{margin-left:auto;font:600 11px var(--mono);color:#7bd6a1}
+.ch-h .mb{display:none;min-width:44px;min-height:44px;border-radius:12px;border:1px solid var(--line);font-weight:700}
+.stream{flex:1;overflow:auto;padding:20px 28px 24px;display:flex;flex-direction:column;gap:18px;scroll-behavior:smooth}
+.day{align-self:center;font:600 11px var(--mono);color:var(--muted-inv);border:1px solid var(--line);border-radius:var(--pill);padding:3px 10px}
+.msg{display:flex;gap:12px;max-width:780px;animation:pop .35s var(--ease) both}
+@media (prefers-reduced-motion:reduce){.msg{animation:none}}
+@keyframes pop{from{transform:translateY(8px)}}
+.ava{width:40px;height:40px;border-radius:50%;flex:none;background:#3a2c24 url(zuey-mascot.webp) no-repeat;background-size:360px 360px;background-position:-25px -6px;border:2px solid rgba(245,239,235,.12)}
+.body{min-width:0;flex:1}
+.meta{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted-inv)}
+.meta b{font:700 14px var(--sans);color:var(--ink-inv)}
+.bot{font:700 9px var(--mono);background:rgba(242,160,122,.2);color:var(--accent-soft);border-radius:4px;padding:1px 5px}
+.txt{margin-top:4px;font-size:15px;max-width:62ch}
+.msg.u{align-self:flex-end;flex-direction:row-reverse}
+.msg.u .txt{background:var(--ink-inv);color:var(--ink);padding:10px 14px;border-radius:16px 16px 4px 16px}
+.card{margin-top:10px;background:var(--card);color:var(--ink);border-radius:18px;padding:16px;box-shadow:var(--shadow)}
+.card h4{font:700 18px var(--serif)}
+.card .s{font-size:13px;color:var(--muted)}
+.offers{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.offers a{border-radius:14px;padding:12px;background:var(--card);color:var(--ink);display:flex;flex-direction:column;gap:2px;min-height:96px;transition:transform .2s var(--ease)}
+.offers a:hover{transform:translateY(-3px)}
+.offers b{font:700 15px var(--serif)}
+.offers small{font-size:12px;color:var(--muted)}
+.offers i{font-style:normal;font-size:20px}
+.carousel{display:flex;gap:10px;overflow-x:auto;margin-top:10px;padding-bottom:6px;scroll-snap-type:x mandatory}
+.rd{flex:none;width:210px;scroll-snap-align:start;background:var(--card);color:var(--ink);border-radius:14px;overflow:hidden}
+.rd .cv{display:block;height:104px;overflow:hidden;background:var(--card-2)}
+.rd .cv img,.rd .cv .cover-fallback{width:100%;height:100%;object-fit:cover}
+.rd .b{padding:10px 12px}
+.rd .k{font:600 9px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.rd b{font:700 14px/1.25 var(--serif);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.months{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:var(--card-2);padding:4px;border-radius:12px;margin-top:12px}
+.months button{border-radius:9px;padding:4px 0;font:600 12px var(--sans);min-height:44px;color:var(--muted);line-height:1.2}
+.months button small{display:block;font:600 10px var(--mono);color:var(--accent-ink)}
+.months button[aria-pressed=true]{background:#fff;color:var(--ink)}
+.pl{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.pl div{border:1.5px solid var(--hair);border-radius:12px;padding:10px 12px}
+.pl div.hot{border-color:var(--accent);background:#fff5ef}
+.pl b{font:700 15px var(--serif);display:block}
+.pl .p{font:900 24px/1.1 var(--serif)}
+.pl .p small{font:500 11px var(--sans);color:var(--muted)}
+.pl .v{font:600 10.5px var(--mono);color:var(--muted)}
+.pl .d{font-size:12px;color:var(--muted);margin-top:4px}
+.row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:var(--pill);font-weight:700;font-size:14px;background:var(--ink);color:var(--card)}
+.btn.acc{background:var(--accent);color:#fff}
+.btn.ghost{background:none;border:1.5px solid var(--hair);color:var(--ink)}
+.gh{display:flex;gap:16px;align-items:flex-start}
+.gh .heat{grid-template-rows:repeat(7,12px);grid-auto-columns:12px;width:max-content;gap:3px}
+.ev{flex:1;min-width:0;font-size:13px}
+.ev div{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--hair)}
+.ev div:last-child{border:0}
+.ev span:first-child{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ev span:last-child{color:var(--muted);font-size:11.5px;white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.grid a{display:flex;gap:10px;align-items:center;padding:10px;border-radius:12px;background:var(--card);color:var(--ink);min-width:0}
+.grid a:hover{background:#fff}
+.grid b{font:600 13.5px var(--sans);display:block}
+.grid small{font-size:11.5px;color:var(--muted);display:block;line-height:1.3}
+.list a{display:grid;grid-template-columns:64px 1fr;gap:12px;padding:10px;border-radius:14px;background:var(--card);color:var(--ink);margin-top:8px}
+.list .cv{width:64px;height:64px;border-radius:10px;overflow:hidden;background:var(--card-2)}
+.list .cv img,.list .cv .cover-fallback{width:100%;height:100%;object-fit:cover}
+.list b{font:700 15px/1.25 var(--serif)}
+.list p{font-size:12.5px;color:var(--muted)}
+.typing{display:flex;gap:12px;align-items:center;color:var(--muted-inv);font-size:13px}
+
+/* composer with Zuey standing on it */
+.dock{position:relative;padding:0 20px 16px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:0 0 10px 132px;scrollbar-width:none}
+.chips button{flex:none;font:600 12.5px var(--sans);min-height:36px;padding:0 14px;border-radius:var(--pill);border:1px solid var(--line);color:var(--ink-inv);background:rgba(24,21,19,.6)}
+.chips button:hover{background:var(--ink-inv);color:var(--ink)}
+.composer{display:flex;gap:8px;align-items:center;padding:6px 6px 6px 132px;border-radius:20px;background:var(--card);min-height:60px}
+.composer input{flex:1;border:0;outline:none;background:none;font:15px var(--sans);color:var(--ink);min-height:44px}
+.composer button{min-height:48px;padding:0 20px;border-radius:15px;background:var(--accent);color:#fff;font-weight:700}
+.composer .q{font:600 11px var(--mono);color:var(--muted);white-space:nowrap}
+#big{position:absolute;left:18px;bottom:8px;filter:drop-shadow(0 12px 14px rgba(0,0,0,.45))}
+
+/* right: about Duy */
+.about{border-left:1px solid var(--line);overflow:auto;background:var(--bg-2)}
+.pc{margin:16px;border-radius:22px;overflow:hidden;background:var(--card);color:var(--ink)}
+.pc .cover{height:84px;background:linear-gradient(120deg,#f2a07a,#c4532a 55%,#5b2a17)}
+.pc .in{padding:0 18px 18px}
+.pc img{width:76px;height:76px;border-radius:50%;object-fit:cover;border:4px solid var(--card);margin-top:-38px}
+.pc h1{font:900 26px/1 var(--serif);letter-spacing:-.03em;margin-top:8px}
+.pc h1 em{font-style:italic;font-weight:500;color:var(--accent-ink)}
+.pc .hd{font:600 12px var(--mono);color:var(--muted)}
+.pc p{font-size:13.5px;color:var(--ink);margin-top:10px}
+.pc .soc{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.pc .soc a{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--card-2);color:var(--ink)}
+.blog{display:flex;gap:10px;align-items:center;margin:0 16px 8px;padding:12px;border-radius:14px;border:1px solid var(--line)}
+.blog:hover{background:rgba(245,239,235,.05)}
+.blog b{font:700 14px var(--serif);display:block}
+.blog small{font-size:11.5px;color:var(--muted-inv)}
+.box{margin:16px;padding:16px;border-radius:18px;border:1px solid var(--line)}
+.box h3{font:600 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-inv)}
+.box .heat{grid-template-rows:repeat(7,16px);grid-auto-columns:16px;width:max-content;margin-top:10px}
+.box p{font-size:12.5px;color:var(--muted-inv);margin-top:8px}
+.foot{padding:0 16px 20px;font-size:12px;color:var(--muted-inv);line-height:1.8}
+.scrim{display:none}
+
+@media (max-width:1180px){.app{grid-template-columns:250px minmax(0,1fr)}.about{display:none}.about.open{display:block;position:fixed;right:0;top:0;bottom:0;width:min(360px,92vw);z-index:50}.ch-h .mb.pr{display:inline-flex;align-items:center;justify-content:center}}
+@media (max-width:760px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{display:none}
+  .side.open{display:flex;position:fixed;left:0;top:0;bottom:0;width:min(300px,86vw);z-index:50}
+  .scrim.on{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:45}
+  .ch-h{padding:8px 12px}.ch-h .mb{display:inline-flex;align-items:center;justify-content:center}.ch-h small,.ch-h .st{display:none}
+  .stream{padding:16px 12px 20px}
+  .offers{grid-template-columns:1fr 1fr}
+  .pl{grid-template-columns:1fr 1fr}
+  .grid{grid-template-columns:1fr}
+  .gh{flex-direction:column}
+  .dock{padding:0 10px 10px}
+  .chips{padding-left:92px}
+  .composer{padding-left:92px}
+  .composer .q{display:none}
+  #big{left:8px}
+}
+</style>
+</head>
+<body>
+<div id="top"></div>
+<div class="app">
+  <aside class="side" id="side" aria-label="Kênh">
+    <div class="me"><img src="avatar.png" alt="Duy Nguyen"><div><b>Duy Nguyen /zuey/</b><small>online · Sài Gòn <span id="clock"></span></small></div></div>
+    <button class="find" data-cmd-alt>⌕ Tìm hoặc hỏi Zuey <kbd>Ctrl K</kbd></button>
+    <nav class="chs" id="chs"></nav>
+    <div class="soc" id="soc1"></div>
+  </aside>
+
+  <main class="conv">
+    <div class="ch-h">
+      <button class="mb" id="openSide" aria-label="Mở danh sách kênh">☰</button>
+      <div><b id="chName"># chào-bạn</b><br><small id="chDesc"></small></div>
+      <span class="st" id="st">● Zuey tí hon đang online</span>
+      <button class="mb pr" id="openAbout" aria-label="Xem hồ sơ Duy" style="margin-left:auto">ⓘ</button>
+    </div>
+    <div class="stream" id="stream" aria-live="polite"></div>
+    <div class="dock">
+      <div class="chips" id="chips"></div>
+      <form class="composer" id="composer"><input id="q" placeholder="Nhắn cho Zuey AI…" aria-label="Nhắn cho Zuey AI"><span class="q">Gói AI · 300 lượt/tháng</span><button>Gửi</button></form>
+      <div id="big"></div>
+    </div>
+  </main>
+
+  <aside class="about" id="about" aria-label="Về Duy">
+    <div class="pc"><div class="cover"></div><div class="in">
+      <img src="avatar.png" alt="Duy Nguyen">
+      <h1>Duy Nguyen <em>/zuey/</em></h1>
+      <span class="hd">@goonnguyen · ✳ Studio</span>
+      <p id="bio"></p>
+      <div class="soc" id="soc2"></div>
+    </div></div>
+    <div id="blogs"></div>
+    <div class="box"><h3>GitHub · @mrgoonie</h3><div id="heat"></div><p id="ghTotal">Đang tải…</p></div>
+    <div class="foot">zuey.me · hi@zuey.me · API Docs · llms.txt · Privacy<br>Crafted with ❤️ by Duy Nguyen. Hosted on Cloudflare Edge.</div>
+  </aside>
+</div>
+<div class="scrim" id="scrim"></div>
+
+<script src="shared.js"></script>
+<script>
+document.getElementById('top').outerHTML = Z.topbar();
+document.getElementById('bio').textContent = Z.profile.bio;
+var socHtml = function (size) { return Z.socials.map(function (s) { return '<a href="' + s[1] + '" aria-label="' + s[2] + '">' + Z.icon(s[0], size) + '</a>'; }).join(''); };
+document.getElementById('soc1').innerHTML = socHtml(18);
+document.getElementById('soc2').innerHTML = socHtml(18);
+document.getElementById('blogs').innerHTML = Z.blogs.map(function (b) { return '<a class="blog" href="' + b[3] + '">' + Z.icon('substack', 24) + '<span><b>' + Z.esc(b[0]) + '</b><small>Substack · ' + b[1] + '</small></span></a>'; }).join('');
+var now = function () { return new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit' }); };
+document.getElementById('clock').textContent = '· ' + now();
+
+var big = new Z.Mascot(document.getElementById('big'), innerWidth < 760 ? 84 : 120);
+var gh = null, months = 1;
+
+/* rich cards built from the real content */
+function readsCarousel(list) { return '<div class="carousel">' + list.map(function (r) { return '<a class="rd" href="' + r.u + '"><span class="cv">' + Z.cover(r.img) + '</span><span class="b" style="display:block"><span class="k">' + r.k + ' · ' + r.a + '</span><b>' + Z.esc(r.t) + '</b></span></a>'; }).join('') + '</div>'; }
+function readsList() { return '<div class="list">' + Z.reads.map(function (r) { return '<a href="' + r.u + '"><span class="cv">' + Z.cover(r.img) + '</span><span><span class="bot" style="background:none;padding:0;color:var(--muted)">' + r.k + ' · ' + r.a + '</span><br><b>' + Z.esc(r.t) + '</b><p>' + r.s + '</p></span></a>'; }).join('') + '</div>'; }
+function pricing() {
+  return '<div class="card" data-pricing><h4>Gói thành viên</h4><span class="s">Trả trước nhiều tháng để được giảm. Thanh toán bằng PayPal hoặc chuyển khoản VND.</span>' +
+    '<div class="months">' + [1, 3, 6, 12].map(function (m) { return '<button type="button" aria-pressed="' + (m === months) + '" data-m="' + m + '">' + m + ' tháng<small>' + (Z.discount[m] ? '−' + Z.discount[m] + '%' : '&nbsp;') + '</small></button>'; }).join('') + '</div>' +
+    '<div class="pl">' + Z.plans.map(function (p) { return '<div class="' + (p[0] === 'combo' ? 'hot' : '') + '"><b>' + p[1] + '</b><span class="p">$' + p[2] + '<small>/th</small></span><div class="v">' + Z.fmtVnd(Z.vnd(p[2], months)) + (months > 1 ? ' / ' + months + ' th' : '') + '</div><div class="d">' + p[3] + '</div></div>'; }).join('') + '</div>' +
+    '<div class="row"><a class="btn acc" href="#">Chọn gói</a><a class="btn ghost" href="#">So sánh chi tiết</a></div></div>';
+}
+function ghCard() {
+  if (!gh) return '<div class="card"><h4>Duy đang làm gì</h4><span class="s">Đang tải hoạt động GitHub…</span></div>';
+  if (gh.err) return '<div class="card"><h4>Duy đang làm gì</h4><span class="s">GitHub đang giới hạn truy cập, thử lại sau.</span></div>';
+  var h = Z.heatmap(gh.ev, 35);
+  return '<div class="card"><h4>Duy đang làm gì</h4><span class="s">' + h.total + ' sự kiện công khai trên GitHub trong 35 ngày</span><div class="gh" style="margin-top:12px">' + h.html + '<div class="ev">' + gh.ev.slice(0, 4).map(function (e) { return '<div><span>' + Z.esc(Z.eventLabel(e)) + '</span><span>' + Z.ago(e.created_at) + '</span></div>'; }).join('') + '</div></div></div>';
+}
+function gridOf(items, size) { return '<div class="grid">' + items.map(function (p) { return '<a href="' + p[3] + '">' + Z.icon(p[0], size) + '<span style="min-width:0"><b>' + p[1] + '</b><small>' + p[2] + '</small></span></a>'; }).join('') + '</div>'; }
+var OFFER_ICON = ['📝', '📚', '⚙️', '🤝'];
+
+var CH = {
+  'chào-bạn': { d: 'Bắt đầu ở đây', chips: [['Duy đang đọc gì?', 'đang-đọc'], ['Xem sản phẩm', 'sản-phẩm'], ['Làm việc với Duy', 'làm-việc-cùng-zuey'], ['MCP hay CLI cho coding agent?']], msgs: function () { return [
+    ['Chào bạn 👋 Mình là <b>Zuey tí hon</b>, trợ lý AI của Duy. Bạn muốn bắt đầu từ đâu?', '<div class="offers">' + Z.offers.map(function (o, i) { return '<a href="#"><i>' + OFFER_ICON[i] + '</i><b>' + o[0] + '</b><small>' + o[1] + '</small></a>'; }).join('') + '</div>'],
+    ['Tuần này Duy đang đọc mấy bài hay về agent và MCP 👇', readsCarousel(Z.reads.slice(0, 6))],
+    ['Muốn đọc hết và hỏi mình không giới hạn? Có gói cho bạn:', pricing()],
+    ['Còn đây là Duy đang code gì, cập nhật trực tiếp:', ghCard()],
+  ]; } },
+  'đang-đọc': { d: '8 bài Duy đang đọc, tóm tắt tiếng Việt', n: 8, chips: [['Tóm tắt bài MCP vs CLI'], ['Gói Knowledges', 'gói-thành-viên']], msgs: function () { return [['Đây là 8 bài Duy đang đọc. Bấm vào bài nào để đọc bản tóm tắt nhé.', readsList()]]; } },
+  'kiến-thức': { d: 'Bài viết, biểu đồ, survey', lock: 1, chips: [['Báo mình khi có bài'], ['Xem gói', 'gói-thành-viên']], msgs: function () { return [['Hmm… kệ này còn trống 🤔 Bài viết đầu tiên của Duy sắp lên sóng. Thành viên Knowledges sẽ đọc được toàn bộ.', '<div class="card"><h4>Nhận thông báo khi có bài mới</h4><span class="s">Mình sẽ nhắn bạn qua email, không spam.</span><div class="row"><a class="btn" href="#">Báo cho mình</a></div></div>']]; }, act: 'thinking' },
+  'sản-phẩm': { d: '12 sản phẩm & công cụ', n: 12, chips: [['AgentKit khác gì ClaudeKit?'], ['Công ty của Duy', 'công-ty']], msgs: function () { return [['12 sản phẩm Duy đã làm, phần lớn cho AI agent:', gridOf(Z.products, 32)]]; }, act: 'happy' },
+  'công-ty': { d: 'Found by me', n: 6, chips: [['Build in Public VN là gì?'], ['Xem sản phẩm', 'sản-phẩm']], msgs: function () { return [['6 công ty và cộng đồng Duy sáng lập hoặc đồng sáng lập:', gridOf(Z.ventures, 40)]]; }, act: 'surprised' },
+  'làm-việc-cùng-zuey': { d: 'For Business · AI Workflows', chips: [['Buổi 1:1 gồm những gì?'], ['Xem gói thành viên', 'gói-thành-viên']], msgs: function () { return [
+    ['Doanh nghiệp muốn đưa AI vào công việc thật? Duy nhận tư vấn 1:1.', '<div class="card"><h4>For Business</h4><div style="font:900 44px/1 var(--serif);letter-spacing:-.04em;margin-top:8px">$1,999<span class="s" style="font:500 13px var(--sans)"> / buổi 1:1</span></div><p class="s" style="margin-top:6px">Toàn bộ $1,999 được trừ vào gói đồng hành 3–6 tháng nếu hai bên đi tiếp.</p><div class="row"><a class="btn acc" href="#">Đặt lịch tư vấn</a></div></div>'],
+    ['Còn đây là cách Duy làm việc với AI mỗi ngày:', '<div class="card"><h4>AI Workflows</h4><p class="s" style="margin-top:6px">⌨️ Claude Code + AgentKit · 🐾 Agent team trên Dewee · ✨ UI với uupm.cc</p><div class="row"><a class="btn ghost" href="#">Xem workflows</a></div></div>'],
+  ]; }, act: 'wave' },
+  'gói-thành-viên': { d: 'Knowledges · AI · Kết hợp · Cộng đồng', chips: [['Gói nào hợp với mình?'], ['Làm việc với Duy', 'làm-việc-cùng-zuey']], msgs: function () { return [['Chọn số tháng để xem giá đã giảm:', pricing()]]; }, act: 'happy' },
+};
+var order = ['chào-bạn', 'đang-đọc', 'kiến-thức', 'sản-phẩm', 'công-ty', 'làm-việc-cùng-zuey', 'gói-thành-viên'];
+var current = '';
+
+document.getElementById('chs').innerHTML = '<div class="grp">Kênh</div>' + order.map(function (k) { var c = CH[k]; return '<button class="ch" data-ch="' + k + '"><span class="h">#</span>' + k + (c.n ? '<span class="n">' + c.n + '</span>' : c.lock ? '<span class="lock">🔒</span>' : '') + '</button>'; }).join('');
+
+var stream = document.getElementById('stream');
+function msgHtml(text, extra) { return '<div class="msg"><span class="ava" aria-hidden="true"></span><div class="body"><div class="meta"><b>Zuey tí hon</b><span class="bot">AI</span><time>' + now() + '</time></div><div class="txt">' + text + '</div>' + (extra || '') + '</div></div>'; }
+function bindPricing() {
+  stream.querySelectorAll('[data-pricing] .months button').forEach(function (b) { b.onclick = function () { months = +b.dataset.m; stream.querySelectorAll('[data-pricing]').forEach(function (c) { c.outerHTML = pricing(); }); bindPricing(); }; });
+}
+function open(k, instant) {
+  current = k; var c = CH[k];
+  document.querySelectorAll('.ch').forEach(function (b) { b.setAttribute('aria-current', b.dataset.ch === k); });
+  document.getElementById('chName').textContent = '# ' + k;
+  document.getElementById('chDesc').textContent = c.d;
+  stream.innerHTML = '<span class="day">Hôm nay</span>' + c.msgs().map(function (m) { return msgHtml(m[0], m[1]); }).join('');
+  bindPricing();
+  stream.scrollTop = 0;
+  document.getElementById('chips').innerHTML = c.chips.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + x[0] + '</button>'; }).join('');
+  document.querySelectorAll('#chips button').forEach(function (b) { b.onclick = function () { var x = c.chips[+b.dataset.i]; if (x[1]) open(x[1]); else ask(x[0]); }; });
+  big.play(c.act || 'wave');
+  closeDrawers();
+}
+document.querySelectorAll('.ch').forEach(function (b) { b.onclick = function () { open(b.dataset.ch); }; });
+
+/* AI composer: Zuey thinks while you type and talks while answering */
+var q = document.getElementById('q'), st = document.getElementById('st');
+q.addEventListener('input', function () { if (big.anim !== 'thinking') big.play('thinking', 'idle'); });
+function ask(text) {
+  if (!text.trim()) return;
+  stream.insertAdjacentHTML('beforeend', '<div class="msg u"><div class="body"><div class="txt">' + Z.esc(text) + '</div></div></div><div class="typing" id="typing"><span class="ava" aria-hidden="true"></span><span class="dots"><span></span><span></span><span></span></span> Zuey tí hon đang gõ…</div>');
+  stream.scrollTop = 1e6; big.play('thinking'); st.textContent = '● đang trả lời…';
+  setTimeout(function () {
+    document.getElementById('typing').outerHTML = msgHtml(Z.answer(text));
+    stream.scrollTop = 1e6; big.play('talk'); st.textContent = '● Zuey tí hon đang online';
+  }, 1300);
+}
+document.getElementById('composer').addEventListener('submit', function (e) { e.preventDefault(); ask(q.value); q.value = ''; });
+
+/* drawers on smaller screens */
+var side = document.getElementById('side'), about = document.getElementById('about'), scrim = document.getElementById('scrim');
+function closeDrawers() { side.classList.remove('open'); about.classList.remove('open'); scrim.classList.remove('on'); }
+document.getElementById('openSide').onclick = function () { side.classList.add('open'); scrim.classList.add('on'); };
+document.getElementById('openAbout').onclick = function () { about.classList.add('open'); scrim.classList.add('on'); };
+scrim.onclick = closeDrawers;
+
+Z.github(function (err, ev) {
+  gh = err ? { err: err } : { ev: ev };
+  var h = Z.heatmap(err ? [] : ev, 70);
+  document.getElementById('heat').innerHTML = h.html;
+  document.getElementById('ghTotal').textContent = err ? 'GitHub đang giới hạn truy cập.' : h.total + ' sự kiện công khai trong 10 tuần';
+  if (current === 'chào-bạn') { var cards = stream.querySelectorAll('.card'); cards[cards.length - 1].outerHTML = ghCard(); }
+});
+
+open('chào-bạn');
+Z.controls({ rainHost: document.querySelector('.conv'), onWeather: function (on) { if (on) big.play('surprised', 'idle'); } });
+document.querySelector('[data-cmd-alt]').onclick = function () { document.querySelector('[data-cmd]').click(); };
+</script>
+</body>
+</html>

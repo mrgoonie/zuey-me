@@ -1,0 +1,72 @@
+<title>Zuey Home Relayout</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,900&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bg:#181513;--ink:#fdf8f3;--muted:#b9ada4;--line:#3a332e;--acc:#f59e0b;--card:#fffaf5;--serif:Fraunces,Georgia,serif;--sans:"Plus Jakarta Sans",system-ui,sans-serif}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+.wrap{max-width:1500px;margin:0 auto;padding-block:40px;padding-inline:16px}
+h1{font:900 clamp(30px,4.6vw,54px)/1.05 var(--serif);letter-spacing:-.03em;text-wrap:balance}
+.lede{color:var(--muted);max-width:78ch;margin-top:12px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:28px 0 18px}
+.tabs button{font:700 14px var(--sans);min-height:44px;padding:0 18px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:var(--ink);cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--card);color:#1c1917}
+.tabs button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.pick{font-size:11px;font-weight:800;background:#b45309;color:#fff;border-radius:999px;padding:2px 8px;margin-left:6px}
+.info{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:24px;margin-bottom:20px}
+.info>div{min-width:0}
+.info h2{font:800 28px/1.15 var(--serif)}
+.info p,.info li{color:var(--muted);font-size:14px}
+.info h3{font:800 11px var(--sans);text-transform:uppercase;letter-spacing:.14em;color:var(--acc);margin-bottom:6px}
+.info ul{padding-left:18px;display:grid;gap:4px}
+.order{margin-top:10px;font-size:13px;color:var(--ink)!important}
+.frames{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:20px;align-items:start}
+.frame{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#000;min-width:0}
+.frame .bar{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);background:#120f0d}
+.frame .bar a{color:var(--ink)}
+.desk{position:relative;width:100%;aspect-ratio:1440/900;overflow:hidden}
+.desk iframe{position:absolute;top:0;left:0;width:1440px;height:900px;border:0;transform-origin:0 0}
+.phone iframe{width:375px;max-width:100%;height:760px;border:0;display:block;margin:0 auto}
+@media (max-width:1000px){.frames,.info{grid-template-columns:1fr}}
+</style>
+<div class="wrap">
+  <h1>zuey.me: 3 cách sắp xếp lại trang chủ</h1>
+  <p class="lede">Giữ nguyên phong cách đang chạy trên zuey.me: cùng CSS đã build, video nền, card kem, chip trên thanh đầu, font Fraunces và Plus Jakarta Sans, mascot Zuey. Nội dung lấy từ DOM thật của trang (bản tiếng Việt, ngày 4/10). Chỉ thay vị trí và kích thước các khối. Đây là bản tĩnh: nút và chat chưa chạy, link mở sang zuey.me.</p>
+  <div class="tabs" role="tablist" aria-label="Phương án">
+    <button role="tab" aria-selected="true" data-i="0">1 · Ba cột cân bằng<span class="pick">Đề xuất</span></button>
+    <button role="tab" aria-selected="false" data-i="1">2 · Hồ sơ bên trái</button>
+    <button role="tab" aria-selected="false" data-i="2">3 · Dải ngang</button>
+  </div>
+  <div class="info" id="info"></div>
+  <div class="frames">
+    <div class="frame"><div class="bar"><span>Desktop 1440 × 900</span><a id="open" href="#" target="_blank">Mở toàn màn hình ↗</a></div><div class="desk" id="desk"><iframe id="fd" title="Desktop"></iframe></div></div>
+    <div class="frame phone"><div class="bar"><span>Mobile 375</span></div><iframe id="fm" title="Mobile"></iframe></div>
+  </div>
+</div>
+<script>
+var O=[
+ {f:'option-1-ba-cot.html',t:'Ba cột cân bằng',
+  idea:'Vẫn là lưới 3 cột như hiện tại, nhưng mỗi cột có việc rõ ràng. Cột trái: Zuey AI và Knowledges. Cột giữa: hồ sơ gọn, gồm avatar, bio, mạng xã hội, 4 ô lối tắt và 2 blog. Cột phải: gói Thành viên và Dành cho doanh nghiệp, đưa từ cuối trang lên màn hình đầu. Bên dưới, Sáng lập & Điều hành và Sản phẩm & Công cụ nằm cạnh nhau (sản phẩm chia 2 cột), cuối cùng là GitHub với danh sách sự kiện chia 2 cột.',
+  order:'Mobile: giữ thanh tab Zuey AI / Profile / Knowledges như hiện tại; gói, công ty, sản phẩm và GitHub nằm bên dưới.',
+  why:['Ít thay đổi nhất: chỉ chuyển khối trong HomeShell và ProfileView, không cần component mới.','Cột giữa chỉ còn hồ sơ, lối tắt và 2 blog; 18 link công ty và sản phẩm chuyển xuống dưới.','Gói trả phí xuất hiện ngay màn hình đầu thay vì phải cuộn qua hết hồ sơ.'],
+  risk:['Ở 1280–1440px, cột gói khá hẹp nên 4 gói xếp 2×2.','Knowledges đang trống nên cột trái vẫn thấp hơn cột giữa.']},
+ {f:'option-2-ho-so-ben-trai.html',t:'Hồ sơ bên trái',
+  idea:'Hai cột. Bên trái là card hồ sơ rộng khoảng 470px, dính khi cuộn (sticky) nên avatar, mạng xã hội và lối tắt luôn trong tầm mắt. Bên phải là cột nội dung rộng: Zuey AI và Knowledges cùng hàng, cùng chiều cao; rồi gói Thành viên với Doanh nghiệp; Sản phẩm & Công cụ chia 3 cột; Sáng lập & Điều hành chia 3 cột; GitHub.',
+  order:'Mobile: không cần tab nữa. Thứ tự cuộn: hồ sơ → Zuey AI → Knowledges → gói → sản phẩm → công ty → GitHub.',
+  why:['Giống bố cục profile và dashboard quen thuộc: danh tính một bên, việc làm một bên.','Ở 1440px, Zuey AI rộng khoảng 500px thay vì 390px như hiện tại.','Sản phẩm 3 cột: 12 mục chỉ chiếm 4 hàng.'],
+  risk:['Card hồ sơ sticky cao hơn màn hình laptop nên phải cuộn bên trong card.','Bỏ tab trên mobile đồng nghĩa trang mobile dài hơn.']},
+ {f:'option-3-dai-ngang.html',t:'Dải ngang',
+  idea:'Một cột rộng 1240px gồm các dải xếp chồng. Dải 1: card hồ sơ nằm ngang, avatar, tên, bio và mạng xã hội bên trái; 4 lối tắt trên một hàng và 2 blog bên phải. Dải 2: Zuey AI (rộng) và Knowledges cùng chiều cao. Dải 3: Thành viên và Doanh nghiệp. Dải 4: Sáng lập & Điều hành cạnh Sản phẩm & Công cụ. Dải 5: GitHub.',
+  order:'Mobile: các dải xếp dọc theo đúng thứ tự trên, không cần tab.',
+  why:['Màn hình đầu thấy đủ hồ sơ, lối tắt và blog trong một card.','Mỗi dải là một câu chuyện, đọc từ trên xuống rất dễ.','Dễ thêm dải mới (Zuey Reads, Workflows) mà không phá lưới.'],
+  risk:['Card hồ sơ ngang khác nhiều nhất so với card dọc hiện tại.','Zuey AI nằm dưới mép màn hình đầu (1440×900), phải cuộn mới thấy.']}
+];
+var fd=document.getElementById('fd'),fm=document.getElementById('fm'),desk=document.getElementById('desk');
+function fit(){fd.style.transform='scale('+desk.clientWidth/1440+')'}
+addEventListener('resize',fit);
+function li(a){return a.map(function(x){return '<li>'+x+'</li>'}).join('')}
+function show(i){var o=O[i];fd.src=o.f;fm.src=o.f;document.getElementById('open').href=o.f;
+ document.getElementById('info').innerHTML='<div><h2>'+o.t+'</h2><p style="margin-top:8px">'+o.idea+'</p><p class="order">'+o.order+'</p></div><div><h3>Vì sao đáng chọn</h3><ul>'+li(o.why)+'</ul></div><div><h3>Đánh đổi</h3><ul>'+li(o.risk)+'</ul></div>';
+ document.querySelectorAll('[role=tab]').forEach(function(b){b.setAttribute('aria-selected',b.dataset.i==i)});fit()}
+document.querySelectorAll('[role=tab]').forEach(function(b){b.onclick=function(){show(+b.dataset.i)}});
+show(0);
+</script>

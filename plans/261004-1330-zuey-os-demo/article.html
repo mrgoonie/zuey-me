@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23c4532a%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2216%22 font-family=%22monospace%22 font-weight=%22700%22 fill=%22%23fff%22 text-anchor=%22middle%22%3E/z%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Zuey's Knowledges</title>
+<meta name="description" content="Ghi chép, biểu đồ, sơ đồ và khảo sát của Duy Nguyen trên zuey.me.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* Standalone article page: what zuey.me/knowledges/<slug> server-renders. Follows the Zuey OS theme and accent saved on this device. */
+:root{
+  color-scheme:dark;
+  --bg:#14100e; --surface:#1d1815; --surface-2:#251f1b; --ink:#f1e9e2; --ink-2:#ddd2c8; --muted:#b0a398; --hair:rgba(241,233,226,.12); --hair-2:rgba(241,233,226,.2); --sk:#3a312b;
+  --accent:#c4532a; --accent-ink:#a3401c; --accent-hi:#f2b48a; --link:var(--accent-hi);
+  --demo:#f2b48a; --code-bg:#0e0b0a;
+  --serif:Fraunces,Georgia,serif; --sans:"Plus Jakarta Sans",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  --pill:999px; --ease:cubic-bezier(.2,.8,.2,1);
+}
+:root[data-zt=light]{
+  color-scheme:light;
+  --bg:#fbf6f1; --surface:#fff; --surface-2:#f3ebe3; --ink:#231f1c; --ink-2:#3d3530; --muted:#6a5f57; --hair:#e6dbd1; --hair-2:#d4c6b9; --sk:#e3d8ce;
+  --link:var(--accent-ink); --demo:#a3401c; --code-bg:#231f1c;
+}
+*{box-sizing:border-box;margin:0}
+html{scroll-padding-top:72px}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+button,select{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer;padding:0}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px;border-radius:6px}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* top bar + reading progress */
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top,0px));background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--hair)}
+.brand{display:flex;align-items:center;gap:8px;font:800 15px var(--serif);text-decoration:none;white-space:nowrap}
+.brand i{width:24px;height:24px;border-radius:7px;background:var(--accent);display:grid;place-items:center;font:700 11px var(--mono);color:#fff;font-style:normal}
+.brand span{color:var(--muted);font:600 13px var(--sans)}
+.sp{flex:1}
+.tbtn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;min-width:44px;padding:0 12px;border-radius:var(--pill);border:1px solid var(--hair-2);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap}
+.tbtn:hover{border-color:var(--link);color:var(--link)}
+.tbtn.icon{width:36px;padding:0;justify-content:center}
+.tbtn.acc{background:var(--accent);border-color:transparent;color:#fff}
+.tbtn.acc:hover{background:var(--accent-ink);color:#fff}
+.progress{position:absolute;left:0;right:0;bottom:-1px;height:2px}
+.progress i{display:block;height:100%;width:100%;background:var(--accent);transform-origin:left;transform:scaleX(var(--p,0))}
+
+/* demo strip: only in this preview */
+.demo{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;max-width:1120px;margin:16px auto 0;padding:10px 14px;border:1.5px dashed var(--demo);border-radius:14px;font-size:13px;color:var(--muted)}
+.demo b{color:var(--demo);font-weight:700}
+.demo select{min-height:34px;border-radius:10px;border:1px solid var(--hair-2);background:var(--surface);padding:0 8px}
+.demo .tbtn{min-height:40px}
+
+.wrap{max-width:1120px;margin:0 auto;padding:0 16px 96px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:40px;margin-top:28px}
+@media (min-width:1040px){.layout{grid-template-columns:minmax(0,1fr) 240px}}
+article{max-width:68ch;min-width:0}
+.crumbs ol{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px;font-size:13px;color:var(--muted)}
+.crumbs li+li::before{content:"›";margin-right:4px;opacity:.6}
+.crumbs a{text-decoration:none}.crumbs a:hover{color:var(--link);text-decoration:underline}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
+.tag{display:inline-flex;align-items:center;gap:4px;font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;border-radius:6px;background:var(--surface-2);color:var(--muted)}
+.tag.paid{background:var(--ink);color:var(--bg)}
+.tag.free{background:color-mix(in srgb,#57c084 22%,transparent);color:inherit}
+.tag.sample{border:1px dashed var(--demo);background:transparent;color:var(--demo)}
+h1{font:800 clamp(30px,4.6vw,44px)/1.08 var(--serif);letter-spacing:-.02em;margin-top:12px;text-wrap:balance}
+.meta{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin-top:14px;font-size:14px;color:var(--muted)}
+.meta img{width:28px;height:28px;border-radius:50%;object-fit:cover}
+.meta b{color:var(--ink);font-weight:700}
+.tldr{margin-top:22px;border-left:3px solid var(--accent);background:var(--surface);border-radius:0 14px 14px 0;padding:12px 16px;color:var(--ink-2)}
+.tldr strong{display:block;font:700 11px var(--mono);letter-spacing:.1em;color:var(--link);margin-bottom:2px}
+.prose{margin-top:24px;font-size:18px;line-height:1.75;color:var(--ink-2)}
+.prose>p+p,.prose section p+p,.prose figure{margin-top:16px}
+.prose>p+section,.prose section+section{margin-top:30px}
+.prose h2{font:800 25px/1.2 var(--serif);color:var(--ink);margin-bottom:10px;text-wrap:balance}
+.prose section{scroll-margin-top:80px}
+figure{border:1px solid var(--hair);border-radius:16px;padding:16px;background:var(--surface)}
+figcaption{font-size:13px;color:var(--muted);margin-top:8px}
+.bars{display:flex;align-items:flex-end;gap:10px;height:160px;border-bottom:1px solid var(--hair)}
+.bars div{flex:1;display:grid;grid-template-rows:minmax(0,1fr) auto;gap:4px;justify-items:center;height:100%;font:600 11px var(--mono);color:var(--muted)}
+.bars b{display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;width:100%;min-height:0;font:inherit}
+.bars i{display:block;width:100%;border-radius:6px 6px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent-hi))}
+.flow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
+.flow span{padding:8px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--hair);font-weight:700;font-size:14px;color:var(--ink)}
+.flow em{color:var(--muted);font-style:normal}
+.survey{display:grid;gap:8px}
+.survey label{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--hair);border-radius:12px;cursor:pointer;font-size:15px;position:relative;overflow:hidden;color:var(--ink)}
+.survey .pct{margin-left:auto;font:600 12px var(--mono);color:var(--muted)}
+.survey .fill{position:absolute;inset:0 auto 0 0;background:color-mix(in srgb,var(--accent) 16%,transparent);transition:width .6s var(--ease)}
+.survey label>*:not(.fill){position:relative}
+
+/* the locked part: headings and skeleton lines only, blurred under the sign-up box */
+.lock-wrap{position:relative;margin-top:30px}
+.paywalled{filter:blur(4px);-webkit-mask-image:linear-gradient(180deg,#000,rgba(0,0,0,.5) 40%,transparent 85%);mask-image:linear-gradient(180deg,#000,rgba(0,0,0,.5) 40%,transparent 85%);user-select:none;pointer-events:none}
+.paywalled section+section{margin-top:28px}
+.sk-p{display:grid;gap:12px;margin-top:10px}
+.sk-l{display:block;height:12px;border-radius:6px;background:var(--sk)}
+.lockbox{position:relative;margin:-200px auto 0;width:min(480px,100%);display:grid;gap:10px;justify-items:center;text-align:center;padding:22px 20px;border-radius:20px;background:var(--surface);border:1px solid var(--hair-2);box-shadow:0 30px 60px -30px rgba(0,0,0,.55)}
+.lockbox .ent{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--ink);color:var(--bg)}
+.lockbox h2{font:800 22px/1.2 var(--serif);text-wrap:balance}
+.lockbox p{font-size:14px;color:var(--muted)}
+.lockbox .row{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.lockbox small{font-size:12px;color:var(--muted)}
+
+.box{margin-top:32px;padding:18px 20px;border-radius:18px;background:var(--surface);border:1px solid var(--hair)}
+.box h2{font:800 21px var(--serif)}
+.box ul{margin-top:10px;padding-left:20px;display:grid;gap:8px;color:var(--ink-2)}
+.faq details{border-bottom:1px solid var(--hair);padding:10px 0}
+.faq details:last-child{border-bottom:0}
+.faq summary{cursor:pointer;font-weight:700;min-height:32px;display:flex;align-items:center}
+.faq p{margin-top:6px;color:var(--ink-2)}
+.author{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.author img{width:56px;height:56px;border-radius:16px;object-fit:cover}
+.author>div{flex:1 1 220px;min-width:0}
+.author p{font-size:14px;color:var(--muted)}
+.author .links{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:13px}
+.author .links a{color:var(--link)}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+.related{margin-top:40px}
+.related h2{font:800 21px var(--serif);margin-bottom:12px}
+.cards{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))}
+.card{display:grid;gap:8px;align-content:start;padding:16px;border-radius:16px;border:1px solid var(--hair);background:var(--surface);text-decoration:none;transition:border-color .15s,transform .2s var(--ease)}
+.card:hover{border-color:var(--link);transform:translateY(-2px)}
+.card h3{font:700 18px/1.25 var(--serif);text-wrap:balance}
+.card p{font-size:14px;color:var(--muted)}
+.card .meta{margin-top:0;font-size:12px}
+
+/* sticky table of contents */
+.toc{display:none}
+@media (min-width:1040px){.toc{display:block;position:sticky;top:84px;align-self:start;font-size:14px}}
+.toc h2{font:700 11px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.toc ol{list-style:none;padding:0;display:grid;gap:2px;border-left:1px solid var(--hair)}
+.toc a{display:flex;align-items:center;gap:6px;padding:6px 10px;margin-left:-1px;border-left:2px solid transparent;color:var(--muted);text-decoration:none}
+.toc a:hover{color:var(--ink)}
+.toc a[aria-current=true]{color:var(--ink);border-left-color:var(--accent);font-weight:600}
+.toc svg.i{width:12px;height:12px}
+
+/* SEO / GEO inspector (demo) */
+.seo{margin-top:40px;border:1.5px dashed var(--demo);border-radius:16px;padding:4px 16px}
+.seo>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:8px;font-weight:700;color:var(--demo)}
+.seo h3{font:700 12px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+.seo ul{padding-left:18px;font-size:14px;color:var(--ink-2);display:grid;gap:4px}
+.seo pre{background:var(--code-bg);color:#f1e9e2;border-radius:12px;padding:12px;font:12px/1.55 var(--mono);overflow:auto;max-height:340px;white-space:pre}
+.seo code{font:12px var(--mono)}
+.seo .pb{padding-bottom:14px}
+
+/* index */
+.index h1{margin-top:28px}
+.index .lead{color:var(--muted);margin-top:8px;max-width:60ch}
+.index .cards{margin-top:24px}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translate(-50%,10px);background:var(--ink);color:var(--bg);padding:9px 14px;border-radius:12px;font-size:13px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .2s,transform .25s var(--ease);z-index:50}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+@media (max-width:560px){.brand span,.tbtn .lbl{display:none}.brand,.demo select{min-height:44px}.tbtn{padding:0}.prose{font-size:17px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="zuey-os.html"><i>/z</i>Zuey <span>Knowledges</span></a>
+  <span class="sp"></span>
+  <button class="tbtn icon" id="theme" type="button"></button>
+  <a class="tbtn" href="zuey-os.html#knowledges"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg><span class="lbl">Mở trong Zuey OS</span></a>
+  <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+</header>
+<div class="demo" role="note"><b>Demo</b><span>Trang bài viết riêng (như zuey.me/knowledges/&lt;slug&gt;). Đổi vai trò để xem paywall:</span>
+  <label class="sr" for="as">Xem như</label>
+  <select id="as"><option value="guest">Khách (chưa đăng ký)</option><option value="member:none">Thành viên, chưa có gói</option><option value="member:ai">Thành viên gói Zuey AI</option><option value="member:knowledges">Thành viên gói Knowledges</option><option value="admin:none">Admin</option></select>
+</div>
+<div class="wrap" id="main"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="articles.js"></script>
+<script>
+(() => {
+  'use strict';
+  const A = window.ZART, esc = A.esc;
+  const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } };
+  const S = Object.assign({ role: 'guest', plan: 'none', theme: 'dark', accent: 'ember', lang: 'vi' }, lsGet('zos_demo_v1', {}));
+  const save = (patch) => { Object.assign(S, patch); lsSet('zos_demo_v1', Object.assign(lsGet('zos_demo_v1', {}), patch)); };
+  const PLAN = { none: 'Chưa có gói', ai: 'Zuey AI', knowledges: 'Knowledges', combo: 'Kết hợp', community: 'Cộng đồng' };
+  const ACC = { ember: ['#c4532a', '#a3401c', '#f2b48a'], rose: ['#c2416b', '#9e2c53', '#f4a7c0'], violet: ['#6b4fd6', '#5236b8', '#c3b4ff'], ocean: ['#2f7fa8', '#1f6288', '#9fd3ef'], forest: ['#3e8a5c', '#2b6a44', '#a8dcb9'], amber: ['#b8862b', '#8f6719', '#f2d08a'] };
+  const I = { lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>', sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>', moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>', link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>', spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>', doc: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>' };
+  const ic = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
+  const vnDate = (d) => new Date(d).toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' });
+  const lightMq = matchMedia('(prefers-color-scheme: light)');
+  const theme = () => (S.theme === 'light' || (S.theme === 'auto' && lightMq.matches) ? 'light' : 'dark');
+  const look = () => {
+    const r = document.documentElement, a = ACC[S.accent] || ACC.ember;
+    r.dataset.zt = theme();
+    r.style.setProperty('--accent', a[0]); r.style.setProperty('--accent-ink', a[1]); r.style.setProperty('--accent-hi', a[2]);
+    const t = document.getElementById('theme');
+    t.innerHTML = ic(theme() === 'light' ? 'moon' : 'sun');
+    t.setAttribute('aria-label', theme() === 'light' ? 'Chuyển sang giao diện tối' : 'Chuyển sang giao diện sáng');
+    t.title = t.getAttribute('aria-label');
+  };
+  lightMq.addEventListener('change', () => { if (S.theme === 'auto') look(); });
+  document.getElementById('theme').onclick = () => { save({ theme: theme() === 'light' ? 'dark' : 'light' }); look(); };
+  let toastT = 0;
+  const toast = (m) => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2200); };
+  const copy = (text, done) => {
+    const ok = () => toast(done);
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, () => toast(text));
+    else toast(text);
+  };
+
+  /* head tags + JSON-LD, the same set zuey.me renders on the server */
+  const setHead = (a, acc) => {
+    document.querySelectorAll('[data-seo]').forEach((n) => n.remove());
+    const { meta, ld } = A.seo(a, acc);
+    meta.forEach(([tag, attrs]) => {
+      if (tag === 'title') { document.title = attrs; return; }
+      if (tag === 'meta' && attrs.name === 'description') { document.querySelector('meta[name=description]').content = attrs.content; return; }
+      const el = document.createElement(tag); el.dataset.seo = '';
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      document.head.append(el);
+    });
+    ld.forEach((o) => { const s = document.createElement('script'); s.type = 'application/ld+json'; s.dataset.seo = ''; s.textContent = JSON.stringify(o); document.head.append(s); });
+    return { meta, ld };
+  };
+  const card = (x) => `<a class="card" href="#${x.id}"><div class="tags" style="margin-top:0"><span class="tag">${esc(x.cat)}</span><span class="tag ${x.paid ? 'paid' : 'free'}">${x.paid ? 'Trả phí' : 'Miễn phí'}</span></div><h3>${esc(x.title)}</h3><p>${esc(x.excerpt)}</p><div class="meta"><time datetime="${x.date}">${vnDate(x.date)}</time><span>·</span><span>${x.min} phút đọc</span></div></a>`;
+
+  const renderIndex = () => {
+    document.title = "Zuey's Knowledges · Ghi chép của Duy Nguyen";
+    document.querySelectorAll('[data-seo]').forEach((n) => n.remove());
+    document.getElementById('main').innerHTML = `<div class="index"><h1>Zuey's Knowledges</h1><p class="lead">Ghi chép, biểu đồ, sơ đồ và khảo sát của Duy Nguyen. Bài mẫu trong demo, nội dung minh hoạ.</p><div class="cards">${A.list.map(card).join('')}</div></div>`;
+    window.scrollTo(0, 0);
+  };
+
+  const render = (a) => {
+    const acc = A.access(a, S), SEC = A.sections(a);
+    const lc = acc.full ? null : A.lockCopy(acc, PLAN[S.plan] || PLAN.none);
+    const lockbox = lc ? `<div class="lockbox" role="region" aria-labelledby="lk-h"><span class="ent">${ic('lock')}</span><h2 id="lk-h">${esc(lc.h[0])}</h2><p>${esc(lc.p[0])}</p>
+      <div class="row">${acc.reason === 'guest'
+        ? '<a class="tbtn acc" href="zuey-os.html#login">Đăng ký miễn phí</a><a class="tbtn" href="zuey-os.html#login">Đăng nhập</a>'
+        : `<a class="tbtn acc" href="zuey-os.html#pricing">${acc.reason === 'plan' ? 'Nâng cấp gói' : 'Xem các gói'}</a>${S.role === 'guest' ? '<a class="tbtn" href="zuey-os.html#login">Đăng nhập</a>' : ''}`}</div>
+      <small>Đang đọc phần xem trước · ${SEC.length - acc.open}/${SEC.length} phần bị khoá</small></div>` : '';
+    const rel = A.list.filter((x) => x.id !== a.id).sort((x, y) => (y.cat === a.cat) - (x.cat === a.cat) || y.date.localeCompare(x.date)).slice(0, 3);
+    const head = setHead(a, acc);
+    document.getElementById('main').innerHTML = `<div class="layout">
+      <article itemscope itemtype="https://schema.org/BlogPosting">
+        <nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="zuey-os.html">Zuey</a></li><li><a href="#">Knowledges</a></li><li>${esc(a.cat)}</li></ol></nav>
+        <div class="tags">${a.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}<span class="tag ${a.paid ? 'paid' : 'free'}">${a.paid ? 'Trả phí' : 'Miễn phí'}</span><span class="tag sample">Nội dung mẫu</span></div>
+        <h1 itemprop="headline">${esc(a.title)}</h1>
+        <div class="meta"><img src="${A.AUTHOR.avatar}" alt=""><b itemprop="author">${esc(A.AUTHOR.name)}</b><span>·</span><span>Đăng <time itemprop="datePublished" datetime="${a.date}">${vnDate(a.date)}</time></span>${a.updated !== a.date ? `<span>·</span><span>Cập nhật <time itemprop="dateModified" datetime="${a.updated}">${vnDate(a.updated)}</time></span>` : ''}<span>·</span><span>${a.min} phút đọc</span></div>
+        <aside class="tldr" aria-label="Tóm tắt"><strong>TL;DR</strong><span itemprop="abstract">${esc(a.tldr)}</span></aside>
+        <div class="prose" itemprop="articleBody">${A.bodyHTML(a, acc, lockbox)}</div>
+        <section class="box" aria-labelledby="tk"><h2 id="tk">Ý chính</h2><ul>${a.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>
+        <section class="box faq" id="faq" aria-labelledby="fq"><h2 id="fq">Câu hỏi thường gặp</h2>${a.faq.map(([q, x]) => `<details><summary>${esc(q)}</summary><p>${esc(x)}</p></details>`).join('')}</section>
+        <div class="acts"><button class="tbtn acc" data-ask>${ic('spark')} Hỏi Zuey AI về bài này</button><button class="tbtn" data-copy>${ic('link')} Sao chép link</button><button class="tbtn" data-md>${ic('doc')} Link Markdown</button></div>
+        <section class="box author" aria-label="Tác giả"><img src="${A.AUTHOR.avatar}" alt="Duy Nguyen"><div><b>${esc(A.AUTHOR.name)}</b><p>Viết về AI engineering, sản phẩm và build in public. Sáng lập nhiều sản phẩm AI, chia sẻ quá trình làm thật trên zuey.me.</p><div class="links">${A.AUTHOR.sameAs.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener me">${esc(u.replace(/^https:\/\/(www\.)?/, ''))}</a>`).join('')}</div></div></section>
+        <section class="related" aria-labelledby="rl"><h2 id="rl">Đọc tiếp</h2><div class="cards">${rel.map(card).join('')}</div></section>
+        <details class="seo"><summary>SEO / GEO: những gì crawler và AI nhận được</summary><div class="pb">
+          <h3>Cách trang này được xử lý trên zuey.me</h3>
+          <ul>
+            <li>Render phía server (SSR) ở <code>${esc(A.url(a))}</code>: crawler nhận đủ tiêu đề, TL;DR, phần mở, ý chính và FAQ mà không cần chạy JavaScript.</li>
+            <li>Phần bị khoá không được gửi xuống trình duyệt khi chưa có quyền: chỉ có tiêu đề mục và dòng giả, nên không thể gỡ blur để đọc.</li>
+            <li>Schema <code>isAccessibleForFree</code> = ${!a.paid && acc.full}${acc.full ? '' : ' + <code>hasPart</code> trỏ vào <code>.paywalled</code>'}: Google hiểu đây là nội dung giới hạn, không phải cloaking.</li>
+            <li>Bản Markdown sạch cho AI agent ở <code>${esc(A.url(a))}.md</code> (cũng trả về khi gửi <code>Accept: text/markdown</code>), được liệt kê trong <code>/llms.txt</code>.</li>
+            <li>GEO: TL;DR làm <code>abstract</code>, FAQ làm <code>FAQPage</code>, tác giả có <code>sameAs</code>, ngày đăng và ngày cập nhật rõ ràng; câu trả lời ngắn, có số liệu để công cụ AI trích dẫn.</li>
+          </ul>
+          <h3>Thẻ trong &lt;head&gt;</h3>
+          <pre>${esc(head.meta.map(([t, at]) => (t === 'title' ? `<title>${at}</title>` : `<${t} ${Object.entries(at).map(([k, v]) => `${k}="${v}"`).join(' ')}>`)).join('\n'))}</pre>
+          <h3>JSON-LD</h3>
+          <pre>${esc(JSON.stringify(head.ld, null, 2))}</pre>
+        </div></details>
+      </article>
+      <nav class="toc" aria-label="Mục lục"><h2>Trong bài</h2><ol>${SEC.map((s, i) => `<li><a href="#${s.id}" data-to="${s.id}">${i >= acc.open ? ic('lock') : ''}${esc(s.h)}</a></li>`).join('')}<li><a href="#faq" data-to="faq">Câu hỏi thường gặp</a></li></ol></nav>
+    </div>`;
+    window.scrollTo(0, 0);
+    const main = document.getElementById('main');
+    const sv = main.querySelector('[data-survey]');
+    if (sv) sv.onchange = () => sv.querySelectorAll('label').forEach((l) => { const p = l.querySelector('.pct'); p.textContent = p.dataset.p + '%'; l.querySelector('.fill').style.width = p.dataset.p + '%'; });
+    main.onclick = (e) => {
+      const to = e.target.closest('[data-to]');
+      if (to) { e.preventDefault(); const t = document.getElementById(to.dataset.to); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); return; }
+      const b = e.target.closest('button'); if (!b) return;
+      if ('copy' in b.dataset) copy(A.url(a), 'Đã sao chép link bài viết.');
+      if ('md' in b.dataset) copy(`[${a.title}](${A.url(a)})`, 'Đã sao chép link Markdown.');
+      if ('ask' in b.dataset) { lsSet('zos_ask_v1', { q: `Tóm tắt giúp mình bài “${a.title}”`, t: Date.now() }); location.href = 'zuey-os.html#ai'; }
+    };
+    /* highlight the section being read */
+    const links = [...main.querySelectorAll('.toc a')];
+    const io = new IntersectionObserver((ents) => ents.forEach((en) => { if (en.isIntersecting) links.forEach((l) => l.setAttribute('aria-current', String(l.dataset.to === en.target.id))); }), { rootMargin: '-30% 0px -60% 0px' });
+    [...SEC.map((s) => s.id), 'faq'].forEach((id) => { const el = document.getElementById(id); if (el) io.observe(el); });
+  };
+
+  const prog = document.getElementById('prog');
+  addEventListener('scroll', () => {
+    const art = document.querySelector('article');
+    if (!art) { prog.style.setProperty('--p', 0); return; }
+    const r = art.getBoundingClientRect(), total = r.height - innerHeight * 0.6;
+    prog.style.setProperty('--p', Math.max(0, Math.min(1, -r.top / Math.max(1, total))).toFixed(3));
+  }, { passive: true });
+
+  const as = document.getElementById('as');
+  as.value = S.role === 'guest' ? 'guest' : S.role === 'admin' ? 'admin:none' : `member:${['ai', 'knowledges', 'none'].includes(S.plan) ? S.plan : S.plan === 'combo' || S.plan === 'community' ? 'knowledges' : 'none'}`;
+  as.onchange = () => { const [role, plan] = as.value.split(':'); save({ role, plan: plan || 'none' }); route(); };
+  const route = () => { const a = A.find(location.hash.slice(1)); if (a) render(a); else renderIndex(); };
+  addEventListener('hashchange', route);
+  look();
+  route();
+})();
+</script>
+</body>
+</html>

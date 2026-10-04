@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zuey Bold Layouts</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,900&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#181513;--ink:#f5efeb;--muted:#b9ada4;--line:#3a332e;--acc:#c4532a;--serif:Fraunces,Georgia,serif;--sans:"Plus Jakarta Sans",system-ui,sans-serif}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+.wrap{max-width:1500px;margin:0 auto;padding:40px 16px}
+h1{font:900 clamp(32px,5vw,60px)/1 var(--serif);letter-spacing:-.03em}
+.lede{color:var(--muted);max-width:75ch;margin-top:12px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:28px 0 18px}
+.tabs button{font:600 14px var(--sans);min-height:44px;padding:0 18px;border-radius:999px;border:1px solid var(--line);background:none;color:var(--ink);cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--ink);color:var(--bg)}
+.tabs button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.pick{font-size:11px;font-weight:700;background:var(--acc);color:#fff;border-radius:999px;padding:2px 8px;margin-left:6px}
+.info{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:24px;margin-bottom:20px}
+.info h2{font:700 30px/1.1 var(--serif)}
+.info p,.info li{color:var(--muted);font-size:14px}
+.info h3{font:600 12px var(--sans);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.info ul{padding-left:18px}
+.frames{display:grid;grid-template-columns:1fr 390px;gap:20px;align-items:start}
+.frame{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#000}
+.frame .bar{display:flex;justify-content:space-between;padding:8px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);background:#120f0d}
+.frame .bar a{color:var(--ink)}
+.desk{position:relative;width:100%;aspect-ratio:1440/900;overflow:hidden}
+.desk iframe{position:absolute;top:0;left:0;width:1440px;height:900px;border:0;transform-origin:0 0}
+.phone iframe{width:375px;height:760px;border:0;display:block;margin:0 auto}
+@media (max-width:1000px){.frames,.info{grid-template-columns:1fr}.phone iframe{width:100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>zuey.me: 3 hướng đột phá</h1>
+  <p class="lede">Mỗi phương án là một trang chạy được, dùng nội dung thật: avatar, bio, 7 mạng xã hội, 8 bài Zuey Reads, 12 sản phẩm, 6 công ty, 4 gói và giá. Bấm vào để tương tác: kéo cửa sổ, nhấn ⌘K, hỏi Zuey AI, bấm vào các điểm trên bản đồ. Mở từng file để xem toàn màn hình.</p>
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-i="0">1 · Zuey OS<span class="pick">Đề xuất</span></button>
+    <button role="tab" aria-selected="false" data-i="1">2 · The Zuey Issue</button>
+    <button role="tab" aria-selected="false" data-i="2">3 · Constellation</button>
+  </div>
+  <div class="info" id="info"></div>
+  <div class="frames">
+    <div class="frame"><div class="bar"><span>Desktop 1440 × 900</span><a id="open" href="#" target="_blank">Mở toàn màn hình ↗</a></div><div class="desk" id="desk"><iframe id="fd" title="Desktop"></iframe></div></div>
+    <div class="frame phone"><div class="bar"><span>Mobile 375</span></div><iframe id="fm" title="Mobile"></iframe></div>
+  </div>
+</div>
+<script>
+var O=[
+ {f:'option-1-zuey-os.html',t:'Zuey OS: website là một hệ điều hành',
+  idea:'Trang chủ là màn hình desktop của Zuey: menubar có giờ Sài Gòn và trạng thái “Zuey online”, các cửa sổ kéo thả được (about-zuey.md, Zuey AI, Reads), icon desktop cho các mục trả phí, và dock chứa 16 sản phẩm/công ty, phóng to khi rê chuột. ⌘K mở Spotlight để tìm hoặc hỏi AI. Trên mobile, trang thành màn hình chính kiểu iOS: widget profile, lưới app, widget Reads và thanh hỏi AI dính dưới đáy.',
+  why:['Hợp bản sắc: một CTO xây AI agent và dev tools.','Zuey AI là cửa sổ trung tâm, đang mở sẵn một hội thoại mẫu, nên người xem hiểu ngay sản phẩm.','Dễ nhớ và dễ chia sẻ; ⌘K đã có sẵn trong codebase.'],
+  risk:['Kéo thả và cửa sổ chồng nhau cần làm kỹ phần bàn phím và trình đọc màn hình.','Màn hình 1280–1440 cần một bố cục cửa sổ mặc định được tính sẵn.']},
+ {f:'option-2-the-zuey-issue.html',t:'The Zuey Issue: trang bìa tạp chí',
+  idea:'Masthead “zuey/” cao bằng nửa màn hình, chân dung cắt hình vòm đè lên chữ, sticker xoay “Hỏi Zuey AI” và các tít bìa dẫn vào nội dung. Tiếp theo là dải chạy tên các công ty, Mục lục 01–06 hiện ảnh khi rê chuột, trang đôi “Đang đọc” với ảnh thật, mục “Hỏi Zuey” dạng thư bạn đọc, bảng gói giá kiểu phiếu cắt và colophon liệt kê sản phẩm.',
+  why:['Sang, có chất biên tập; hợp với một nền tảng bán nội dung (Knowledges, Reads).','Câu chuyện rõ: bìa, mục lục, bài, đặt mua; đường tới trang Gói rất ngắn.','Đổi bìa theo số mỗi tháng tạo lý do để người đọc quay lại.'],
+  risk:['Nền sáng là thay đổi lớn so với giao diện tối hiện tại.','Cần ảnh chân dung chất lượng cao, tách nền càng tốt.']},
+ {f:'option-3-constellation.html',t:'Constellation: bản đồ vũ trụ của Zuey',
+  idea:'Zuey ở tâm, xung quanh là 3 quỹ đạo: vòng trong là những gì làm được trên site (Knowledges, AI, Business, Workflows, Cộng đồng), vòng giữa là Reads, vòng ngoài là sản phẩm và công ty. Các điểm chuyển động chậm và dừng khi rê chuột; bấm vào điểm nào thì mở ngăn bên với chi tiết và CTA. Gõ vào thanh hỏi để làm mờ các điểm không khớp, hoặc gửi câu hỏi cho Zuey AI. Có bộ lọc theo loại.',
+  why:['Độc nhất: thể hiện được độ rộng hệ sinh thái mà một danh sách link không làm được.','Tìm kiếm và AI gộp chung một ô.','Thêm sản phẩm mới chỉ là thêm một điểm.'],
+  risk:['Khó đọc nhanh hơn một danh sách; mobile phải chuyển về dạng chip.','Chuyển động liên tục cần tắt hẳn với prefers-reduced-motion (đã làm).']}
+];
+var fd=document.getElementById('fd'),fm=document.getElementById('fm'),desk=document.getElementById('desk');
+function fit(){fd.style.transform='scale('+desk.clientWidth/1440+')'}
+addEventListener('resize',fit);
+function show(i){var o=O[i];fd.src=o.f;fm.src=o.f;document.getElementById('open').href=o.f;
+ document.getElementById('info').innerHTML='<div><h2>'+o.t+'</h2><p style="margin-top:8px">'+o.idea+'</p></div><div><h3>Vì sao đáng chọn</h3><ul>'+o.why.map(function(x){return '<li>'+x+'</li>'}).join('')+'</ul></div><div><h3>Rủi ro</h3><ul>'+o.risk.map(function(x){return '<li>'+x+'</li>'}).join('')+'</ul></div>';
+ document.querySelectorAll('[role=tab]').forEach(function(b){b.setAttribute('aria-selected',b.dataset.i==i)});fit()}
+document.querySelectorAll('[role=tab]').forEach(function(b){b.onclick=function(){show(+b.dataset.i)}});
+show(0);
+</script>
+</body>
+</html>
