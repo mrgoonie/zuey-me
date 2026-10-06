@@ -11,7 +11,9 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Cache-Control': 'no-store',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy': "frame-ancestors 'none'",
-  'Referrer-Policy': 'no-referrer',
+  // same-origin, not no-referrer: with no-referrer browsers send `Origin: null` on the consent form
+  // POST, which the CSRF origin check rejects. Cross-origin navigations still carry no referrer.
+  'Referrer-Policy': 'same-origin',
   'X-Robots-Tag': 'noindex, nofollow',
 };
 for (const [k, v] of Object.entries(SECURITY_HEADERS)) Astro.response.headers.set(k, v);
@@ -57,7 +59,7 @@ const pageTitle = view ? `Cho phép ${view.client_name} truy cập Zuey?` : (fai
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    <meta name="referrer" content="no-referrer" />
+    <meta name="referrer" content="same-origin" />
     <title>{pageTitle} — Zuey</title>
     <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
   </head>
