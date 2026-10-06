@@ -234,14 +234,16 @@ async function fetchMetadataDocument(clientId: string): Promise<{ name: string; 
   };
   let res: Response;
   try {
+    // Cloudflare Workers reject `redirect: 'error'`, so redirects are taken manually and refused below.
     res = await membersRuntime.fetch(clientId, {
       headers: { Accept: 'application/json' },
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(CIMD_TIMEOUT_MS),
     });
   } catch {
     return invalid('the document could not be fetched');
   }
+  if (res.status >= 300 && res.status < 400) invalid('the document URL must not redirect');
   if (!res.ok) invalid(`the document URL answered HTTP ${res.status}`);
   const declared = Number(res.headers.get('content-length') ?? '0');
   if (declared > MAX_CIMD_BYTES) invalid('the document is too large');

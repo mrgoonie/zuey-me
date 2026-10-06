@@ -181,7 +181,11 @@ beforeEach(() => {
   now = T0;
   fetchHandler = () => new Response('not found', { status: 404 });
   membersRuntime.now = () => now;
-  membersRuntime.fetch = async (input: string) => fetchHandler(input);
+  membersRuntime.fetch = async (input: string, init?: RequestInit) => {
+    // Mirrors the Workers runtime, which throws on the `error` redirect mode.
+    if (init?.redirect === 'error') throw new TypeError('Invalid redirect value, must be one of "follow" or "manual"');
+    return fetchHandler(input);
+  };
 });
 
 describe('discovery metadata', () => {
@@ -390,6 +394,12 @@ describe('authorization code + PKCE', () => {
     fetchHandler = () => new Response(JSON.stringify({ client_id: clientId, client_name: 'x', redirect_uris: [REDIRECT] }));
     const bad = await startAuthorization(d1, new Request(authorizeUrl({ response_type: 'code', client_id: mismatched, redirect_uri: REDIRECT })));
     expect(bad.kind).toBe('error');
+
+    const redirecting = 'https://client.example/moved.json';
+    fetchHandler = () => new Response(null, { status: 302, headers: { Location: clientId } });
+    const moved = await startAuthorization(d1, new Request(authorizeUrl({ response_type: 'code', client_id: redirecting, redirect_uri: REDIRECT })));
+    expect(moved.kind).toBe('error');
+    if (moved.kind === 'error') expect(moved.message).toContain('must not redirect');
   });
 
   it('authenticates confidential clients at the token endpoint', async () => {
