@@ -395,11 +395,31 @@ describe('authorization code + PKCE', () => {
     const bad = await startAuthorization(d1, new Request(authorizeUrl({ response_type: 'code', client_id: mismatched, redirect_uri: REDIRECT })));
     expect(bad.kind).toBe('error');
 
+    const jwtOnly = 'https://client.example/jwt-only.json';
+    fetchHandler = () => new Response(JSON.stringify({ client_id: jwtOnly, client_name: 'x', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'private_key_jwt' }));
+    const refused = await startAuthorization(d1, new Request(authorizeUrl({ response_type: 'code', client_id: jwtOnly, redirect_uri: REDIRECT })));
+    expect(refused.kind).toBe('error');
+
     const redirecting = 'https://client.example/moved.json';
     fetchHandler = () => new Response(null, { status: 302, headers: { Location: clientId } });
     const moved = await startAuthorization(d1, new Request(authorizeUrl({ response_type: 'code', client_id: redirecting, redirect_uri: REDIRECT })));
     expect(moved.kind).toBe('error');
     if (moved.kind === 'error') expect(moved.message).toContain('must not redirect');
+  });
+
+  it('accepts metadata documents that prefer private_key_jwt but also support none', async () => {
+    const clientId = 'https://chat.example/oauth/client.json';
+    fetchHandler = (url) => url === clientId
+      ? new Response(JSON.stringify({
+        client_id: clientId, client_name: 'Chat Example', redirect_uris: [REDIRECT], grant_types: ['authorization_code', 'refresh_token'],
+        token_endpoint_auth_method: 'private_key_jwt', token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      }))
+      : new Response('nope', { status: 404 });
+    const m = await member('lan@example.com');
+    const v = randomVerifier();
+    const { code } = await authorize({ clientId, cookie: m.cookie, verifier: v });
+    const tok = await exchange({ grant_type: 'authorization_code', code: code ?? '', redirect_uri: REDIRECT, code_verifier: v, client_id: clientId });
+    expect(tok.status).toBe(200);
   });
 
   it('authenticates confidential clients at the token endpoint', async () => {

@@ -263,8 +263,11 @@ async function fetchMetadataDocument(clientId: string): Promise<{ name: string; 
     invalid('redirect_uris must be a non-empty array');
   }
   const redirectUris = (Array.isArray(doc.redirect_uris) ? doc.redirect_uris : []).map(u => validateRedirectUri(u, 'invalid_client'));
+  // Clients such as ChatGPT prefer private_key_jwt but list `none` among the methods they support; this
+  // server only advertises `none` for them, so they authenticate as public clients protected by PKCE.
   const method = doc.token_endpoint_auth_method ?? 'none';
-  if (method !== 'none') invalid('only token_endpoint_auth_method "none" is supported for metadata-document clients');
+  const supported = Array.isArray(doc.token_endpoint_auth_methods_supported) ? doc.token_endpoint_auth_methods_supported : [];
+  if (method !== 'none' && !supported.includes('none')) invalid('only token_endpoint_auth_method "none" is supported for metadata-document clients');
   const grants = Array.isArray(doc.grant_types) ? doc.grant_types.filter(isGrantType) : ['authorization_code' as const];
   if (!grants.includes('authorization_code')) invalid('grant_types must include authorization_code');
   return { name: name ?? '', uri: httpsUrlOrNull(doc.client_uri), redirectUris, grants: [...new Set(grants)] };
