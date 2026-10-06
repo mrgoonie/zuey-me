@@ -96,7 +96,8 @@ function ctx(opts: CtxOpts): APIContext {
   if (opts.body !== undefined) headers.set('Content-Type', 'application/json');
   const request = new Request(`${ORIGIN}${opts.path ?? '/api/test'}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
   // Handlers only read request/params/locals; a full APIContext is not constructible in tests.
-  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: opts.env ?? baseEnv() } } };
+  const redirect = (location: string, status = 302) => new Response(null, { status, headers: { Location: location } });
+  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), redirect, locals: { runtime: { env: opts.env ?? baseEnv() } } };
   return partial as unknown as APIContext;
 }
 
@@ -376,6 +377,31 @@ describe('admin identity', () => {
     // A member whose email is not allowlisted is never admin.
     const plain = await memberWithSession('lan@example.com');
     expect((await authenticateAdmin(new Request(ORIGIN, { headers: { cookie: plain.cookie } }), d1, env)).authenticated).toBe(false);
+  });
+
+  it('opens a member session alongside the Studio session on owner sign-in', async () => {
+    oauthProfiles.githubUser = { id: 7, login: 'mrgoonie', name: 'Duy', avatar_url: 'https://img.test/duy.png' };
+    oauthProfiles.githubEmails = [{ email: 'duy@example.com', verified: true, primary: true }];
+    const realFetch = globalThis.fetch;
+    // The Studio callback calls the global fetch for its own token and profile checks.
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => fakeFetch(String(input), init)) as typeof fetch;
+    try {
+      const studioLogin = (cookie?: string) => githubCallback(ctx({ path: '/api/auth/github/callback?code=abc', headers: cookie ? { cookie } : {} }));
+      const first = await studioLogin();
+      expect(first.headers.get('Location')).toBe('/studio');
+      const studioCookie = cookieFrom(first, 'zuey_session');
+      const memberCookie = cookieFrom(first, 'zuey_member');
+      const me = await read(await meApi(ctx({ headers: browser(`${studioCookie}; ${memberCookie}`) })));
+      expect(field(me.data, 'email')).toBe('duy@example.com');
+      expect(JSON.stringify(field(me.data, 'identities'))).toContain('github');
+
+      // Signing in to Studio again from the same browser keeps the existing member session.
+      const again = await studioLogin(memberCookie);
+      expect(again.headers.getSetCookie().some(c => c.startsWith('zuey_member='))).toBe(false);
+      expect(again.headers.getSetCookie().some(c => c.startsWith('zuey_session='))).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it('lets a member session win over a Studio cookie in the same browser', async () => {

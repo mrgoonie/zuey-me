@@ -147,6 +147,12 @@ async function fetchGithubProfile(creds: OAuthCredentials, code: string, redirec
   const tokenBody = await readJson(tokenRes);
   const accessToken = isRecord(tokenBody) && typeof tokenBody.access_token === 'string' ? tokenBody.access_token : null;
   if (!accessToken) throw new AppError(502, 'oauth_token_failed', 'GitHub token exchange failed');
+  return githubProfileFromToken(accessToken);
+}
+
+/** Reads the GitHub profile and its verified email with an access token already exchanged. */
+export async function githubProfileFromToken(accessToken: string): Promise<OAuthProfile> {
+  const f = membersRuntime.fetch;
   const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': UA };
   const userRes = await f('https://api.github.com/user', { headers });
   const u = await readJson(userRes);
@@ -255,5 +261,26 @@ export async function handleMemberOAuthCallback(request: Request, env: RuntimeEn
     const code = err instanceof AppError ? err.code : 'oauth_failed';
     if (!(err instanceof AppError)) console.error('member OAuth error:', err instanceof Error ? err.message : 'unknown');
     return loginError(code);
+  }
+}
+
+/**
+ * Studio sign-in also opens a member session for the same identity, so the owner's browser has an
+ * account for /account, community and Zuey AI. Returns the member Set-Cookie value, or null when the
+ * browser already holds that member's session or the account cannot be resolved (Studio still signs in).
+ */
+export async function memberCookieForStudioLogin(request: Request, d1: D1DatabaseLike | undefined, profile: OAuthProfile): Promise<string | null> {
+  if (!d1) return null;
+  try {
+    // No linking to whichever member happens to be signed in: the identity or its verified email decides.
+    const { user, created } = await completeOAuthLogin(d1, profile, null);
+    const current = await resolveMemberSession(request, d1);
+    if (current && current.user.id === user.id) return null;
+    const { token } = await createMemberSession(d1, user.id, request);
+    await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: profile.provider, via: 'studio' }, request);
+    return memberCookie(token);
+  } catch (err) {
+    console.warn('Studio member session skipped:', err instanceof AppError ? err.code : err instanceof Error ? err.message : 'unknown');
+    return null;
   }
 }
