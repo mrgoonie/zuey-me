@@ -456,7 +456,8 @@ export function AccountApp({ keyScopes }: { keyScopes: readonly string[] }) {
   useEffect(() => {
     void callApi('/api/v1/me', { cache: 'no-store' }).then(res => {
       if (res.ok) { const parsed = parseMe(res.data); if (parsed) setMe(parsed); else setError('Phản hồi không hợp lệ.'); return; }
-      if (res.status === 401) { window.location.assign(loginUrl('/account')); return; }
+      // No member account behind this browser's session: send the visitor to sign in instead of a dead end.
+      if (res.status === 401 || res.code === 'member_account_required') { window.location.assign(loginUrl('/account')); return; }
       setError(res.message);
     });
   }, []);

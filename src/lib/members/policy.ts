@@ -89,21 +89,23 @@ const KEY_ERRORS: Record<'invalid' | 'expired' | 'revoked', CredentialError> = {
 };
 
 /**
- * Resolves the caller. Order: Studio session → member session (CSRF-checked for unsafe methods)
- * → bearer/X-API-Key (user `zk_` key or Studio key). User keys are never admin.
+ * Resolves the caller. Order: member session (same-origin) → Studio session → bearer/X-API-Key
+ * (user `zk_` key or Studio key). The member session wins over the Studio cookie because only it
+ * carries an account; a valid Studio cookie in the same browser still makes that member an admin.
+ * User keys are never admin.
  */
 export async function resolvePrincipal(request: Request, env: RuntimeEnv): Promise<Principal> {
   const d1 = env.DB;
 
   const studioToken = extractSessionCookie(request.headers.get('cookie') || '');
-  if (studioToken && (await verifySession(studioToken, d1))) return studioAdmin('studio_session');
+  const hasStudioSession = Boolean(studioToken && (await verifySession(studioToken, d1)));
 
   let csrfError: CredentialError | null = null;
   const member = d1 ? await resolveMemberSession(request, d1) : null;
   if (member) {
     if (isSameOriginRequest(request)) {
       const { plans, entitlements } = d1 ? await getEntitlements(d1, member.user.id) : { plans: [], entitlements: [] };
-      const admin = isAdminIdentity(member.user.email, member.user.email_verified_at, env);
+      const admin = hasStudioSession || isAdminIdentity(member.user.email, member.user.email_verified_at, env);
       return {
         kind: admin ? 'admin' : 'member',
         via: 'member_session',
@@ -120,6 +122,8 @@ export async function resolvePrincipal(request: Request, env: RuntimeEnv): Promi
     }
     csrfError = { status: 403, code: 'csrf_rejected', message: 'Cross-site request rejected: send same-origin requests (Origin header) when using the session cookie' };
   }
+
+  if (hasStudioSession) return studioAdmin('studio_session');
 
   const token = extractApiToken(request);
   if (!token) return anonymous(csrfError);

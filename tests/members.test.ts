@@ -378,6 +378,34 @@ describe('admin identity', () => {
     expect((await authenticateAdmin(new Request(ORIGIN, { headers: { cookie: plain.cookie } }), d1, env)).authenticated).toBe(false);
   });
 
+  it('lets a member session win over a Studio cookie in the same browser', async () => {
+    const env = baseEnv();
+    const studio = await createSession('owner@zuey.me', d1);
+    const lan = await memberWithSession('lan@example.com');
+    const both = `zuey_session=${studio}; ${lan.cookie}`;
+
+    // Same-origin: the member account is used and the Studio cookie still grants admin.
+    const p = await resolvePrincipal(new Request(`${ORIGIN}/api/v1/me`, { headers: { cookie: both, Origin: ORIGIN } }), env);
+    expect(p.via).toBe('member_session');
+    expect(p.userId).toBe(lan.userId);
+    expect(p.kind).toBe('admin');
+    expect(can(p, 'community:access')).toBe(true);
+    expect(can(p, 'keys:manage')).toBe(true);
+    const me = await meApi(ctx({ headers: browser(both) }));
+    expect(me.status).toBe(200);
+
+    // Cross-site: the member cookie is ignored and the Studio session behaves as before.
+    const cross = await resolvePrincipal(new Request(`${ORIGIN}/api/x`, { method: 'POST', headers: { cookie: both, Origin: 'https://evil.test' } }), env);
+    expect(cross.via).toBe('studio_session');
+
+    // Signing out ends both sessions.
+    const out = await logoutApi(ctx({ method: 'POST', headers: browser(both) }));
+    expect(out.status).toBe(200);
+    expect(out.headers.get('set-cookie')).toContain('zuey_session=;');
+    const after = await resolvePrincipal(new Request(`${ORIGIN}/api/x`, { headers: { cookie: both, Origin: ORIGIN } }), env);
+    expect(after.kind).toBe('anonymous');
+  });
+
   it('keeps Studio sessions and admin API keys working', async () => {
     const env = baseEnv();
     const studio = await createSession('owner@zuey.me', d1);
