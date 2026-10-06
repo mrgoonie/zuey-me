@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createSession } from '../../../../db/store';
-import { handleMemberOAuthCallback, isMemberOAuthCallback } from '../../../../lib/members/oauth';
+import { githubProfileFromToken, handleMemberOAuthCallback, isMemberOAuthCallback, memberCookieForStudioLogin } from '../../../../lib/members/oauth';
 
 const ALLOWED_GITHUB_USERS: Record<string, true> = { mrgoonie: true };
 const ALLOWED_EMAILS: Record<string, true> = {
@@ -114,6 +114,10 @@ export const GET: APIRoute = async ({ request, redirect, locals }) => {
       'Set-Cookie',
       `zuey_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${60 * 60 * 24 * 7}`
     );
+    // 5. Also sign the owner in as a member so account-bound features work in this browser.
+    const profile = await githubProfileFromToken(tokenData.access_token).catch(() => null);
+    const memberSetCookie = profile ? await memberCookieForStudioLogin(request, d1, profile) : null;
+    if (memberSetCookie) response.headers.append('Set-Cookie', memberSetCookie);
     return response;
   } catch (err) {
     console.error('GitHub OAuth exception:', err);

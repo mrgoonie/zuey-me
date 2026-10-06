@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createSession } from '../../../../db/store';
-import { handleMemberOAuthCallback, isMemberOAuthCallback } from '../../../../lib/members/oauth';
+import { handleMemberOAuthCallback, isMemberOAuthCallback, memberCookieForStudioLogin } from '../../../../lib/members/oauth';
 
 const ALLOWED_EMAILS: Record<string, true> = {
   'hi@zuey.me': true,
@@ -58,7 +58,7 @@ export const GET: APIRoute = async ({ request, redirect, locals }) => {
       return redirect('/studio?error=failed_to_fetch_user');
     }
 
-    const userData = await userRes.json() as { email?: string; verified_email?: boolean };
+    const userData = await userRes.json() as { id?: string; email?: string; verified_email?: boolean; name?: string; picture?: string };
     const email = (userData.email || '').toLowerCase();
 
     // 3. Strict Identity Verification: must be on allowlist and email verified by Google
@@ -77,6 +77,13 @@ export const GET: APIRoute = async ({ request, redirect, locals }) => {
       'Set-Cookie',
       `zuey_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${60 * 60 * 24 * 7}`
     );
+    // 5. Also sign the owner in as a member; the v2 userinfo `id` is the same account id as OIDC `sub`.
+    if (userData.id) {
+      const memberSetCookie = await memberCookieForStudioLogin(request, d1, {
+        provider: 'google', subject: userData.id, email, emailVerified: true, name: userData.name ?? null, avatarUrl: userData.picture ?? null,
+      });
+      if (memberSetCookie) response.headers.append('Set-Cookie', memberSetCookie);
+    }
     return response;
   } catch (err) {
     console.error('Google OAuth exception:', err);
