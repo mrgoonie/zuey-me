@@ -1,14 +1,6 @@
 import { defineMiddleware } from 'astro:middleware';
+import { isForbiddenCrossSiteSubmission, isMachineEndpoint } from './lib/csrf-origin-check';
 import { REQUEST_ID_HEADER, resolveRequestId, withRequestId } from './lib/http';
-
-/** Bearer-only machine endpoints (MCP + OAuth back-channel + discovery) that browser-based MCP clients call cross-origin. */
-function isMachineEndpoint(pathname: string): boolean {
-  return pathname === '/mcp'
-    || pathname === '/oauth/token'
-    || pathname === '/oauth/register'
-    || pathname === '/oauth/revoke'
-    || pathname.startsWith('/.well-known/oauth-');
-}
 
 const MACHINE_ALLOW_HEADERS = 'Content-Type, Authorization, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID, X-Request-Id';
 const EXPOSE_HEADERS = 'WWW-Authenticate, X-Request-Id, MCP-Protocol-Version';
@@ -38,6 +30,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
     const headers = new Headers({ [REQUEST_ID_HEADER]: requestId });
     setMachineCors(headers);
     return new Response(null, { status: 204, headers });
+  }
+
+  if (isForbiddenCrossSiteSubmission(request, url)) {
+    return withRequestId(new Response(`Cross-site ${request.method} form submissions are forbidden`, { status: 403 }), requestId);
   }
 
   const response = await withRequestId(await next(), requestId);
