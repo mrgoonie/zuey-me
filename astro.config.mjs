@@ -5,6 +5,8 @@ import tailwind from '@astrojs/tailwind';
 
 export default defineConfig({
   output: 'server',
+  // The same check runs in src/middleware.ts, which exempts the OAuth/MCP machine endpoints.
+  security: { checkOrigin: false },
   adapter: cloudflare({
     imageService: 'passthrough',
     // Local dev uses the local D1 state; remote-only bindings (Workers AI) stay unbound and fail honestly.
