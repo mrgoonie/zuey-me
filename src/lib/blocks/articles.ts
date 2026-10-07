@@ -104,6 +104,18 @@ export interface ArticleInput {
 export interface WriteContext {
   actor?: string;
   env?: RuntimeEnv;
+  /**
+   * Runtime hook that keeps background work alive after the response (Cloudflare `ctx.waitUntil`).
+   * When present, writes re-render the article's social share images; without it (tests, scripts)
+   * images are rendered lazily on their first request instead.
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+/** `waitUntil` of the current Cloudflare request, if any (absent in `astro dev` and tests). */
+export function runtimeWaitUntil(runtime?: { ctx?: { waitUntil(promise: Promise<unknown>): void } }): WriteContext['waitUntil'] {
+  const ctx = runtime?.ctx;
+  return ctx ? promise => ctx.waitUntil(promise) : undefined;
 }
 
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -513,6 +525,19 @@ export async function getArticleView(
 
 // ---------- Writes ----------
 
+/** Re-renders share images (og:image) of every published edition in the background after a write. */
+function scheduleOgRefresh(db: D1DatabaseLike, articleId: string, slug: string, ctx: WriteContext): void {
+  if (!ctx.waitUntil) return;
+  // Loaded lazily: the renderer pulls in wasm engines that only the Workers runtime can instantiate.
+  ctx.waitUntil((async () => {
+    const [{ refreshArticleOgImages }, { renderArticleOgPng }] = await Promise.all([
+      import('../og/article-og-service'),
+      import('../og/og-renderer'),
+    ]);
+    await refreshArticleOgImages(db, articleId, slug, card => renderArticleOgPng(card));
+  })().catch(err => console.error('Share image refresh failed:', err instanceof Error ? err.message : 'unknown')));
+}
+
 function firstImage(blocks: Block[]): string | null {
   let url: string | null = null;
   walkBlocks(blocks, b => {
@@ -650,6 +675,7 @@ export async function updateArticle(
   await mirrorPrimary(db, art.id);
   // Access, tags and category affect what each search tier may contain: always rebuild.
   await reindexArticle(db, art.id, ctx.env);
+  scheduleOgRefresh(db, art.id, nextSlug, ctx);
   const updated = await getArticle(db, nextSlug, { locale });
   if (!updated) throw new AppError(500, 'internal_error', 'Article disappeared after update');
   return updated;
@@ -683,6 +709,7 @@ export async function publishArticle(
   await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, doc, ctx.actor ?? 'admin');
   await mirrorPrimary(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
+  scheduleOgRefresh(db, art.id, slug, ctx);
   const rec = await getArticle(db, slug, { locale });
   if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after publish');
   return rec;
@@ -708,6 +735,7 @@ export async function deleteEdition(
     .bind(now, now, expected + 1, art.id, locale).run();
   await recordRevision(db, art.id, locale, expected + 1, 'delete_edition', edition.title, edition.excerpt, parseStoredDoc(edition.draftJson, slug), ctx.actor ?? 'admin');
   await reindexArticle(db, art.id, ctx.env);
+  scheduleOgRefresh(db, art.id, slug, ctx);
   const rec = await getArticle(db, slug);
   if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after edition delete');
   return rec;
@@ -723,6 +751,7 @@ export async function deleteArticle(d1: D1DatabaseLike | undefined, slug: string
     .bind(now, now, art.id).run();
   if (!res.meta?.changes) throw new AppError(404, 'not_found', 'Article not found');
   await reindexArticle(db, art.id, ctx.env);
+  scheduleOgRefresh(db, art.id, slug, ctx);
 }
 
 /** Replaces the article's public topic tags (admin; expected_revision; audit via revision bump). */
@@ -739,6 +768,7 @@ export async function setTagsForArticle(
   if (!res.meta?.changes) return conflict(db, slug);
   await setArticleTags(db, art.id, tagIds);
   await reindexArticle(db, art.id, ctx.env);
+  scheduleOgRefresh(db, art.id, slug, ctx);
   const rec = await getArticle(db, slug);
   if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after tag update');
   return rec;

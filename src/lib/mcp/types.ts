@@ -22,6 +22,8 @@ export interface McpContext {
   isAdmin(): Promise<boolean>;
   /** The caller resolved by the central membership policy (memoised per request). */
   principal?(): Promise<Principal>;
+  /** Keeps background work alive after the response (Cloudflare `ctx.waitUntil`); absent in tests. */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /** A feature module contributes tools and handles calls for the tool names it owns. */

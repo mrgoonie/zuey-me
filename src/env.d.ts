@@ -91,6 +91,8 @@ declare global {
     interface Locals {
       runtime?: {
         env?: RuntimeEnv;
+        /** Cloudflare execution context: work passed to waitUntil keeps running after the response. */
+        ctx?: { waitUntil(promise: Promise<unknown>): void };
       };
     }
   }

@@ -148,24 +148,24 @@ export const articlesMcpModule: McpToolModule = {
       }
       case 'article_create': {
         const actor = await mcpAdminActor(ctx);
-        const rec = await createArticle(d1, parseArticleInput(args, 'create'), { actor, env: ctx.env });
+        const rec = await createArticle(d1, parseArticleInput(args, 'create'), { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return { ...toSummary(rec), document: rec.draft };
       }
       case 'article_update': {
         const actor = await mcpAdminActor(ctx);
         const slug = requireSlug(args);
         const input = parseArticleInput({ ...args, slug: args.new_slug }, 'update');
-        const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env });
+        const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return { ...toSummary(rec), document: rec.draft };
       }
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
-        const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, locale: localeField(args) });
+        const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args) });
         return { ...toSummary(rec), document: rec.published };
       }
       case 'article_delete': {
         const actor = await mcpAdminActor(ctx);
-        await deleteArticle(d1, requireSlug(args), { actor, env: ctx.env });
+        await deleteArticle(d1, requireSlug(args), { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return { deleted: true };
       }
       case 'article_editions': {
@@ -178,7 +178,7 @@ export const articlesMcpModule: McpToolModule = {
         const actor = await mcpAdminActor(ctx);
         const locale = localeField(args);
         if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
-        return toSummary(await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env }));
+        return toSummary(await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
       }
       case 'article_revisions': {
         await ctx.requireAdmin();
@@ -196,7 +196,7 @@ export const articlesMcpModule: McpToolModule = {
       }
       case 'article_tags_set': {
         const actor = await mcpAdminActor(ctx);
-        return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env }));
+        return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
       }
       case 'survey_results': {
         await ctx.requireAdmin();

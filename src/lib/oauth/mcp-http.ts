@@ -114,10 +114,11 @@ function stepUpScope(oauth: OAuthGrantInfo | null, err: AppError, access: ToolAc
   return null;
 }
 
-function toolContext(request: Request, env: RuntimeEnv, principal: Principal): McpContext {
+function toolContext(request: Request, env: RuntimeEnv, principal: Principal, waitUntil?: McpContext['waitUntil']): McpContext {
   return {
     request,
     env,
+    waitUntil,
     d1: env.DB,
     principal: async () => principal,
     async requireAdmin() {
@@ -192,7 +193,7 @@ function unauthorized(id: JsonRpcId, issuer: string, caller: Extract<McpCaller, 
   return rpcError(id, ERR_UNAUTHORIZED, caller.description, 401, undefined, { 'WWW-Authenticate': challenge });
 }
 
-export async function handleMcpPost(request: Request, env: RuntimeEnv): Promise<Response> {
+export async function handleMcpPost(request: Request, env: RuntimeEnv, waitUntil?: McpContext['waitUntil']): Promise<Response> {
   if (!originAllowed(request, env)) return rpcError(null, ERR_FORBIDDEN, 'Origin not allowed', 403);
   const issuer = issuerFor(request);
 
@@ -241,7 +242,7 @@ export async function handleMcpPost(request: Request, env: RuntimeEnv): Promise<
       const args = isRecord(params.arguments) ? params.arguments : {};
       const access = toolAccess(name);
       try {
-        return ok(toolResult(await callMcpTool(name, args, toolContext(request, env, principal))));
+        return ok(toolResult(await callMcpTool(name, args, toolContext(request, env, principal, waitUntil))));
       } catch (err) {
         if (!(err instanceof AppError)) {
           console.error('MCP tool error:', name, err instanceof Error ? err.message : 'unknown');

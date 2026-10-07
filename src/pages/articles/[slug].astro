@@ -10,6 +10,7 @@ import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
 import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
 import { readingMinutes } from '../../lib/search/text';
+import { articleOgImage } from '../../lib/og/article-og-service';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
@@ -39,7 +40,9 @@ if (preview) Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 const canonical = view ? articleUrl(origin, view.slug, view.locale) : `${origin}/articles/${slug}`;
 const alternates = view && !preview ? articleAlternates(origin, view.slug, view.available_locales) : [];
 if (view && !preview) Astro.response.headers.set('Link', linkHeader(canonical, alternates));
-const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, 'https://zuey.me/og.png')) : null;
+// Generated share card of this edition; its ?v= hash changes with the content so networks re-fetch it.
+const shareImage = view && !preview ? `${origin}${(await articleOgImage(view)).path}` : undefined;
+const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, shareImage ?? 'https://zuey.me/og.png')) : null;
 const translations = view ? view.available_locales.filter(l => l !== view?.locale) : [];
 const dateText = view ? formatKnowledgeDate(view.published_at, view.locale) : '';
 const paywallClass = PAYWALL_SELECTOR.slice(1);
@@ -51,7 +54,8 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
   title={view ? `${view.title} — Zuey` : `${t.notFoundTitle} — Zuey`}
   description={view?.excerpt || t.sectionLead}
   url={canonical}
-  image={view?.cover_url ?? undefined}
+  image={shareImage}
+  imageAlt={view?.title}
   lang={LOCALE_LABELS[uiLocale].htmlLang}
 >
   {jsonLd && <script is:inline type="application/ld+json" set:html={jsonLd} />}
