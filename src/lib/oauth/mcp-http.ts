@@ -20,6 +20,9 @@ export const MODERN_VERSIONS = ['2026-07-28'];
 export const LEGACY_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 export const SUPPORTED_VERSIONS = [...MODERN_VERSIONS, ...LEGACY_VERSIONS];
 
+/** How long a 2026-07-28 client may reuse a tools/list result. */
+const TOOLS_LIST_TTL_MS = 5 * 60 * 1000;
+
 export const SERVER_INFO = { name: 'zuey-me', title: 'Zuey (zuey.me)', version: '2.0.0' };
 const INSTRUCTIONS = 'Tools for zuey.me: Duy Nguyen\'s profile, articles (full text follows the member\'s plan), workflows, reads, '
   + 'membership plans and SePay checkout. Admin tools appear only for admin identities that granted the admin scope.';
@@ -228,8 +231,11 @@ export async function handleMcpPost(request: Request, env: RuntimeEnv): Promise<
       return ok({ supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: { listChanged: false } }, instructions: INSTRUCTIONS });
     case 'ping':
       return ok({});
-    case 'tools/list':
-      return ok({ tools: visibleTools(principal, allMcpTools()) });
+    case 'tools/list': {
+      const tools = visibleTools(principal, allMcpTools());
+      // 2026-07-28 list results must carry cache hints; the list depends on the caller, so it is private.
+      return ok(era.modern ? { tools, ttlMs: TOOLS_LIST_TTL_MS, cacheScope: 'private' } : { tools });
+    }
     case 'tools/call': {
       const name = typeof params.name === 'string' ? params.name : '';
       const args = isRecord(params.arguments) ? params.arguments : {};
