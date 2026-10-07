@@ -318,9 +318,27 @@ export async function getClient(d1: D1DatabaseLike, clientId: string): Promise<O
   return row ? rowToClient(row) : null;
 }
 
-/** Exact string comparison against the registered redirect URIs (no prefix or wildcard matching). */
+/** The redirect URI without its port when it is an http loopback URI, otherwise null. */
+function loopbackWithoutPort(uri: string): string | null {
+  try {
+    const u = new URL(uri);
+    if (u.protocol !== 'http:' || !isLoopbackHost(u.hostname)) return null;
+    u.port = '';
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Exact string comparison against the registered redirect URIs (no prefix or wildcard matching), except
+ * that http loopback URIs match on any port: native apps such as Claude Code register
+ * `http://localhost/callback` and listen on an ephemeral port (RFC 8252 §7.3).
+ */
 export function redirectUriAllowed(client: OAuthClient, redirectUri: string): boolean {
-  return client.redirect_uris.includes(redirectUri);
+  if (client.redirect_uris.includes(redirectUri)) return true;
+  const requested = loopbackWithoutPort(redirectUri);
+  return requested !== null && client.redirect_uris.some(r => loopbackWithoutPort(r) === requested);
 }
 
 function decodeBasic(header: string): { id: string; secret: string } | null {
