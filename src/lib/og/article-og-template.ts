@@ -142,8 +142,9 @@ export function articleOgTemplate(card: ArticleOgCard, avatarUrl: string): OgNod
     borderRadius: 40,
     overflow: 'hidden',
     backgroundColor: TOKENS.ivory,
-    backgroundImage: `radial-gradient(circle at 100% 0%, rgba(251,191,36,0.30) 0%, rgba(251,191,36,0) 38%), radial-gradient(circle at 0% 100%, rgba(255,107,74,0.14) 0%, rgba(255,107,74,0) 34%)`,
-    boxShadow: '0 30px 60px rgba(0,0,0,0.35)',
+    // Warm amber corner light. Linear gradients only: blurred shadows and radial gradients cost resvg
+    // seconds of CPU per image, linear ones a few milliseconds.
+    backgroundImage: 'linear-gradient(225deg, #FBE3B6 0%, #F8ECDD 22%, #F5EFEB 45%, #F5EFEB 80%, #F8E6DF 100%)',
   }, [header, body, footer]);
 
   return el('div', {
@@ -153,7 +154,8 @@ export function articleOgTemplate(card: ArticleOgCard, avatarUrl: string): OgNod
     padding: 30,
     fontFamily: `"${OG_SANS}", "${OG_SANS_CJK}"`,
     backgroundColor: TOKENS.plum950,
-    backgroundImage: `radial-gradient(circle at 88% 12%, rgba(255,107,74,0.45) 0%, rgba(255,107,74,0) 45%), radial-gradient(circle at 10% 90%, rgba(168,85,247,0.40) 0%, rgba(168,85,247,0) 45%), linear-gradient(135deg, ${TOKENS.plum900} 0%, ${TOKENS.plum950} 100%)`,
+    // Coral glow top-right, violet glow bottom-left over the plum night background.
+    backgroundImage: `linear-gradient(45deg, #4A2560 0%, ${TOKENS.plum900} 30%, ${TOKENS.plum950} 50%, ${TOKENS.plum900} 68%, #6B2E2C 100%)`,
   }, [ivoryCard]);
 }
 
