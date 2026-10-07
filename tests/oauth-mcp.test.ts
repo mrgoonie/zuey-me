@@ -627,8 +627,12 @@ describe('/mcp resource server', () => {
 
     const legacy = await mcp('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } }, { token: f.access, modern: false });
     expect(get(legacy.body, 'result', 'protocolVersion')).toBe('2025-06-18');
+    const modernList = await mcp('tools/list', {}, { token: f.access });
+    expect(typeof get(modernList.body, 'result', 'ttlMs')).toBe('number');
+    expect(get(modernList.body, 'result', 'cacheScope')).toBe('private');
     const legacyList = await mcp('tools/list', {}, { token: f.access, modern: false, headers: { 'MCP-Protocol-Version': '2025-06-18' } });
     expect(legacyList.status).toBe(200);
+    expect(get(legacyList.body, 'result', 'ttlMs')).toBeUndefined();
 
     const mismatch = await mcp('tools/list', {}, { token: f.access, headers: { 'Mcp-Method': 'tools/call' } });
     expect(mismatch.status).toBe(400);
