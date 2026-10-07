@@ -422,6 +422,24 @@ describe('authorization code + PKCE', () => {
     expect(tok.status).toBe(200);
   });
 
+  it('matches loopback redirect URIs on any port', async () => {
+    const clientId = 'https://cli.example/oauth/client-metadata';
+    fetchHandler = (url) => url === clientId
+      ? new Response(JSON.stringify({ client_id: clientId, client_name: 'CLI', redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'], token_endpoint_auth_method: 'none' }))
+      : new Response('nope', { status: 404 });
+    const m = await member('lan@example.com');
+    const v = randomVerifier();
+    const redirectUri = 'http://localhost:64510/callback';
+    const { code } = await authorize({ clientId, cookie: m.cookie, verifier: v, redirectUri });
+    const tok = await exchange({ grant_type: 'authorization_code', code: code ?? '', redirect_uri: redirectUri, code_verifier: v, client_id: clientId });
+    expect(tok.status).toBe(200);
+
+    for (const other of ['http://localhost:64510/other', 'http://evil.example:64510/callback', 'https://localhost:64510/callback']) {
+      const r = await startAuthorization(d1, new Request(authorizeUrl({ response_type: 'code', client_id: clientId, redirect_uri: other })));
+      expect(r.kind).toBe('error');
+    }
+  });
+
   it('authenticates confidential clients at the token endpoint', async () => {
     const m = await member('lan@example.com');
     const { clientId, secret } = await register({ token_endpoint_auth_method: 'client_secret_basic' });
