@@ -17,6 +17,7 @@
     "@astrojs/cloudflare": "^12.2.0",
     "@astrojs/react": "^4.2.0",
     "@astrojs/tailwind": "^5.1.5",
+    "@resvg/resvg-wasm": "^2.6.2",
     "canvas-confetti": "^1.9.4",
     "chart.js": "^4.5.1",
     "clsx": "^2.1.1",
@@ -26,6 +27,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "satori": "0.32.0",
     "tailwind-merge": "^3.0.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3"

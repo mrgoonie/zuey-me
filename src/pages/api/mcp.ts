@@ -3,6 +3,7 @@ import { authenticateAdmin } from '../../lib/auth';
 import { AppError } from '../../lib/http';
 import { allMcpTools, callMcpTool } from '../../lib/mcp/dispatch';
 import type { McpContext } from '../../lib/mcp/types';
+import { runtimeWaitUntil } from '../../lib/blocks/articles';
 import { resolvePrincipal } from '../../lib/members/policy';
 import type { Principal } from '../../lib/members/policy';
 
@@ -56,6 +57,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       request,
       env,
       d1,
+      waitUntil: runtimeWaitUntil(locals.runtime),
       principal() {
         principalPromise ??= resolvePrincipal(request, { ...env, DB: d1 });
         return principalPromise;
