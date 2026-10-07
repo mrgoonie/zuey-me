@@ -32,10 +32,12 @@ export async function ensureArticleOgImage(
   db: D1DatabaseLike, article: ArticleSummary, render: OgRender,
 ): Promise<{ hash: string; png: Uint8Array }> {
   const { card, hash } = await articleOgImage(article);
-  const stored = await getStoredOgImage(db, article.id, article.locale);
+  // Storage is an optimisation: when D1 is unavailable the image is still rendered and served.
+  const stored = await getStoredOgImage(db, article.id, article.locale).catch(() => null);
   if (stored?.hash === hash) return stored;
   const png = await render(card);
-  await putStoredOgImage(db, article.id, article.locale, hash, png);
+  await putStoredOgImage(db, article.id, article.locale, hash, png)
+    .catch(err => console.error('Share image store failed:', err instanceof Error ? err.message : 'unknown'));
   return { hash, png };
 }
 
