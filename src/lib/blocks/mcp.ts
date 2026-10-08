@@ -213,7 +213,8 @@ export const articlesMcpModule: McpToolModule = {
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
         const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at });
-        if (args.summary_only === true) return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
+        // Clients holding a stale tool schema forward unknown flags as strings.
+        if (args.summary_only === true || args.summary_only === 'true') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
         return { ...toSummary(rec), document: rec.published };
       }
       case 'article_delete': {

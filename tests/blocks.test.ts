@@ -345,6 +345,8 @@ describe('articles REST, Markdown and MCP', () => {
     const published = await articlesMcpModule.call('article_publish', { slug: 'mcp-x', expected_revision: 1, confirm: true, summary_only: true }, mcpCtx(true)) as Record<string, unknown>;
     expect(published).toMatchObject({ status: 'published', document_blocks: 1 });
     expect(published).not.toHaveProperty('document');
+    const again = await articlesMcpModule.call('article_publish', { slug: 'mcp-x', expected_revision: 2, confirm: true, summary_only: 'true' }, mcpCtx(true));
+    expect(again).not.toHaveProperty('document');
     const schema = JSON.stringify(await articlesMcpModule.call('block_schema', {}, mcpCtx(false)));
     expect(schema).toContain('BlockLayout');
     expect(Object.keys(articlesOpenApi.paths)).toContain('/api/v1/surveys/{blockId}/vote');
