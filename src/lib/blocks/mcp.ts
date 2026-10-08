@@ -23,13 +23,15 @@ export const DOCUMENT_URL_HOSTS = ['media.zuey.me'] as const;
 const DOCUMENT_URL_MAX_BYTES = 2_000_000;
 /** Article fields an import payload may supply when the caller omits them (never slug or revision). */
 const DOCUMENT_URL_METADATA = ['title', 'excerpt', 'tags', 'category', 'access', 'locale', 'primary_locale'] as const;
+/** On update the payload never switches the article's primary language; adding an edition must not demote the original. */
+const DOCUMENT_URL_UPDATE_METADATA = DOCUMENT_URL_METADATA.filter((key) => key !== 'primary_locale');
 
 /**
  * Resolves `document_url` into `document` so large documents need not travel inline through the
  * MCP client. Called only after the admin gate; the host allowlist keeps the server from fetching
  * arbitrary URLs.
  */
-export async function withFetchedDocument(args: Record<string, unknown>, fetcher: typeof fetch = fetch): Promise<Record<string, unknown>> {
+export async function withFetchedDocument(args: Record<string, unknown>, fetcher: typeof fetch = fetch, mode: 'create' | 'update' = 'create'): Promise<Record<string, unknown>> {
   const raw = args.document_url;
   if (raw === undefined || args.document !== undefined) return args;
   if (typeof raw !== 'string') throw new AppError(400, 'invalid_field', 'document_url must be a string', { field: 'document_url' });
@@ -50,7 +52,7 @@ export async function withFetchedDocument(args: Record<string, unknown>, fetcher
   // An import payload may also carry article metadata; explicit tool arguments always win.
   const payload = body as Record<string, unknown>;
   const filled: Record<string, unknown> = {};
-  for (const key of DOCUMENT_URL_METADATA) if (payload[key] !== undefined && rest[key] === undefined) filled[key] = payload[key];
+  for (const key of mode === 'update' ? DOCUMENT_URL_UPDATE_METADATA : DOCUMENT_URL_METADATA) if (payload[key] !== undefined && rest[key] === undefined) filled[key] = payload[key];
   return { ...rest, ...filled, document: payload.document };
 }
 
@@ -204,7 +206,7 @@ export const articlesMcpModule: McpToolModule = {
       case 'article_update': {
         const actor = await mcpAdminActor(ctx);
         const slug = requireSlug(args);
-        const input = parseArticleInput({ ...(await withFetchedDocument(args)), slug: args.new_slug }, 'update');
+        const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
         const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return withSavedDocument(toSummary(rec), rec.draft, args);
       }

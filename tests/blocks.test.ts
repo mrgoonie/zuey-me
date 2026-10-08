@@ -366,6 +366,11 @@ describe('articles REST, Markdown and MCP', () => {
     const withMeta = (async () => new Response(JSON.stringify({ document: doc, title: 'From payload', excerpt: 'E', tags: ['AI'], slug: 'ignored' }))) as unknown as typeof fetch;
     const merged = await withFetchedDocument({ slug: 'x', title: 'Explicit', document_url: 'https://media.zuey.me/x.json' }, withMeta);
     expect(merged).toMatchObject({ slug: 'x', title: 'Explicit', excerpt: 'E', tags: ['AI'], document: doc });
+    const edition = (async () => new Response(JSON.stringify({ document: doc, locale: 'en', primary_locale: 'en' }))) as unknown as typeof fetch;
+    expect(await withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, edition)).toMatchObject({ locale: 'en', primary_locale: 'en' });
+    const update = await withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, edition, 'update');
+    expect(update).toMatchObject({ locale: 'en' });
+    expect(update).not.toHaveProperty('primary_locale');
     const bare = await withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, (async () => new Response(JSON.stringify(doc))) as unknown as typeof fetch);
     expect(bare.document).toEqual(doc);
     for (const bad of ['http://media.zuey.me/x.json', 'https://evil.example/x.json', 'https://media.zuey.me.evil.example/x.json', 'nope']) {
