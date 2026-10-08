@@ -6,7 +6,7 @@ import { knowledgeStrings } from '../../components/knowledge/strings';
  * Bump when the image design changes: every card hash changes with it, so social networks see a new
  * og:image URL and re-fetch instead of keeping the old picture.
  */
-export const OG_TEMPLATE_VERSION = 2;
+export const OG_TEMPLATE_VERSION = 3;
 
 export const OG_WIDTH = 1200;
 export const OG_HEIGHT = 630;

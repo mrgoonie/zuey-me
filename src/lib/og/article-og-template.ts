@@ -75,6 +75,26 @@ function tagChip(text: string): OgNode {
   }, `#${text}`);
 }
 
+/**
+ * Text block clamped to `lines`. Korean separates words with spaces and must not break inside them,
+ * but satori 0.32 ignores `word-break: keep-all` for Hangul, so each Korean word becomes its own
+ * box in a wrapping row (lines then break only between words) and the height cap does the clamping.
+ */
+function clampedText(text: string, locale: ArticleOgCard['locale'], style: Record<string, unknown>, lines: number): OgNode {
+  if (locale !== 'ko') return el('div', { ...style, display: 'block', lineClamp: lines }, text);
+  const fontSize = Number(style.fontSize);
+  const lineHeight = Number(style.lineHeight);
+  const words = text.split(/\s+/).filter(Boolean).map(word => el('div', { display: 'flex' }, word));
+  return el('div', {
+    ...style,
+    display: 'flex',
+    flexWrap: 'wrap',
+    columnGap: Math.round(fontSize * 0.28),
+    maxHeight: Math.floor(fontSize * lineHeight * lines),
+    overflow: 'hidden',
+  }, words);
+}
+
 /** Builds the satori element tree for one card. `avatarUrl` is drawn inside the amber ring. */
 export function articleOgTemplate(card: ArticleOgCard, avatarUrl: string): OgNode {
   const badges: OgNode[] = [];
@@ -90,25 +110,21 @@ export function articleOgTemplate(card: ArticleOgCard, avatarUrl: string): OgNod
     ]),
   ]);
 
+  const titleSize = titleFontSize(card.title);
   const body = el('div', { display: 'flex', flexDirection: 'column', gap: 22, width: '100%' }, [
-    el('div', {
-      display: 'block',
+    clampedText(card.title, card.locale, {
       fontFamily: `"${OG_SERIF}", "${OG_SERIF_CJK}"`,
       fontWeight: 800,
-      fontSize: titleFontSize(card.title),
+      fontSize: titleSize,
       lineHeight: 1.08,
       letterSpacing: '-0.02em',
       color: TOKENS.stone950,
-      lineClamp: 3,
-      wordBreak: card.locale === 'ko' ? 'keep-all' : 'normal',
-    }, card.title),
-    ...(card.excerpt ? [el('div', {
-      display: 'block',
+    }, 3),
+    ...(card.excerpt ? [clampedText(card.excerpt, card.locale, {
       fontSize: 27,
       lineHeight: 1.4,
       color: TOKENS.stone600,
-      lineClamp: 2,
-    }, card.excerpt)] : []),
+    }, 2)] : []),
   ]);
 
   const author = el('div', { display: 'flex', alignItems: 'center', gap: 18 }, [
