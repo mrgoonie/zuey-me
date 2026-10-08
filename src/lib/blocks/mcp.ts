@@ -12,6 +12,7 @@ import {
 import { discoverArticles } from './discovery';
 import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
+import type { ArticleDocument } from './schema';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import { BLOCK_SCHEMA_NOTES, blockSchemas } from './openapi';
 import { articleUrl } from './seo';
@@ -51,6 +52,12 @@ export async function withFetchedDocument(args: Record<string, unknown>, fetcher
   const filled: Record<string, unknown> = {};
   for (const key of DOCUMENT_URL_METADATA) if (payload[key] !== undefined && rest[key] === undefined) filled[key] = payload[key];
   return { ...rest, ...filled, document: payload.document };
+}
+
+/** Echoes the saved draft, except for document_url imports where the caller already holds it (keeps bulk imports small). */
+function withSavedDocument<T extends object>(summary: T, draft: ArticleDocument, args: Record<string, unknown>) {
+  if (args.document === undefined && typeof args.document_url === 'string') return { ...summary, document_blocks: draft.blocks.length };
+  return { ...summary, document: draft };
 }
 
 const slugProp = { slug: { type: 'string', description: 'Article slug' } };
@@ -192,14 +199,14 @@ export const articlesMcpModule: McpToolModule = {
         const actor = await mcpAdminActor(ctx);
         const input = parseArticleInput(await withFetchedDocument(args), 'create');
         const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return { ...toSummary(rec), document: rec.draft };
+        return withSavedDocument(toSummary(rec), rec.draft, args);
       }
       case 'article_update': {
         const actor = await mcpAdminActor(ctx);
         const slug = requireSlug(args);
         const input = parseArticleInput({ ...(await withFetchedDocument(args)), slug: args.new_slug }, 'update');
         const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return { ...toSummary(rec), document: rec.draft };
+        return withSavedDocument(toSummary(rec), rec.draft, args);
       }
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
