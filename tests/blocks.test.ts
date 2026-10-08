@@ -347,6 +347,16 @@ describe('articles REST, Markdown and MCP', () => {
     expect(Object.keys(articlesOpenApi.paths)).toContain('/api/v1/surveys/{blockId}/vote');
   });
 
+  it('backdates published_at on publish and rejects future dates', async () => {
+    const created = await call(createApi, { method: 'POST', headers: { cookie: adminCookie }, body: { slug: 'backdated', title: 'B', document: { version: 1, blocks: [para('old post')] } } });
+    expect(created.status).toBe(201);
+    const future = await call(publishApi, { method: 'POST', headers: { cookie: adminCookie }, params: { slug: 'backdated' }, body: { expected_revision: 1, confirm: true, published_at: '2999-01-01' } });
+    expect(future.status).toBe(400);
+    const pub = await call(publishApi, { method: 'POST', headers: { cookie: adminCookie }, params: { slug: 'backdated' }, body: { expected_revision: 1, confirm: true, published_at: '2026-03-16T09:00:00+07:00' } });
+    expect(pub.status).toBe(200);
+    expect(JSON.stringify(await json(pub))).toContain('"published_at":"2026-03-16T02:00:00.000Z"');
+  });
+
   it('resolves document_url only from the first-party media host', async () => {
     const doc = { version: 1, blocks: [para('from url')] };
     const fetcher = (async () => new Response(JSON.stringify({ document: doc }))) as unknown as typeof fetch;
