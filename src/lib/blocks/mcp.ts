@@ -20,6 +20,8 @@ import { locateSurvey, surveyResults } from './survey';
 /** Hosts an admin may import a block document from (first-party media bucket only, never arbitrary URLs). */
 export const DOCUMENT_URL_HOSTS = ['media.zuey.me'] as const;
 const DOCUMENT_URL_MAX_BYTES = 2_000_000;
+/** Article fields an import payload may supply when the caller omits them (never slug or revision). */
+const DOCUMENT_URL_METADATA = ['title', 'excerpt', 'tags', 'category', 'access', 'locale', 'primary_locale'] as const;
 
 /**
  * Resolves `document_url` into `document` so large documents need not travel inline through the
@@ -42,9 +44,13 @@ export async function withFetchedDocument(args: Record<string, unknown>, fetcher
   if (text.length > DOCUMENT_URL_MAX_BYTES) throw new AppError(400, 'invalid_field', 'document_url body is too large', { field: 'document_url' });
   let body: unknown;
   try { body = JSON.parse(text); } catch { throw new AppError(400, 'invalid_field', 'document_url must serve JSON', { field: 'document_url' }); }
-  const document = body && typeof body === 'object' && 'document' in body ? (body as { document: unknown }).document : body;
   const { document_url: _url, ...rest } = args;
-  return { ...rest, document };
+  if (!body || typeof body !== 'object' || !('document' in body)) return { ...rest, document: body };
+  // An import payload may also carry article metadata; explicit tool arguments always win.
+  const payload = body as Record<string, unknown>;
+  const filled: Record<string, unknown> = {};
+  for (const key of DOCUMENT_URL_METADATA) if (payload[key] !== undefined && rest[key] === undefined) filled[key] = payload[key];
+  return { ...rest, ...filled, document: payload.document };
 }
 
 const slugProp = { slug: { type: 'string', description: 'Article slug' } };
@@ -53,7 +59,7 @@ const documentProp = {
   document: { type: 'object', description: 'Block document {version: 1, blocks: [...]}; call block_schema for the format' },
   document_url: {
     type: 'string',
-    description: `Alternative to document for large imports: https URL on ${DOCUMENT_URL_HOSTS.join(', ')} serving the block document JSON (or an object with a document field). Ignored when document is given.`,
+    description: `Alternative to document for large imports: https URL on ${DOCUMENT_URL_HOSTS.join(', ')} serving the block document JSON, or an import payload {document, title?, excerpt?, tags?, category?, access?, locale?, primary_locale?} whose fields fill arguments you omit. Ignored when document is given.`,
   },
 };
 const metaProps = {
