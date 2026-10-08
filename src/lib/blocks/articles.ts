@@ -681,13 +681,27 @@ export async function updateArticle(
   return updated;
 }
 
+/**
+ * Optional backdated publish time for imported archives: an ISO date/datetime that is not in the
+ * future. Returns null when absent so the first-publish time is kept.
+ */
+export function parsePublishedAt(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const ms = typeof raw === 'string' ? Date.parse(raw) : NaN;
+  if (!Number.isFinite(ms)) throw new AppError(400, 'invalid_field', 'published_at must be an ISO date', { field: 'published_at' });
+  if (ms > Date.now() + 60_000) throw new AppError(400, 'invalid_field', 'published_at cannot be in the future', { field: 'published_at' });
+  return new Date(ms).toISOString();
+}
+
 /** Publishes one edition's current draft (locale defaults to primary). Requires confirm === true. */
 export async function publishArticle(
-  d1: D1DatabaseLike | undefined, slug: string, expectedRevision: unknown, confirm: unknown, ctx: WriteContext & { locale?: Locale } = {},
+  d1: D1DatabaseLike | undefined, slug: string, expectedRevision: unknown, confirm: unknown,
+  ctx: WriteContext & { locale?: Locale; publishedAt?: unknown } = {},
 ): Promise<ArticleRecord> {
   const db = requireDb(d1);
   if (confirm !== true) throw new AppError(400, 'confirmation_required', 'Publishing requires confirm: true');
   const expected = requireRevision(expectedRevision);
+  const publishedAt = parsePublishedAt(ctx.publishedAt);
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
   const locale = ctx.locale ?? art.primary;
@@ -703,9 +717,9 @@ export async function publishArticle(
   const publicPart = applyPaywall(doc, art.access, { isAdmin: false, entitlements: [] }).doc;
   await db.prepare(`
     UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
-      published_at = COALESCE(published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
+      published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
     WHERE article_id = ? AND locale = ?
-  `).bind(revision, revision, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale).run();
+  `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale).run();
   await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, doc, ctx.actor ?? 'admin');
   await mirrorPrimary(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
