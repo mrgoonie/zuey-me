@@ -58,14 +58,17 @@ export function unspaceCjk(text: string): string {
   return text.replace(CJK_JOIN_RE, '$1');
 }
 
-/** Approximate word count; CJK characters count as one word each. */
+/** CJK readers cover ~440 chars/min, so each character weighs half a word at 220 words/min. */
+const CJK_CHAR_WEIGHT = 0.5;
+
+/** Approximate word count in reading-time units; CJK characters weigh CJK_CHAR_WEIGHT each. */
 export function wordCount(text: string): number {
   const cjk = (text.match(CJK_CHAR_RE) ?? []).length;
   const latin = text.replace(CJK_CHAR_RE, ' ').split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length;
-  return latin + cjk;
+  return latin + Math.round(cjk * CJK_CHAR_WEIGHT);
 }
 
-/** Reading time in minutes (~220 words/min; CJK ~400 chars/min), at least 1. */
+/** Reading time in minutes (~220 words/min, CJK weighted by wordCount), at least 1. */
 export function readingMinutes(words: number): number {
   return Math.max(1, Math.round(words / 220));
 }
