@@ -6,7 +6,7 @@ import { validateDocument } from '../src/lib/blocks/validate';
 import { documentToMarkdown } from '../src/lib/blocks/markdown';
 import { applyPaywall, canReadFull } from '../src/lib/blocks/paywall';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
-import { articlesMcpModule } from '../src/lib/blocks/mcp';
+import { articlesMcpModule, withFetchedDocument } from '../src/lib/blocks/mcp';
 import { articlesOpenApi } from '../src/lib/blocks/openapi';
 import { AppError } from '../src/lib/http';
 import type { McpContext } from '../src/lib/mcp/types';
@@ -345,6 +345,23 @@ describe('articles REST, Markdown and MCP', () => {
     const schema = JSON.stringify(await articlesMcpModule.call('block_schema', {}, mcpCtx(false)));
     expect(schema).toContain('BlockLayout');
     expect(Object.keys(articlesOpenApi.paths)).toContain('/api/v1/surveys/{blockId}/vote');
+  });
+
+  it('resolves document_url only from the first-party media host', async () => {
+    const doc = { version: 1, blocks: [para('from url')] };
+    const fetcher = (async () => new Response(JSON.stringify({ document: doc }))) as unknown as typeof fetch;
+    const resolved = await withFetchedDocument({ slug: 'x', document_url: 'https://media.zuey.me/imports/x.json' }, fetcher);
+    expect(resolved.document).toEqual(doc);
+    expect(resolved).not.toHaveProperty('document_url');
+    const bare = await withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, (async () => new Response(JSON.stringify(doc))) as unknown as typeof fetch);
+    expect(bare.document).toEqual(doc);
+    for (const bad of ['http://media.zuey.me/x.json', 'https://evil.example/x.json', 'https://media.zuey.me.evil.example/x.json', 'nope']) {
+      await expect(withFetchedDocument({ document_url: bad }, fetcher)).rejects.toBeInstanceOf(AppError);
+    }
+    const failing = (async () => new Response('missing', { status: 404 })) as unknown as typeof fetch;
+    await expect(withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, failing)).rejects.toBeInstanceOf(AppError);
+    const inline = { document: doc, document_url: 'https://evil.example/x.json' };
+    expect(await withFetchedDocument(inline, fetcher)).toBe(inline);
   });
 });
 
