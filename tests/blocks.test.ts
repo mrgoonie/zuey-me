@@ -360,6 +360,8 @@ describe('articles REST, Markdown and MCP', () => {
     }
     const failing = (async () => new Response('missing', { status: 404 })) as unknown as typeof fetch;
     await expect(withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, failing)).rejects.toBeInstanceOf(AppError);
+    const redirecting = (async () => new Response(null, { status: 302, headers: { location: 'https://evil.example/' } })) as unknown as typeof fetch;
+    await expect(withFetchedDocument({ document_url: 'https://media.zuey.me/x.json' }, redirecting)).rejects.toBeInstanceOf(AppError);
     const inline = { document: doc, document_url: 'https://evil.example/x.json' };
     expect(await withFetchedDocument(inline, fetcher)).toBe(inline);
   });

@@ -35,7 +35,8 @@ export async function withFetchedDocument(args: Record<string, unknown>, fetcher
   if (url.protocol !== 'https:' || !(DOCUMENT_URL_HOSTS as readonly string[]).includes(url.hostname)) {
     throw new AppError(400, 'invalid_field', `document_url must be https on ${DOCUMENT_URL_HOSTS.join(', ')}`, { field: 'document_url' });
   }
-  const res = await fetcher(url.toString(), { redirect: 'error' });
+  // Workers reject redirect: 'error'; 'manual' surfaces a 3xx as !ok so redirects off the allowlist are never followed.
+  const res = await fetcher(url.toString(), { redirect: 'manual' });
   if (!res.ok) throw new AppError(400, 'document_url_unavailable', `document_url returned HTTP ${res.status}`, { field: 'document_url' });
   const text = await res.text();
   if (text.length > DOCUMENT_URL_MAX_BYTES) throw new AppError(400, 'invalid_field', 'document_url body is too large', { field: 'document_url' });
