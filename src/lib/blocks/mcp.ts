@@ -149,7 +149,7 @@ export const articlesMcpModule: McpToolModule = {
     },
     {
       name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports.',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' } }, required: ['slug', 'expected_revision', 'confirm'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' } }, required: ['slug', 'expected_revision', 'confirm'] },
     },
     { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
@@ -213,6 +213,7 @@ export const articlesMcpModule: McpToolModule = {
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
         const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at });
+        if (args.summary_only === true) return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
         return { ...toSummary(rec), document: rec.published };
       }
       case 'article_delete': {
