@@ -17,9 +17,44 @@ import { BLOCK_SCHEMA_NOTES, blockSchemas } from './openapi';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
 
+/** Hosts an admin may import a block document from (first-party media bucket only, never arbitrary URLs). */
+export const DOCUMENT_URL_HOSTS = ['media.zuey.me'] as const;
+const DOCUMENT_URL_MAX_BYTES = 2_000_000;
+
+/**
+ * Resolves `document_url` into `document` so large documents need not travel inline through the
+ * MCP client. Called only after the admin gate; the host allowlist keeps the server from fetching
+ * arbitrary URLs.
+ */
+export async function withFetchedDocument(args: Record<string, unknown>, fetcher: typeof fetch = fetch): Promise<Record<string, unknown>> {
+  const raw = args.document_url;
+  if (raw === undefined || args.document !== undefined) return args;
+  if (typeof raw !== 'string') throw new AppError(400, 'invalid_field', 'document_url must be a string', { field: 'document_url' });
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new AppError(400, 'invalid_field', 'document_url must be a valid URL', { field: 'document_url' }); }
+  if (url.protocol !== 'https:' || !(DOCUMENT_URL_HOSTS as readonly string[]).includes(url.hostname)) {
+    throw new AppError(400, 'invalid_field', `document_url must be https on ${DOCUMENT_URL_HOSTS.join(', ')}`, { field: 'document_url' });
+  }
+  const res = await fetcher(url.toString(), { redirect: 'error' });
+  if (!res.ok) throw new AppError(400, 'document_url_unavailable', `document_url returned HTTP ${res.status}`, { field: 'document_url' });
+  const text = await res.text();
+  if (text.length > DOCUMENT_URL_MAX_BYTES) throw new AppError(400, 'invalid_field', 'document_url body is too large', { field: 'document_url' });
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { throw new AppError(400, 'invalid_field', 'document_url must serve JSON', { field: 'document_url' }); }
+  const document = body && typeof body === 'object' && 'document' in body ? (body as { document: unknown }).document : body;
+  const { document_url: _url, ...rest } = args;
+  return { ...rest, document };
+}
+
 const slugProp = { slug: { type: 'string', description: 'Article slug' } };
 const localeProp = { locale: { type: 'string', enum: [...LOCALES], description: 'Edition locale (default: primary edition)' } };
-const documentProp = { document: { type: 'object', description: 'Block document {version: 1, blocks: [...]}; call block_schema for the format' } };
+const documentProp = {
+  document: { type: 'object', description: 'Block document {version: 1, blocks: [...]}; call block_schema for the format' },
+  document_url: {
+    type: 'string',
+    description: `Alternative to document for large imports: https URL on ${DOCUMENT_URL_HOSTS.join(', ')} serving the block document JSON (or an object with a document field). Ignored when document is given.`,
+  },
+};
 const metaProps = {
   title: { type: 'string' }, excerpt: { type: 'string' }, ...localeProp,
   primary_locale: { type: 'string', enum: [...LOCALES] },
@@ -148,13 +183,14 @@ export const articlesMcpModule: McpToolModule = {
       }
       case 'article_create': {
         const actor = await mcpAdminActor(ctx);
-        const rec = await createArticle(d1, parseArticleInput(args, 'create'), { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+        const input = parseArticleInput(await withFetchedDocument(args), 'create');
+        const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return { ...toSummary(rec), document: rec.draft };
       }
       case 'article_update': {
         const actor = await mcpAdminActor(ctx);
         const slug = requireSlug(args);
-        const input = parseArticleInput({ ...args, slug: args.new_slug }, 'update');
+        const input = parseArticleInput({ ...(await withFetchedDocument(args)), slug: args.new_slug }, 'update');
         const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return { ...toSummary(rec), document: rec.draft };
       }
