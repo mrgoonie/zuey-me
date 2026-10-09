@@ -161,12 +161,15 @@ zuey chat "<message>"
 zuey plans
 zuey subscribe <plan> --months 3   # prints VietQR bank-transfer details
 zuey mcp config                # client config snippets
+zuey videos list --q "<query>"  # Zueytube: search titles and transcripts
+zuey videos get <id>
 
 # Admin
 zuey login --key <ADMIN_API_KEY>
 zuey profile view
 zuey links list --section products
 zuey theme set ivory
+zuey videos add <youtube_link> --locale vi [--pair <video_id>]
 ```
 
 `ZUEY_API_KEY` / `ZUEY_API_URL` environment variables override the saved config.
