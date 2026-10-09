@@ -70,12 +70,15 @@ export const PROFILE_DECISIONS: ProfileDecision[] = ['approve', 'reject'];
 export const MAX_REJECT_REASON_LENGTH = 500;
 
 /**
- * Admin: approves (→ verified) or rejects a submitted profile. Both ID images are deleted from R2 first,
- * in this request; only then are the keys cleared, so a failed delete leaves the decision undone and
- * retryable instead of orphaning an image. A verified profile may also be rejected (revoked).
+ * Admin: approves (→ verified) or rejects a submitted profile; a verified profile may also be rejected
+ * (revoked). `expectedUpdatedAt` is the profile version the admin was shown: the update only applies while
+ * the row still has that version, status, payee details and ID image keys, so a member edit or image upload
+ * racing the decision yields 409 instead of verifying details nobody saw (or clearing a key whose image
+ * would then never be deleted). Both ID images are deleted from R2 only after the guarded update succeeded,
+ * using the keys from the same read; a failed delete is logged and audited with the keys for cleanup.
  */
 export async function decidePayoutProfile(
-  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, decision: ProfileDecision, actor: string, rawReason?: unknown,
+  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, decision: ProfileDecision, actor: string, rawReason?: unknown, expectedUpdatedAt?: unknown,
 ): Promise<AdminPayoutProfileView> {
   const profile = await getStored(d1, userId);
   if (!profile) throw new AppError(404, 'not_found', 'Payout profile not found');
@@ -93,24 +96,44 @@ export async function decidePayoutProfile(
       throw new AppError(409, 'invalid_state', `Only a submitted or verified profile can be rejected (status: ${profile.status})`);
     }
   }
-  await deleteObjects(env, [profile.id_front_key, profile.id_back_key]);
+  if (typeof expectedUpdatedAt !== 'string' || !expectedUpdatedAt) {
+    throw new AppError(400, 'invalid_field', 'updated_at of the reviewed profile is required', { field: 'updated_at' });
+  }
+  if (profile.updated_at !== expectedUpdatedAt) throw profileChanged();
+
   const now = iso(membersRuntime.now());
-  if (decision === 'approve') {
-    await d1.prepare(
-      `UPDATE referral_payout_profiles SET status = 'verified', id_front_key = NULL, id_back_key = NULL, verified_at = ?, verified_by = ?,
-         reject_reason = NULL, updated_at = ? WHERE user_id = ?`
-    ).bind(now, actor, now, userId).run();
-  } else {
-    await d1.prepare(
-      `UPDATE referral_payout_profiles SET status = 'rejected', id_front_key = NULL, id_back_key = NULL, verified_at = NULL, verified_by = ?,
-         reject_reason = ?, updated_at = ? WHERE user_id = ?`
-    ).bind(actor, reason, now, userId).run();
+  const set = decision === 'approve'
+    ? { sql: "status = 'verified', verified_at = ?, verified_by = ?, reject_reason = NULL", params: [now, actor] }
+    : { sql: "status = 'rejected', verified_at = NULL, verified_by = ?, reject_reason = ?", params: [actor, reason] };
+  const res = await d1.prepare(
+    `UPDATE referral_payout_profiles SET ${set.sql}, id_front_key = NULL, id_back_key = NULL, updated_at = ?
+     WHERE user_id = ? AND updated_at = ? AND status = ? AND method = ? AND full_name IS ? AND bank_name IS ? AND bank_account IS ?
+       AND national_id IS ? AND address IS ? AND paypal_email IS ? AND id_front_key IS ? AND id_back_key IS ?`
+  ).bind(
+    ...set.params, now, userId, profile.updated_at, profile.status, profile.method, profile.full_name, profile.bank_name, profile.bank_account,
+    profile.national_id, profile.address, profile.paypal_email, profile.id_front_key, profile.id_back_key,
+  ).run();
+  if (res.meta?.changes !== 1) throw profileChanged();
+
+  const keys = [profile.id_front_key, profile.id_back_key];
+  let imagesDeleted = keys.filter(Boolean).length;
+  try {
+    await deleteObjects(env, keys);
+  } catch (err) {
+    // The decision is committed; keep the keys on the audit trail so the images can still be removed by hand.
+    imagesDeleted = 0;
+    console.error('payout profile image delete failed:', err instanceof Error ? err.message : 'unknown');
+    await logReferralEvent(d1, { actor, action: 'payout_profile.image_delete_failed', subjectUserId: userId, detail: { keys: keys.filter(Boolean) } });
   }
   await logReferralEvent(d1, {
     actor, action: decision === 'approve' ? 'payout_profile.verified' : 'payout_profile.rejected', subjectUserId: userId,
-    detail: { method: profile.method, reason: reason || null, images_deleted: [profile.id_front_key, profile.id_back_key].filter(Boolean).length },
+    detail: { method: profile.method, reason: reason || null, images_deleted: imagesDeleted },
   });
   const view = await getAdminView(d1, userId);
   if (!view) throw new AppError(500, 'internal_error', 'Payout profile disappeared');
   return view;
+}
+
+function profileChanged(): AppError {
+  return new AppError(409, 'profile_changed', 'The payout profile changed since it was loaded; reload and review the current details');
 }

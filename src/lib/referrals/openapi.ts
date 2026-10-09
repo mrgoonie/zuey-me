@@ -105,7 +105,7 @@ export const referralsOpenApi: OpenApiFragment = {
     },
     '/api/v1/referrals/jobs/run': {
       post: {
-        tags: [TAG], summary: 'Cron (Bearer CRON_SECRET) or admin: mature commissions, refresh tiers, day-1 payout close. Idempotent', security: adminSecurity,
+        tags: [TAG], summary: 'Cron (Bearer CRON_SECRET) or admin: recapture commissions whose capture failed, mature commissions, refresh tiers, day-1 payout close. Idempotent', security: adminSecurity,
         responses: { '200': ok('Per-job results; a failed job reports status "error"', { type: 'object' }), ...adminDenied },
       },
     },
@@ -180,13 +180,19 @@ export const referralsOpenApi: OpenApiFragment = {
       post: {
         tags: [TAG], summary: 'Admin: approve (→ verified) or reject (reason required) a payout profile; both ID images are deleted in the same request', security: adminSecurity,
         parameters: [pathParam('userId'), pathParam('action', { type: 'string', enum: ['approve', 'reject'] })],
-        requestBody: body({ type: 'object', properties: { reason: { type: 'string', maxLength: 500 } } }, false),
+        requestBody: body({
+          type: 'object', required: ['updated_at'],
+          properties: {
+            reason: { type: 'string', maxLength: 500 },
+            updated_at: { type: 'string', description: 'updated_at of the profile as reviewed; a profile changed since is refused with 409 `profile_changed`' },
+          },
+        }),
         responses: { '200': ok('Decided', ref('ReferralPayoutProfile')), '400': errorResponses['400'], '404': notFound, '409': conflict, ...adminDenied, '503': err('`storage_unavailable` (REFERRAL_KYC)') },
       },
     },
     '/api/v1/admin/referrals/payouts': {
       get: {
-        tags: [TAG], summary: 'Admin: payouts of a period and/or status, with payee details', security: adminSecurity,
+        tags: [TAG], summary: 'Admin: payouts of a period and/or status, with the payee snapshotted at close', security: adminSecurity,
         parameters: [{ name: 'period', in: 'query', required: false, schema: month }, { name: 'status', in: 'query', required: false, schema: { type: 'string', enum: PAYOUT_STATUSES } }],
         responses: { '200': ok('Payouts', { type: 'object', properties: { payouts: { type: 'array', items: ref('ReferralPayout') } } }), '400': errorResponses['400'], ...adminDenied },
       },
@@ -205,7 +211,7 @@ export const referralsOpenApi: OpenApiFragment = {
         requestBody: body({ type: 'object', properties: { transaction_ref: { type: 'string', maxLength: 200 }, reason: { type: 'string' } } }, false),
         responses: {
           '200': ok('Result', { type: 'object', properties: { outcome: { type: 'string', enum: ['paid', 'already_paid', 'cancelled', 'already_cancelled'] }, payout: ref('ReferralPayout'), email: { type: ['string', 'null'] } } }),
-          '400': errorResponses['400'], '404': notFound, '409': err('`payout_cancelled` or `payout_paid`'), ...adminDenied,
+          '400': errorResponses['400'], '404': notFound, '409': err('`payout_cancelled`, `payout_paid` or `payee_unverified` (no payee snapshot from a verified profile)'), ...adminDenied,
         },
       },
     },
@@ -294,7 +300,7 @@ export const referralsOpenApi: OpenApiFragment = {
         usd_vnd_rate: { type: ['number', 'null'] }, net_vnd: { type: ['integer', 'null'] }, status: { type: 'string', enum: PAYOUT_STATUSES },
         transaction_ref: { type: ['string', 'null'] }, paid_at: { type: ['string', 'null'] }, paid_by: { type: ['string', 'null'] },
         email: { type: ['string', 'null'], description: 'Admin list only' },
-        payee: { type: 'object', description: 'Admin list only: full_name, bank_name, bank_account, national_id, address, paypal_email' },
+        payee: { type: 'object', description: 'Admin list only, snapshotted from the verified payout profile at close: full_name, bank_name, bank_account, national_id, address, paypal_email, verified_at (null = not payable)' },
       },
     },
   },

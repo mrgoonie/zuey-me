@@ -9,6 +9,7 @@ import {
 } from './admin-api';
 import { MAX_REFERRAL_RATE, getReferralSettings } from './config';
 import { monthlyLeaderboard, parseLeaderboardMonth } from './leaderboard';
+import { maskPayee } from './payout-payee-snapshot';
 import { listPayoutProfiles } from './payout-profile-review';
 import { PAYOUT_STATUSES, listPayouts, markPayoutPaid, parsePayoutStatus, parsePeriod } from './payouts';
 
@@ -81,7 +82,7 @@ export const referralsMcpModule: McpToolModule = {
       },
     },
     {
-      name: 'referral_payouts_list', description: 'Admin: referral payouts of a period (YYYY-MM) and/or status, with gross, deduction, net (USD cents, VND for bank payouts) and payee details.',
+      name: 'referral_payouts_list', description: 'Admin: referral payouts of a period (YYYY-MM) and/or status, with gross, deduction, net (USD cents, VND for bank payouts) and the payee snapshot (national ID and bank account masked to the last 3/4 digits; full values are in Studio and the CSV).',
       inputSchema: { type: 'object', properties: { period: { type: 'string', pattern: '^\\d{4}-\\d{2}$' }, status: { type: 'string', enum: PAYOUT_STATUSES } } },
     },
     {
@@ -114,8 +115,11 @@ export const referralsMcpModule: McpToolModule = {
         };
       case 'referral_commission_decide':
         return decideCommission(d1, requiredString(args, 'id'), parseCommissionDecision(args.action), actor, args.note);
-      case 'referral_payouts_list':
-        return { payouts: await listPayouts(d1, { period: parsePeriod(args.period), status: parsePayoutStatus(args.status) }) };
+      case 'referral_payouts_list': {
+        // Full CCCD and account numbers would flow into the MCP client's (LLM) context; the admin gets them in Studio/CSV.
+        const payouts = await listPayouts(d1, { period: parsePeriod(args.period), status: parsePayoutStatus(args.status) });
+        return { payouts: payouts.map(p => ({ ...p, payee: maskPayee(p.payee) })) };
+      }
       case 'referral_payout_mark_paid':
         return markPayoutPaid(d1, ctx.env, requiredString(args, 'id'), args.transaction_ref, actor);
       case 'referral_leaderboard': {

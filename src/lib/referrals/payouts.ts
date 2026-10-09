@@ -6,6 +6,8 @@ import type { LoggedEmailStatus } from '../members/email';
 import type { Row } from '../members/runtime';
 import { escapeHtml, iso, membersRuntime, num, numOrNull, str, strOrNull } from '../members/runtime';
 import { logReferralEvent } from './ledger';
+import type { PayoutPayee } from './payout-payee-snapshot';
+import { assertPayableSnapshot, rowToPayee } from './payout-payee-snapshot';
 import { MONTH_RE } from './saigon-calendar';
 
 /**
@@ -37,18 +39,11 @@ export interface ReferralPayout {
   updated_at: string;
 }
 
-/** Admin view: the payout plus where to send the money (never national-ID images). */
+/** Admin view: the payout plus where to send the money, as snapshotted at close (never national-ID images). */
 export interface PayoutAdminView extends ReferralPayout {
   email: string | null;
   name: string | null;
-  payee: {
-    full_name: string | null;
-    bank_name: string | null;
-    bank_account: string | null;
-    national_id: string | null;
-    address: string | null;
-    paypal_email: string | null;
-  };
+  payee: PayoutPayee;
 }
 
 export function rowToPayout(row: Row): ReferralPayout {
@@ -92,25 +87,13 @@ export async function ensurePayoutLedgerLine(d1: D1DatabaseLike, payoutId: strin
   return res.meta?.changes ?? 0;
 }
 
-const ADMIN_SELECT = `SELECT p.*, u.email, u.name, pp.full_name, pp.bank_name, pp.bank_account, pp.national_id, pp.address, pp.paypal_email
+// The payee comes from the payout's own snapshot, never from the live (possibly edited, unverified) profile.
+const ADMIN_SELECT = `SELECT p.*, u.email, u.name
   FROM referral_payouts p
-  LEFT JOIN users u ON u.id = p.referrer_user_id
-  LEFT JOIN referral_payout_profiles pp ON pp.user_id = p.referrer_user_id`;
+  LEFT JOIN users u ON u.id = p.referrer_user_id`;
 
 function rowToAdminView(row: Row): PayoutAdminView {
-  return {
-    ...rowToPayout(row),
-    email: strOrNull(row, 'email'),
-    name: strOrNull(row, 'name'),
-    payee: {
-      full_name: strOrNull(row, 'full_name'),
-      bank_name: strOrNull(row, 'bank_name'),
-      bank_account: strOrNull(row, 'bank_account'),
-      national_id: strOrNull(row, 'national_id'),
-      address: strOrNull(row, 'address'),
-      paypal_email: strOrNull(row, 'paypal_email'),
-    },
-  };
+  return { ...rowToPayout(row), email: strOrNull(row, 'email'), name: strOrNull(row, 'name'), payee: rowToPayee(row) };
 }
 
 /** Validates a `YYYY-MM` period filter; undefined when absent. */
@@ -153,7 +136,7 @@ function csvCell(value: string | number | null): string {
 
 const CSV_HEADER = [
   'payout_id', 'period', 'status', 'email', 'method', 'full_name', 'national_id', 'address', 'bank_name', 'bank_account',
-  'paypal_email', 'gross_usd', 'deduction_bp', 'deduction_usd', 'net_usd', 'usd_vnd_rate', 'net_vnd', 'transaction_ref', 'paid_at',
+  'paypal_email', 'payee_verified_at', 'gross_usd', 'deduction_bp', 'deduction_usd', 'net_usd', 'usd_vnd_rate', 'net_vnd', 'transaction_ref', 'paid_at',
 ];
 
 /** Admin: CSV of one period for the accountant (tax declaration) and for paying by hand. */
@@ -163,7 +146,7 @@ export async function payoutsCsv(d1: D1DatabaseLike, period: string): Promise<st
   for (const p of rows) {
     lines.push([
       p.id, p.period, p.status, p.email, p.method, p.payee.full_name, p.payee.national_id, p.payee.address, p.payee.bank_name,
-      p.payee.bank_account, p.payee.paypal_email, usd(p.gross_cents), p.deduction_bp, usd(p.deduction_cents), usd(p.net_cents),
+      p.payee.bank_account, p.payee.paypal_email, p.payee.verified_at, usd(p.gross_cents), p.deduction_bp, usd(p.deduction_cents), usd(p.net_cents),
       p.usd_vnd_rate, p.net_vnd, p.transaction_ref, p.paid_at,
     ].map(csvCell).join(','));
   }
@@ -201,7 +184,7 @@ export interface MarkPaidResult {
 
 /**
  * Admin: records the manual transfer and emails the referrer. Repeating it on a paid payout changes
- * nothing; a cancelled payout cannot be paid.
+ * nothing; a cancelled payout cannot be paid, nor one without a payee snapshot from a verified profile.
  */
 export async function markPayoutPaid(
   d1: D1DatabaseLike, env: RuntimeEnv, id: string, rawRef: unknown, adminEmail: string,
@@ -214,6 +197,8 @@ export async function markPayoutPaid(
   if (!current) throw new AppError(404, 'not_found', 'Payout not found');
   if (current.status === 'paid') return { outcome: 'already_paid', payout: current, email: null };
   if (current.status === 'cancelled') throw new AppError(409, 'payout_cancelled', 'A cancelled payout cannot be marked paid');
+  const snapshot = await d1.prepare('SELECT * FROM referral_payouts WHERE id = ?').bind(id).first<Row>();
+  assertPayableSnapshot(current.method, snapshot ? rowToPayee(snapshot) : rowToPayee({}));
 
   const now = iso(membersRuntime.now());
   const res = await d1.prepare(

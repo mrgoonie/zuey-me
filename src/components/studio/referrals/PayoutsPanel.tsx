@@ -20,7 +20,8 @@ function toPayout(r: Record<string, unknown>): Payout {
 }
 
 /**
- * Monthly payouts: the day-1 close of a period with payee details, CSV export, mark paid (with the bank or
+ * Monthly payouts: the day-1 close of a period with the payee details snapshotted from the verified payout
+ * profile at close (later profile edits never change them), CSV export, mark paid (with the bank or
  * PayPal transaction reference; emails the referrer) and cancel (returns the gross to the balance).
  */
 export function PayoutsPanel() {
@@ -80,6 +81,7 @@ export function PayoutsPanel() {
         {items.map(p => {
           const working = busy === p.id;
           const payee = p.payee;
+          const verifiedAt = sn(payee, 'verified_at');
           return (
             <li key={p.id} className={row} aria-busy={working}>
               <div className="flex flex-wrap items-center gap-2">
@@ -92,6 +94,11 @@ export function PayoutsPanel() {
                 {p.method === 'paypal'
                   ? <>PayPal <span className="text-white">{s(payee, 'paypal_email') || '—'}</span></>
                   : <><span className="text-white">{s(payee, 'full_name') || '—'}</span> · {s(payee, 'bank_name') || '—'} · <span className="font-mono">{s(payee, 'bank_account') || '—'}</span> · CCCD <span className="font-mono">{s(payee, 'national_id') || '—'}</span></>}
+              </p>
+              <p className={verifiedAt ? 'text-[11px] text-stone-500' : 'text-[11px] text-rose-300'}>
+                {verifiedAt
+                  ? <>Payee snapshot from the profile verified {when(verifiedAt)}; pay exactly these details.</>
+                  : <>No verified payee snapshot: this payout cannot be marked paid. Cancel it; the next close recreates it from the verified profile.</>}
               </p>
               <p className="tabular-nums">
                 Gross {usd(p.gross_cents)} − {(p.deduction_bp / 100).toFixed(2)}% ({usd(p.deduction_cents)}) = <span className="text-white font-semibold">{usd(p.net_cents)}</span>

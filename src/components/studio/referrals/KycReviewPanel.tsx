@@ -55,9 +55,16 @@ export function KycReviewPanel() {
     const reason = reasons[p.user_id]?.trim() ?? '';
     if (decision === 'approve' && !window.confirm(`Approve payout details for ${p.email ?? p.user_id}? Both ID images are deleted.`)) return;
     setBusy(p.user_id); setMessage(null);
-    const r = await adminApi(`/api/v1/admin/referrals/payout-profiles/${encodeURIComponent(p.user_id)}/${decision}`, { method: 'POST', body: reason ? { reason } : {} });
+    // updated_at pins the decision to the details shown here; a member edit in between makes the server refuse (409).
+    const body = reason ? { reason, updated_at: p.updated_at } : { updated_at: p.updated_at };
+    const r = await adminApi(`/api/v1/admin/referrals/payout-profiles/${encodeURIComponent(p.user_id)}/${decision}`, { method: 'POST', body });
     setBusy(null);
-    if (!r.ok) { setMessage({ kind: 'error', text: `${p.email ?? p.user_id}: ${r.message}` }); return; }
+    if (!r.ok) {
+      setMessage({ kind: 'error', text: `${p.email ?? p.user_id}: ${r.message}` });
+      // Reload so a profile changed by the member (409) shows its current details before deciding again.
+      void load();
+      return;
+    }
     setViewer(null);
     setMessage({ kind: 'ok', text: `${p.email ?? p.user_id}: ${decision === 'approve' ? 'approved' : 'rejected'}; ID images deleted.` });
     void load();
