@@ -9,7 +9,7 @@ import {
 } from './admin-api';
 import { MAX_REFERRAL_RATE, getReferralSettings } from './config';
 import { monthlyLeaderboard, parseLeaderboardMonth } from './leaderboard';
-import { maskPayee } from './payout-payee-snapshot';
+import { maskPayee, maskTail } from './payout-payee-snapshot';
 import { listPayoutProfiles } from './payout-profile-review';
 import { PAYOUT_STATUSES, listPayouts, markPayoutPaid, parsePayoutStatus, parsePeriod } from './payouts';
 
@@ -111,7 +111,10 @@ export const referralsMcpModule: McpToolModule = {
       case 'referral_review_list':
         return {
           commissions: await listCommissions(d1, { status: 'review', limit: args.limit }),
-          payout_profiles: await listPayoutProfiles(d1, 'submitted'),
+          // Same masking as payouts: full identity numbers stay in Studio, out of the MCP client's context.
+          payout_profiles: (await listPayoutProfiles(d1, 'submitted')).map(p => ({
+            ...p, national_id: maskTail(p.national_id, 3), bank_account: maskTail(p.bank_account, 4),
+          })),
         };
       case 'referral_commission_decide':
         return decideCommission(d1, requiredString(args, 'id'), parseCommissionDecision(args.action), actor, args.note);
