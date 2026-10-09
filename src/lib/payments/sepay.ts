@@ -104,6 +104,17 @@ export interface SepayTransfer {
   bookingCode: string | null;
   /** Full membership order code (ZSB + 8 characters) when the content carries one. */
   billingCode: string | null;
+  /** When the bank booked the transfer (epoch ms), or null when SePay sent no readable time. */
+  transactedAt: number | null;
+}
+
+/** Parses SePay's `YYYY-MM-DD HH:mm:ss` bank time, which is Vietnam local time (UTC+7). */
+export function parseSepayTime(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  const ms = Date.parse(`${m[1]}T${m[2]}+07:00`);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /** Extracts a ZSB membership order code from free-form transfer content. */
@@ -129,5 +140,6 @@ export function parseSepayPayload(payload: unknown): SepayTransfer | null {
     referenceCode: typeof payload.referenceCode === 'string' ? payload.referenceCode : null,
     bookingCode: match ? match[1].toUpperCase() : null,
     billingCode: extractBillingCode(content),
+    transactedAt: parseSepayTime(payload.transactionDate),
   };
 }

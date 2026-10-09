@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0014_zueytube_videos.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0015_zueytube_videos.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -44,7 +44,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 
 ## 2a. Zueytube
 
-1. Chạy migration `0014_zueytube_videos.sql` (xem mục 0).
+1. Chạy migration `0015_zueytube_videos.sql` (xem mục 0).
 2. Zueytube dùng chung secret `ANYMD_API_KEY` với Reads để lấy transcript (mỗi video YouTube tốn 3 credit AnyMD, chỉ lấy một lần khi thêm). Không có key thì AnyMD vẫn chạy với quota ẩn danh nhỏ.
 3. Thêm video: Studio → tab **Zueytube**, hoặc `zuey videos add <link> --locale vi|en [--pair <video_id>]`, MCP `video_add`, REST `POST /api/v1/videos` (admin). Video không có phụ đề vẫn được thêm, với trạng thái transcript `unavailable`; lỗi AnyMD cho trạng thái `failed`, bấm *Refetch* để lấy lại.
 
@@ -137,8 +137,9 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
   ```bash
   openssl rand -hex 32                       # tạo giá trị CRON_SECRET
   wrangler pages secret put CRON_SECRET --project-name=zuey-me
-  cd workers/scheduler && wrangler deploy && wrangler secret put CRON_SECRET
+  wrangler secret put CRON_SECRET --config workers/scheduler/wrangler.toml   # chỉ đặt một lần, deploy không xoá
   ```
+  Code của Worker được CI deploy cùng lúc với Pages mỗi khi merge vào `main` (`.github/workflows/deploy.yml`), không chạy `wrangler deploy` bằng tay.
 - **Biến môi trường:** `MEMBER_HASH_SALT` (ký link huỷ nhận email, bắt buộc), `ARTICLE_EMAIL_FROM` / `ARTICLE_EMAIL_REPLY_TO` (tuỳ chọn), `ARTICLE_EMAIL_DAILY_CAP` (mặc định 2000), `ARTICLE_EMAIL_QUIET_HOURS` (mặc định `23-7` giờ Việt Nam, `off` để tắt).
 - **Mỗi người nhận tối đa một lần:** mỗi lượt gửi giữ chỗ người nhận trong `email_log` trước khi gọi Resend. Lỗi chắc chắn chưa gửi (4xx, ví dụ 429 hay sai domain) thì trả lại để lượt sau gửi. Lỗi không rõ đã gửi hay chưa (mạng, 5xx sau một lần thử lại) thì ghi `failed` với `error` bắt đầu bằng `unconfirmed:` và không gửi lại.
 - **Đổi `MEMBER_HASH_SALT`** sẽ làm hỏng mọi link huỷ nhận trong các email đã gửi (kể cả huỷ một chạm). Chỉ đổi khi thật cần.
