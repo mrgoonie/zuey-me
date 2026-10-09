@@ -51,14 +51,16 @@ export async function getArticleNotification(db: D1DatabaseLike, articleId: stri
  * - notify === true (explicit) schedules an article that was skipped or cancelled before.
  */
 export async function applyPublishNotification(
-  db: D1DatabaseLike, articleId: string, opts: { notify?: boolean; backdated: boolean; actor: string; nowMs: number },
+  db: D1DatabaseLike, articleId: string,
+  opts: { notify?: boolean; backdated: boolean; previouslyPublished?: boolean; actor: string; nowMs: number },
 ): Promise<ArticleNotification | null> {
   const now = new Date(opts.nowMs).toISOString();
   const sendAfter = new Date(opts.nowMs + ARTICLE_EMAIL_DELAY_MS).toISOString();
   const existing = await getArticleNotification(db, articleId);
   if (!existing) {
-    const send = opts.notify ?? !opts.backdated;
-    const reason = send ? null : opts.notify === false ? 'publisher_opted_out' : 'backdated';
+    // An article published before (any edition) without a row is a republish, not a first publish.
+    const send = opts.notify ?? (!opts.backdated && !opts.previouslyPublished);
+    const reason = send ? null : opts.notify === false ? 'publisher_opted_out' : opts.backdated ? 'backdated' : 'previously_published';
     await db.prepare(`
       INSERT OR IGNORE INTO article_notifications (article_id, status, send_after, reason, actor, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)

@@ -67,6 +67,8 @@ export interface BatchEmailResult {
   error?: string;
   /** True when the whole request may be retried later (rate limit, 5xx, network). */
   retryable?: boolean;
+  /** HTTP status of a rejected request; absent on network errors (outcome unknown). */
+  httpStatus?: number;
 }
 
 function batchItems(body: unknown, count: number): { id?: string; error?: string }[] {
@@ -122,7 +124,7 @@ export async function sendEmailBatch(
       }))),
     });
     const body: unknown = await res.json().catch(() => null);
-    if (!res.ok) return { status: 'failed', items: [], error: `resend_${res.status}`, retryable: res.status === 429 || res.status >= 500 };
+    if (!res.ok) return { status: 'failed', items: [], error: `resend_${res.status}`, retryable: res.status === 429 || res.status >= 500, httpStatus: res.status };
     return { status: 'sent', items: batchItems(body, inputs.length) };
   } catch (err) {
     return { status: 'failed', items: [], error: err instanceof Error ? err.message.slice(0, 120) : 'resend_error', retryable: true };

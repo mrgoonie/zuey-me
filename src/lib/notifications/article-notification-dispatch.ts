@@ -3,17 +3,19 @@ import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import { getArticle } from '../blocks/articles';
 import type { ArticleRecord } from '../blocks/articles';
-import { READ_FULL_ENTITLEMENT } from '../blocks/paywall';
 import { isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
 import { RESEND_BATCH_LIMIT, sendEmailBatch } from '../integrations/resend';
-import type { BulkEmailInput } from '../integrations/resend';
+import type { BatchEmailResult, BulkEmailInput } from '../integrations/resend';
 import { isAdminIdentity } from '../members/admins';
 import { DAY_MS, membersRuntime, sha256Hex, siteUrl } from '../members/runtime';
-import { getEntitlements } from '../members/subscriptions';
 import { oneClickUnsubscribeUrl, unsubscribePageUrl, unsubscribeSecret, unsubscribeToken } from './article-email-subscription';
 import { renderArticleEmail, withFooter } from './article-email-render';
 import type { ArticleEmailBody, ArticleEmailMode } from './article-email-render';
+import {
+  ARTICLE_EMAIL_KIND, claimRecipients, nextRecipients, readFullMembers, recordOutcomes, releaseRecipients,
+} from './article-notification-recipients';
+import type { RecipientOutcome } from './article-notification-recipients';
 
 /**
  * Sends due new-article emails. Called every few minutes by the Cloudflare cron worker (workers/scheduler).
@@ -24,9 +26,12 @@ import type { ArticleEmailBody, ArticleEmailMode } from './article-email-render'
  * - quiet hours (Asia/Ho_Chi_Minh): emails wait for the morning instead of landing at night;
  * - RFC 8058 one-click unsubscribe headers, and suppression of bounced / complaining addresses (Resend webhook).
  * The email always carries the latest published edition, so edits made after publishing are included.
+ * Delivery is at-most-once per member (see article-notification-recipients): a failure whose outcome is unknown is
+ * recorded as unconfirmed rather than retried, because a missed newsletter costs less than a duplicate one.
  */
 
-export const ARTICLE_EMAIL_KIND = 'article_notification';
+export { ARTICLE_EMAIL_KIND };
+
 const WARMUP_START_PER_DAY = 50;
 const DEFAULT_DAILY_CAP = 2000;
 const DEFAULT_QUIET_HOURS = { start: 23, end: 7 };
@@ -36,9 +41,9 @@ const VN_UTC_OFFSET_HOURS = 7;
 const MAX_ARTICLES_PER_RUN = 3;
 const MAX_BATCHES_PER_RUN = 5;
 const BATCH_PAUSE_MS = 600;
+const RETRY_PAUSE_MS = 2000;
+/** A run renews its lease before every batch; another run may take the article over only after it lapses. */
 const LEASE_MS = 4 * 60 * 1000;
-/** An email_log row left pending this long (crashed run) is retried. */
-const STALE_PENDING_MS = 10 * 60 * 1000;
 
 type Row = Record<string, unknown>;
 
@@ -94,36 +99,14 @@ function dailyCap(env: RuntimeEnv): number {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_DAILY_CAP;
 }
 
+/** Every article-email row of the last 24 hours counts against the warm-up limit, including unconfirmed sends. */
 async function sendingStats(db: D1DatabaseLike, nowMs: number): Promise<{ firstSentMs: number | null; last24h: number }> {
   const row = await db.prepare(`
     SELECT (SELECT MIN(created_at) FROM email_log WHERE kind = ? AND status = 'sent') AS first_sent,
-           (SELECT COUNT(*) FROM email_log WHERE kind = ? AND status IN ('sent', 'pending') AND created_at > ?) AS last_24h
+           (SELECT COUNT(*) FROM email_log WHERE kind = ? AND created_at > ?) AS last_24h
   `).bind(ARTICLE_EMAIL_KIND, ARTICLE_EMAIL_KIND, iso(nowMs - DAY_MS)).first<Row>();
   const first = row && typeof row.first_sent === 'string' ? Date.parse(row.first_sent) : NaN;
   return { firstSentMs: Number.isFinite(first) ? first : null, last24h: row && typeof row.last_24h === 'number' ? row.last_24h : 0 };
-}
-
-interface Recipient { id: string; email: string; locale: string; emailVerifiedAt: string | null }
-
-/** Next members who have not received this article's email yet, most recently active first. */
-async function nextRecipients(db: D1DatabaseLike, articleId: string, cutoff: string, nowMs: number, limit: number): Promise<Recipient[]> {
-  const { results } = await db.prepare(`
-    SELECT u.id, u.email, u.locale, u.email_verified_at,
-           (SELECT MAX(a.created_at) FROM user_activity a WHERE a.user_id = u.id) AS last_active
-    FROM users u
-    WHERE u.email_verified_at IS NOT NULL AND u.deleted_at IS NULL AND u.article_emails_opt_out_at IS NULL
-      AND u.created_at <= ?
-      AND NOT EXISTS (
-        SELECT 1 FROM email_log l WHERE l.idempotency_key = 'article:' || ? || ':' || u.id
-          AND (l.status IN ('sent', 'failed') OR (l.status = 'pending' AND l.updated_at > ?))
-      )
-    ORDER BY last_active IS NULL, last_active DESC, u.created_at
-    LIMIT ?
-  `).bind(cutoff, articleId, iso(nowMs - STALE_PENDING_MS), limit).all<Row>();
-  return (results ?? []).map(r => ({
-    id: s(r, 'id'), email: s(r, 'email'), locale: s(r, 'locale'),
-    emailVerifiedAt: typeof r.email_verified_at === 'string' ? r.email_verified_at : null,
-  }));
 }
 
 /** Per-dispatch cache of rendered editions: one render per (locale, full/teaser). */
@@ -156,27 +139,48 @@ class ArticleEmailVariants {
   }
 }
 
-async function canReadFull(db: D1DatabaseLike, env: RuntimeEnv, r: Recipient): Promise<boolean> {
-  if (isAdminIdentity(r.email, r.emailVerifiedAt, env)) return true;
-  return (await getEntitlements(db, r.id)).entitlements.includes(READ_FULL_ENTITLEMENT);
+/** Extends this run's lease; null when the send was cancelled meanwhile or another run holds the article. */
+async function renewLease(db: D1DatabaseLike, articleId: string, lease: string): Promise<string | null> {
+  const next = iso(membersRuntime.now() + LEASE_MS);
+  const res = await db.prepare("UPDATE article_notifications SET locked_until = ? WHERE article_id = ? AND status = 'sending' AND locked_until = ?")
+    .bind(next, articleId, lease).run();
+  return res.meta?.changes ? next : null;
 }
 
-/** Releases the lease; a send the publisher cancelled meanwhile stays cancelled. */
-async function finish(db: D1DatabaseLike, articleId: string, status: 'sent' | 'cancelled' | 'sending', reason: string | null, nowMs: number): Promise<void> {
-  await db.prepare("UPDATE article_notifications SET status = ?, reason = COALESCE(?, reason), locked_until = NULL, updated_at = ? WHERE article_id = ? AND status = 'sending'")
-    .bind(status, reason, iso(nowMs), articleId).run();
-  await db.prepare('UPDATE article_notifications SET locked_until = NULL WHERE article_id = ?').bind(articleId).run();
+/** Releases this run's lease; a send cancelled meanwhile stays cancelled, and a lease taken over is left alone. */
+async function finish(db: D1DatabaseLike, articleId: string, lease: string, status: 'sent' | 'cancelled' | 'sending', reason: string | null): Promise<void> {
+  await db.prepare(`
+    UPDATE article_notifications SET status = CASE WHEN status = 'sending' THEN ? ELSE status END,
+      reason = CASE WHEN status = 'sending' THEN COALESCE(?, reason) ELSE reason END, locked_until = NULL, updated_at = ?
+    WHERE article_id = ? AND locked_until = ?
+  `).bind(status, reason, iso(membersRuntime.now()), articleId, lease).run();
 }
+
+/** Sends one batch request, retrying a transient failure once with the same idempotency key (Resend dedupes it). */
+async function sendWithRetry(env: RuntimeEnv, emails: BulkEmailInput[], key: string): Promise<BatchEmailResult> {
+  const first = await sendEmailBatch(env, emails, membersRuntime.fetch, key);
+  if (first.status === 'sent' || !first.retryable) return first;
+  await dispatchRuntime.sleep(RETRY_PAUSE_MS);
+  return sendEmailBatch(env, emails, membersRuntime.fetch, key);
+}
+
+/**
+ * Whether Resend definitely did not accept a failed request: a 4xx answer other than 409 (409 means the same key is
+ * in flight or was used, so the batch may have gone out). Network errors and 5xx leave the outcome unknown.
+ */
+const definitelyRejected = (r: BatchEmailResult): boolean =>
+  r.status === 'unconfigured' || (r.httpStatus !== undefined && r.httpStatus >= 400 && r.httpStatus < 500 && r.httpStatus !== 409);
 
 async function dispatchOne(
-  db: D1DatabaseLike, env: RuntimeEnv, row: Row, budget: { left: number }, secret: string, nowMs: number,
+  db: D1DatabaseLike, env: RuntimeEnv, row: Row, claimedLease: string, budget: { left: number }, secret: string,
 ): Promise<ArticleDispatchOutcome> {
+  let lease = claimedLease;
   const articleId = s(row, 'article_id');
   const art = await db.prepare('SELECT slug FROM articles WHERE id = ? AND deleted_at IS NULL').bind(articleId).first<Row>();
   const slug = art ? s(art, 'slug') : null;
   const primary = slug ? await getArticle(db, slug, { publishedOnly: true }) : null;
   if (!slug || !primary || !primary.published) {
-    await finish(db, articleId, 'cancelled', 'not_published', nowMs);
+    await finish(db, articleId, lease, 'cancelled', 'not_published');
     return { article_id: articleId, slug, status: 'cancelled', sent: 0, failed: 0 };
   }
   const cutoff = s(row, 'audience_cutoff') || s(row, 'send_after');
@@ -187,69 +191,84 @@ async function dispatchOne(
 
   for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch++) {
     if (budget.left <= 0) break;
+    if (batch > 0) await dispatchRuntime.sleep(BATCH_PAUSE_MS);
+    // Also notices a cancellation made while this run is sending.
+    const renewed = batch === 0 ? lease : await renewLease(db, articleId, lease);
+    if (!renewed) {
+      out.status = 'cancelled';
+      return out;
+    }
+    lease = renewed;
     const limit = Math.min(RESEND_BATCH_LIMIT, budget.left);
-    const recipients = await nextRecipients(db, articleId, cutoff, nowMs, limit);
-    if (recipients.length === 0) {
+    const candidates = await nextRecipients(db, articleId, cutoff, limit);
+    if (candidates.length === 0) {
       out.status = 'sent';
       break;
     }
-    if (batch > 0) await dispatchRuntime.sleep(BATCH_PAUSE_MS);
 
-    const emails: BulkEmailInput[] = [];
-    for (const r of recipients) {
+    // Render before claiming, so a render error never leaves members claimed but unsent.
+    const readers = primary.access === 'knowledges'
+      ? await readFullMembers(db, candidates.map(r => r.id), iso(membersRuntime.now()))
+      : new Set<string>();
+    const prepared: { userId: string; email: BulkEmailInput }[] = [];
+    for (const r of candidates) {
       const rec = await variants.edition(r.locale);
-      const mode: ArticleEmailMode = rec.access === 'knowledges' && !(await canReadFull(db, env, r)) ? 'teaser' : 'full';
-      const body = await variants.body(rec, mode);
+      const full = rec.access !== 'knowledges' || isAdminIdentity(r.email, r.emailVerifiedAt, env) || readers.has(r.id);
+      const body = await variants.body(rec, full ? 'full' : 'teaser');
       const token = await unsubscribeToken(secret, r.id);
       const personal = withFooter(body, rec.locale, unsubscribePageUrl(env, token));
-      emails.push({
-        to: r.email, subject: body.subject, html: personal.html, text: personal.text, from, replyTo,
-        headers: {
-          'List-Unsubscribe': `<${oneClickUnsubscribeUrl(env, token)}>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          // Distinct per article so Gmail never threads separate articles together.
-          'X-Entity-Ref-ID': `article-${articleId}`,
+      prepared.push({
+        userId: r.id,
+        email: {
+          to: r.email, subject: body.subject, html: personal.html, text: personal.text, from, replyTo,
+          headers: {
+            'List-Unsubscribe': `<${oneClickUnsubscribeUrl(env, token)}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+            // Distinct per article so Gmail never threads separate articles together.
+            'X-Entity-Ref-ID': `article-${articleId}`,
+          },
         },
       });
     }
 
-    const now = iso(membersRuntime.now());
-    for (const r of recipients) {
-      await db.prepare(`
-        INSERT INTO email_log (idempotency_key, kind, user_id, to_email, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)
-        ON CONFLICT (idempotency_key) DO UPDATE SET status = 'pending', to_email = excluded.to_email, updated_at = excluded.updated_at
-      `).bind(`article:${articleId}:${r.id}`, ARTICLE_EMAIL_KIND, r.id, r.email, now, now).run();
-    }
-    const batchKey = `article-${articleId}-${(await sha256Hex(recipients.map(r => r.id).join(','))).slice(0, 32)}`;
-    const result = await sendEmailBatch(env, emails, membersRuntime.fetch, batchKey);
+    const claimed = await claimRecipients(db, articleId, candidates, iso(membersRuntime.now()));
+    const sending = prepared.filter(p => claimed.has(p.userId));
+    budget.left -= sending.length;
+    if (sending.length === 0) continue;
+    const ids = sending.map(p => p.userId);
+    const key = `article-${articleId}-${(await sha256Hex(ids.join(','))).slice(0, 32)}`;
+    const result = await sendWithRetry(env, sending.map(p => p.email), key);
 
     if (result.status !== 'sent') {
-      // Whole request failed (rate limit, quota, outage, bad key): release the rows so the next run retries them.
-      for (const r of recipients) {
-        await db.prepare("DELETE FROM email_log WHERE idempotency_key = ? AND status = 'pending'").bind(`article:${articleId}:${r.id}`).run();
-      }
       out.status = 'error';
       out.error = result.error ?? 'send_failed';
+      if (definitelyRejected(result)) {
+        // Nothing went out (rate limit, quota, unverified sender…): a later run emails these members.
+        await releaseRecipients(db, articleId, ids);
+      } else {
+        // The batch may have been delivered: never send it again.
+        await recordOutcomes(db, articleId, ids.map(userId => ({ userId, status: 'failed', error: `unconfirmed:${out.error}` })), iso(membersRuntime.now()));
+        out.failed += ids.length;
+      }
       break;
     }
-    let batchSent = 0;
-    for (let i = 0; i < recipients.length; i++) {
+    const outcomes: RecipientOutcome[] = sending.map((p, i) => {
       const item = result.items[i] ?? { error: 'missing_result' };
-      await db.prepare('UPDATE email_log SET status = ?, provider_id = ?, error = ?, updated_at = ? WHERE idempotency_key = ?')
-        .bind(item.id ? 'sent' : 'failed', item.id ?? null, item.error ?? null, iso(membersRuntime.now()), `article:${articleId}:${recipients[i].id}`).run();
-      if (item.id) batchSent += 1; else out.failed += 1;
-    }
+      return { userId: p.userId, status: item.id ? 'sent' : 'failed', providerId: item.id ?? null, error: item.error ?? null };
+    });
+    await recordOutcomes(db, articleId, outcomes, iso(membersRuntime.now()));
+    const batchSent = outcomes.filter(o => o.status === 'sent').length;
     out.sent += batchSent;
-    budget.left -= recipients.length;
+    out.failed += outcomes.length - batchSent;
     await db.prepare('UPDATE article_notifications SET sent_count = sent_count + ?, updated_at = ? WHERE article_id = ?')
       .bind(batchSent, iso(membersRuntime.now()), articleId).run();
-    if (recipients.length < limit) {
+    if (candidates.length < limit) {
       out.status = 'sent';
       break;
     }
   }
 
-  await finish(db, articleId, out.status === 'sent' ? 'sent' : 'sending', null, membersRuntime.now());
+  await finish(db, articleId, lease, out.status === 'sent' ? 'sent' : 'sending', null);
   return out;
 }
 
@@ -281,15 +300,17 @@ export async function dispatchArticleNotifications(d1: D1DatabaseLike, env: Runt
   for (const row of results ?? []) {
     if (budget.left <= 0) break;
     const articleId = s(row, 'article_id');
+    const lease = iso(nowMs + LEASE_MS);
     const claim = await d1.prepare(`
       UPDATE article_notifications SET status = 'sending', locked_until = ?, audience_cutoff = COALESCE(audience_cutoff, send_after), updated_at = ?
       WHERE article_id = ? AND status IN ('scheduled', 'sending') AND (locked_until IS NULL OR locked_until < ?)
-    `).bind(iso(nowMs + LEASE_MS), now, articleId, now).run();
+    `).bind(lease, now, articleId, now).run();
     if (!claim.meta?.changes) continue;
     try {
-      result.articles.push(await dispatchOne(d1, env, row, budget, secret, nowMs));
+      result.articles.push(await dispatchOne(d1, env, row, lease, budget, secret));
     } catch (err) {
-      await d1.prepare('UPDATE article_notifications SET locked_until = NULL WHERE article_id = ?').bind(articleId).run();
+      // Members claimed by the failed batch stay pending and are never emailed again, so an error here cannot cause
+      // a duplicate. The lease is left to lapse, which also keeps a failing article from blocking the others.
       result.articles.push({ article_id: articleId, slug: null, status: 'error', sent: 0, failed: 0, error: err instanceof Error ? err.message.slice(0, 120) : 'dispatch_error' });
     }
   }

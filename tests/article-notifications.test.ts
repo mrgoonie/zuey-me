@@ -31,6 +31,9 @@ const realFetch = membersRuntime.fetch;
 const realSleep = dispatchRuntime.sleep;
 let sent: SentEmail[];
 let batchStatus: number;
+/** Statuses (0 = network error) answered by the next batch requests before batchStatus applies. */
+let failures: number[];
+let idempotencyKeys: string[];
 
 function baseEnv(d1: D1DatabaseLike, extra: Partial<RuntimeEnv> = {}): RuntimeEnv {
   return { DB: d1, RESEND_API_KEY: 're_test', MEMBER_HASH_SALT: SALT, PUBLIC_SITE_URL: 'https://zuey.me', ARTICLE_EMAIL_QUIET_HOURS: 'off', ...extra };
@@ -70,11 +73,17 @@ function ctx(request: Request, env: RuntimeEnv): APIContext {
 beforeEach(() => {
   sent = [];
   batchStatus = 200;
+  failures = [];
+  idempotencyKeys = [];
   // Other suites may leave a fake clock behind; webhook signatures and schedules here use real time.
   membersRuntime.now = () => Date.now();
   dispatchRuntime.sleep = async () => {};
   membersRuntime.fetch = async (input: string, init?: RequestInit) => {
     if (!String(input).endsWith('/emails/batch')) throw new Error(`unexpected fetch ${input}`);
+    idempotencyKeys.push((init?.headers as Record<string, string>)['Idempotency-Key']);
+    const failure = failures.shift();
+    if (failure === 0) throw new Error('network down');
+    if (failure !== undefined) return new Response(JSON.stringify({ message: 'server error' }), { status: failure });
     if (batchStatus !== 200) return new Response(JSON.stringify({ message: 'rate limited' }), { status: batchStatus });
     const emails = JSON.parse(String(init?.body)) as SentEmail[];
     sent.push(...emails);
@@ -114,6 +123,15 @@ describe('publish schedules the member email', () => {
     expect(explicit.email_notification?.status).toBe('scheduled');
     const cancelled = await publishArticle(d1, 'archive', explicit.revision, true, { notify: false });
     expect(cancelled.email_notification?.status).toBe('skipped');
+  });
+
+  it('treats a republish without a schedule row as a republish, not a first publish', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'gap');
+    // E.g. published by an older deploy that did not record article emails yet.
+    await d1.prepare('DELETE FROM article_notifications WHERE article_id = ?').bind(rec.id).run();
+    const again = await publishArticle(d1, 'gap', rec.revision, true);
+    expect(again.email_notification).toMatchObject({ status: 'skipped', reason: 'previously_published' });
   });
 
   it('rejects a non-boolean notify before publishing', async () => {
@@ -258,6 +276,71 @@ describe('dispatching article emails', () => {
     const retried = await dispatchArticleNotifications(d1, env);
     expect(retried.articles[0]).toMatchObject({ status: 'sent', sent: 1 });
     expect(sent.map(e => e.to[0])).toEqual(['retry@example.com']);
+  });
+
+  it('retries a transient failure once in the same run with the same idempotency key', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    await member(d1, 'blip@example.com');
+    await publishNew(d1, 'blip');
+    afterDelay();
+    failures = [503];
+    const result = await dispatchArticleNotifications(d1, env);
+    expect(result.articles[0]).toMatchObject({ status: 'sent', sent: 1 });
+    expect(idempotencyKeys).toHaveLength(2);
+    expect(idempotencyKeys[0]).toBe(idempotencyKeys[1]);
+  });
+
+  it('never resends a batch whose delivery is unknown', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    await member(d1, 'unknown@example.com');
+    const rec = await publishNew(d1, 'unknown');
+    afterDelay();
+    failures = [0, 500];
+    const failed = await dispatchArticleNotifications(d1, env);
+    expect(failed.articles[0]).toMatchObject({ status: 'error', failed: 1 });
+    const log = await d1.prepare("SELECT status, error FROM email_log WHERE kind = 'article_notification'").first<Record<string, unknown>>();
+    expect(log?.status).toBe('failed');
+    expect(String(log?.error)).toStartWith('unconfirmed:');
+
+    const next = await dispatchArticleNotifications(d1, env);
+    expect(next.articles[0]).toMatchObject({ status: 'sent', sent: 0 });
+    expect(sent).toHaveLength(0);
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('sent');
+  });
+
+  it('skips members another run claimed, even when their row was left pending long ago', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    const claimedId = await member(d1, 'claimed@example.com');
+    await member(d1, 'free@example.com');
+    const rec = await publishNew(d1, 'claimed');
+    const old = new Date(Date.now() - 86_400_000).toISOString();
+    await d1.prepare("INSERT INTO email_log (idempotency_key, kind, user_id, to_email, status, created_at, updated_at) VALUES (?, 'article_notification', ?, 'claimed@example.com', 'pending', ?, ?)")
+      .bind(`article:${rec.id}:${claimedId}`, claimedId, old, old).run();
+    afterDelay();
+    await dispatchArticleNotifications(d1, env);
+    expect(sent.map(e => e.to[0])).toEqual(['free@example.com']);
+  });
+
+  it('stops between batches when the publisher cancels mid-send', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    for (let n = 0; n < 101; n++) await member(d1, `bulk${n}@example.com`);
+    const rec = await publishNew(d1, 'bulk', { doc: paragraphs('Bulk', 1) });
+    // Three days of sending history lift the warm-up limit above one batch.
+    const longAgo = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    await d1.prepare("INSERT INTO email_log (idempotency_key, kind, to_email, status, created_at, updated_at) VALUES ('article:old:x', 'article_notification', 'x@example.com', 'sent', ?, ?)")
+      .bind(longAgo, longAgo).run();
+    afterDelay();
+    dispatchRuntime.sleep = async () => {
+      await d1.prepare("UPDATE article_notifications SET status = 'cancelled' WHERE article_id = ?").bind(rec.id).run();
+    };
+    const result = await dispatchArticleNotifications(d1, env);
+    expect(result.articles[0]).toMatchObject({ status: 'cancelled', sent: 100 });
+    expect(sent).toHaveLength(100);
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('cancelled');
   });
 
   it('respects the warm-up budget and continues on the next run', async () => {

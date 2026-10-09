@@ -31,6 +31,8 @@ async function runJob(env: Env, path: string): Promise<string> {
   });
   const body = (await res.text()).slice(0, 500);
   if (!res.ok) throw new Error(`${path} → ${res.status} ${body}`);
+  // A 200 can still report per-item failures (e.g. an article whose send Resend rejected).
+  if (body.includes('"status":"error"')) throw new Error(`${path} → ${res.status} reported errors: ${body}`);
   return `${path} → ${res.status} ${body}`;
 }
 

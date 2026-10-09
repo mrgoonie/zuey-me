@@ -725,6 +725,11 @@ export async function publishArticle(
   const edition = toEditionRow(row);
   const doc = parseStoredDoc(edition.draftJson, slug);
   const now = nowIso();
+  // Durable "was this article ever published" signal, independent of article_notifications rows.
+  const previouslyPublished = Boolean(await db.prepare(`
+    SELECT 1 FROM article_revisions WHERE article_id = ? AND action = 'publish'
+    UNION ALL SELECT 1 FROM article_editions WHERE article_id = ? AND published_json IS NOT NULL LIMIT 1
+  `).bind(art.id, art.id).first());
   const res = await db.prepare('UPDATE articles SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
     .bind(now, art.id, expected).run();
   if (!res.meta?.changes) return conflict(db, slug);
@@ -741,7 +746,7 @@ export async function publishArticle(
   scheduleOgRefresh(db, art.id, slug, ctx);
   const nowMs = Date.now();
   const backdated = publishedAt !== null && Date.parse(publishedAt) < nowMs - BACKDATE_THRESHOLD_MS;
-  const emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, actor: ctx.actor ?? 'admin', nowMs });
+  const emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, previouslyPublished, actor: ctx.actor ?? 'admin', nowMs });
   const rec = await getArticle(db, slug, { locale });
   if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after publish');
   return { ...rec, email_notification: emailNotification };

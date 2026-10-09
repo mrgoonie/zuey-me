@@ -134,6 +134,8 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
   cd workers/scheduler && wrangler deploy && wrangler secret put CRON_SECRET
   ```
 - **Biến môi trường:** `MEMBER_HASH_SALT` (ký link huỷ nhận email, bắt buộc), `ARTICLE_EMAIL_FROM` / `ARTICLE_EMAIL_REPLY_TO` (tuỳ chọn), `ARTICLE_EMAIL_DAILY_CAP` (mặc định 2000), `ARTICLE_EMAIL_QUIET_HOURS` (mặc định `23-7` giờ Việt Nam, `off` để tắt).
+- **Mỗi người nhận tối đa một lần:** mỗi lượt gửi giữ chỗ người nhận trong `email_log` trước khi gọi Resend. Lỗi chắc chắn chưa gửi (4xx, ví dụ 429 hay sai domain) thì trả lại để lượt sau gửi. Lỗi không rõ đã gửi hay chưa (mạng, 5xx sau một lần thử lại) thì ghi `failed` với `error` bắt đầu bằng `unconfirmed:` và không gửi lại.
+- **Đổi `MEMBER_HASH_SALT`** sẽ làm hỏng mọi link huỷ nhận trong các email đã gửi (kể cả huỷ một chạm). Chỉ đổi khi thật cần.
 - **Bounce/spam:** tạo webhook trong Resend (Dashboard → Webhooks) trỏ tới `https://zuey.me/api/webhooks/resend` với các sự kiện `email.bounced` và `email.complained`, rồi lưu signing secret vào `RESEND_WEBHOOK_SECRET`. Địa chỉ hard bounce hoặc bị đánh dấu spam sẽ tự ngừng nhận email bài viết.
 
 **Giữ email ngoài hộp spam (warm-up):**
