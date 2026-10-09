@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
-import { adminGuard, siteOrigin, videosDb } from '../../../../lib/videos/route-helpers';
+import { adminGuard, siteOrigin, videosDb, ingestDeps } from '../../../../lib/videos/route-helpers';
 import { listVideos } from '../../../../lib/videos/store';
 import { parseAddVideoInput } from '../../../../lib/videos/video-admin-operations';
 import { addVideo } from '../../../../lib/videos/video-ingest-service';
@@ -39,7 +39,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   try {
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Expected a JSON object body');
-    const result = await addVideo({ db: videosDb(env), anymdApiKey: env.ANYMD_API_KEY }, parseAddVideoInput(body));
+    const result = await addVideo(ingestDeps(env), parseAddVideoInput(body));
     return jsonOk(result, 201, { 'Cache-Control': 'no-store' });
   } catch (err) {
     return errorResponse(err);

@@ -20,6 +20,8 @@ export interface RuntimeEnv {
   // Zuey Reads
   ANYMD_API_KEY?: string;
   READS_SUMMARY_MODEL?: string;
+  /** Workers AI model that cleans up Zueytube transcripts (default @cf/meta/llama-3.3-70b-instruct-fp8-fast). */
+  VIDEOS_REWRITE_MODEL?: string;
   // Booking, payments, email
   GOOGLE_CALENDAR_REFRESH_TOKEN?: string;
   GOOGLE_CALENDAR_ID?: string;

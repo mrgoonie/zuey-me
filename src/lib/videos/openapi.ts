@@ -156,6 +156,23 @@ export const videosOpenApi: OpenApiFragment = {
         },
       },
     },
+    '/api/v1/videos/{id}/rewrite': {
+      post: {
+        tags: [TAG],
+        summary: 'Rewrite an edition transcript with AI (admin)',
+        description: 'Cleans up the stored raw captions with Workers AI (punctuation, paragraphs, filler words; same language, no summary) without calling AnyMD. Paragraph timestamps are estimates. A failed rewrite keeps the current text and reports `transcript_rewrite_status: failed`.',
+        security: adminSecurity,
+        parameters: [{ ...idParam, description: 'YouTube id of the edition' }],
+        responses: {
+          '200': { description: 'Rewrite outcome', content: envelope({ $ref: '#/components/schemas/VideoIngestResult' }) },
+          '401': errorResponses['401'],
+          '403': errorResponses['403'],
+          '404': { description: 'Not found', content: errorRef },
+          '409': { description: 'The edition has no transcript yet', content: errorRef },
+          '503': { description: 'Workers AI binding not configured', content: errorRef },
+        },
+      },
+    },
     '/videos.md': {
       get: {
         tags: [TAG],
@@ -179,6 +196,9 @@ export const videosOpenApi: OpenApiFragment = {
         published_at: { type: 'string', nullable: true },
         transcript_status: { type: 'string', enum: ['pending', 'ready', 'unavailable', 'failed'] },
         transcript_error: { type: 'string', nullable: true },
+        transcript_rewrite_status: { type: 'string', enum: ['none', 'ready', 'failed'], description: '`ready`: the transcript is AI-cleaned and its timestamps are estimates' },
+        transcript_rewrite_error: { type: 'string', nullable: true },
+        transcript_rewritten_at: { type: 'string', nullable: true },
         transcript_fetched_at: { type: 'string', nullable: true },
         word_count: { type: 'integer' },
         watch_url: { type: 'string', format: 'uri' },
@@ -232,6 +252,8 @@ export const videosOpenApi: OpenApiFragment = {
         youtube_id: { type: 'string' },
         transcript_status: { type: 'string', enum: ['ready', 'unavailable', 'failed'] },
         transcript_error: { type: 'string', nullable: true },
+        transcript_rewrite_status: { type: 'string', enum: ['none', 'ready', 'failed'], description: '`ready`: the transcript is AI-cleaned and its timestamps are estimates' },
+        transcript_rewrite_error: { type: 'string', nullable: true },
       },
     },
   },

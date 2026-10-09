@@ -3,6 +3,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { authenticateAdmin } from '../auth';
 import { AppError, jsonError } from '../http';
+import type { IngestDeps } from './video-ingest-service';
 
 /** Returns an error Response when the caller is not an admin, otherwise null. */
 export async function adminGuard(request: Request, env: RuntimeEnv): Promise<Response | null> {
@@ -20,4 +21,9 @@ export function videosDb(env: RuntimeEnv): D1DatabaseLike {
 
 export function siteOrigin(env: RuntimeEnv, request: Request): string {
   return (env.PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, '');
+}
+
+/** Dependencies for add/refetch/rewrite: D1, the AnyMD key and the Workers AI binding for transcript cleanup. */
+export function ingestDeps(env: RuntimeEnv): IngestDeps {
+  return { db: videosDb(env), anymdApiKey: env.ANYMD_API_KEY, ai: env.AI, rewriteModel: env.VIDEOS_REWRITE_MODEL };
 }

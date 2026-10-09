@@ -37,6 +37,7 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   video_update: ADMIN,
   video_delete: ADMIN,
   video_refetch_transcript: ADMIN,
+  video_rewrite_transcript: ADMIN,
   // Workflows (drafts need admin inside the tool)
   workflow_list: PUBLIC,
   workflow_get: PUBLIC,
