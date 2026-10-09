@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Share2, QrCode, Settings } from 'lucide-react';
+import { Share2, QrCode } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import { LinkCard } from './LinkCard';
 import { ShareModal } from './ShareModal';
@@ -67,14 +67,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             >
               <BrandIcon name="starburst" className="w-5 h-5" />
             </button>
-            <a
-              href="/studio"
-              className="px-2 sm:px-2.5 py-1 text-[11px] font-semibold text-stone-600 hover:text-stone-900 bg-stone-200/60 hover:bg-stone-200 rounded-full border border-stone-300/60 transition-colors flex items-center gap-1"
-              title="Page Builder Studio"
-            >
-              <Settings className="w-3 h-3" />
-              <span>Studio</span>
-            </a>
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2">
