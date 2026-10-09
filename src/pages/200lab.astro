@@ -1,0 +1,24 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { Lab200Courses } from '../components/lab200/Lab200Courses';
+import { runtimeWaitUntil } from '../lib/blocks/articles';
+import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
+import { lab200Copy } from '../lib/lab200/copy';
+import { getLab200Snapshot } from '../lib/lab200/store';
+
+const runtime = Astro.locals.runtime;
+const snapshot = await getLab200Snapshot(runtime?.env?.DB, { waitUntil: runtimeWaitUntil(runtime) })
+  .catch(() => ({ courses: [], syncedAt: null }));
+const locale = resolveLocale(Astro.request);
+const t = lab200Copy(locale);
+Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
+---
+
+<Layout
+  title="200lab — Khoá học Duy giới thiệu"
+  description={`${t.intro} ${t.discount}.`}
+  url="https://zuey.me/200lab"
+  lang={LOCALE_LABELS[locale].htmlLang}
+>
+  <Lab200Courses client:load snapshot={snapshot} locale={locale} variant="page" />
+</Layout>

@@ -3,7 +3,7 @@ import { listArticles } from '../lib/blocks/articles';
 import { articleAlternates, articleUrl } from '../lib/blocks/seo';
 import { LOCALES } from '../lib/i18n/locales';
 
-const STATIC_PATHS = ['/', '/articles', '/pricing', '/business', '/reads', '/workflows', '/docs'];
+const STATIC_PATHS = ['/', '/articles', '/pricing', '/business', '/reads', '/200lab', '/workflows', '/docs'];
 
 function esc(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
