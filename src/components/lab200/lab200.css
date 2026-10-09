@@ -82,12 +82,22 @@
 .lab200-body strong { color: var(--l2-text); font-weight: 600; }
 .lab200-link { color: var(--l2-action); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .lab200-link:hover { color: var(--l2-action-hover); }
+/* Referral offer: the one thing a visitor must not miss, so it gets 200lab's action colour and a big discount badge. */
 .lab200-offer {
-  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 16px; padding: 6px 10px;
-  border: 1px solid var(--l2-brand-line); background: var(--l2-brand-soft); color: var(--l2-on-mint-soft);
-  border-radius: 4px; font-size: 12.5px; line-height: 1.4; font-weight: 600;
+  display: flex; align-items: center; gap: 14px; margin-top: 18px; padding: 14px 16px;
+  border: 1px solid var(--l2-brand-line); border-left: 4px solid var(--l2-brand); border-radius: 4px;
+  background: var(--l2-brand-soft);
 }
-.lab200-offer code { font-family: var(--l2-mono); font-size: 12px; color: var(--l2-brand); }
+.lab200-offer-badge {
+  flex-shrink: 0; padding: 8px 10px; border-radius: 4px; background: var(--l2-action); color: var(--l2-on-action);
+  font-size: 22px; line-height: 1; letter-spacing: -.02em; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.lab200-offer-title { margin: 0; font-size: 16px; line-height: 1.4; letter-spacing: -.01em; font-weight: 700; color: var(--l2-text); }
+.lab200-offer-code { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--l2-muted); }
+.lab200-offer-code code {
+  margin-left: 4px; padding: 1px 7px; border: 1px dashed var(--l2-brand); border-radius: 3px; background: var(--l2-surface);
+  font-family: var(--l2-mono); font-size: 12.5px; font-weight: 600; letter-spacing: .04em; color: var(--l2-brand);
+}
 
 /* Sections */
 .lab200-section { margin-top: 28px; container-type: inline-size; }

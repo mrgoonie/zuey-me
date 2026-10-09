@@ -97,11 +97,13 @@ export const Lab200Courses: React.FC<Lab200CoursesProps> = ({ snapshot, locale, 
             {t.author.before}<strong>{LAB200_AUTHOR.name}</strong>{t.author.after}
             <a href={LAB200_AUTHOR.companyUrl} target="_blank" rel="noopener" className="lab200-link">{LAB200_AUTHOR.company}</a>.
           </p>
-          <p className="lab200-offer">
-            <span>{t.discount}</span>
-            <span aria-hidden="true">·</span>
-            <span>{t.code} <code>{LAB200_REF}</code></span>
-          </p>
+          <div className="lab200-offer">
+            <span className="lab200-offer-badge" aria-hidden="true">−{Math.round(LAB200_REF_DISCOUNT * 100)}%</span>
+            <div>
+              <p className="lab200-offer-title">{t.discount}</p>
+              <p className="lab200-offer-code">{t.code} <code>{LAB200_REF}</code></p>
+            </div>
+          </div>
         </header>
 
         {snapshot.courses.length === 0 ? (
