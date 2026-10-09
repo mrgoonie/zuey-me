@@ -1,0 +1,19 @@
+---
+/**
+ * The `<li>` rows of the /articles list. Shared by the full page and the page partial that the
+ * infinite-scroll loader appends, so both render identical cards. `data-article-slug` is the
+ * anchor the loader uses to restore the reader's place after Back.
+ */
+import { ArticleCard } from './ArticleCard';
+import type { DiscoveryItem } from '../../lib/blocks/discovery';
+import type { Locale } from '../../lib/i18n/locales';
+
+interface Props {
+  items: DiscoveryItem[];
+  uiLocale: Locale;
+}
+
+const { items, uiLocale } = Astro.props;
+---
+
+{items.map(a => <li data-article-slug={a.slug}><ArticleCard article={a} uiLocale={uiLocale} /></li>)}

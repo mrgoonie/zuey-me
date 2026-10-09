@@ -1,0 +1,49 @@
+---
+/**
+ * HTML partial: one page of /articles rows (same filters as the list's query string), appended by the
+ * infinite-scroll loader. `data-has-more` tells it whether to keep going. Not a reader-facing page.
+ */
+import ArticleListItems from '../../../components/knowledge/ArticleListItems.astro';
+import { discoverArticles } from '../../../lib/blocks/discovery';
+import type { DiscoveryItem } from '../../../lib/blocks/discovery';
+import { MAX_ARTICLE_PAGE, pageWindow } from '../../../lib/blocks/pagination';
+import { parseDiscoveryQuery } from '../../../lib/blocks/params';
+import { AppError } from '../../../lib/http';
+import { resolveLocale } from '../../../lib/i18n/locales';
+import { resolvePrincipal } from '../../../lib/members/policy';
+
+export const partial = true;
+
+const env = Astro.locals.runtime?.env ?? {};
+const uiLocale = resolveLocale(Astro.request);
+const page = Number(Astro.params.n);
+let items: DiscoveryItem[] = [];
+let hasMore = false;
+let status = 200;
+
+if (!Number.isInteger(page) || page < 1 || page > MAX_ARTICLE_PAGE) {
+  status = 404;
+} else {
+  try {
+    const query = parseDiscoveryQuery(Astro.url);
+    const principal = await resolvePrincipal(Astro.request, env);
+    const result = await discoverArticles(principal, env, { ...query, locale: query.locale ?? uiLocale }, pageWindow(page));
+    items = result.items;
+    hasMore = result.hasMore;
+    Astro.response.headers.set('Cache-Control', query.q ? 'private, no-store' : 'public, max-age=120');
+  } catch (err) {
+    if (!(err instanceof AppError)) console.error('Article page partial failed:', err instanceof Error ? err.message : 'unknown');
+    status = err instanceof AppError ? err.status : 500;
+  }
+}
+Astro.response.status = status;
+Astro.response.headers.set('Vary', 'Cookie, Authorization, Accept-Language');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+if (status !== 200) Astro.response.headers.set('Cache-Control', 'no-store');
+---
+
+{status === 200 && (
+  <ul data-article-page={page} data-has-more={hasMore ? 'true' : 'false'}>
+    <ArticleListItems items={items} uiLocale={uiLocale} />
+  </ul>
+)}

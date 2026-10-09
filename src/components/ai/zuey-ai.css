@@ -120,6 +120,12 @@
 .zai-composer label { font-size: 0.75rem; font-weight: 600; color: var(--zai-muted); }
 .zai-textarea { width: 100%; min-width: 0; resize: none; border-radius: 16px; border: 1px solid var(--zai-line); background: #fff; padding: 0.65rem 0.8rem; font: inherit; font-size: 0.92rem; line-height: 1.45; color: var(--zai-ink); max-height: 12rem; transition: border-color 160ms ease, box-shadow 160ms ease; }
 .zai-textarea:focus { outline: none; border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.22); }
+.zai-quote { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.55rem 0.6rem 0.55rem 0.7rem; border-radius: 14px; background: var(--zai-accent-soft); border: 1px solid rgba(180, 83, 9, 0.25); }
+.zai-quote-icon { flex: none; margin-top: 0.15rem; color: var(--zai-accent); }
+.zai-quote-body { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; flex: 1; }
+.zai-quote-from { font-size: 0.72rem; font-weight: 700; color: var(--zai-accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zai-quote-text { margin: 0; font-size: 0.82rem; line-height: 1.4; color: var(--zai-ink); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.zai-close { flex: none; }
 .zai-composer-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .zai-hint { font-size: 0.72rem; color: var(--zai-muted); }
 .zai-privacy { margin: 0; font-size: 0.72rem; color: var(--zai-muted); display: flex; gap: 0.35rem; align-items: flex-start; }
