@@ -5,6 +5,7 @@ import { LOOK_BOOT_SCRIPT } from '../components/os/look';
 import { ZueyAiPanel } from '../components/ai/ZueyAiPanel';
 import { KnowledgesPanel } from '../components/knowledge/KnowledgesPanel';
 import { ReadsBrowser } from '../components/reads/ReadsBrowser';
+import { ZueytubeBrowser } from '../components/zueytube/ZueytubeBrowser';
 import { PricingTable } from '../components/members/PricingTable';
 import { BookingWidget } from '../components/booking/BookingWidget';
 import BusinessIntro from '../components/booking/BusinessIntro.astro';
@@ -19,6 +20,7 @@ import { USER_KEY_SCOPES } from '../lib/members/api-keys';
 import { resolveMemberSession } from '../lib/members/session';
 import { configuredPaymentMethods } from '../lib/booking/store';
 import { getLastSyncedAt, listReads, listReadSources } from '../lib/reads/store';
+import { listVideos } from '../lib/videos/store';
 
 /** Reads shown in the desktop window; the full archive lives on /reads. */
 const HOME_READS_LIMIT = 60;
@@ -26,7 +28,7 @@ const HOME_READS_LIMIT = 60;
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
 
-const [profile, links, reads, readSources, readsSyncedAt, member] = await Promise.all([
+const [profile, links, reads, readSources, readsSyncedAt, member, videos] = await Promise.all([
   getProfile(d1),
   getLinks(d1),
   // A reads query failure must not take the homepage down: the window shows its empty state.
@@ -34,6 +36,8 @@ const [profile, links, reads, readSources, readsSyncedAt, member] = await Promis
   listReadSources(d1).catch(() => []),
   getLastSyncedAt(d1).catch(() => null),
   resolveMemberSession(Astro.request, d1).catch(() => null),
+  // Same for Zueytube: no DB or a failed query renders the window's empty state.
+  d1 ? listVideos(d1, { limit: 200 }).catch(() => ({ items: [], total: 0 })) : Promise.resolve({ items: [], total: 0 }),
 ]);
 const catalog = plansCatalog(runtimeEnv);
 const paymentMethods = configuredPaymentMethods(runtimeEnv);
@@ -62,6 +66,9 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
     </div>
     <div slot="reads" class="min-w-0">
       <ReadsBrowser client:visible items={reads.items} sources={readSources} lastSyncedAt={readsSyncedAt} />
+    </div>
+    <div slot="zueytube" class="min-w-0">
+      <ZueytubeBrowser client:visible items={videos.items} locale={locale} />
     </div>
     <div slot="pricing" class="min-w-0 flex flex-col items-center gap-4">
       <PricingTable client:visible catalog={catalog} initialPlan={null} initialMonths={1} />

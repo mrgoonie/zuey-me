@@ -115,6 +115,7 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .os-g--ai { background: linear-gradient(160deg, #e0703f, #8a2f12); }
 .os-g--knowledges { background: linear-gradient(180deg, #fffaf6, var(--os-paper-2)); color: var(--os-ink); }
 .os-g--reads { background: linear-gradient(160deg, #3e6b5c, #1e3b33); }
+.os-g--zueytube { background: linear-gradient(160deg, #e5484d, #8f1d22); }
 .os-g--github { background: linear-gradient(160deg, #3b3632, #151210); }
 .os-g--pricing { background: linear-gradient(160deg, #e9d8b6, #b89b63); color: #3a2a10; }
 .os-g--business { background: linear-gradient(160deg, var(--accent), #7a2c10); }

@@ -16,6 +16,7 @@ import { addDismissed, nextNoticeChange, parseDismissed, pickNotice } from '../h
 import { STORAGE_KEYS, readStored, writeStored } from '../home/storage';
 import { WeatherBackdrop } from '../home/WeatherBackdrop';
 import { APPS, DOCK_APPS, SLOT_APPS, appFromHash, type AppId, type Rect, type SlotAppId } from './apps';
+import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
 import { AppGlyph } from './AppGlyph';
 import { AppearancePanel } from './AppearancePanel';
 import { Dock } from './Dock';
@@ -229,6 +230,15 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     dispatch({ type: 'open', id });
     setHash(id);
   }, [setHash]);
+
+  /** Opens Zueytube on one video: ?v= covers a window that has not hydrated yet, the event one that has. */
+  const openVideo = useCallback((youtubeId: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('v', youtubeId);
+    window.history.replaceState(window.history.state, '', url);
+    openApp('zueytube');
+    window.dispatchEvent(new CustomEvent(ZUEYTUBE_OPEN_EVENT, { detail: youtubeId }));
+  }, [openApp]);
 
   const closeApp = useCallback((id: AppId) => {
     dispatch({ type: 'close', id });
@@ -613,6 +623,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
         onOpenMcp={() => openApp('mcp')}
         onShowActivity={() => openApp('github')}
         actionOverrides={paletteOverrides}
+        onOpenVideo={openVideo}
       />
     </div>
   );

@@ -83,6 +83,7 @@ export const taxonomyOpenApi: OpenApiFragment = {
         reranked: { type: 'boolean', description: 'True when the Jev relevance layer (TYPESAFEAI_API_KEY) reordered the fused results; false falls back to BM25/vector fusion order' },
         tiers: { type: 'array', items: { type: 'string', enum: [...SEARCH_TIERS] }, description: 'Index tiers searched; others were excluded before ranking' },
         results: { type: 'array', items: ref('KnowledgeHit') },
+        videos: { type: 'array', items: ref('VideoHit'), description: 'Zueytube videos whose title, description or transcript match (ranked separately from articles)' },
       },
     },
     PublicTaxonomy: {

@@ -9,6 +9,8 @@ import type { SearchTier } from './indexer';
 import { jevConfig, jevRelevance, MAX_JEV_CANDIDATES, orderByRelevance } from './jev';
 import { embedTexts, parseMatches, parseVectorId, semanticBackend } from './semantic';
 import { buildMatchQuery, unspaceCjk } from './text';
+import type { VideoHit } from '../videos/types';
+import { searchVideos } from '../videos/video-search';
 
 export type { SearchTier } from './indexer';
 export { reindexAll, reindexArticle } from './indexer';
@@ -44,6 +46,20 @@ export interface KnowledgeSearchResult {
   /** Tiers this principal was allowed to search; everything else was excluded before ranking. */
   tiers: SearchTier[];
   results: KnowledgeHit[];
+  /** Zueytube videos whose title, description or transcript match (public; ranked separately from articles). */
+  videos: VideoHit[];
+}
+
+const MAX_VIDEO_HITS = 5;
+
+/** Video hits never fail the article search: a missing table or bad row yields an empty list. */
+async function videoHits(db: D1DatabaseLike, query: string, locale: Locale | null, origin: string): Promise<VideoHit[]> {
+  try {
+    return await searchVideos(db, query, { limit: MAX_VIDEO_HITS, origin, locale });
+  } catch (err) {
+    console.error('Video search failed:', err instanceof Error ? err.message : 'unknown');
+    return [];
+  }
 }
 
 /** Which index rows a principal may see: decided by the single read_full policy. */
@@ -132,9 +148,11 @@ export async function searchKnowledge(
   const tiers = allowedTiers(principal);
   const q = query.trim().slice(0, 200);
   const max = Math.min(Math.max(Math.floor(limit) || 10, 1), 50);
-  const empty: KnowledgeSearchResult = { query: q, locale, semantic: false, reranked: false, tiers, results: [] };
+  const empty: KnowledgeSearchResult = { query: q, locale, semantic: false, reranked: false, tiers, results: [], videos: [] };
   const match = buildMatchQuery(q);
   if (!match) return empty;
+  const origin = (env.PUBLIC_SITE_URL || 'https://zuey.me').replace(/\/$/, '');
+  const videos = await videoHits(db, q, locale, origin);
 
   const bm25 = await bm25Candidates(db, match, tiers, locale, max * 2);
   let semantic = false;
@@ -158,9 +176,8 @@ export async function searchKnowledge(
   const jev = jevConfig(env);
   const poolSize = jev ? Math.min(MAX_JEV_CANDIDATES, Math.max(max * 2, 10)) : max;
   const ranked = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, poolSize);
-  if (ranked.length === 0) return { ...empty, semantic };
+  if (ranked.length === 0) return { ...empty, semantic, videos };
 
-  const origin = (env.PUBLIC_SITE_URL || 'https://zuey.me').replace(/\/$/, '');
   const results: KnowledgeHit[] = [];
   for (const c of ranked) {
     const row = await db.prepare(`
@@ -181,11 +198,11 @@ export async function searchKnowledge(
       url: `${origin}/articles/${slug}${lang}`, markdown_url: `${origin}/articles/${slug}.md${lang}`,
     });
   }
-  if (!jev || results.length < 2) return { query: q, locale, semantic, reranked: false, tiers, results: results.slice(0, max) };
+  if (!jev || results.length < 2) return { query: q, locale, semantic, reranked: false, tiers, results: results.slice(0, max), videos };
   // Only text this principal may read (public title/excerpt + the tier-filtered snippet) reaches Jev.
   const scores = await jevRelevance(jev, q, results.map(h => ({ id: key({ articleId: h.article_id, locale: h.locale }), text: `${h.title}\n${h.excerpt}\n${h.snippet}` })));
-  if (!scores) return { query: q, locale, semantic, reranked: false, tiers, results: results.slice(0, max) };
+  if (!scores) return { query: q, locale, semantic, reranked: false, tiers, results: results.slice(0, max), videos };
   const scored = results.map(h => ({ ...h, relevance: scores.get(key({ articleId: h.article_id, locale: h.locale })) ?? null }));
   const reordered = orderByRelevance(scored, h => key({ articleId: h.article_id, locale: h.locale }), scores);
-  return { query: q, locale, semantic, reranked: true, tiers, results: reordered.slice(0, max) };
+  return { query: q, locale, semantic, reranked: true, tiers, results: reordered.slice(0, max), videos };
 }

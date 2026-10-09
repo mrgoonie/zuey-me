@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const DEFAULT_API_URL = 'https://zuey.me';
 
 // ---------------------------------------------------------------------------
@@ -228,6 +228,8 @@ MEMBER COMMANDS (personal key zk_…, created at https://zuey.me/account#keys):
   subscribe <plan> --months <n>        Create an order and print the VietQR bank-transfer details
   keys                                 How to create, rotate and revoke keys
   mcp config                           Print MCP client configuration snippets
+  videos list [--q <query>]            List Zueytube videos, or search titles and transcripts
+  videos get <id>                      Print a video's editions, transcript and related articles
 
 ADMIN COMMANDS (admin API key):
   login --key <API_KEY> [--url <URL>]  Save an admin key non-interactively (prefer ZUEY_API_KEY env)
@@ -235,6 +237,11 @@ ADMIN COMMANDS (admin API key):
   links list | add | delete | reorder  Manage link cards
   theme view | set <name>              Switch theme (ivory | dark | minimal | glass)
   mcp                                  Stdio MCP bridge to /api/mcp
+  videos add <url> [--locale vi|en] [--pair <video_id>] [--title <t>]
+                                       Add a YouTube video (transcript fetched once via AnyMD)
+  videos refetch <youtube_id>          Fetch the transcript again
+  videos feature <video_id> [--off]    Pin a video to the top (or unpin)
+  videos delete <id>                   Delete a video (video_id) or one edition (youtube_id)
 
 ENVIRONMENT:
   ZUEY_API_KEY    Key used instead of the saved one (recommended for CI and agents)
@@ -323,6 +330,96 @@ async function cmdArticles(args) {
     return;
   }
   console.error('Usage: zuey articles list [--tag <t>] | zuey articles read <slug>');
+  process.exit(1);
+}
+
+function printVideoTranscriptStatus(e) {
+  return `${e.transcript_status}${e.transcript_error ? ` (${e.transcript_error})` : ''}`;
+}
+
+async function cmdVideos(args) {
+  const sub = args[1] || 'list';
+  const usage = 'Usage: zuey videos list [--q <query>] | get <id> | add <url> [--locale vi|en] [--pair <video_id>] [--title <t>] | refetch <youtube_id> | feature <video_id> [--off] | delete <id>';
+  const id = args[2];
+  const needId = () => {
+    if (!id || id.startsWith('--')) {
+      console.error(usage);
+      process.exit(1);
+    }
+    return encodeURIComponent(id);
+  };
+
+  if (sub === 'list') {
+    const q = flag(args, '--q');
+    if (q) {
+      const { data } = await requestApi(`/api/v1/videos?q=${encodeURIComponent(q)}&limit=20`, 'GET');
+      const results = Array.isArray(data.results) ? data.results : [];
+      console.log(`${results.length} match(es) for "${q}"\n`);
+      for (const h of results) {
+        console.log(`- [${h.locale.toUpperCase()}] ${h.title}  (${h.video_id})`);
+        if (h.snippet) console.log(`    ${h.snippet.replace(/\*\*/g, '')}`);
+        console.log(`    ${h.url}`);
+      }
+      return;
+    }
+    const { data } = await requestApi('/api/v1/videos?limit=200', 'GET');
+    const items = Array.isArray(data.items) ? data.items : [];
+    console.log(`${items.length} video(s)\n`);
+    for (const v of items) {
+      console.log(`${v.featured ? '★ ' : ''}${v.id}`);
+      for (const e of v.editions) console.log(`  [${e.locale.toUpperCase()}] ${e.title}  ${e.watch_url}  transcript: ${printVideoTranscriptStatus(e)}`);
+    }
+    return;
+  }
+  if (sub === 'get') {
+    const { data } = await requestApi(`/api/v1/videos/${needId()}`, 'GET');
+    const { video, related_articles: related } = data;
+    for (const e of video.editions) {
+      console.log(`# [${e.locale.toUpperCase()}] ${e.title}\n`);
+      console.log(`${e.watch_url}\n${loadConfig().apiUrl}/videos?v=${e.youtube_id}\n`);
+      if (e.description) console.log(`${e.description}\n`);
+      console.log(e.transcript ? `## Transcript\n\n${e.transcript}\n` : `Transcript: ${printVideoTranscriptStatus(e)}\n`);
+    }
+    if (Array.isArray(related) && related.length > 0) {
+      console.log('## Related articles\n');
+      for (const a of related) console.log(`- ${a.title}  ${a.url}`);
+    }
+    return;
+  }
+
+  requireKey();
+  if (sub === 'add') {
+    const url = id;
+    if (!url || url.startsWith('--')) {
+      console.error(usage);
+      process.exit(1);
+    }
+    const body = { url, locale: flag(args, '--locale') || 'vi' };
+    const pair = flag(args, '--pair');
+    const title = flag(args, '--title');
+    if (pair) body.pair_with = pair;
+    if (title) body.title = title;
+    console.log('Adding video and fetching its transcript (this can take up to a minute)…');
+    const { data } = await requestApi('/api/v1/videos', 'POST', body, { auth: true });
+    console.log(`Added ${data.youtube_id} to ${data.video.id} — transcript: ${data.transcript_status}${data.transcript_error ? ` (${data.transcript_error})` : ''}`);
+    return;
+  }
+  if (sub === 'refetch') {
+    const { data } = await requestApi(`/api/v1/videos/${needId()}/refetch`, 'POST', {}, { auth: true });
+    console.log(`Transcript: ${data.transcript_status}${data.transcript_error ? ` (${data.transcript_error})` : ''}`);
+    return;
+  }
+  if (sub === 'feature') {
+    await requestApi(`/api/v1/videos/${needId()}`, 'PATCH', { featured: !args.includes('--off') }, { auth: true });
+    console.log(args.includes('--off') ? 'Unpinned.' : 'Pinned to the top.');
+    return;
+  }
+  if (sub === 'delete') {
+    await requestApi(`/api/v1/videos/${needId()}`, 'DELETE', null, { auth: true });
+    console.log('Deleted.');
+    return;
+  }
+  console.error(usage);
   process.exit(1);
 }
 
@@ -529,6 +626,7 @@ async function main() {
   if (cmd === 'plans') return cmdPlans();
   if (cmd === 'subscribe') return cmdSubscribe(args);
   if (cmd === 'keys') return cmdKeys();
+  if (cmd === 'videos') return cmdVideos(args);
 
   if (cmd === 'mcp') {
     if (args[1] === 'config') return cmdMcpConfig();

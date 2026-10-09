@@ -43,7 +43,7 @@ export const taxonomyMcpModule: McpToolModule = {
   tools: [
     {
       name: 'knowledge_search',
-      description: 'Search published articles (BM25 + optional semantic). Authorization happens before ranking: without the read_full entitlement only free text and paid previews are searched, so snippets never quote paid text.',
+      description: 'Search published articles (BM25 + optional semantic). Authorization happens before ranking: without the read_full entitlement only free text and paid previews are searched, so snippets never quote paid text. Also returns `videos`: Zueytube videos whose title, description or transcript match.',
       inputSchema: { type: 'object', properties: { query: { type: 'string' }, ...localeProp, limit: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['query'] },
     },
     { name: 'taxonomy_facets', description: 'Public tags, categories and approved labels used by published articles, localized.', inputSchema: { type: 'object', properties: { ...localeProp } } },
