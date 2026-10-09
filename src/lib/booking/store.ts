@@ -16,6 +16,7 @@ import type { PromoCode } from '../promos/promo-codes';
 import { activateInvoiceRequest, createInvoiceRequest, parseInvoiceField } from '../promos/invoice-requests';
 import { redeemPromo, requirePromoApplicable, reservePromo } from '../promos/promo-redemptions';
 import { BOOKING_PRICE_USD_CENTS, resolveCheckoutReferral } from '../referrals/checkout';
+import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { parseUsdVndRate } from '../members/plans';
 import { captureReferralCommission, rescheduleBookingCommissionHold } from '../referrals/commissions';
 import { applyPercent } from '../referrals/rates';
@@ -409,13 +410,13 @@ export async function createHold(
     const code = randomCode();
     try {
       await d1.prepare(
-        `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email,
+        `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email, canonical_email,
           company, notes, guest_timezone, payment_method, manage_token_hash, reschedule_count, created_at, updated_at,
           referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral, usd_vnd_rate,
           promo_code_id, promo_code, promo_discount_percent)
-         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        id, code, slot.start, slot.end, slot.duration_min, iso(now + HOLD_MS), input.name, input.email,
+        id, code, slot.start, slot.end, slot.duration_min, iso(now + HOLD_MS), input.name, input.email, normalizeEmailForSelfCheck(input.email),
         input.company, input.notes, input.timezone, input.payment_method, tokenHash, nowIso, nowIso,
         referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
         referral || promo ? listAmount : null, parseUsdVndRate(env),

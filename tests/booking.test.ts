@@ -232,6 +232,8 @@ describe('holds', () => {
     expect((await read(loser)).error?.code).toBe('slot_taken');
     const count = d1.raw.query("SELECT COUNT(*) AS n FROM bookings WHERE slot_start = ? AND status = 'held'").get(SLOT_OCT7);
     expect(count).toEqual({ n: 1 });
+    const held = d1.raw.query("SELECT canonical_email FROM bookings WHERE slot_start = ? AND status = 'held'").get(SLOT_OCT7);
+    expect(held).toEqual({ canonical_email: 'lan@example.com' });
   });
 
   it('reuses an expired hold lazily', async () => {

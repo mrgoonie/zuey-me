@@ -1,7 +1,7 @@
 ---
 phase: 8
 title: "Docs, remote migration, verification and PR"
-status: pending
+status: completed
 priority: P1
 effort: 3h
 dependsOn: [7]

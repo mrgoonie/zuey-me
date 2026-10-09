@@ -8,7 +8,8 @@ import { isPaidEmailRecorded } from './paid-email-hashes';
 /**
  * Who may refer and who may be referred.
  * Referrer: not locked, and admin-enabled or holding an active plan (the link pauses while the plan lapses).
- * Referee: never paid for anything before (memberships, bookings or courses), matched by account and by canonical email (Gmail dots, +tags),
+ * Referee: never paid for anything before (memberships, bookings or courses), matched by account and by canonical email (Gmail dots, +tags)
+ * through the indexed `canonical_email` columns (written on every insert/update, see migration 0019),
  * including mailboxes of deleted accounts that had paid (kept only as hashes, see `paid-email-hashes.ts`).
  */
 
@@ -29,29 +30,6 @@ function placeholders(n: number): string {
   return Array.from({ length: n }, () => '?').join(', ');
 }
 
-/** Domains whose addresses can share a canonical mailbox (gmail.com and googlemail.com fold together). */
-function domainSuffixes(canonical: string): string[] {
-  const domain = canonical.slice(canonical.lastIndexOf('@'));
-  return domain === '@gmail.com' ? ['@gmail.com', '@googlemail.com'] : [domain];
-}
-
-/**
- * Distinct raw values of `column` in `table` whose canonical email equals `canonical`. SQL narrows by
- * domain (exact suffix, no LIKE wildcards); the canonical comparison happens here.
- */
-export async function rawEmailsMatching(d1: D1DatabaseLike, table: 'users' | 'bookings' | 'card_subscriptions', column: string, canonical: string): Promise<string[]> {
-  const out = new Set<string>();
-  for (const suffix of domainSuffixes(canonical)) {
-    const { results } = await d1.prepare(`SELECT DISTINCT ${column} AS email FROM ${table} WHERE ${column} IS NOT NULL AND substr(lower(${column}), -?) = ?`)
-      .bind(suffix.length, suffix).all<Row>();
-    for (const r of results ?? []) {
-      const email = str(r, 'email');
-      if (normalizeEmailForSelfCheck(email) === canonical) out.add(email);
-    }
-  }
-  return [...out];
-}
-
 /**
  * Accounts that are the referee: the given user plus every live account on the same canonical mailbox.
  * Deleted accounts no longer carry their email (it is scrubbed), so they are covered by the paid-email
@@ -60,11 +38,8 @@ export async function rawEmailsMatching(d1: D1DatabaseLike, table: 'users' | 'bo
 export async function refereeUserIds(d1: D1DatabaseLike, userId: string | undefined, canonical: string | null): Promise<string[]> {
   const ids = new Set<string>(userId ? [userId] : []);
   if (canonical) {
-    const emails = await rawEmailsMatching(d1, 'users', 'email', canonical);
-    if (emails.length) {
-      const { results } = await d1.prepare(`SELECT id FROM users WHERE email IN (${placeholders(emails.length)})`).bind(...emails).all<Row>();
-      for (const r of results ?? []) ids.add(str(r, 'id'));
-    }
+    const { results } = await d1.prepare('SELECT id FROM users WHERE canonical_email = ?').bind(canonical).all<Row>();
+    for (const r of results ?? []) ids.add(str(r, 'id'));
   }
   return [...ids];
 }
@@ -106,14 +81,12 @@ export async function isEligibleReferee(
   }
   if (!canonical) return true;
   if (await isPaidEmailRecorded(d1, canonical)) return false;
-  const cardEmails = await rawEmailsMatching(d1, 'card_subscriptions', 'customer_email', canonical);
-  if (cardEmails.length && await anyRow(d1,
-    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND promo_code_id IS NULL AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${before('COALESCE(first_payment_at, created_at)')} LIMIT 1`,
-    [...cardEmails, exclude, ...sinceArg])) return false;
-  const guestEmails = await rawEmailsMatching(d1, 'bookings', 'guest_email', canonical);
-  if (guestEmails.length && await anyRow(d1,
-    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND id <> ? AND promo_code_id IS NULL AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0)${before('created_at')} LIMIT 1`,
-    [...guestEmails, exclude, ...sinceArg])) return false;
+  if (await anyRow(d1,
+    `SELECT 1 FROM card_subscriptions WHERE canonical_email = ? AND id <> ? AND promo_code_id IS NULL AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${before('COALESCE(first_payment_at, created_at)')} LIMIT 1`,
+    [canonical, exclude, ...sinceArg])) return false;
+  if (await anyRow(d1,
+    `SELECT 1 FROM bookings WHERE canonical_email = ? AND id <> ? AND promo_code_id IS NULL AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0)${before('created_at')} LIMIT 1`,
+    [canonical, exclude, ...sinceArg])) return false;
   return true;
 }
 
