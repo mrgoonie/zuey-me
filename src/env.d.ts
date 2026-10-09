@@ -41,6 +41,8 @@ export interface RuntimeEnv {
   OPENROUTER_API_KEY?: string;
   /** OpenRouter model for transcript cleanup (default google/gemma-4-31b-it). */
   VIDEOS_REWRITE_OPENROUTER_MODEL?: string;
+  /** Extra proper nouns for transcript cleanup: "Name" or "Name = heard1 | heard2", comma- or newline-separated. */
+  VIDEOS_REWRITE_GLOSSARY?: string;
   // Booking, payments, email
   GOOGLE_CALENDAR_REFRESH_TOKEN?: string;
   GOOGLE_CALENDAR_ID?: string;

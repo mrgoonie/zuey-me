@@ -9,6 +9,7 @@
  */
 import { AppError } from '../http';
 import { transcriptSegments } from './anymd-transcript-parser';
+import { glossaryPromptLines, type GlossaryTerm } from './video-transcript-glossary';
 import type { TranscriptRewriter } from './video-transcript-rewrite-providers';
 
 const CHUNK_WORDS = 600;
@@ -30,6 +31,23 @@ const SYSTEM_PROMPT = [
   'Split the text into short readable paragraphs of 2-5 sentences. Your output should be roughly as long as the input.',
   'Output only the cleaned paragraphs separated by blank lines, with no headings, lists or notes.',
 ].join(' ');
+
+/** Adds the video title and the proper-noun list so mis-heard names come back spelled right. */
+export function buildSystemPrompt(opts: { title?: string | null; glossary?: GlossaryTerm[] } = {}): string {
+  const parts = [SYSTEM_PROMPT];
+  const title = opts.title?.trim();
+  if (title) parts.push(`The video is titled: "${title}".`);
+  if (opts.glossary?.length) {
+    parts.push([
+      'These proper nouns may appear; spell them exactly as listed. Replace a word with a listed name only when it is one of the',
+      'mis-hearings given in brackets or differs from the name only in spacing, case or one letter. Never map an unfamiliar name',
+      'to a listed name just because it sounds a little alike: keep unknown names as they appear, and never add names that are not spoken.',
+      'Keep every other name, model name, version and number exactly as it appears in the captions (for example "GPT 5.6" stays "GPT 5.6"), even if it looks wrong to you.',
+      ...glossaryPromptLines(opts.glossary).map(l => `- ${l}`),
+    ].join('\n'));
+  }
+  return parts.join('\n\n');
+}
 
 interface TimedWord { word: string; time: number; segment: number }
 
@@ -129,12 +147,12 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * Cleans one chunk, trying each provider in order (a single provider gets one retry).
  * Returns the paragraphs and the label of the provider that produced them.
  */
-async function rewriteChunk(rewriters: TranscriptRewriter[], chunk: TranscriptChunk): Promise<{ paragraphs: string[]; label: string }> {
+async function rewriteChunk(rewriters: TranscriptRewriter[], system: string, chunk: TranscriptChunk): Promise<{ paragraphs: string[]; label: string }> {
   const attempts = rewriters.length === 1 ? [rewriters[0], rewriters[0]] : rewriters;
   const errors: string[] = [];
   for (const rewriter of attempts) {
     try {
-      const paragraphs = parseParagraphs(await withTimeout(rewriter.complete(SYSTEM_PROMPT, chunk.text, MAX_TOKENS), CALL_TIMEOUT_MS));
+      const paragraphs = parseParagraphs(await withTimeout(rewriter.complete(system, chunk.text, MAX_TOKENS), CALL_TIMEOUT_MS));
       const ratio = paragraphs.reduce((n, p) => n + words(p).length, 0) / chunk.words;
       if (ratio >= MIN_WORD_RATIO && ratio <= MAX_WORD_RATIO) return { paragraphs, label: rewriter.label };
       errors.push(`${rewriter.label}: output kept ${Math.round(ratio * 100)}% of the words`);
@@ -153,18 +171,20 @@ export interface RewriteOutcome {
 
 /** Rewrites a stored raw transcript; throws AppError when any chunk cannot be cleaned (the caller keeps the raw text). */
 export async function rewriteTranscript(
-  rewriters: TranscriptRewriter[], source: string, opts: { durationSeconds?: number | null } = {},
+  rewriters: TranscriptRewriter[], source: string,
+  opts: { durationSeconds?: number | null; title?: string | null; glossary?: GlossaryTerm[] } = {},
 ): Promise<RewriteOutcome> {
   if (rewriters.length === 0) throw new AppError(503, 'llm_unconfigured', 'No AI provider is configured for transcript rewrites');
   const chunks = chunkTranscript(source, opts.durationSeconds);
   if (chunks.length === 0) throw new AppError(409, 'transcript_empty', 'There is no transcript text to rewrite');
+  const system = buildSystemPrompt(opts);
   const results: string[][] = new Array(chunks.length);
   const labels = new Set<string>();
   let next = 0;
   const worker = async () => {
     while (next < chunks.length) {
       const i = next++;
-      const out = await rewriteChunk(rewriters, chunks[i]);
+      const out = await rewriteChunk(rewriters, system, chunks[i]);
       labels.add(out.label);
       results[i] = placeParagraphs(chunks[i], out.paragraphs);
     }

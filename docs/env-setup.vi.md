@@ -51,6 +51,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 5. Provider AI được thử theo thứ tự cho từng đoạn transcript:
    - **OpenRouter** (chính): đặt secret `OPENROUTER_API_KEY`. Model mặc định `google/gemma-4-31b-it`, đổi bằng biến `VIDEOS_REWRITE_OPENROUTER_MODEL` (không bắt buộc).
    - **Workers AI** (dự phòng, hoặc là provider duy nhất khi không có key OpenRouter): dùng binding `AI` có sẵn. Model mặc định `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, đổi bằng biến `VIDEOS_REWRITE_MODEL`.
+   - **Tên riêng**: prompt luôn kèm tiêu đề video và danh sách tên riêng mặc định (ClaudeKit, AgentKit, Codex, Zuey…, kèm các cách phụ đề hay nghe nhầm) trong `src/lib/videos/video-transcript-glossary.ts`. Bổ sung tên mới bằng biến `VIDEOS_REWRITE_GLOSSARY` (không bắt buộc), mỗi tên cách nhau bằng dấu phẩy hoặc xuống dòng, có thể ghi cách hay bị nghe nhầm: `Hermes = Han Harris | Hermit, Kongming`. Sau khi đổi, bấm nút viết lại AI (hoặc `zuey videos rewrite <youtube_id>`) để áp dụng cho video cũ.
    Cột `transcript_rewrite_model` ghi provider đã tạo ra bản viết lại.
 
 ## 3. Google Calendar / Meet
