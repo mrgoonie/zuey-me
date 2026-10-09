@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0013_article_email_notifications.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0014_referrals.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -191,3 +191,26 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
    - Booking chuyển sang `confirmed`.
    - Có link Meet.
    - Email kèm file ICS được gửi tới.
+
+## 12. Chương trình giới thiệu (referral)
+
+Migration `0014_referrals.sql` chỉ thêm bảng và cột, không sửa dữ liệu cũ. Vẫn ghi lại bookmark Time Travel trước khi chạy (mục 0).
+
+1. **R2 cho ảnh CCCD:** tạo bucket riêng tư, không bật public access, không gắn custom domain:
+   ```bash
+   wrangler r2 bucket create zuey-referral-kyc
+   ```
+   Binding `REFERRAL_KYC` đã khai báo trong `wrangler.toml`. Thiếu binding thì upload ảnh trả `503`. Ảnh chỉ admin xem được (qua Studio, `Cache-Control: no-store`) và bị xoá ngay khi admin duyệt hoặc từ chối hồ sơ.
+2. **Cron:** Worker `zuey-me-scheduler` gọi thêm `POST /api/v1/referrals/jobs/run` mỗi 5 phút (dùng chung `CRON_SECRET`). Job idempotent: chuyển hoa hồng hết hạn giữ sang `approved`, cập nhật bậc, và vào ngày 1 (giờ Việt Nam) chốt danh sách payout. Sau khi merge phải deploy lại worker:
+   ```bash
+   cd workers/scheduler && wrangler deploy
+   ```
+3. **Dodo (mã giảm giá một lần):** khi người được giới thiệu trả bằng thẻ, hệ thống tạo một discount code dùng một lần cho chu kỳ đầu và truyền vào checkout. Checkout đang tắt ô nhập mã (`DODO_ALLOW_DISCOUNT_CODE_INPUT = false` trong `src/lib/payments/dodo.ts`). **Cần kiểm tra ở Test Mode** rằng Dodo vẫn áp mã khi ô nhập mã bị tắt (xem giá trong trang checkout hoặc `POST /checkouts/preview`). Nếu không áp, đổi hằng số thành `true` (ô mã hiện ra nhưng mã đã được điền sẵn). Webhook Dodo cần thêm sự kiện `refund.succeeded`, `dispute.opened` và `dispute.lost` để đảo hoa hồng khi hoàn tiền.
+4. **PayPal (booking):** thêm sự kiện `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` và `CUSTOMER.DISPUTE.CREATED` vào webhook PayPal để đảo hoa hồng.
+5. **Cấu hình (Studio → Referrals → Settings, hoặc `PATCH /api/v1/admin/referrals/settings`):** bảng bậc, số ngày giữ (30), tỷ lệ booking (10%), ngưỡng chi trả ($50), số ngày cookie (30), mức khấu trừ VN (10%, nhãn "Thuế TNCN") và PayPal (18%, nhãn "Phí xử lý & thuế"). **Mức khấu trừ cần kế toán xác nhận** trước kỳ chi trả đầu tiên; đổi trong Settings, không cần deploy.
+6. **Quy trình chi trả hằng tháng:**
+   - Ngày 1: job tự chốt kỳ. Mỗi referrer có số dư đã duyệt ≥ ngưỡng và hồ sơ nhận tiền đã duyệt được tạo một payout, đã trừ khấu trừ, quy VND theo `USD_VND_RATE` lúc chốt. Khoản hoàn tiền phát sinh sau khi đã trả được trừ vào kỳ sau.
+   - Ngày 1–10: vào Studio → Referrals → Payouts, tải CSV (`GET /api/v1/admin/referrals/payouts.csv?period=YYYY-MM`), chuyển khoản ngân hàng hoặc PayPal thủ công, rồi bấm *Mark paid* kèm mã giao dịch (`POST /api/v1/admin/referrals/payouts/{id}/paid`). Người nhận được email xác nhận. Payout sai thì *Cancel* để số tiền trở lại số dư.
+   - Hàng chờ duyệt (Studio → Referrals → Review): hoa hồng có dấu hiệu gian lận mềm (IP đăng ký trùng IP của referrer, người chuyển khoản trùng hồ sơ nhận tiền của referrer, email dùng một lần, quá nhiều đăng ký trong 24 giờ) và hồ sơ KYC chờ duyệt.
+7. **Kiểm tra sau khi deploy:** mở `/r/<mã>` → phải chuyển hướng về trang chủ và có cookie `zr_ref`; `/pricing` hiện giá đã giảm cho tài khoản chưa từng trả tiền; `/docs` có nhóm Referrals.
+

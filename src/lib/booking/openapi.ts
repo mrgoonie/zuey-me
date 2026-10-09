@@ -153,6 +153,7 @@ export const bookingOpenApi: OpenApiFragment = {
         notes: { type: 'string', maxLength: 2000 },
         timezone: { type: 'string', description: 'Guest IANA time zone' },
         payment_method: { type: 'string', enum: ['sepay', 'paypal'] },
+        referral_code: { type: 'string', pattern: '^[A-Za-z0-9]{6,16}$', description: 'Optional referral code (or the `zr_ref` cookie). The booking referral total is 10%, split by the referrer; applies only to a guest email with no prior paid order.' },
       },
     },
     BookingHoldResult: {

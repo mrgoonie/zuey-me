@@ -253,6 +253,7 @@ export const billingOpenApi: OpenApiFragment = {
             plan: { type: 'string', enum: PLAN_IDS },
             provider: { type: 'string', enum: ['sepay', 'dodo'], default: 'sepay' },
             months: { type: 'integer', enum: [...BILLING_MONTHS], default: 1, description: 'SePay only; card subscriptions are monthly' },
+            referral_code: { type: 'string', pattern: '^[A-Za-z0-9]{6,16}$', description: 'Optional referral code. Applies only to a first paid order; the account binding or the `zr_ref` cookie is used when omitted. 400 `referral_code_invalid` when it cannot apply.' },
           },
         }),
         responses: {
