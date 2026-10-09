@@ -1,0 +1,40 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { ZueytubeBrowser } from '../components/zueytube/ZueytubeBrowser';
+import { resolveLocale, LOCALE_LABELS } from '../lib/i18n/locales';
+import { listVideos } from '../lib/videos/store';
+import { parseYoutubeId, thumbnailUrl, videoPageUrl } from '../lib/videos/youtube-url';
+
+// Page views only read D1; AnyMD is called exclusively when an admin adds or refetches a video.
+const env = Astro.locals.runtime?.env ?? {};
+const origin = (env.PUBLIC_SITE_URL || Astro.url.origin).replace(/\/$/, '');
+const locale = resolveLocale(Astro.request);
+const { items } = env.DB ? await listVideos(env.DB, { limit: 200 }).catch(() => ({ items: [], total: 0 })) : { items: [] };
+const requested = Astro.url.searchParams.get('v');
+const ref = requested ? parseYoutubeId(requested) ?? requested : null;
+const video = ref ? items.find(v => v.id === ref || v.editions.some(e => e.youtube_id === ref)) : undefined;
+const edition = video ? video.editions.find(e => e.youtube_id === ref) ?? video.editions[0] : undefined;
+
+const title = edition ? `${edition.title} — Zueytube` : 'Zueytube — Duy Nguyen /zuey/';
+const description = edition?.description
+  ? edition.description.replace(/\s+/g, ' ').slice(0, 200)
+  : "Curated videos from Zuey's YouTube channel (@imzuey), with transcripts and related articles.";
+const url = edition ? videoPageUrl(origin, edition.youtube_id) : `${origin}/videos`;
+const jsonLd = edition ? JSON.stringify({
+  '@context': 'https://schema.org',
+  '@type': 'VideoObject',
+  name: edition.title,
+  description: edition.description || edition.title,
+  thumbnailUrl: edition.thumbnail_url ?? thumbnailUrl(edition.youtube_id),
+  uploadDate: edition.published_at ?? video?.created_at,
+  embedUrl: edition.embed_url,
+  url,
+  inLanguage: edition.locale,
+  ...(edition.duration_seconds ? { duration: `PT${edition.duration_seconds}S` } : {}),
+}).replace(/</g, '\\u003c') : null;
+---
+
+<Layout title={title} description={description} url={url} image={edition?.thumbnail_url ?? undefined} lang={LOCALE_LABELS[locale].htmlLang}>
+  {jsonLd && <script is:inline slot="head" type="application/ld+json" set:html={jsonLd} />}
+  <ZueytubeBrowser client:load items={items} locale={locale} standalone initialRef={edition?.youtube_id ?? null} />
+</Layout>

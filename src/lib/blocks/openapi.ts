@@ -2,6 +2,7 @@ import type { OpenApiFragment } from '../openapi/types';
 import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
 import { SORTS } from './articles';
+import { MAX_ARTICLE_PAGE } from './pagination';
 import {
   BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
 } from './schema';
@@ -252,9 +253,20 @@ export const articlesOpenApi: OpenApiFragment = {
           { name: 'label', in: 'query', schema: { type: 'string' }, description: '<kind>:<slug>, e.g. freshness:current' },
           { name: 'access', in: 'query', schema: { type: 'string', enum: ['free', 'knowledges'] } },
           { name: 'sort', in: 'query', schema: { type: 'string', enum: [...SORTS] } },
-          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 }, description: 'Maximum results; with page, the page size (default 20)' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, maximum: MAX_ARTICLE_PAGE }, description: '1-based page of limit results' },
         ],
-        responses: { '200': ok('Articles', { type: 'array', items: ref('ArticleSummary') }), ...errorResponses },
+        responses: {
+          '200': {
+            ...ok('Articles', { type: 'array', items: ref('ArticleSummary') }),
+            headers: {
+              'X-Total-Count': { description: 'Matching articles before paging', schema: { type: 'integer' } },
+              'X-Has-More': { description: '1 when more results follow this page', schema: { type: 'string', enum: ['0', '1'] } },
+              Link: { description: 'rel="next" URL when page is given and more results follow', schema: { type: 'string' } },
+            },
+          },
+          ...errorResponses,
+        },
       },
       post: {
         tags, summary: 'Create a draft article', security: adminSecurity,

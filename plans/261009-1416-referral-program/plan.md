@@ -61,7 +61,7 @@ flowchart LR
   batch --> admin["Admin marks paid → email"]
 ```
 
-Module: `src/lib/referrals/` — `config.ts`, `rates.ts`, `codes.ts`, `attribution.ts`, `checkout.ts`, `commissions.ts`, `fraud.ts`, `refunds.ts`, `jobs.ts`, `payouts.ts`, `payout-profiles.ts`, `leaderboard.ts`, `openapi.ts`, `mcp.ts`. Migration `migrations/0014_referrals.sql`.
+Module: `src/lib/referrals/` — `config.ts`, `rates.ts`, `codes.ts`, `attribution.ts`, `checkout.ts`, `commissions.ts`, `fraud.ts`, `refunds.ts`, `jobs.ts`, `payouts.ts`, `payout-profiles.ts`, `leaderboard.ts`, `openapi.ts`, `mcp.ts`. Migration `migrations/0016_referrals.sql`.
 
 ## Acceptance (Done means)
 

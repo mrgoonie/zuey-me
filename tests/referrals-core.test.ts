@@ -27,7 +27,7 @@ async function member(email: string): Promise<string> {
   return (await findOrCreateVerifiedUser(d1, { email })).user.id;
 }
 
-describe('migration 0014', () => {
+describe('migration 0016 (referrals)', () => {
   it('applies on a fresh database and seeds the default settings row', async () => {
     const settings = await getReferralSettings(d1);
     expect(settings.tiers).toEqual(DEFAULT_TIERS);

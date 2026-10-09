@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  BookOpen, Briefcase, CreditCard, Gift, GitBranch, LayoutGrid, Newspaper, Palette, Plug, Sparkles, User,
+  BookOpen, Briefcase, CreditCard, Gift, GitBranch, GraduationCap, LayoutGrid, Newspaper, Palette, Plug, Sparkles, SquarePlay, User,
 } from 'lucide-react';
 import type { AppId } from './apps';
 
@@ -10,6 +10,7 @@ const ICONS: Record<Exclude<AppId, 'about'>, IconType> = {
   ai: Sparkles,
   knowledges: BookOpen,
   reads: Newspaper,
+  zueytube: SquarePlay,
   github: GitBranch,
   pricing: CreditCard,
   business: Briefcase,
@@ -17,6 +18,7 @@ const ICONS: Record<Exclude<AppId, 'about'>, IconType> = {
   account: User,
   referral: Gift,
   appearance: Palette,
+  '200lab': GraduationCap,
 };
 
 interface AppGlyphProps {

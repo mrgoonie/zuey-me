@@ -43,9 +43,11 @@ ${products.map(p => `- [${p.title_en}](${p.url}): ${p.subtitle_en || 'Product'}`
 - Markdown Profile: https://zuey.me/index.md
 - Markdown Catalog: https://zuey.me/links.md
 - Zuey Reads (Markdown): https://zuey.me/reads.md
+- Zueytube — curated YouTube videos with transcripts (Markdown): https://zuey.me/videos.md (page: https://zuey.me/videos, API: https://zuey.me/api/v1/videos)
 - AI Workflows (Markdown): https://zuey.me/workflows.md
 - Articles: https://zuey.me/articles (each article also at /articles/<slug>.md)
 - Zuey for Business (1:1 consultation booking): https://zuey.me/business
+- 200lab courses Duy recommends (links carry referral code T2CWW3D7, 20% off for buyers): https://zuey.me/200lab.md
 - Full LLM Context: https://zuey.me/llms-full.txt
 `;
 

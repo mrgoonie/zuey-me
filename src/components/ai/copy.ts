@@ -60,6 +60,15 @@ export interface AiCopy {
   loadFailed: string;
   deleted: string;
   emptySessions: string;
+  /** Tooltip shown over a text selection in an article. */
+  askAboutSelection: string;
+  drawerTitle: string;
+  closeDrawer: string;
+  quoteFrom: (title: string) => string;
+  removeQuote: string;
+  quotePlaceholder: string;
+  /** Line under the quoted excerpt in the sent message, naming its article. */
+  quoteSource: (title: string, url: string) => string;
   errors: Record<string, string>;
 }
 
@@ -123,6 +132,13 @@ const vi: AiCopy = {
   loadFailed: 'Không tải được dữ liệu. Thử lại sau.',
   deleted: 'Đã xoá cuộc trò chuyện.',
   emptySessions: 'Chưa có cuộc trò chuyện nào.',
+  askAboutSelection: 'Hỏi Zuey AI',
+  drawerTitle: 'Zuey AI',
+  closeDrawer: 'Đóng Zuey AI',
+  quoteFrom: title => `Trích từ: ${title}`,
+  removeQuote: 'Bỏ đoạn trích',
+  quotePlaceholder: 'Bạn muốn hỏi gì về đoạn này?',
+  quoteSource: (title, url) => `(Trích từ bài "${title}" — ${url})`,
   errors: {
     ai_unavailable: 'Zuey AI đang bận hoặc tạm gián đoạn. Thử lại sau ít phút.',
     ai_timeout: 'Zuey AI phản hồi quá lâu nên đã dừng. Thử lại nhé.',
@@ -199,6 +215,13 @@ const en: AiCopy = {
   loadFailed: 'Could not load data. Try again later.',
   deleted: 'Chat deleted.',
   emptySessions: 'No chats yet.',
+  askAboutSelection: 'Ask Zuey AI',
+  drawerTitle: 'Zuey AI',
+  closeDrawer: 'Close Zuey AI',
+  quoteFrom: title => `Quoted from: ${title}`,
+  removeQuote: 'Remove quote',
+  quotePlaceholder: 'What would you like to ask about this passage?',
+  quoteSource: (title, url) => `(Quoted from "${title}" — ${url})`,
   errors: {
     ai_unavailable: 'Zuey AI is busy or briefly unavailable. Try again in a few minutes.',
     ai_timeout: 'Zuey AI took too long and was stopped. Please try again.',
@@ -275,6 +298,13 @@ const zh: AiCopy = {
   loadFailed: '无法加载数据，请稍后重试。',
   deleted: '对话已删除。',
   emptySessions: '还没有对话。',
+  askAboutSelection: '问 Zuey AI',
+  drawerTitle: 'Zuey AI',
+  closeDrawer: '关闭 Zuey AI',
+  quoteFrom: title => `摘自：${title}`,
+  removeQuote: '移除引用',
+  quotePlaceholder: '关于这段内容，你想问什么？',
+  quoteSource: (title, url) => `（摘自文章「${title}」— ${url}）`,
   errors: {
     ai_unavailable: 'Zuey AI 正忙或暂时不可用，请几分钟后重试。',
     ai_timeout: 'Zuey AI 响应过久已停止，请重试。',
@@ -351,6 +381,13 @@ const ko: AiCopy = {
   loadFailed: '데이터를 불러오지 못했습니다. 나중에 다시 시도하세요.',
   deleted: '대화를 삭제했습니다.',
   emptySessions: '아직 대화가 없습니다.',
+  askAboutSelection: 'Zuey AI에게 묻기',
+  drawerTitle: 'Zuey AI',
+  closeDrawer: 'Zuey AI 닫기',
+  quoteFrom: title => `인용: ${title}`,
+  removeQuote: '인용 삭제',
+  quotePlaceholder: '이 부분에 대해 무엇이 궁금한가요?',
+  quoteSource: (title, url) => `("${title}"에서 인용 — ${url})`,
   errors: {
     ai_unavailable: 'Zuey AI가 바쁘거나 잠시 이용할 수 없습니다. 몇 분 후 다시 시도하세요.',
     ai_timeout: 'Zuey AI 응답이 너무 오래 걸려 중지했습니다. 다시 시도하세요.',
@@ -427,6 +464,13 @@ const ja: AiCopy = {
   loadFailed: 'データを読み込めませんでした。後でもう一度お試しください。',
   deleted: 'チャットを削除しました。',
   emptySessions: 'まだチャットはありません。',
+  askAboutSelection: 'Zuey AI に聞く',
+  drawerTitle: 'Zuey AI',
+  closeDrawer: 'Zuey AI を閉じる',
+  quoteFrom: title => `引用元：${title}`,
+  removeQuote: '引用を外す',
+  quotePlaceholder: 'この部分について何を聞きたいですか？',
+  quoteSource: (title, url) => `（記事「${title}」より引用 — ${url}）`,
   errors: {
     ai_unavailable: 'Zuey AI は混雑中か一時的に利用できません。数分後にお試しください。',
     ai_timeout: 'Zuey AI の応答に時間がかかりすぎたため停止しました。もう一度お試しください。',

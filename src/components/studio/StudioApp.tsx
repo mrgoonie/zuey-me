@@ -21,9 +21,11 @@ import {
   CalendarDays,
   Receipt,
   Gift,
+  SquarePlay,
 } from 'lucide-react';
 import { ArticlesPanel } from './ArticleEditor';
 import { ReadsPanel } from './ReadsPanel';
+import { VideosPanel } from './VideosPanel';
 import { WorkflowsPanel } from './WorkflowsPanel';
 import { BookingPanel } from './BookingPanel';
 import { BillingAttentionPanel } from './BillingAttentionPanel';
@@ -42,7 +44,7 @@ interface StudioAppProps {
   deniedEmail?: string | null;
 }
 
-type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'workflows' | 'booking' | 'billing' | 'referrals';
+type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'videos' | 'workflows' | 'booking' | 'billing' | 'referrals';
 
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
@@ -340,7 +342,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     );
   }
 
-  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'workflows' || activeTab === 'booking' || activeTab === 'billing' || activeTab === 'referrals';
+  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'videos' || activeTab === 'workflows' || activeTab === 'booking' || activeTab === 'billing' || activeTab === 'referrals';
 
   // Filtered links for Links tab
   const filteredLinks = filterSection === 'all'
@@ -373,6 +375,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             { id: 'theme', label: 'Theme', icon: Palette },
             { id: 'articles', label: 'Articles', icon: FileText },
             { id: 'reads', label: 'Reads', icon: BookOpen },
+            { id: 'videos', label: 'Zueytube', icon: SquarePlay },
             { id: 'workflows', label: 'Workflows', icon: Workflow },
             { id: 'booking', label: 'Booking', icon: CalendarDays },
             { id: 'billing', label: 'Payments', icon: Receipt },
@@ -428,6 +431,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
         <div className={`flex-1 p-4 sm:p-8 overflow-y-auto mx-auto w-full min-w-0 ${isFeatureTab ? 'max-w-6xl' : 'max-w-3xl'}`}>
           {activeTab === 'articles' && <ArticlesPanel />}
           {activeTab === 'reads' && <ReadsPanel />}
+          {activeTab === 'videos' && <VideosPanel />}
           {activeTab === 'workflows' && <WorkflowsPanel />}
           {activeTab === 'booking' && <BookingPanel />}
           {activeTab === 'billing' && <BillingAttentionPanel />}

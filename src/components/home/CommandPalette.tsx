@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowLeft, BookOpen, Briefcase, CreditCard, FileCode2, FileText, KeyRound, LogIn, MessageCircle,
-  Plug, Search, Shield, User, X,
+  Plug, Search, Shield, SquarePlay, User, X,
 } from 'lucide-react';
 import type { Locale } from '../../lib/i18n/locales';
 import type { HomeStrings } from './home-i18n';
@@ -9,6 +9,8 @@ import { fmt } from './home-i18n';
 import type { ArticleHit } from './api-client';
 import { apiFetch, parseArticleHits } from './api-client';
 import { animateDialogIn } from './motion';
+import type { VideoHit } from '../../lib/videos/types';
+import { parseVideoHits } from '../zueytube/zueytube-api-client';
 import { STORAGE_KEYS, isRecord, readStored, writeStored } from './storage';
 import { trackEvent } from '../../lib/posthog';
 
@@ -23,6 +25,8 @@ interface PaletteProps {
   onShowActivity: () => void;
   /** Actions handled in place (e.g. open a Zuey OS window) instead of navigating to their page. */
   actionOverrides?: Partial<Record<PaletteActionId, () => void>>;
+  /** Opens a Zueytube video in place (Zuey OS window); defaults to navigating to /videos?v=. */
+  onOpenVideo?: (youtubeId: string) => void;
 }
 
 interface Option {
@@ -30,7 +34,7 @@ interface Option {
   label: string;
   hint?: string;
   icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
-  group: 'recent' | 'actions' | 'articles';
+  group: 'recent' | 'actions' | 'articles' | 'videos';
   run: () => void;
 }
 
@@ -71,7 +75,7 @@ function matches(hit: ArticleHit, q: string): boolean {
  * Ctrl/⌘ K command palette: combobox + listbox with active-descendant navigation, recent items,
  * article search and site actions. Uses a modal <dialog> for the focus trap and Escape handling.
  */
-export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings, locale, onOpenMcp, onShowActivity, actionOverrides }) => {
+export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings, locale, onOpenMcp, onShowActivity, actionOverrides, onOpenVideo }) => {
   const ref = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -82,6 +86,8 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
   const [active, setActive] = useState(0);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [articles, setArticles] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; hits: ArticleHit[] }>({ state: 'idle', hits: [] });
+  const videoCacheRef = useRef(new Map<string, VideoHit[]>());
+  const [videos, setVideos] = useState<VideoHit[]>([]);
   const listId = useId();
   const titleId = useId();
   const optionId = (i: number) => `${listId}-opt-${i}`;
@@ -155,6 +161,32 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
     };
   }, [open, wantsArticles, q, locale]);
 
+  // Video search (titles, descriptions and transcripts) runs alongside; failures just show no videos.
+  useEffect(() => {
+    if (!open || q.length < 2) {
+      setVideos([]);
+      return;
+    }
+    const key = `${locale}:${q}`;
+    const cached = videoCacheRef.current.get(key);
+    if (cached) {
+      setVideos(cached);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const res = await apiFetch(`/api/v1/videos?q=${encodeURIComponent(q)}&locale=${locale}&limit=4`, parseVideoHits);
+      if (cancelled) return;
+      const hits = res.ok ? res.data : [];
+      videoCacheRef.current.set(key, hits);
+      setVideos(hits);
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, q, locale]);
+
   const remember = useCallback((entry: RecentEntry) => {
     const next = [entry, ...readRecent().filter(r => r.id !== entry.id)].slice(0, MAX_RECENT);
     writeStored(STORAGE_KEYS.recentCommands, next);
@@ -184,6 +216,13 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
     trackEvent('command_palette_article', { slug: hit.slug });
     close(() => window.location.assign(href));
   }, [close, remember]);
+
+  const openVideo = useCallback((hit: VideoHit) => {
+    const href = `/videos?v=${encodeURIComponent(hit.youtube_id)}`;
+    remember({ id: `video:${hit.youtube_id}`, label: hit.title, href });
+    trackEvent('command_palette_video', { youtube_id: hit.youtube_id });
+    close(() => (onOpenVideo ? onOpenVideo(hit.youtube_id) : window.location.assign(href)));
+  }, [close, remember, onOpenVideo]);
 
   const options = useMemo<Option[]>(() => {
     const out: Option[] = [];
@@ -216,8 +255,11 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
     for (const hit of articles.hits) {
       out.push({ key: `article:${hit.slug}`, label: hit.title, hint: hit.excerpt, icon: BookOpen, group: 'articles', run: () => openArticle(hit) });
     }
+    for (const hit of videos) {
+      out.push({ key: `video:${hit.youtube_id}`, label: hit.title, hint: hit.snippet.replace(/\*\*/g, ''), icon: SquarePlay, group: 'videos', run: () => openVideo(hit) });
+    }
     return out;
-  }, [mode, q, recent, strings.items, articles.hits, runAction, openArticle, remember, close]);
+  }, [mode, q, recent, strings.items, articles.hits, videos, runAction, openArticle, openVideo, remember, close]);
 
   useEffect(() => {
     setActive(i => Math.min(i, Math.max(0, options.length - 1)));
@@ -254,6 +296,7 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
     { id: 'recent', label: strings.recent },
     { id: 'actions', label: strings.actions },
     { id: 'articles', label: strings.articles },
+    { id: 'videos', label: strings.videos },
   ];
 
   const articleStatus = wantsArticles && q

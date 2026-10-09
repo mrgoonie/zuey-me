@@ -20,6 +20,7 @@ import type { Principal } from '../members/policy';
 import { viewerFromPrincipal } from '../members/policy';
 import type { JevConfig } from '../search/jev';
 import { jevRelevance, orderByRelevance } from '../search/jev';
+import { transcriptPlainText } from '../videos/anymd-transcript-parser';
 
 export interface ContextSource {
   id: string;
@@ -35,6 +36,8 @@ export interface ContextSource {
   excerpt: string;
   /** Passage handed to the model (never more than the caller may read). */
   text: string;
+  /** 'video' marks a Zueytube transcript passage; absent means an article. */
+  kind?: 'article' | 'video';
 }
 
 /** The citation metadata a client receives (no passage text). */
@@ -128,7 +131,46 @@ interface Candidate {
   /** Paywalled text for this caller. */
   body: string;
   full: boolean;
+  kind: 'article' | 'video';
   tokens: { title: string[]; tags: string[]; excerpt: string[]; body: string[] };
+}
+
+const MAX_VIDEO_CANDIDATES = 200;
+const VIDEO_EXCERPT_CHARS = 300;
+
+/**
+ * Zueytube transcripts as public candidates (one edition per video: the asker's language when it
+ * has text, otherwise any edition with a transcript). Failures (e.g. table missing) yield none.
+ */
+async function videoCandidates(d1: D1DatabaseLike, locale: Locale): Promise<Candidate[]> {
+  let rows: Row[] = [];
+  try {
+    const { results } = await d1.prepare(
+      `SELECT youtube_id, video_id, locale, title, description, transcript, published_at FROM video_editions
+       WHERE transcript_status = 'ready' OR description != '' ORDER BY created_at DESC LIMIT ${MAX_VIDEO_CANDIDATES * 2}`
+    ).all<Row>();
+    rows = results ?? [];
+  } catch {
+    return [];
+  }
+  const picked = new Map<string, Row>();
+  const rank = (r: Row) => (s(r, 'transcript') ? 2 : 0) + (r.locale === locale ? 1 : 0);
+  for (const row of rows) {
+    const id = s(row, 'video_id');
+    const current = picked.get(id);
+    if (!current || rank(row) > rank(current)) picked.set(id, row);
+  }
+  return Array.from(picked.values()).slice(0, MAX_VIDEO_CANDIDATES).map(row => {
+    const body = transcriptPlainText(s(row, 'transcript'));
+    const description = s(row, 'description');
+    const excerpt = description.length > VIDEO_EXCERPT_CHARS ? `${description.slice(0, VIDEO_EXCERPT_CHARS)}…` : description;
+    return {
+      id: `video:${s(row, 'video_id')}`, slug: s(row, 'youtube_id'), title: s(row, 'title'), excerpt, tags: [],
+      locale: s(row, 'locale') || 'vi', access: 'free', published_at: typeof row.published_at === 'string' ? row.published_at : null,
+      body, full: true, kind: 'video',
+      tokens: { title: tokenize(s(row, 'title')), tags: [], excerpt: tokenize(description), body: tokenize(body) },
+    };
+  });
 }
 
 function parseTags(raw: string): string[] {
@@ -209,10 +251,12 @@ export async function retrieveContext(principal: Principal, query: string, local
     candidates.push({
       id: s(row, 'id'), slug: s(row, 'slug'), title: s(row, 'title'), excerpt: s(row, 'excerpt'), tags,
       locale: s(row, 'locale') || 'vi', access, published_at: typeof row.published_at === 'string' ? row.published_at : null,
-      body, full: access === 'free' || full,
+      body, full: access === 'free' || full, kind: 'article',
       tokens: { title: tokenize(s(row, 'title')), tags: tokenize(tags.join(' ')), excerpt: tokenize(s(row, 'excerpt')), body: tokenize(body) },
     });
   }
+  // Zueytube transcripts compete in the same BM25 pool, so a video-only answer can be cited.
+  candidates.push(...(await videoCandidates(deps.d1, locale)));
   if (candidates.length === 0) return [];
 
   const avgLen = candidates.reduce((n, c) => n + c.tokens.body.length + c.tokens.excerpt.length, 0) / candidates.length || 1;
@@ -253,13 +297,14 @@ export async function retrieveContext(principal: Principal, query: string, local
     id: c.id,
     slug: c.slug,
     title: c.title,
-    url: `${site}/articles/${encodeURIComponent(c.slug)}`,
+    url: c.kind === 'video' ? `${site}/videos?v=${encodeURIComponent(c.slug)}` : `${site}/articles/${encodeURIComponent(c.slug)}`,
     access: c.access === 'knowledges' ? 'paid' : 'free',
     scope: c.full ? 'full' : 'preview',
     locale: c.locale,
     published_at: c.published_at,
     excerpt: c.excerpt,
     text: passageOf(c),
+    kind: c.kind,
   }));
 }
 
@@ -293,6 +338,7 @@ export function buildContextMessage(sources: ContextSource[], question: string):
       `id="${escapeXml(src.id)}"`,
       `title="${escapeXml(src.title)}"`,
       `url="${escapeXml(src.url)}"`,
+      src.kind === 'video' ? 'kind="video"' : '',
       `access="${src.access}"`,
       `scope="${src.scope}"`,
       src.published_at ? `published="${escapeXml(src.published_at.slice(0, 10))}"` : '',

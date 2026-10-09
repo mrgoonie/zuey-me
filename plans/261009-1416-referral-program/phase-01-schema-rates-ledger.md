@@ -10,9 +10,9 @@ dependsOn: []
 # Phase 1 — Schema, config, rates and ledger core
 
 ## Objective
-Add `migrations/0014_referrals.sql` (tables and columns only, no data rewrite) and pure core logic for rates, codes and the append-only ledger.
+Add `migrations/0016_referrals.sql` (tables and columns only, no data rewrite) and pure core logic for rates, codes and the append-only ledger.
 
-## Schema (`migrations/0014_referrals.sql`)
+## Schema (`migrations/0016_referrals.sql`)
 - `referral_settings` (single row `id = 'default'`): `tiers_json` (`[{min:0,rate:20},{min:3,rate:25},{min:10,rate:30},{min:25,rate:40},{min:50,rate:50}]`), `hold_days` 30, `booking_rate` 10, `payout_threshold_cents` 5000, `vn_deduction_bp` 1000, `paypal_deduction_bp` 1800, `cookie_days` 30, `updated_at`. Seed default row with `INSERT OR IGNORE`.
 - `referral_profiles`: `user_id` PK → users, `code` UNIQUE (lowercase `[a-z0-9]{6,16}`), `discount_percent` INT default 0, `admin_rate_override` INT NULL (0–50), `admin_enabled` INT 0/1, `locked_at`, `lock_reason`, `leaderboard_opt_out` INT 0, `tier_rate` INT default 20, `tier_count_90d` INT default 0, `tier_updated_at`, `created_at`, `updated_at`.
 - `users` add: `referred_by_user_id TEXT`, `referred_at TEXT`, `referral_signup_ip_hash TEXT`.

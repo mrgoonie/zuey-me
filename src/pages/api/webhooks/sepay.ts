@@ -28,6 +28,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         paymentRef: transfer.referenceCode ?? transfer.eventId,
         rawType: 'transfer_in',
         payerText: transfer.content,
+        transactedAt: transfer.transactedAt,
       });
       return jsonOk(result);
     }

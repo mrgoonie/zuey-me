@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import { ArrowRight, ChevronDown, Download, ExternalLink, Lock, MessageSquare, Pencil, Plus, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, Download, ExternalLink, Lock, MessageSquare, Pencil, Plus, Quote, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
 import './zuey-ai.css';
 import type { InteractiveBlock } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
@@ -11,6 +11,9 @@ import { callApi, isRecord, numOr, records, str, strOrNull } from '../members/me
 import type { AiCopy } from './copy';
 import { AI_COPY, errorCopy } from './copy';
 import { InteractiveFrame } from './InteractiveFrame';
+import type { ArticleChatContext } from './article-chat-context';
+import { MAX_CHAT_MESSAGE_CHARS, QUOTE_RESERVED_CHARS, composeQuotedQuestion, quotePreview, rememberArticleSession, sessionForArticle } from './article-chat-context';
+import { trackEvent } from '../../lib/posthog';
 
 // ---------------------------------------------------------------------------
 // Data shapes (validated from untrusted JSON)
@@ -180,7 +183,15 @@ function formatTime(iso: string, locale: Locale): string {
 
 // ---------------------------------------------------------------------------
 
-export function ZueyAiPanel({ locale }: { locale: Locale }) {
+interface PanelProps {
+  locale: Locale;
+  /** Opened from an article: one chat session per article, and an optional quoted passage. */
+  context?: ArticleChatContext;
+  /** Shows a close button (the article drawer). */
+  onClose?: () => void;
+}
+
+export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
   const t = AI_COPY[locale];
   const uid = useId();
   const [phase, setPhase] = useState<Phase>('loading');
@@ -201,6 +212,9 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
   const [renameTarget, setRenameTarget] = useState<Session | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  const [quote, setQuote] = useState<string | null>(context?.quote ?? null);
+  const articleSlug = context?.slug ?? null;
+  const onQuoteChange = context?.onQuoteChange;
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -235,8 +249,16 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
     const list = records(res.data.sessions).map(parseSession);
     setSessions(list);
     setQuota(parseQuota(res.data.quota));
-    if (selectFirst && list[0]) await loadSession(list[0].id);
-  }, [loadSession]);
+    if (!selectFirst) return;
+    if (articleSlug) {
+      // From an article: continue that article's session; the first question creates it.
+      const remembered = sessionForArticle(articleSlug);
+      if (remembered && list.some(s => s.id === remembered)) await loadSession(remembered);
+      else if (remembered) rememberArticleSession(articleSlug, null);
+      return;
+    }
+    if (list[0]) await loadSession(list[0].id);
+  }, [loadSession, articleSlug]);
 
   const loadStatus = useCallback(async () => {
     const res = await callApi('/api/v1/chat/status');
@@ -258,7 +280,7 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
 
   useEffect(() => {
     setIsChatPage(window.location.pathname.replace(/\/+$/, '') === '/chat');
-    setNextPath(window.location.pathname || '/chat');
+    setNextPath(context ? `${window.location.pathname}${window.location.search}` : window.location.pathname || '/chat');
     void loadStatus();
   }, [loadStatus]);
 
@@ -291,6 +313,25 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
   }, [deleteTarget]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // A newly attached passage (each tooltip click bumps the nonce): show it and wait for the question.
+  const quoteNonce = context?.quoteNonce;
+  const contextQuote = context?.quote ?? null;
+  useEffect(() => {
+    if (quoteNonce === undefined) return;
+    setQuote(contextQuote);
+    textareaRef.current?.focus();
+  }, [quoteNonce, contextQuote]);
+
+  // The composer only exists once the panel is ready; focus it then when a passage is waiting.
+  useEffect(() => {
+    if (phase === 'ready' && quote) textareaRef.current?.focus();
+  }, [phase, quote]);
+
+  const changeQuote = (next: string | null) => {
+    setQuote(next);
+    onQuoteChange?.(next);
+  };
 
   const flushLive = (force: boolean) => {
     const buf = liveBuffer.current;
@@ -330,13 +371,18 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
     }
   };
 
-  const send = async (raw: string) => {
-    const question = raw.trim();
-    if (!question || busy || phase !== 'ready' || quotaExceeded) return;
+  /** `composed`: `raw` is a message sent before (retry), already carrying its quote. */
+  const send = async (raw: string, composed = false) => {
+    const typed = raw.trim();
+    if (!typed || busy || phase !== 'ready' || quotaExceeded) return;
+    // An attached passage goes first, as a blockquote naming its article; the API takes one string.
+    const sentQuote = !composed && context && quote ? quote : null;
+    const question = sentQuote && context ? composeQuotedQuestion(sentQuote, typed, t.quoteSource(context.title, context.url)) : typed;
     setBanner(null);
     let sessionId = activeId;
     if (!sessionId) {
-      const created = await callApi('/api/v1/chat/sessions', { method: 'POST', body: JSON.stringify({}) });
+      const title = context ? context.title.slice(0, 120) : undefined;
+      const created = await callApi('/api/v1/chat/sessions', { method: 'POST', body: JSON.stringify(title ? { title } : {}) });
       if (!created.ok || !isRecord(created.data)) {
         handlePreStreamError(created.ok ? 'generic' : created.code, {});
         return;
@@ -345,12 +391,15 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
       sessionId = session.id;
       setSessions(prev => [session, ...prev]);
       setActiveId(session.id);
+      if (articleSlug) rememberArticleSession(articleSlug, session.id);
     }
     const stamp = Date.now();
     const userLocal: Msg = { id: `local-u-${stamp}`, role: 'user', content: question, sources: [], status: 'complete', errorCode: null };
     const aiLocal: Msg = { id: `local-a-${stamp}`, role: 'assistant', content: '', sources: [], status: 'streaming', errorCode: null };
     setMessages(prev => [...prev, userLocal, aiLocal]);
     setInput('');
+    if (sentQuote) changeQuote(null);
+    if (articleSlug) trackEvent('article_ask_ai_sent', { slug: articleSlug, quoted: Boolean(sentQuote) });
     lastQuestion.current = question;
     liveBuffer.current = '';
     stickToBottom.current = true;
@@ -371,7 +420,8 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
         const body: unknown = await res.json().catch(() => null);
         const err = isRecord(body) && isRecord(body.error) ? body.error : {};
         setMessages(prev => prev.filter(m => m.id !== userLocal.id && m.id !== aiLocal.id));
-        setInput(question);
+        setInput(sentQuote ? typed : question);
+        if (sentQuote) changeQuote(sentQuote);
         handlePreStreamError(typeof err.code === 'string' ? err.code : `http_${res.status}`, err);
         return;
       }
@@ -449,7 +499,7 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
       }
       return prev;
     });
-    void send(q);
+    void send(q, true);
   };
 
   const newChat = () => {
@@ -490,6 +540,7 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
       return;
     }
     setSessions(prev => prev.filter(s => s.id !== target.id));
+    if (articleSlug && sessionForArticle(articleSlug) === target.id) rememberArticleSession(articleSlug, null);
     if (target.id === activeId) {
       setActiveId(null);
       setMessages([]);
@@ -522,6 +573,7 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
   const inputId = `${uid}-input`;
   const hintId = `${uid}-hint`;
   const sessionsId = `${uid}-sessions`;
+  const quoteId = `${uid}-quote`;
   const loginHref = `/login?next=${encodeURIComponent(nextPath)}`;
 
   const quotaPill = quota && (
@@ -669,7 +721,7 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
             )}
           </div>
 
-          {messages.length === 0 && !busy && (
+          {messages.length === 0 && !busy && !quote && (
             <div className="zai-suggestions">
               {t.suggestions.map(sug => (
                 <button key={sug} type="button" className="zai-suggestion" disabled={quotaExceeded} onClick={() => void send(sug)}>{sug}</button>
@@ -698,15 +750,28 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
 
           <form className="zai-composer" onSubmit={e => { e.preventDefault(); void send(input); }}>
             <label htmlFor={inputId}>{t.inputLabel}</label>
+            {context && quote && (
+              <div className="zai-quote" id={quoteId}>
+                <Quote size={14} aria-hidden="true" className="zai-quote-icon" />
+                <div className="zai-quote-body">
+                  <span className="zai-quote-from">{t.quoteFrom(context.title)}</span>
+                  <blockquote className="zai-quote-text">{quotePreview(quote)}</blockquote>
+                </div>
+                <button type="button" className="zai-icon-btn" aria-label={t.removeQuote} title={t.removeQuote}
+                  onClick={() => { changeQuote(null); textareaRef.current?.focus(); }}>
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </div>
+            )}
             <textarea
               id={inputId}
               ref={textareaRef}
               className="zai-textarea"
               rows={2}
-              maxLength={4000}
+              maxLength={context && quote ? MAX_CHAT_MESSAGE_CHARS - QUOTE_RESERVED_CHARS : MAX_CHAT_MESSAGE_CHARS}
               value={input}
-              placeholder={t.placeholder}
-              aria-describedby={hintId}
+              placeholder={context && quote ? t.quotePlaceholder : t.placeholder}
+              aria-describedby={context && quote ? `${quoteId} ${hintId}` : hintId}
               disabled={quotaExceeded}
               onChange={e => { setInput(e.target.value); autosize(e.target); }}
               onKeyDown={onComposerKey}
@@ -738,7 +803,13 @@ export function ZueyAiPanel({ locale }: { locale: Locale }) {
           <h2 className="zai-title" id={titleId}>Zuey AI</h2>
           <p className="zai-intro">{t.intro}</p>
         </div>
-        <span className="zai-mark" aria-hidden="true">/z/</span>
+        {onClose ? (
+          <button type="button" className="zai-icon-btn zai-close" onClick={onClose} aria-label={t.closeDrawer} title={t.closeDrawer}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        ) : (
+          <span className="zai-mark" aria-hidden="true">/z/</span>
+        )}
       </div>
       {(phase === 'ready' && (quotaPill || !isChatPage)) && (
         <div className="zai-meta">

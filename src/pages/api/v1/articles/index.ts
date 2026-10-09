@@ -7,7 +7,8 @@ import { resolvePrincipal } from '../../../../lib/members/policy';
 import { requireAdminActor } from '../../../../lib/taxonomy/admin';
 
 /**
- * Published articles with discovery filters (?q=&lang=&category=&tag=&label=&access=&sort=&limit=).
+ * Published articles with discovery filters (?q=&lang=&category=&tag=&label=&access=&sort=&limit=&page=).
+ * With ?page=, `limit` (default 20) is the page size; X-Total-Count / X-Has-More and a rel=next Link describe the rest.
  * Admins may add ?include_drafts=1 (every edition, drafts included). Tags, category and labels are public metadata.
  */
 export const GET: APIRoute = async ({ request, locals }) => {
@@ -25,10 +26,18 @@ export const GET: APIRoute = async ({ request, locals }) => {
       return jsonError(principal.credentialError.status, principal.credentialError.code, principal.credentialError.message);
     }
     const result = await discoverArticles(principal, env, query);
-    return jsonOk(result.items, 200, {
+    const headers: Record<string, string> = {
       'Cache-Control': query.q ? 'private, no-store' : 'public, max-age=60',
       'X-Search-Semantic': result.semantic ? '1' : '0',
-    });
+      'X-Total-Count': String(result.total),
+      'X-Has-More': result.hasMore ? '1' : '0',
+    };
+    if (query.page && result.hasMore) {
+      const next = new URL(url);
+      next.searchParams.set('page', String(query.page + 1));
+      headers.Link = `<${next.pathname}${next.search}>; rel="next"`;
+    }
+    return jsonOk(result.items, 200, headers);
   } catch (err) {
     return errorResponse(err);
   }

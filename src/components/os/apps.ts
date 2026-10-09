@@ -4,10 +4,10 @@
  */
 
 export type AppId =
-  | 'about' | 'ai' | 'knowledges' | 'reads' | 'github'
-  | 'pricing' | 'business' | 'mcp' | 'account' | 'referral' | 'appearance';
+  | 'about' | 'ai' | 'knowledges' | 'reads' | 'zueytube' | 'github'
+  | 'pricing' | 'business' | 'mcp' | 'account' | 'referral' | 'appearance' | '200lab';
 
-export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'pricing' | 'business' | 'account' | 'referral';
+export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'zueytube' | 'pricing' | 'business' | 'account' | 'referral' | '200lab';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -29,19 +29,24 @@ export const APPS: Record<AppId, AppDef> = {
   ai: { id: 'ai', surface: 'glass', href: '/chat', size: (w, h) => ({ w: clampTo(860, w - 40), h: clampTo(680, h - 16) }), min: { w: 360, h: 420 } },
   knowledges: { id: 'knowledges', surface: 'paper', href: '/articles', size: (_, h) => ({ w: 600, h: clampTo(700, h - 16) }), min: { w: 340, h: 360 } },
   reads: { id: 'reads', surface: 'stage', href: '/reads', size: (w, h) => ({ w: clampTo(880, w - 40), h: clampTo(680, h - 16) }), min: { w: 360, h: 360 } },
+  zueytube: { id: 'zueytube', surface: 'stage', href: '/videos', size: (w, h) => ({ w: clampTo(900, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   github: { id: 'github', surface: 'paper', href: '/#github', size: (w, h) => ({ w: clampTo(860, w - 40), h: clampTo(640, h - 16) }), min: { w: 360, h: 320 } },
   pricing: { id: 'pricing', surface: 'stage', href: '/pricing', size: (w, h) => ({ w: clampTo(1080, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   business: { id: 'business', surface: 'stage', href: '/business', size: (w, h) => ({ w: clampTo(720, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   mcp: { id: 'mcp', surface: 'paper', href: '/docs', size: (_, h) => ({ w: 560, h: clampTo(560, h - 16) }), min: { w: 340, h: 320 } },
   account: { id: 'account', surface: 'stage', href: '/account', size: (w, h) => ({ w: clampTo(760, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   referral: { id: 'referral', surface: 'stage', href: '/referral', size: (w, h) => ({ w: clampTo(760, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
+  '200lab': { id: '200lab', surface: 'stage', href: '/200lab', size: (w, h) => ({ w: clampTo(820, w - 40), h: clampTo(700, h - 16) }), min: { w: 360, h: 360 } },
   appearance: { id: 'appearance', surface: 'glass', href: '/#appearance', size: (_, h) => ({ w: 560, h: clampTo(640, h - 16) }), min: { w: 340, h: 360 } },
 };
 
 export const APP_IDS = Object.keys(APPS) as AppId[];
-/** Dock order (Alt+1…9 follow the first nine). Appearance lives in the menu and the dock's right side. */
-export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'github', 'pricing', 'business', 'mcp', 'account', 'referral'];
-export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'pricing', 'business', 'account', 'referral'];
+/**
+ * Dock order (Alt+1…9 follow it, so apps past the ninth have no shortcut). Appearance lives in the
+ * menu and the dock's right side.
+ */
+export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'zueytube', 'github', 'pricing', 'business', 'mcp', 'account', 'referral', '200lab'];
+export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'zueytube', 'pricing', 'business', 'account', 'referral', '200lab'];
 
 export const isAppId = (v: unknown): v is AppId => typeof v === 'string' && (APP_IDS as string[]).includes(v);
 

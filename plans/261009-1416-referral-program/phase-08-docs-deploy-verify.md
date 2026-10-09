@@ -14,7 +14,7 @@ dependsOn: [7]
 2. `bun test` and `bun run build` green.
 3. Code review (`ak:code-review`) on the branch; fix findings.
 4. Commit by concern (conventional commits), push branch, open PR to `main` (never push to main).
-5. Remote rollout (after PR merge or with explicit user go-ahead): export Cloudflare account env; record `wrangler d1 time-travel info zuey_me_db`; `wrangler d1 execute zuey_me_db --remote --file=./migrations/0014_referrals.sql -y`; create R2 bucket; redeploy scheduler worker.
+5. Remote rollout (after PR merge or with explicit user go-ahead): export Cloudflare account env; record `wrangler d1 time-travel info zuey_me_db`; `wrangler d1 execute zuey_me_db --remote --file=./migrations/0016_referrals.sql -y`; create R2 bucket; redeploy scheduler worker.
 6. Dodo test-mode check result recorded in PR description.
 
 ## Done
