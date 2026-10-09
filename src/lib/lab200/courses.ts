@@ -7,6 +7,8 @@
 export const LAB200_ORIGIN = 'https://200lab.io';
 export const LAB200_COURSES_MD = `${LAB200_ORIGIN}/courses.md`;
 export const LAB200_REF = 'T2CWW3D7';
+/** Share of the price taken off at checkout for buyers who arrive with `LAB200_REF`. */
+export const LAB200_REF_DISCOUNT = 0.2;
 
 /** Courses Duy recommends, shown first. Slugs missing from the live list are skipped. */
 export const LAB200_FEATURED_SLUGS = [
@@ -102,6 +104,34 @@ export function parseCoursesMarkdown(md: string): Lab200Course[] {
     });
   }
   return courses;
+}
+
+export interface Lab200Price {
+  /** 200lab's current selling price in VND, before the referral discount. */
+  base: number;
+  /** Price after the referral discount, rounded to whole dong. */
+  discounted: number;
+  /** True when 200lab says "giá từ" (the lowest of several options). */
+  from: boolean;
+}
+
+const PRICE_RE = /(giá từ|giá)\s+([\d.]+)\s*₫/i;
+
+/**
+ * Price parsed from a courses.md status such as "Đang mở bán, giá từ 199.000 ₫"; null for free
+ * courses or a status without a price. Derived on read, so older snapshots need no migration.
+ */
+export function coursePrice(status: string): Lab200Price | null {
+  const m = PRICE_RE.exec(status);
+  if (!m) return null;
+  const base = Number(m[2].replace(/\./g, ''));
+  if (!Number.isFinite(base) || base <= 0) return null;
+  return { base, discounted: Math.round(base * (1 - LAB200_REF_DISCOUNT)), from: /từ/i.test(m[1]) };
+}
+
+/** "199.000 ₫" — grouped by hand so server and browser render the same text whatever their ICU data. */
+export function formatVnd(amount: number): string {
+  return `${String(Math.round(amount)).replace(/\B(?=(\d{3})+(?!\d))/g, '.')} ₫`;
 }
 
 /** Featured courses (in featured order) and the rest (in 200lab's order). */

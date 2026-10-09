@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
-import { courseImageFromHtml, courseLink, parseCoursesMarkdown, slugFromCourseUrl, splitFeatured } from '../src/lib/lab200/courses';
+import { courseImageFromHtml, courseLink, coursePrice, formatVnd, parseCoursesMarkdown, slugFromCourseUrl, splitFeatured } from '../src/lib/lab200/courses';
 import { renderLab200Markdown } from '../src/lib/lab200/markdown';
 import { getLab200Snapshot, LAB200_STALE_MS, refreshLab200Snapshot } from '../src/lib/lab200/store';
 import { GET as getLab200Md } from '../src/pages/200lab.md';
@@ -84,11 +84,22 @@ describe('200lab courses parser and links', () => {
     expect(courseImageFromHtml('<meta property="og:image:alt" content="https://assets.200lab.io/x.png">')).toBeNull();
   });
 
+  it('derives the regular and referral prices from the course status', () => {
+    expect(coursePrice('Đang mở bán, giá từ 199.000 ₫')).toEqual({ base: 199000, discounted: 159200, from: true });
+    expect(coursePrice('Đang mở bán, giá 49.000 ₫')).toEqual({ base: 49000, discounted: 39200, from: false });
+    expect(coursePrice('Miễn phí')).toBeNull();
+    expect(coursePrice('Sắp mở bán')).toBeNull();
+    expect(formatVnd(1299000)).toBe('1.299.000 ₫');
+    expect(formatVnd(39200)).toBe('39.200 ₫');
+  });
+
   it('renders markdown whose course links all carry the referral code', () => {
     const md = renderLab200Markdown({ courses: parseCoursesMarkdown(COURSES_MD), syncedAt: '2026-10-09T06:00:00.000Z' });
     expect(md.match(/\?ref=T2CWW3D7\)/g)).toHaveLength(4);
     expect(md).not.toMatch(/200lab\.io\/courses\/[^)\s]*\.md/);
     expect(md).toContain('Việt Trần');
+    expect(md).toContain('giá gốc từ 199.000 ₫, qua link này 159.200 ₫ (−20%)');
+    expect(md).toContain('· Miễn phí');
     expect(md).toContain('(https://nextlevelbuilder.io)');
   });
 });
