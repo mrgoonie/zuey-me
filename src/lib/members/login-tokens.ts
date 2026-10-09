@@ -32,7 +32,8 @@ function requireEmailConfigured(env: RuntimeEnv, feature: string): void {
   }
 }
 
-async function ipHash(env: RuntimeEnv, request: Request): Promise<string | null> {
+/** Salted SHA-256 of the client IP (never the raw IP); null when the request carries none. */
+export async function ipHash(env: RuntimeEnv, request: Request): Promise<string | null> {
   const ip = clientIp(request);
   return ip ? sha256Hex(`ip:${ip}:${env.MEMBER_HASH_SALT ?? ''}`) : null;
 }
