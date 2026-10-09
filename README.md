@@ -48,7 +48,7 @@ bun run build    # Typecheck and build production bundle
 
 - Workflow: `.github/workflows/deploy.yml` runs test suite and production build on push to `main`.
 - Automated deploy to Cloudflare Pages runs when repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are configured.
-- Manual deployment via wrangler: `wrangler pages deploy dist --project-name=zuey-me --branch=main`.
+- **Production Pages deploys come only from CI.** Never run `wrangler pages deploy` by hand, from any branch or worktree: a local `dist` is built from whatever that checkout holds, and it silently replaces the build of the latest `main` commit, which reverts fixes that are already merged. To ship, merge the PR into `main`. To redeploy `main` without a new commit, run the workflow on `main`: `gh workflow run deploy.yml --ref main`. Each deployment records the commit it was built from, which Cloudflare shows in its deployment list.
 - Scheduler worker (cron jobs for the Pages app): `cd workers/scheduler && wrangler deploy`; its `CRON_SECRET` secret must equal the Pages secret.
 - The Pages project, the D1 database and the `zuey.me` DNS zone live in the same Cloudflare account. Export that account's `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` before any wrangler command so a cached OAuth login for another account is never used.
 - Remote D1 schema migrations (apply every file in `migrations/` in numeric order): `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y`. Record a Time Travel bookmark first (`wrangler d1 time-travel info zuey_me_db`); `wrangler d1 export` refuses databases with FTS5 tables.
