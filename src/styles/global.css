@@ -50,11 +50,3 @@
 .animate-scaleUp {
   animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
-
-/* 200lab app: the full course list puts the thumbnail beside the text once the list itself is
-   wide enough (the Zuey OS window can be narrower than the viewport, so this is a container query). */
-.lab200-list { container-type: inline-size; }
-@container (min-width: 520px) {
-  .lab200-row { display: flex; gap: 1rem; }
-  .lab200-row > .lab200-thumb { width: 11rem; margin-bottom: 0; align-self: flex-start; }
-}
