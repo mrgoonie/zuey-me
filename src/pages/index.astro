@@ -58,6 +58,8 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
   ambient={false}
 >
   <script is:inline slot="head" set:html={LOOK_BOOT_SCRIPT} />
+  <!-- Fonts for the 200lab app window (200lab design tokens). -->
+  <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" />
   <ZueyOS client:load locale={locale} profile={profile} links={links} signedIn={member !== null}>
     <div slot="ai" class="min-w-0 h-full">
       <ZueyAiPanel client:visible locale={locale} />
