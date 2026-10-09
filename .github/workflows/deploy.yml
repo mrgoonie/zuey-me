@@ -7,6 +7,15 @@ on:
   pull_request:
     branches:
       - main
+  # The only sanctioned way to redeploy production without a new commit: run this
+  # workflow on main from the Actions tab (or `gh workflow run deploy.yml --ref main`).
+  workflow_dispatch:
+
+# Production deploys run one at a time in commit order, so an older build can never
+# finish after a newer one and overwrite it.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test-and-build:
@@ -34,9 +43,10 @@ jobs:
         run: bun run build
 
       - name: Deploy to Cloudflare Pages (Production)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.CLOUDFLARE_API_TOKEN != ''
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.CLOUDFLARE_API_TOKEN != ''
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=zuey-me --branch=main
+          # The commit hash ties each Cloudflare deployment to the main commit it was built from.
+          command: pages deploy dist --project-name=zuey-me --branch=main --commit-hash=${{ github.sha }}
