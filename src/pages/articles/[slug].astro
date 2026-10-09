@@ -2,6 +2,8 @@
 import Layout from '../../layouts/Layout.astro';
 import { BlockRenderer } from '../../components/blocks/BlockRenderer';
 import { ShareMenu } from '../../components/knowledge/ShareMenu';
+import { ArticleAskAi } from '../../components/ai/ArticleAskAi';
+import { AI_COPY } from '../../components/ai/copy';
 import { TagBadges } from '../../components/knowledge/TagBadges';
 import { EntitlementIcon } from '../../components/knowledge/EntitlementIcon';
 import { formatKnowledgeDate, knowledgeStrings } from '../../components/knowledge/strings';
@@ -118,7 +120,10 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
             )}
           </header>
 
-          <BlockRenderer client:load doc={view.document} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
+          {/* Readable body: selections inside it get the "Ask Zuey AI" tooltip; tabindex lets the drawer return focus here. */}
+          <div data-ask-ai-scope tabindex="-1" class="focus:outline-none">
+            <BlockRenderer client:load doc={view.document} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
+          </div>
 
           {view.truncated && (
             <div class="zb-lock-wrap">
@@ -158,5 +163,9 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
         </div>
       )}
     </article>
+    {view && !view.preview && (
+      <ArticleAskAi client:idle locale={uiLocale} slug={view.slug} title={view.title} url={canonical} scopeSelector="[data-ask-ai-scope]"
+        labels={{ ask: AI_COPY[uiLocale].askAboutSelection, drawerTitle: AI_COPY[uiLocale].drawerTitle, loading: AI_COPY[uiLocale].loading }} />
+    )}
   </main>
 </Layout>
