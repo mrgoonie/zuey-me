@@ -1,0 +1,156 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import { CourseCheckout } from '../../../components/courses/CourseCheckout';
+import { CourseGithubRepos } from '../../../components/courses/CourseGithubRepos';
+import { CourseOutline } from '../../../components/courses/CourseOutline';
+import { CoursePrice } from '../../../components/courses/CoursePrice';
+import { fmtMinutes, levelLabel } from '../../../components/courses/course-ui';
+import type { CourseDetail } from '../../../lib/courses/course-views';
+import { courseDetail } from '../../../lib/courses/course-views';
+import { AppError } from '../../../lib/http';
+import { missingBillingConfig } from '../../../lib/members/billing';
+import { missingDodoConfig } from '../../../lib/payments/dodo';
+import { parseUsdVndRate } from '../../../lib/members/plans';
+import { resolvePrincipal } from '../../../lib/members/policy';
+
+const env = Astro.locals.runtime?.env ?? {};
+const slug = Astro.params.slug ?? '';
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Vary', 'Cookie');
+
+let course: CourseDetail | null = null;
+let failure: 'not_found' | 'unavailable' | null = null;
+if (!env.DB) failure = 'unavailable';
+else {
+  try {
+    course = await courseDetail(env.DB, env, await resolvePrincipal(Astro.request, env), slug);
+  } catch (err) {
+    if (err instanceof AppError && err.status === 404) failure = 'not_found';
+    else {
+      console.error('Course page failed:', err instanceof Error ? err.message : 'unknown');
+      failure = 'unavailable';
+    }
+  }
+}
+if (failure) Astro.response.status = failure === 'not_found' ? 404 : 503;
+
+// Payment availability mirrors the checkout's own checks, so a buyer is only offered methods that work.
+const sepayAvailable = missingBillingConfig(env).length === 0 && parseUsdVndRate(env) !== null;
+const cardAvailable = missingDodoConfig(env).length === 0 && Boolean(env.DODO_PRODUCT_COURSE);
+
+const lessons = course ? course.outline.flatMap(s => s.lessons) : [];
+const completed = new Set(course?.progress?.completed_lesson_ids ?? []);
+const canLearn = Boolean(course && (course.viewer.owns || course.viewer.is_admin));
+const nextLesson = lessons.find(l => !completed.has(l.id) && (!l.locked || canLearn)) ?? lessons[0];
+const firstTrial = lessons.find(l => l.is_trial);
+const forSale = Boolean(course && course.status === 'published' && course.price.list_usd_cents > 0);
+const started = (course?.progress?.completed_lessons ?? 0) > 0 || (course?.progress?.started_lesson_ids.length ?? 0) > 0;
+---
+
+<Layout
+  title={course ? `${course.title} — Khoá học Zuey` : 'Không tìm thấy khoá học — Zuey'}
+  description={course ? (course.subtitle || course.summary).slice(0, 300) : 'Khoá học trên zuey.me'}
+  url={`https://zuey.me/courses/${course?.slug ?? slug}`}
+  image={course?.cover_url ?? undefined}
+  imageAlt={course?.title}
+  lang="vi"
+>
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-5 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <div class="w-full max-w-[1100px]">
+      <a href="/courses" class="text-xs font-semibold text-stone-200 hover:text-white underline">← Tất cả khoá học</a>
+    </div>
+
+    {failure && (
+      <section class="w-full max-w-[720px] bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 p-8 text-center text-stone-900">
+        <h1 class="font-serif text-3xl font-bold">{failure === 'not_found' ? 'Không tìm thấy khoá học' : 'Tạm thời không tải được khoá học'}</h1>
+        <p class="mt-3 text-stone-600">{failure === 'not_found' ? 'Khoá học này không tồn tại hoặc chưa được công bố.' : 'Vui lòng thử lại sau ít phút.'}</p>
+        <a href="/courses" class="mt-6 inline-flex min-h-[44px] items-center rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold">Xem các khoá học</a>
+      </section>
+    )}
+
+    {course && (
+      <div class="w-full max-w-[1100px] grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_360px] items-start min-w-0">
+        <article class="grid gap-5 min-w-0">
+          <section class="bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 shadow-floating-card overflow-hidden text-stone-900">
+            {course.cover_url && <img src={course.cover_url} alt="" class="w-full object-cover bg-stone-900" style="aspect-ratio: 16 / 9" />}
+            <div class="px-4 py-6 sm:p-8">
+              <p class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-bold uppercase tracking-wider text-stone-500">
+                <span>{levelLabel(course.level)}</span>
+                <span>{course.lesson_count} bài học</span>
+                {course.duration_minutes > 0 && <span>{fmtMinutes(course.duration_minutes)}</span>}
+                {course.trial_lesson_count > 0 && <span class="text-emerald-700">{course.trial_lesson_count} bài học thử miễn phí</span>}
+              </p>
+              <h1 class="mt-2 font-serif text-3xl sm:text-4xl font-extrabold leading-tight break-words">{course.title}</h1>
+              {course.subtitle && <p class="mt-2 text-base sm:text-lg text-stone-600">{course.subtitle}</p>}
+              {course.release_note && <p class="mt-4 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-sm">{course.release_note}</p>}
+              {course.summary && <p class="mt-4 text-[15px] leading-relaxed text-stone-800 whitespace-pre-line">{course.summary}</p>}
+            </div>
+          </section>
+
+          {course.outcomes.length > 0 && (
+            <section class="bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 px-4 py-6 sm:p-8 text-stone-900" aria-labelledby="outcomes-title">
+              <h2 id="outcomes-title" class="font-serif text-2xl font-bold">Bạn sẽ học được gì</h2>
+              <ul class="mt-4 grid gap-2 sm:grid-cols-2">
+                {course.outcomes.map(o => <li class="flex gap-2 text-[15px] min-w-0"><span aria-hidden="true" class="text-amber-600">✓</span><span class="min-w-0 break-words">{o}</span></li>)}
+              </ul>
+            </section>
+          )}
+
+          <section class="bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 px-4 py-6 sm:p-8 text-stone-900" aria-labelledby="outline-title">
+            <h2 id="outline-title" class="font-serif text-2xl font-bold">Nội dung khoá học</h2>
+            <p class="mt-1 mb-4 text-sm text-stone-600">Bài có nhãn “Học thử” mở miễn phí cho mọi người.</p>
+            <CourseOutline courseSlug={course.slug} sections={course.outline} completedIds={course.progress?.completed_lesson_ids ?? []} />
+          </section>
+
+          {course.github_repos.length > 0 && (
+            <section class="bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 px-4 py-6 sm:p-8 text-stone-900" aria-labelledby="repos-title">
+              <h2 id="repos-title" class="font-serif text-2xl font-bold">Kho mã nguồn riêng</h2>
+              <p class="mt-1 mb-4 text-sm text-stone-600">Tài khoản GitHub đã liên kết của bạn được mời với quyền đọc vào các kho riêng của khoá học.</p>
+              <CourseGithubRepos client:visible courseSlug={course.slug} repos={course.github_repos} />
+            </section>
+          )}
+        </article>
+
+        <aside class="lg:sticky lg:top-6 bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 shadow-floating-card px-4 py-6 sm:p-6 text-stone-900 grid gap-4 min-w-0" aria-label="Mua hoặc tiếp tục học">
+          {canLearn ? (
+            <>
+              {course.viewer.owns && <p class="inline-flex w-fit rounded-full bg-emerald-600 px-3 py-1 text-xs font-bold text-white">Đã sở hữu</p>}
+              {course.viewer.is_admin && !course.viewer.owns && <p class="inline-flex w-fit rounded-full bg-stone-900 px-3 py-1 text-xs font-bold text-amber-50">Quản trị viên</p>}
+              {course.viewer.locked && <p class="rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm p-3">Quyền truy cập khoá học trên tài khoản này đang tạm dừng để kiểm tra. Vui lòng email hi@zuey.me.</p>}
+              {course.progress && (
+                <div>
+                  <p class="flex justify-between text-sm font-semibold"><span>Tiến độ</span><span class="tabular-nums">{course.progress.completed_lessons}/{course.progress.total_lessons} bài · {course.progress.percent}%</span></p>
+                  <div class="mt-2 h-2.5 w-full rounded-full bg-stone-200 overflow-hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={course.progress.percent} aria-label="Tiến độ khoá học">
+                    <div class="h-full rounded-full bg-emerald-600" style={`width: ${course.progress.percent}%`}></div>
+                  </div>
+                </div>
+              )}
+              {nextLesson && (
+                <a href={`/courses/${course.slug}/${nextLesson.slug}`} class="inline-flex min-h-[44px] items-center justify-center rounded-full bg-stone-900 text-amber-50 px-5 py-3 text-sm font-semibold hover:bg-black focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2">
+                  {started ? 'Tiếp tục học' : 'Bắt đầu học'}: {nextLesson.title}
+                </a>
+              )}
+            </>
+          ) : (
+            <>
+              <CoursePrice quote={course.price} size="lg" />
+              {forSale ? (
+                <CourseCheckout client:load courseSlug={course.slug} signedIn={course.viewer.signed_in} sepayAvailable={sepayAvailable} cardAvailable={cardAvailable} />
+              ) : (
+                <p class="rounded-xl bg-amber-50 border border-amber-200 text-sm p-3">Khoá học này chưa mở bán.</p>
+              )}
+              {firstTrial && (
+                <a href={`/courses/${course.slug}/${firstTrial.slug}`} class="inline-flex min-h-[44px] items-center justify-center rounded-full border border-stone-300 bg-white/80 px-4 py-2.5 text-sm font-medium hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">Học thử miễn phí</a>
+              )}
+              <ul class="grid gap-1 text-xs text-stone-600">
+                <li>• Mua một lần, học trọn đời trong thời gian dịch vụ hoạt động.</li>
+                <li>• Không hoàn tiền — hãy học thử trước khi mua.</li>
+                <li>• Giá niêm yết USD; chuyển khoản tính VND theo tỷ giá lúc thanh toán.</li>
+              </ul>
+            </>
+          )}
+        </aside>
+      </div>
+    )}
+  </main>
+</Layout>

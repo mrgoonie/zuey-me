@@ -1,0 +1,79 @@
+---
+import CourseLegalPage from '../components/courses/CourseLegalPage.astro';
+import type { LegalSection } from '../components/courses/CourseLegalPage.astro';
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+
+const highlights = [
+  'Mua một lần, học trọn đời trong suốt thời gian dịch vụ hoạt động. Không phải gia hạn.',
+  'KHÔNG HOÀN TIỀN sau khi thanh toán, trừ trường hợp chúng tôi phát hiện bạn bị trừ tiền trùng cho cùng một khoá học, hoặc khi pháp luật bắt buộc.',
+  'Hãy học thử các bài miễn phí trước khi mua để chắc chắn khoá học phù hợp với bạn.',
+  'Giảm giá thành viên và giảm giá mã giới thiệu không cộng dồn: hệ thống tự áp dụng mức cao hơn.',
+  'Hoàn tiền qua ngân hàng/thẻ hoặc khiếu nại thanh toán (chargeback) sẽ thu hồi quyền truy cập khoá học, kho GitHub và chứng chỉ.',
+];
+
+const sections: LegalSection[] = [
+  {
+    id: 'one-time',
+    title: 'Mua một lần, sở hữu trọn đời',
+    paras: [
+      'Mỗi khoá học được bán theo hình thức thanh toán một lần. Sau khi hệ thống xác nhận thanh toán, khoá học xuất hiện trong mục Khoá học của tôi và bạn được học mọi bài, kể cả các bài được bổ sung về sau, trong suốt thời gian dịch vụ zuey.me còn hoạt động.',
+      'Quyền truy cập là giấy phép cá nhân, không chuyển nhượng, theo Điều khoản sử dụng khoá học.',
+    ],
+  },
+  {
+    id: 'pricing',
+    title: 'Giá và thanh toán',
+    items: [
+      'Giá niêm yết bằng đô la Mỹ (USD).',
+      'Chuyển khoản ngân hàng qua VietQR (SePay) thanh toán bằng đồng Việt Nam: số tiền VND được quy đổi theo tỷ giá tại thời điểm tạo đơn và làm tròn lên bội số 1.000 ₫. Số tiền trên đơn là số tiền bạn cần chuyển; đơn chuyển khoản có hiệu lực 60 phút.',
+      'Thẻ quốc tế thanh toán bằng USD qua Dodo Payments (khi được bật). Ngân hàng phát hành thẻ có thể thu thêm phí chuyển đổi ngoại tệ; khoản phí này không do zuey.me thu.',
+      'Khoá học chỉ được mở khi hệ thống nhận được xác nhận thanh toán từ ngân hàng hoặc cổng thanh toán, không dựa vào ảnh chụp màn hình hay việc bạn quay lại trang.',
+      'Chuyển khoản thiếu, sai nội dung hoặc đến sau khi đơn hết hạn sẽ được đối soát thủ công; vui lòng email kèm mã đơn.',
+    ],
+  },
+  {
+    id: 'discounts',
+    title: 'Giảm giá',
+    items: [
+      'Thành viên đang có gói (Knowledges, Zuey AI, Kết hợp, Cộng đồng) được giảm giá theo gói; mức giảm hiển thị trên trang khoá học khi bạn đăng nhập.',
+      'Mã giới thiệu có thể mang lại mức giảm riêng.',
+      'Hai loại giảm giá không cộng dồn: hệ thống áp dụng mức cao hơn. Giá cuối cùng được chốt và lưu vào đơn tại thời điểm tạo đơn.',
+    ],
+  },
+  {
+    id: 'no-refunds',
+    title: 'Không hoàn tiền',
+    paras: [
+      'Vì nội dung số được mở ngay sau khi thanh toán và không thể "trả lại", mọi giao dịch mua khoá học là cuối cùng và không được hoàn tiền, kể cả khi bạn chưa học hoặc học chưa hết. Mỗi khoá học đều có bài học thử miễn phí để bạn đánh giá trước khi mua.',
+      'Ngoại lệ duy nhất: (1) chúng tôi phát hiện bạn bị trừ tiền trùng cho cùng một khoá học, khi đó khoản trùng sẽ được hoàn lại; (2) các trường hợp pháp luật hiện hành bắt buộc phải hoàn tiền.',
+    ],
+  },
+  {
+    id: 'reversals',
+    title: 'Khiếu nại thanh toán và thu hồi quyền truy cập',
+    items: [
+      'Nếu khoản thanh toán bị hoàn lại, bị ngân hàng/thẻ khiếu nại (chargeback, dispute) hoặc bị đảo ngược vì bất kỳ lý do gì, quyền truy cập khoá học sẽ bị thu hồi ngay.',
+      'Cùng lúc đó, quyền vào các kho GitHub riêng của khoá học bị gỡ và chứng chỉ của khoá học bị thu hồi.',
+      'Nếu khiếu nại được giải quyết theo hướng khoản thanh toán hợp lệ, quyền truy cập sẽ được khôi phục.',
+      'Nếu bạn gặp vấn đề với đơn hàng, hãy liên hệ hi@zuey.me trước khi khiếu nại với ngân hàng để được hỗ trợ nhanh nhất.',
+    ],
+  },
+  {
+    id: 'locks',
+    title: 'Tạm khoá do vi phạm',
+    paras: [
+      'Khi phát hiện chia sẻ tài khoản, phát tán nội dung, ghi lại/thu thập nội dung tự động hoặc hành vi vi phạm khác trong Điều khoản sử dụng, quyền truy cập khoá học có thể bị tạm khoá trong lúc kiểm tra và bị khoá hẳn nếu xác nhận vi phạm, mà không hoàn tiền.',
+    ],
+  },
+];
+---
+
+<CourseLegalPage
+  path="/policy"
+  title="Chính sách khoá học"
+  intro="Chính sách này nói rõ về giá, thanh toán, giảm giá, việc không hoàn tiền và những gì xảy ra khi khoản thanh toán bị đảo ngược. Vui lòng đọc kỹ trước khi mua."
+  highlightsTitle="Tóm tắt"
+  highlights={highlights}
+  sections={sections}
+/>

@@ -570,7 +570,7 @@ describe('/mcp resource server', () => {
     const lan = await fullFlow('lan@example.com', { scope: 'articles:read account:read billing:read checkout:write' });
     const memberTools = await toolNames(lan.access);
     expect(memberTools).toEqual(expect.arrayContaining(['get_profile', 'article_list', 'me_get', 'me_keys_list', 'plans_list', 'billing_checkout_create', 'subscription_get']));
-    for (const adminOnly of ['update_profile', 'members_list', 'article_create', 'workflow_delete', 'booking_list']) expect(memberTools).not.toContain(adminOnly);
+    for (const adminOnly of ['update_profile', 'members_list', 'article_create', 'course_upsert', 'booking_list']) expect(memberTools).not.toContain(adminOnly);
 
     // Admin identity without the admin scope stays a member and is told which scope to request.
     const bossMember = await fullFlow('boss@example.com', { scope: 'account:read' });

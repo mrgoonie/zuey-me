@@ -180,6 +180,38 @@ export async function createDodoCheckout(env: RuntimeEnv, input: DodoCheckoutInp
   return { sessionId: body.session_id, url: body.checkout_url };
 }
 
+export interface DodoOneTimeCheckoutInput {
+  productId: string;
+  /** Final price in US cents; the product must be pay-what-you-want so Dodo accepts the amount. */
+  amountCents: number;
+  customerEmail: string;
+  customerName: string | null;
+  returnUrl: string;
+  metadata: Record<string, string>;
+}
+
+/** One-time checkout for a pay-what-you-want product at a server-computed amount (courses). */
+export function dodoOneTimeCheckoutPayload(input: DodoOneTimeCheckoutInput): Record<string, unknown> {
+  const customer: Record<string, string> = { email: input.customerEmail };
+  if (input.customerName) customer.name = input.customerName;
+  return {
+    product_cart: [{ product_id: input.productId, quantity: 1, amount: input.amountCents }],
+    customer,
+    billing_currency: 'USD',
+    return_url: input.returnUrl,
+    metadata: input.metadata,
+    feature_flags: { allow_discount_code: false, allow_currency_selection: false },
+  };
+}
+
+export async function createDodoOneTimeCheckout(env: RuntimeEnv, input: DodoOneTimeCheckoutInput, fetchImpl: FetchLike): Promise<{ sessionId: string; url: string }> {
+  const body = await dodoRequest(env, '/checkouts', { method: 'POST', body: dodoOneTimeCheckoutPayload(input) }, fetchImpl, 'checkout creation');
+  if (typeof body.session_id !== 'string' || typeof body.checkout_url !== 'string') {
+    throw new AppError(502, 'payment_provider_error', 'Dodo Payments returned no checkout URL');
+  }
+  return { sessionId: body.session_id, url: body.checkout_url };
+}
+
 /** Short-lived Dodo customer portal link (manage card, invoices, cancel). */
 export async function createDodoPortalLink(env: RuntimeEnv, customerId: string, fetchImpl: FetchLike): Promise<string> {
   const body = await dodoRequest(env, `/customers/${encodeURIComponent(customerId)}/customer-portal/session`, { method: 'POST' }, fetchImpl, 'portal session');

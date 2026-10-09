@@ -1,0 +1,178 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import { CourseOutline } from '../../../components/courses/CourseOutline';
+import { LessonCompleteButton } from '../../../components/courses/LessonCompleteButton';
+import type { LessonSegment } from '../../../components/courses/LessonContent';
+import { LessonContent } from '../../../components/courses/LessonContent';
+import { LessonTutor } from '../../../components/courses/LessonTutor';
+import { fmtMinutes } from '../../../components/courses/course-ui';
+import type { CourseDetail, LessonView } from '../../../lib/courses/course-views';
+import { courseDetail, lessonView } from '../../../lib/courses/course-views';
+import { lessonSegments } from '../../../lib/courses/lesson-blocks';
+import type { LessonDenial } from '../../../lib/courses/course-access';
+import { AppError } from '../../../lib/http';
+import { resolvePrincipal } from '../../../lib/members/policy';
+
+const env = Astro.locals.runtime?.env ?? {};
+const slug = Astro.params.slug ?? '';
+const lessonSlug = Astro.params.lesson ?? '';
+// Lesson pages are personal (ownership, progress, watermark) and paid bodies must never be cached or shared.
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Vary', 'Cookie');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+
+let course: CourseDetail | null = null;
+let view: LessonView | null = null;
+let failure: 'not_found' | 'rate_limited' | 'unavailable' | null = null;
+let signedIn = false;
+let watermark = '';
+if (!env.DB) failure = 'unavailable';
+else {
+  try {
+    const principal = await resolvePrincipal(Astro.request, env);
+    signedIn = principal.userId !== null;
+    course = await courseDetail(env.DB, env, principal, slug);
+    view = await lessonView(env.DB, env, principal, slug, lessonSlug, Astro.request);
+    watermark = principal.email ?? (principal.userId ? `ID ${principal.userId.slice(0, 12)}` : '');
+  } catch (err) {
+    if (err instanceof AppError && err.status === 404) failure = 'not_found';
+    else if (err instanceof AppError && err.status === 429) failure = 'rate_limited';
+    else {
+      console.error('Lesson page failed:', err instanceof Error ? err.message : 'unknown');
+      failure = 'unavailable';
+    }
+  }
+}
+if (failure) Astro.response.status = failure === 'not_found' ? 404 : failure === 'rate_limited' ? 429 : 503;
+
+const paid = view ? !view.lesson.is_trial : true;
+if (paid || failure) Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+const segments: LessonSegment[] = view?.document ? lessonSegments(view.document.blocks) : [];
+const showWatermark = Boolean(view?.document && paid && watermark);
+const lessonPath = `/courses/${slug}/${lessonSlug}`;
+const coursePath = `/courses/${course?.slug ?? slug}`;
+
+const DENIAL_COPY: Record<LessonDenial, { title: string; body: string }> = {
+  sign_in: { title: 'Bài học dành cho học viên', body: 'Đăng nhập và mua khoá học để đọc bài này. Bạn có thể học thử miễn phí các bài có nhãn “Học thử”.' },
+  purchase: { title: 'Mở khoá bài học này', body: 'Bài học này thuộc phần trả phí của khoá học. Mua một lần để học trọn đời mọi bài.' },
+  locked: { title: 'Quyền truy cập đang tạm dừng', body: 'Quyền truy cập khoá học trên tài khoản này đang tạm dừng để kiểm tra (ví dụ: nghi ngờ chia sẻ tài khoản). Vui lòng email hi@zuey.me để được hỗ trợ.' },
+  browser_only: { title: 'Chỉ đọc trên trình duyệt', body: 'Bài trả phí chỉ đọc được trong trình duyệt đã đăng nhập tại zuey.me, không qua khoá API hay MCP.' },
+};
+const denial = view?.denial ? DENIAL_COPY[view.denial] : null;
+---
+
+<Layout
+  title={view ? `${view.lesson.title} — ${view.course.title}` : 'Bài học — Zuey'}
+  description={view?.lesson.summary || (course ? `Bài học trong khoá ${course.title}` : 'Bài học trên zuey.me')}
+  url={`https://zuey.me${lessonPath}`}
+  lang="vi"
+>
+  {(paid || failure) && <meta slot="head" name="robots" content="noindex, nofollow" />}
+  <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 px-2.5 sm:px-4 z-10">
+    {failure && (
+      <section class="w-full max-w-[720px] bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 p-8 text-center text-stone-900">
+        <h1 class="font-serif text-3xl font-bold">
+          {failure === 'not_found' ? 'Không tìm thấy bài học' : failure === 'rate_limited' ? 'Bạn đang mở bài quá nhanh' : 'Tạm thời không tải được bài học'}
+        </h1>
+        <p class="mt-3 text-stone-600">
+          {failure === 'not_found' && 'Bài học này không tồn tại hoặc chưa được xuất bản.'}
+          {failure === 'rate_limited' && 'Để bảo vệ nội dung, mỗi tài khoản chỉ mở được một số bài trong một giờ. Vui lòng nghỉ một chút rồi tải lại trang.'}
+          {failure === 'unavailable' && 'Vui lòng thử lại sau ít phút.'}
+        </p>
+        <p class="mt-6 flex flex-wrap justify-center gap-2">
+          {failure === 'rate_limited' && <a href={lessonPath} class="inline-flex min-h-[44px] items-center rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold">Tải lại</a>}
+          <a href={failure === 'not_found' && !course ? '/courses' : coursePath} class="inline-flex min-h-[44px] items-center rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800">
+            {failure === 'not_found' && !course ? 'Xem các khoá học' : 'Về trang khoá học'}
+          </a>
+        </p>
+      </section>
+    )}
+
+    {course && view && (
+      <div class="w-full max-w-[1180px] grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[300px_minmax(0,1fr)] items-start min-w-0">
+        <aside class="lg:sticky lg:top-4 bg-[#F5EFEB] rounded-[24px] border border-stone-200/90 p-3 sm:p-4 text-stone-900 min-w-0 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+          <a href={coursePath} class="block rounded-xl px-2 py-2 text-sm font-bold font-serif hover:bg-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">← {course.title}</a>
+          {course.progress && (
+            <p class="px-2 text-xs text-stone-600 tabular-nums">Tiến độ {course.progress.completed_lessons}/{course.progress.total_lessons} bài · {course.progress.percent}%</p>
+          )}
+          <details class="mt-2 lg:hidden group">
+            <summary class="flex min-h-[44px] cursor-pointer items-center rounded-xl px-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">Mục lục khoá học</summary>
+            <nav aria-label="Mục lục khoá học (di động)" class="mt-1">
+              <CourseOutline courseSlug={course.slug} sections={course.outline} completedIds={course.progress?.completed_lesson_ids ?? []} currentLessonId={view.lesson.id} compact />
+            </nav>
+          </details>
+          <nav aria-label="Mục lục khoá học" class="mt-3 hidden lg:block">
+            <CourseOutline courseSlug={course.slug} sections={course.outline} completedIds={course.progress?.completed_lesson_ids ?? []} currentLessonId={view.lesson.id} compact />
+          </nav>
+        </aside>
+
+        <article class="relative overflow-hidden min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12 text-stone-900">
+          {showWatermark && (
+            <div class="pointer-events-none select-none absolute inset-0 z-10 overflow-hidden" aria-hidden="true">
+              <div class="absolute -inset-1/2 grid grid-cols-3 gap-x-16 gap-y-28 rotate-[-24deg] content-start">
+                {Array.from({ length: 60 }).map(() => <span class="whitespace-nowrap text-sm font-semibold text-stone-900 opacity-[0.06]">{watermark}</span>)}
+              </div>
+            </div>
+          )}
+
+          <header class="mb-7">
+            <p class="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-stone-500">
+              {view.lesson.is_trial && <span class="rounded-full bg-emerald-100 border border-emerald-300 px-2.5 py-1 text-emerald-900">Học thử</span>}
+              {view.lesson.status !== 'published' && <span class="rounded-full bg-amber-200 px-2.5 py-1 text-stone-900">Bản nháp</span>}
+              {view.lesson.duration_minutes > 0 && <span>{fmtMinutes(view.lesson.duration_minutes)}</span>}
+            </p>
+            <h1 class="mt-2 font-serif text-3xl sm:text-4xl font-extrabold leading-tight break-words">{view.lesson.title}</h1>
+            {view.lesson.summary && <p class="mt-3 text-stone-600 text-base sm:text-lg">{view.lesson.summary}</p>}
+          </header>
+
+          {denial ? (
+            <section class="zb-lockbox" aria-labelledby="locked-title">
+              <span class="zb-lockbox-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+              </span>
+              <h2 id="locked-title" class="font-serif text-xl font-bold text-stone-900">{denial.title}</h2>
+              <p class="mt-2 text-sm text-stone-700">{denial.body}</p>
+              <div class="mt-4 flex flex-wrap justify-center gap-2">
+                {(view.denial === 'sign_in' || view.denial === 'purchase') && (
+                  <a href={coursePath} class="inline-flex min-h-[44px] items-center rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">Mua khoá học</a>
+                )}
+                {(view.denial === 'sign_in' || view.denial === 'browser_only') && (
+                  <a href={`/login?next=${encodeURIComponent(lessonPath)}`} class="inline-flex min-h-[44px] items-center rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-bold text-stone-800 hover:bg-stone-50">Đăng nhập</a>
+                )}
+                {view.denial === 'locked' && (
+                  <a href="mailto:hi@zuey.me" class="inline-flex min-h-[44px] items-center rounded-full bg-stone-900 text-white px-5 py-2.5 text-sm font-bold hover:bg-stone-800">Email hi@zuey.me</a>
+                )}
+              </div>
+            </section>
+          ) : (
+            <LessonContent client:load segments={segments} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} />
+          )}
+
+          {!denial && (
+            <div class="relative z-20 mt-10 grid gap-4 border-t border-stone-300/70 pt-6">
+              <LessonCompleteButton
+                client:load courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} initiallyCompleted={view.completed}
+                nextHref={view.next ? `/courses/${course.slug}/${view.next.slug}` : null}
+              />
+              <LessonTutor client:visible courseSlug={course.slug} lessonSlug={view.lesson.slug} lessonTitle={view.lesson.title} signedIn={signedIn} />
+            </div>
+          )}
+
+          <nav class="relative z-20 mt-8 grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-2" aria-label="Chuyển bài">
+            {view.previous ? (
+              <a href={`/courses/${course.slug}/${view.previous.slug}`} rel="prev" class="flex min-h-[44px] flex-col rounded-2xl border border-stone-300 bg-white/70 px-4 py-3 hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">
+                <span class="text-xs text-stone-500">← Bài trước</span><span class="text-sm font-semibold break-words">{view.previous.title}</span>
+              </a>
+            ) : <span class="hidden sm:block"></span>}
+            {view.next && (
+              <a href={`/courses/${course.slug}/${view.next.slug}`} rel="next" class="flex min-h-[44px] flex-col rounded-2xl border border-stone-300 bg-white/70 px-4 py-3 text-right hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">
+                <span class="text-xs text-stone-500">Bài tiếp →</span><span class="text-sm font-semibold break-words">{view.next.title}</span>
+              </a>
+            )}
+          </nav>
+        </article>
+      </div>
+    )}
+  </main>
+</Layout>

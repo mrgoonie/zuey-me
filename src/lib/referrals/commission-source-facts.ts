@@ -8,7 +8,7 @@ import type { CommissionSource } from './commissions';
 import { applyPercent } from './rates';
 
 /**
- * Facts read from a paid source row (SePay order, Dodo card, booking) for its commission: who referred whom,
+ * Facts read from a paid source row (SePay order, Dodo card, booking, course order) for its commission: who referred whom,
  * the snapshotted commission percent and the base actually collected, in USD cents.
  */
 export interface SourceFacts {
@@ -75,6 +75,28 @@ export async function sourceFacts(d1: D1DatabaseLike, env: RuntimeEnv, source: C
       refereeEmail: (await emailOf(d1, userId)) ?? strOrNull(r, 'customer_email'),
       baseCents: Math.max(Math.trunc(source.collectedCents), 0), paidAt, holdFrom: paidAt,
       paymentId: source.paymentId, payerText: null, payerEmail: null,
+    };
+  }
+  if (source.kind === 'course_order') {
+    const r = await d1.prepare('SELECT * FROM course_orders WHERE id = ?').bind(source.id).first<Row>();
+    const s = snapshot(r);
+    if (!r || !s || r.status !== 'paid') return null;
+    // Commission on what was collected for the order, never on an overpayment or card tax beyond its price.
+    let baseCents: number;
+    if (r.provider === 'sepay') {
+      const collectedVnd = Math.min(numOrNull(r, 'amount_paid') ?? 0, numOrNull(r, 'amount_vnd') ?? 0);
+      const rate = numOrNull(r, 'usd_vnd_rate') ?? parseUsdVndRate(env);
+      if (rate === null || rate <= 0) throw new AppError(503, 'billing_unconfigured', 'USD_VND_RATE is required to convert a VND course commission');
+      baseCents = vndToUsdCents(collectedVnd, rate);
+    } else {
+      baseCents = Math.min(numOrNull(r, 'amount_paid') ?? 0, num(r, 'amount_usd_cents'));
+    }
+    const userId = str(r, 'user_id');
+    const paidAt = strOrNull(r, 'paid_at') ?? nowIso;
+    return {
+      referrerUserId: s.referrer, commissionPercent: s.percent, refereeUserId: userId, refereeEmail: await emailOf(d1, userId),
+      baseCents: Math.max(baseCents, 0), paidAt, holdFrom: paidAt,
+      paymentId: strOrNull(r, 'provider_payment_id') ?? strOrNull(r, 'payment_ref'), payerText: source.payerText ?? null, payerEmail: null,
     };
   }
   const r = await d1.prepare('SELECT * FROM bookings WHERE id = ?').bind(source.id).first<Row>();

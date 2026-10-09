@@ -18,7 +18,7 @@ Use this skill whenever you need to programmatically inspect or modify **Duy Ngu
 2. **Links**: Add, edit, remove, and reorder links under `blogs`, `companies`, and `products`.
 3. **Themes**: Switch between visual presets (`ivory`, `dark`, `minimal`, `glass`) and apply custom CSS tokens.
 4. **Analytics**: Inspect link click counts and engagement.
-5. **AI Workflows**: Manage drafts/publishing of `/workflows`; to extract workflows from local sessions see [`workflows/SKILL.md`](workflows/SKILL.md).
+5. **Courses**: Browse the catalog, outlines and trial lessons (`course_list`, `course_get`, `course_lesson_get`, `/courses.md`); start a purchase (`course_checkout_create`, needs `accept_terms: true`); admins author courses, sections and lessons (`course_upsert`, `course_section_upsert`, `course_lesson_upsert`, `course_lesson_publish`). Paid lesson text is only readable in a signed-in browser, never through the API or MCP.
 
 ---
 

@@ -38,6 +38,9 @@ export async function hasPendingReferralCheckout(d1: D1DatabaseLike, input: { us
       `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND referrer_user_id IS NOT NULL AND status = 'pending'
          AND first_payment_id IS NULL AND created_at > ? LIMIT 1`,
       [...ids, iso(nowMs - CARD_PENDING_TTL_MS)])) return true;
+    if (await anyRow(d1,
+      `SELECT 1 FROM course_orders WHERE user_id IN (${inIds}) AND referrer_user_id IS NOT NULL AND status = 'pending' AND expires_at > ? LIMIT 1`,
+      [...ids, now])) return true;
   }
   if (!canonical) return false;
   const guestEmails = await rawEmailsMatching(d1, 'bookings', 'guest_email', canonical);

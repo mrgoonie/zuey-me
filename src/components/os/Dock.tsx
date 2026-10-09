@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Workflow } from 'lucide-react';
+import { GraduationCap } from 'lucide-react';
 import { DOCK_APPS, type AppId } from './apps';
 import { AppGlyph } from './AppGlyph';
 import type { OsStrings } from './os-i18n';
@@ -19,7 +19,7 @@ const MAX_SCALE = 1.55;
 const REACH = 150;
 
 /**
- * Desktop dock: apps (Alt+1…9), Exposé and Appearance, then the standalone AI Workflows page.
+ * Desktop dock: apps (Alt+1…9), Exposé and Appearance, then the standalone Courses page.
  * A running app shows a dot (dimmed when minimized). Icons magnify near the pointer.
  */
 export const Dock: React.FC<DockProps> = ({ wins, avatar, expoOn, reduced, strings, onLaunch, onExpo }) => {
@@ -79,9 +79,9 @@ export const Dock: React.FC<DockProps> = ({ wins, avatar, expoOn, reduced, strin
         </li>
         {item('appearance', null)}
         <li>
-          <a className="os-di" href="/workflows" aria-label={strings.links.workflows}>
-            <span className="os-g os-g--flow" aria-hidden="true"><Workflow aria-hidden /></span>
-            <span className="os-tip" aria-hidden="true">{strings.links.workflows}</span>
+          <a className="os-di" href="/courses" aria-label={strings.links.courses}>
+            <span className="os-g os-g--flow" aria-hidden="true"><GraduationCap aria-hidden /></span>
+            <span className="os-tip" aria-hidden="true">{strings.links.courses}</span>
           </a>
         </li>
       </ul>

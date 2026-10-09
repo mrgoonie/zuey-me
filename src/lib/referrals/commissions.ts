@@ -15,7 +15,7 @@ import { isSourceReversed } from './source-reversals';
  * terms decide the percent; the base is the amount actually collected, in USD cents. A commission starts
  * `pending` (or `review` / `blocked` from the fraud verdict) and only reaches the ledger when approved.
  */
-export type CommissionSourceKind = 'billing_order' | 'card_subscription' | 'booking';
+export type CommissionSourceKind = 'billing_order' | 'card_subscription' | 'booking' | 'course_order';
 export type CommissionStatus = 'pending' | 'review' | 'approved' | 'reversed' | 'blocked';
 
 export type CommissionSource =
@@ -27,7 +27,9 @@ export type CommissionSource =
    * Consultation booking (SePay or PayPal). `payerText` is the SePay content or the PayPal payer's name,
    * `payerEmail` the PayPal payer's email.
    */
-  | { kind: 'booking'; id: string; payerText?: string | null; payerEmail?: string | null };
+  | { kind: 'booking'; id: string; payerText?: string | null; payerEmail?: string | null }
+  /** Paid course order (SePay ZSC transfer or Dodo one-time card payment); every course a referred account buys. */
+  | { kind: 'course_order'; id: string; payerText?: string | null };
 
 export interface ReferralCommission {
   id: string;
@@ -51,7 +53,7 @@ export interface ReferralCommission {
 }
 
 const STATUSES: CommissionStatus[] = ['pending', 'review', 'approved', 'reversed', 'blocked'];
-const KINDS: CommissionSourceKind[] = ['billing_order', 'card_subscription', 'booking'];
+const KINDS: CommissionSourceKind[] = ['billing_order', 'card_subscription', 'booking', 'course_order'];
 
 function parseReasons(raw: string | null): string[] {
   if (!raw) return [];
@@ -118,6 +120,7 @@ export async function recordReferralCommission(
   const assessment = assessReferral(await gatherFraudSnapshot(d1, {
     referrerUserId: facts.referrerUserId, refereeUserId: facts.refereeUserId, refereeEmail: facts.refereeEmail,
     sourceId: source.id, payerText: facts.payerText, payerEmail: facts.payerEmail, manualReview: source.kind === 'booking',
+    repeatOrdersOfBoundReferee: source.kind === 'course_order',
   }));
   const status = STATUS_FOR_VERDICT[assessment.verdict];
   const { hold_days } = await getReferralSettings(d1);

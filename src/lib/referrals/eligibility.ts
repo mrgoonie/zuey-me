@@ -8,7 +8,7 @@ import { isPaidEmailRecorded } from './paid-email-hashes';
 /**
  * Who may refer and who may be referred.
  * Referrer: not locked, and admin-enabled or holding an active plan (the link pauses while the plan lapses).
- * Referee: never paid for anything before, matched by account and by canonical email (Gmail dots, +tags),
+ * Referee: never paid for anything before (memberships, bookings or courses), matched by account and by canonical email (Gmail dots, +tags),
  * including mailboxes of deleted accounts that had paid (kept only as hashes, see `paid-email-hashes.ts`).
  */
 
@@ -80,9 +80,13 @@ async function anyRow(d1: D1DatabaseLike, sql: string, params: unknown[]): Promi
  * at commission time the order being paid must not count as "paid before".
  */
 export async function isEligibleReferee(
-  d1: D1DatabaseLike, input: { userId?: string; email?: string | null; excludeSourceId?: string | null },
+  d1: D1DatabaseLike, input: { userId?: string; email?: string | null; excludeSourceId?: string | null; ownPaymentsSince?: string | null },
 ): Promise<boolean> {
   const exclude = input.excludeSourceId ?? '';
+  // Repeat course orders of a bound referee: payments made after binding are allowed (see `isEligibleBoundReferee`).
+  const since = input.ownPaymentsSince ?? null;
+  const before = (col: string) => (since ? ` AND ${col} < ?` : '');
+  const sinceArg = since ? [since] : [];
   let canonical = normalizeEmailForSelfCheck(input.email);
   if (!canonical && input.userId) {
     const row = await d1.prepare('SELECT email FROM users WHERE id = ?').bind(input.userId).first<Row>();
@@ -93,20 +97,39 @@ export async function isEligibleReferee(
 
   if (ids.length) {
     const inIds = placeholders(ids.length);
-    if (await anyRow(d1, `SELECT 1 FROM billing_orders WHERE user_id IN (${inIds}) AND id <> ? AND (status = 'paid' OR paid_at IS NOT NULL) LIMIT 1`, [...ids, exclude])) return false;
-    if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`, [...ids, exclude])) return false;
+    // Other accounts on the same mailbox always count; with `ownPaymentsSince`, the buyer's own later payments do not.
+    const own = since && input.userId ? ` AND (user_id <> ? OR COALESCE(%s, created_at) < ?)` : '';
+    const ownArgs = since && input.userId ? [input.userId, since] : [];
+    if (await anyRow(d1, `SELECT 1 FROM billing_orders WHERE user_id IN (${inIds}) AND id <> ? AND (status = 'paid' OR paid_at IS NOT NULL)${own.replace('%s', 'paid_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
+    if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${own.replace('%s', 'first_payment_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
+    if (await anyRow(d1, `SELECT 1 FROM course_orders WHERE user_id IN (${inIds}) AND id <> ? AND paid_at IS NOT NULL${own.replace('%s', 'paid_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
   }
   if (!canonical) return true;
   if (await isPaidEmailRecorded(d1, canonical)) return false;
   const cardEmails = await rawEmailsMatching(d1, 'card_subscriptions', 'customer_email', canonical);
   if (cardEmails.length && await anyRow(d1,
-    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`,
-    [...cardEmails, exclude])) return false;
+    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${before('COALESCE(first_payment_at, created_at)')} LIMIT 1`,
+    [...cardEmails, exclude, ...sinceArg])) return false;
   const guestEmails = await rawEmailsMatching(d1, 'bookings', 'guest_email', canonical);
   if (guestEmails.length && await anyRow(d1,
-    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND id <> ? AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0) LIMIT 1`,
-    [...guestEmails, exclude])) return false;
+    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND id <> ? AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0)${before('created_at')} LIMIT 1`,
+    [...guestEmails, exclude, ...sinceArg])) return false;
   return true;
+}
+
+/**
+ * A referee bound to `referrerUserId` keeps earning that referrer commission on repeat course orders, but only if
+ * nobody behind the account or mailbox had paid before it was bound (signup binding does not check this itself).
+ * Null when the account is not bound to that referrer.
+ */
+export async function isEligibleBoundReferee(
+  d1: D1DatabaseLike, input: { userId: string; referrerUserId: string; excludeSourceId?: string | null },
+): Promise<boolean | null> {
+  const row = await d1.prepare('SELECT referred_at FROM users WHERE id = ? AND referred_by_user_id = ?').bind(input.userId, input.referrerUserId).first<Row>();
+  const referredAt = row ? strOrNull(row, 'referred_at') : null;
+  if (!row) return null;
+  // A binding without a timestamp cannot prove when the payments happened: apply the first-order rule.
+  return isEligibleReferee(d1, { userId: input.userId, excludeSourceId: input.excludeSourceId, ownPaymentsSince: referredAt });
 }
 
 /** Canonical mailboxes of an account: its email plus the emails of its linked OAuth identities. */

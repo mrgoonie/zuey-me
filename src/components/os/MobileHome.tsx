@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookText, Workflow } from 'lucide-react';
+import { BookText, GraduationCap } from 'lucide-react';
 import type { Profile } from '../../db/types';
 import type { Locale } from '../../lib/i18n/locales';
 import { ContributionGraph, useContributionCalendar } from '../home/ContributionGraph';
@@ -43,9 +43,9 @@ export const MobileHome: React.FC<MobileHomeProps> = ({ locale, profile, strings
           </li>
         ))}
         <li>
-          <a href="/workflows">
-            <span className="os-g os-g--flow" aria-hidden="true"><Workflow aria-hidden /></span>
-            <span>{strings.links.workflows}</span>
+          <a href="/courses">
+            <span className="os-g os-g--flow" aria-hidden="true"><GraduationCap aria-hidden /></span>
+            <span>{strings.links.courses}</span>
           </a>
         </li>
         <li>

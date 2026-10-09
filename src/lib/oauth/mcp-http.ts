@@ -24,7 +24,7 @@ export const SUPPORTED_VERSIONS = [...MODERN_VERSIONS, ...LEGACY_VERSIONS];
 const TOOLS_LIST_TTL_MS = 5 * 60 * 1000;
 
 export const SERVER_INFO = { name: 'zuey-me', title: 'Zuey (zuey.me)', version: '2.0.0' };
-const INSTRUCTIONS = 'Tools for zuey.me: Duy Nguyen\'s profile, articles (full text follows the member\'s plan), workflows, reads, '
+const INSTRUCTIONS = 'Tools for zuey.me: Duy Nguyen\'s profile, articles (full text follows the member\'s plan), courses (catalog and trial lessons; paid lessons are read in the browser), reads, '
   + 'membership plans and SePay checkout. Admin tools appear only for admin identities that granted the admin scope.';
 
 const META_VERSION = 'io.modelcontextprotocol/protocolVersion';

@@ -42,7 +42,7 @@ const en = {
     note: 'Next close {date} · minimum payout {min} · commissions are held {days} days before approval.',
   },
   commissions: { title: 'Recent commissions', empty: 'No commissions yet. Share your link to get started.', holdUntil: 'held until {date}' },
-  kinds: { billing_order: 'Membership (VietQR)', card_subscription: 'Membership (card)', booking: 'Consultation' } as Record<string, string>,
+  kinds: { billing_order: 'Membership (VietQR)', card_subscription: 'Membership (card)', booking: 'Consultation', course_order: 'Course' } as Record<string, string>,
   statuses: { pending: 'On hold', review: 'Under review', approved: 'Approved', reversed: 'Reversed', blocked: 'Not eligible' } as Record<string, string>,
   payouts: {
     title: 'Payouts', empty: 'No payouts yet.', gross: 'Gross', deduction: 'Deduction', net: 'Net', ref: 'Ref',
@@ -112,7 +112,7 @@ const vi: ReferralStrings = {
     note: 'Kỳ chốt tiếp theo {date} · chi trả tối thiểu {min} · hoa hồng được giữ {days} ngày trước khi duyệt.',
   },
   commissions: { title: 'Hoa hồng gần đây', empty: 'Chưa có hoa hồng. Hãy chia sẻ link để bắt đầu.', holdUntil: 'giữ đến {date}' },
-  kinds: { billing_order: 'Gói thành viên (VietQR)', card_subscription: 'Gói thành viên (thẻ)', booking: 'Tư vấn' },
+  kinds: { billing_order: 'Gói thành viên (VietQR)', card_subscription: 'Gói thành viên (thẻ)', booking: 'Tư vấn', course_order: 'Khoá học' },
   statuses: { pending: 'Đang giữ', review: 'Đang kiểm tra', approved: 'Đã duyệt', reversed: 'Đã hoàn', blocked: 'Không hợp lệ' },
   payouts: {
     title: 'Chi trả', empty: 'Chưa có kỳ chi trả nào.', gross: 'Tổng', deduction: 'Khấu trừ', net: 'Thực nhận', ref: 'Mã GD',

@@ -12,6 +12,7 @@ const SOURCE_TABLE: Record<CommissionSourceKind, string> = {
   billing_order: 'billing_orders',
   card_subscription: 'card_subscriptions',
   booking: 'bookings',
+  course_order: 'course_orders',
 };
 
 export async function isSourceReversed(d1: D1DatabaseLike, kind: CommissionSourceKind, sourceId: string): Promise<boolean> {

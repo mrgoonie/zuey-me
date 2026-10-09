@@ -6,6 +6,7 @@ export function createFakeR2(): R2BucketLike & { objects: Map<string, { bytes: U
   return {
     objects,
     async put(key, value, options) {
+      if (typeof value === 'string' || value instanceof ReadableStream) throw new Error('fake R2 stores bytes only');
       const bytes = value instanceof Uint8Array ? value.slice() : new Uint8Array(value.slice(0));
       objects.set(key, { bytes, contentType: options?.httpMetadata?.contentType });
       return {};
@@ -14,6 +15,8 @@ export function createFakeR2(): R2BucketLike & { objects: Map<string, { bytes: U
       const o = objects.get(key);
       if (!o) return null;
       return {
+        body: new Blob([o.bytes.slice().buffer]).stream(),
+        size: o.bytes.byteLength,
         httpMetadata: { contentType: o.contentType },
         async arrayBuffer() {
           return o.bytes.slice().buffer;

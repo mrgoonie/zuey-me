@@ -285,7 +285,7 @@ export const referralsOpenApi: OpenApiFragment = {
     ReferralCommission: {
       type: 'object',
       properties: {
-        id: { type: 'string' }, source_kind: { type: 'string', enum: ['billing_order', 'card_subscription', 'booking'] }, source_id: { type: 'string' },
+        id: { type: 'string' }, source_kind: { type: 'string', enum: ['billing_order', 'card_subscription', 'booking', 'course_order'] }, source_id: { type: 'string' },
         referrer_user_id: { type: 'string' }, referrer_email: { type: ['string', 'null'] }, referee_user_id: { type: ['string', 'null'] }, referee_email: { type: ['string', 'null'] },
         base_amount_cents: cents, commission_percent: { type: 'integer' }, commission_cents: cents,
         status: { type: 'string', enum: ['pending', 'review', 'approved', 'reversed', 'blocked'] }, review_reasons: { type: 'array', items: { type: 'string' } },

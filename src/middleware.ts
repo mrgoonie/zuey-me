@@ -26,6 +26,11 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return context.redirect('/index.md', 307);
   }
 
+  // Workflows were replaced by Courses; keep old links and search results landing somewhere useful.
+  if (url.pathname === '/workflows' || url.pathname === '/workflows.md' || url.pathname.startsWith('/workflows/')) {
+    return context.redirect('/courses', 301);
+  }
+
   if (machine && request.method === 'OPTIONS') {
     const headers = new Headers({ [REQUEST_ID_HEADER]: requestId });
     setMachineCors(headers);

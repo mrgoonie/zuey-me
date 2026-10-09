@@ -7,7 +7,8 @@ import { getReferralSettings } from './config';
 import { isActiveReferrer, isEligibleReferee, isSelfReferral } from './eligibility';
 import { bookingSplit, effectiveRate, membershipSplit } from './rates';
 
-export type ReferralProduct = 'membership' | 'booking';
+/** Courses split R like memberships (d / R − d). */
+export type ReferralProduct = 'membership' | 'booking' | 'course';
 
 export interface CheckoutReferral {
   referrerUserId: string;

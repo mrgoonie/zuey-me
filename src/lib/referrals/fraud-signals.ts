@@ -2,7 +2,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { Row } from '../members/runtime';
 import { DAY_MS, iso, membersRuntime, num, str, strOrNull } from '../members/runtime';
 import { getReferralProfile, normalizeEmailForSelfCheck } from './codes';
-import { accountMailboxes, isEligibleReferee, isSelfReferral } from './eligibility';
+import { accountMailboxes, isEligibleBoundReferee, isEligibleReferee, isSelfReferral } from './eligibility';
 import type { ReferralFraudSnapshot } from './fraud';
 import { payerTextMatches } from './fraud';
 
@@ -21,6 +21,11 @@ export interface FraudSignalInput {
   payerEmail?: string | null;
   /** Route to admin review regardless of the soft signals (bookings). */
   manualReview?: boolean;
+  /**
+   * Course orders: an account bound to this referrer earns commission on every course it buys. Only payments
+   * made before the binding (or by other accounts on the same mailbox) count as "previously paid".
+   */
+  repeatOrdersOfBoundReferee?: boolean;
 }
 
 /**
@@ -81,6 +86,14 @@ async function boundSignupsAroundReferee(d1: D1DatabaseLike, referrerUserId: str
   return row ? num(row, 'n') : 0;
 }
 
+async function refereeStillEligible(d1: D1DatabaseLike, input: FraudSignalInput, referee: { userId?: string; email?: string | null }): Promise<boolean> {
+  if (input.repeatOrdersOfBoundReferee && input.refereeUserId) {
+    const bound = await isEligibleBoundReferee(d1, { userId: input.refereeUserId, referrerUserId: input.referrerUserId, excludeSourceId: input.sourceId });
+    if (bound !== null) return bound;
+  }
+  return isEligibleReferee(d1, { ...referee, excludeSourceId: input.sourceId });
+}
+
 /** Collects every fact `assessReferral` needs for one paid referred order. */
 export async function gatherFraudSnapshot(d1: D1DatabaseLike, input: FraudSignalInput): Promise<ReferralFraudSnapshot> {
   const referee = { userId: input.refereeUserId ?? undefined, email: input.refereeEmail };
@@ -92,7 +105,7 @@ export async function gatherFraudSnapshot(d1: D1DatabaseLike, input: FraudSignal
   }
   return {
     selfReferral: await isSelfReferral(d1, input.referrerUserId, referee),
-    refereePreviouslyPaid: !(await isEligibleReferee(d1, { ...referee, excludeSourceId: input.sourceId })),
+    refereePreviouslyPaid: !(await refereeStillEligible(d1, input, referee)),
     referrerLocked: profile?.locked_at != null,
     refereeEmail,
     sharedIp: await sharedSignupIp(d1, input.referrerUserId, input.refereeUserId),

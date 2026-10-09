@@ -29,6 +29,11 @@ async function candidates(d1: D1DatabaseLike, limit: number): Promise<Commission
      ORDER BY b.updated_at LIMIT ?`
   ).bind(limit).all<Row>();
   for (const r of bookings.results ?? []) out.push({ kind: 'booking', id: str(r, 'id') });
+  const courses = await d1.prepare(
+    `SELECT o.id FROM course_orders o WHERE o.referrer_user_id IS NOT NULL AND o.status = 'paid' AND ${MISSING('course_order', 'o')}
+     ORDER BY o.paid_at LIMIT ?`
+  ).bind(limit).all<Row>();
+  for (const r of courses.results ?? []) out.push({ kind: 'course_order', id: str(r, 'id') });
   const cards = await d1.prepare(
     `SELECT s.id, s.first_payment_id, s.first_payment_cents, s.first_payment_tax_cents FROM card_subscriptions s
      WHERE s.referrer_user_id IS NOT NULL AND s.first_payment_id IS NOT NULL AND s.first_payment_cents IS NOT NULL AND ${MISSING('card_subscription', 's')}

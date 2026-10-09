@@ -1,0 +1,14 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { CourseLeaderboard } from '../../components/courses/CourseLeaderboard';
+
+// Entries are fetched client-side ("Bạn" highlight is personal); the shell itself is static.
+Astro.response.headers.set('Cache-Control', 'public, max-age=300');
+---
+
+<Layout title="Bảng xếp hạng học viên — Zuey" description="Những học viên tích cực nhất trên các khoá học của Zuey, theo XP tháng này và mọi thời điểm." url="https://zuey.me/courses/leaderboard" lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-4 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <div class="w-full max-w-[720px]"><a href="/courses" class="text-xs font-semibold text-stone-200 hover:text-white underline">← Khoá học</a></div>
+    <CourseLeaderboard client:load />
+  </main>
+</Layout>

@@ -24,3 +24,8 @@ binding = "AI"
 [[r2_buckets]]
 binding = "REFERRAL_KYC"
 bucket_name = "zuey-referral-kyc"
+
+# Private course audio and downloads; the bucket stays private (no public access).
+[[r2_buckets]]
+binding = "COURSE_FILES"
+bucket_name = "zuey-course-files"
