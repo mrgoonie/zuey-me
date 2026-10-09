@@ -43,6 +43,8 @@ zuey plans                         # plans and VND prices for 1/3/6/12 months
 zuey subscribe <plan> --months 3   # creates an order and prints the VietQR bank-transfer details
 zuey keys                          # where to create, rotate and revoke keys (browser only)
 zuey mcp config                    # MCP client configuration snippets
+zuey videos list [--q <query>]     # Zueytube videos, or search titles and transcripts
+zuey videos get <id>               # editions, transcript and related articles
 ```
 
 ## MCP
@@ -82,6 +84,11 @@ zuey links list --section products
 zuey links add --section products --title "AgentKit" --url "https://agentkit.best" --subtitle "AI engineering framework"
 zuey links reorder prod-agentkit prod-dewee prod-tose
 zuey theme set ivory
+zuey videos add https://youtu.be/<id> --locale vi            # transcript fetched once via AnyMD
+zuey videos add https://youtu.be/<id> --locale en --pair vid_…  # English edition of the same video
+zuey videos refetch <youtube_id>
+zuey videos feature <video_id> [--off]
+zuey videos delete <video_id | youtube_id>
 ```
 
 `zuey mcp` (no arguments) still runs the stdio bridge to the legacy admin endpoint `/api/mcp`:

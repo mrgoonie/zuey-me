@@ -4,10 +4,10 @@
  */
 
 export type AppId =
-  | 'about' | 'ai' | 'knowledges' | 'reads' | 'github'
+  | 'about' | 'ai' | 'knowledges' | 'reads' | 'zueytube' | 'github'
   | 'pricing' | 'business' | 'mcp' | 'account' | 'appearance' | '200lab';
 
-export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'pricing' | 'business' | 'account' | '200lab';
+export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'zueytube' | 'pricing' | 'business' | 'account' | '200lab';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -29,6 +29,7 @@ export const APPS: Record<AppId, AppDef> = {
   ai: { id: 'ai', surface: 'glass', href: '/chat', size: (w, h) => ({ w: clampTo(860, w - 40), h: clampTo(680, h - 16) }), min: { w: 360, h: 420 } },
   knowledges: { id: 'knowledges', surface: 'paper', href: '/articles', size: (_, h) => ({ w: 600, h: clampTo(700, h - 16) }), min: { w: 340, h: 360 } },
   reads: { id: 'reads', surface: 'stage', href: '/reads', size: (w, h) => ({ w: clampTo(880, w - 40), h: clampTo(680, h - 16) }), min: { w: 360, h: 360 } },
+  zueytube: { id: 'zueytube', surface: 'stage', href: '/videos', size: (w, h) => ({ w: clampTo(900, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   github: { id: 'github', surface: 'paper', href: '/#github', size: (w, h) => ({ w: clampTo(860, w - 40), h: clampTo(640, h - 16) }), min: { w: 360, h: 320 } },
   pricing: { id: 'pricing', surface: 'stage', href: '/pricing', size: (w, h) => ({ w: clampTo(1080, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   business: { id: 'business', surface: 'stage', href: '/business', size: (w, h) => ({ w: clampTo(720, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
@@ -43,8 +44,8 @@ export const APP_IDS = Object.keys(APPS) as AppId[];
  * Dock order (Alt+1…9 follow it, so apps past the ninth have no shortcut). Appearance lives in the
  * menu and the dock's right side.
  */
-export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'github', 'pricing', 'business', 'mcp', 'account', '200lab'];
-export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'pricing', 'business', 'account', '200lab'];
+export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'zueytube', 'github', 'pricing', 'business', 'mcp', 'account', '200lab'];
+export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'zueytube', 'pricing', 'business', 'account', '200lab'];
 
 export const isAppId = (v: unknown): v is AppId => typeof v === 'string' && (APP_IDS as string[]).includes(v);
 

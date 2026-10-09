@@ -31,6 +31,12 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   // Zuey Reads
   reads_list: PUBLIC,
   reads_sync: ADMIN,
+  videos_list: PUBLIC,
+  video_get: PUBLIC,
+  video_add: ADMIN,
+  video_update: ADMIN,
+  video_delete: ADMIN,
+  video_refetch_transcript: ADMIN,
   // Workflows (drafts need admin inside the tool)
   workflow_list: PUBLIC,
   workflow_get: PUBLIC,
