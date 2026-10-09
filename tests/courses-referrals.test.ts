@@ -99,4 +99,19 @@ describe('course referrals', () => {
     expect((await buy(hoa, 'second-course', { referral_code: ref.code })).code).toBe('referral_code_invalid');
     expect(await boundTo(hoa.userId)).toBeNull();
   });
+
+  it('gives no course referral to an account bound after it had already paid', async () => {
+    await publishedCourse();
+    await publishedCourse({ slug: 'second-course', title: 'Khoá thứ hai' });
+    const ref = await referrer('ref@example.com', 10);
+    const hoa = await member('hoa@example.com');
+    await pay(String(field((await buy(hoa, 'ai-product')).data, 'code')));
+    // Bound later (e.g. at a signup through a referral link), which does not check past payments itself.
+    state.now += 60_000;
+    await state.d1.prepare('UPDATE users SET referred_by_user_id = ?, referred_at = ? WHERE id = ?').bind(ref.id, new Date(state.now).toISOString(), hoa.userId).run();
+    const second = await buy(hoa, 'second-course');
+    expect(field(second.data, 'discount_source')).toBe('none');
+    const order = await getCourseOrderByCode(state.d1, String(field(second.data, 'code')));
+    expect(order?.referrer_user_id).toBeNull();
+  });
 });

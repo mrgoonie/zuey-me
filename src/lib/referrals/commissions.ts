@@ -29,7 +29,7 @@ export type CommissionSource =
    */
   | { kind: 'booking'; id: string; payerText?: string | null; payerEmail?: string | null }
   /** Paid course order (SePay ZSC transfer or Dodo one-time card payment); every course a referred account buys. */
-  | { kind: 'course_order'; id: string };
+  | { kind: 'course_order'; id: string; payerText?: string | null };
 
 export interface ReferralCommission {
   id: string;

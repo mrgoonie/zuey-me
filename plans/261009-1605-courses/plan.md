@@ -1,6 +1,6 @@
 ---
 title: "Courses: replace AI Workflows with paid one-time courses"
-status: in-progress
+status: in-review
 priority: P1
 branch: claude/courses-learning-widgets-cfcd72
 created: 2026-10-09
@@ -17,7 +17,7 @@ Source of truth: confirmed advise session (2026-10-09). Replaces AI Workflows.
 - Admin marks lessons `is_trial` (free for everyone). Other lessons: owner or admin only. Paid lesson bodies never served to personal API keys / MCP; only outline + trial lessons in `.md`.
 - One-time purchase, owned forever. List price USD; SePay VND = USD × `USD_VND_RATE` rounded up to 1,000 (code `ZSC…`); Dodo one-time via one pay-what-you-want product `DODO_PRODUCT_COURSE` with `amount` override.
 - Subscriber discount: admin table plan → % (default 10/10/25/40), per-course override. Referral discount `d`. Applied = max(subscriber, referral). One `quoteCoursePrice()`.
-- Referral: every course a referee buys earns commission (`source_kind = course_order`). Integrated through `src/lib/courses/referral-bridge.ts`; wired to `src/lib/referrals` once that PR is on main.
+- Referral: every course a referee buys earns commission (`source_kind = course_order`). Integrated through `src/lib/courses/referral-bridge.ts`; wired to `src/lib/referrals`: bound accounts earn commission on every course (binding already required a never-paid referee, so repeat course orders skip the "previously paid" block); unbound buyers follow the first-order rule.
 - No refunds (Terms/Policy pages, checkbox required at checkout, terms version stored). Refund/chargeback/dispute → revoke access, GitHub, commission.
 - Anti-abuse: max 2 member sessions per account (oldest dropped); IP/country anomaly in 24 h → review flag; per-user rate limits on lessons and media; email watermark; admin lock.
 - Media: Cloudflare Stream signed tokens (RS256 JWT, ≤10 min); audio/files in private R2 (`COURSE_FILES`), streamed via HMAC-signed URLs (≤10 min, bound to user).
@@ -30,15 +30,15 @@ Source of truth: confirmed advise session (2026-10-09). Replaces AI Workflows.
 
 | # | Phase | Status |
 |---|-------|--------|
-| 1 | Migration, remove Workflows, redirects | pending |
-| 2 | Course domain: store, lesson schema/validation, access policy, pricing | pending |
-| 3 | Orders: SePay ZSC + Dodo one-time + webhooks + revoke | pending |
-| 4 | Anti-abuse: sessions cap, signals, rate limits, locks; media signing | pending |
-| 5 | Learning: progress, quiz grading, XP/badges/streaks, certificates, leaderboard | pending |
-| 6 | GitHub invites queue, AI tutor context, scheduler job | pending |
-| 7 | REST + OpenAPI + MCP | pending |
-| 8 | UI: catalog, landing+checkout, reader, account, Studio, Terms/Policy, OS links | pending |
-| 9 | Referral wiring (after referral PR lands), docs, tests, build, PR | pending |
+| 1 | Migration, remove Workflows, redirects | done |
+| 2 | Course domain: store, lesson schema/validation, access policy, pricing | done |
+| 3 | Orders: SePay ZSC + Dodo one-time + webhooks + revoke | done |
+| 4 | Anti-abuse: sessions cap, signals, rate limits, locks; media signing | done |
+| 5 | Learning: progress, quiz grading, XP/badges/streaks, certificates, leaderboard | done |
+| 6 | GitHub invites queue, AI tutor context, scheduler job | done |
+| 7 | REST + OpenAPI + MCP | done |
+| 8 | UI: catalog, landing+checkout, reader, account, Studio, Terms/Policy, OS links | done |
+| 9 | Referral wiring, docs, tests, build, PR | done |
 
 ## Done means
 
@@ -50,4 +50,4 @@ XP→coupon redemption, bilingual courses, AI essay grading, fill-in/ordering qu
 
 ## Ops (need owner action or confirmation)
 
-- Remote D1 migration (Time Travel bookmark first), R2 bucket `zuey-course-files`, Stream signing key, `DODO_PRODUCT_COURSE` (PWYW one-time), `GITHUB_COURSES_TOKEN`, `COURSE_MEDIA_SECRET`.
+- Remote D1 migration `0018_courses.sql` (Time Travel bookmark first; drops workflows, rebuilds two referral tables), R2 bucket `zuey-course-files`, Stream signing key, `DODO_PRODUCT_COURSE` (PWYW one-time), `GITHUB_COURSES_TOKEN`, `COURSE_MEDIA_SECRET`.

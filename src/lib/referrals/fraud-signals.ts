@@ -2,7 +2,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { Row } from '../members/runtime';
 import { DAY_MS, iso, membersRuntime, num, str, strOrNull } from '../members/runtime';
 import { getReferralProfile, normalizeEmailForSelfCheck } from './codes';
-import { accountMailboxes, isEligibleReferee, isSelfReferral } from './eligibility';
+import { accountMailboxes, isEligibleBoundReferee, isEligibleReferee, isSelfReferral } from './eligibility';
 import type { ReferralFraudSnapshot } from './fraud';
 import { payerTextMatches } from './fraud';
 
@@ -22,8 +22,8 @@ export interface FraudSignalInput {
   /** Route to admin review regardless of the soft signals (bookings). */
   manualReview?: boolean;
   /**
-   * Course orders: an account bound to this referrer earns commission on every course it buys. Binding already
-   * required a never-paid referee, so payments made since then are not "previously paid".
+   * Course orders: an account bound to this referrer earns commission on every course it buys. Only payments
+   * made before the binding (or by other accounts on the same mailbox) count as "previously paid".
    */
   repeatOrdersOfBoundReferee?: boolean;
 }
@@ -86,9 +86,12 @@ async function boundSignupsAroundReferee(d1: D1DatabaseLike, referrerUserId: str
   return row ? num(row, 'n') : 0;
 }
 
-async function isBoundTo(d1: D1DatabaseLike, refereeUserId: string | null, referrerUserId: string): Promise<boolean> {
-  if (!refereeUserId) return false;
-  return (await d1.prepare('SELECT 1 AS hit FROM users WHERE id = ? AND referred_by_user_id = ?').bind(refereeUserId, referrerUserId).first<Row>()) !== null;
+async function refereeStillEligible(d1: D1DatabaseLike, input: FraudSignalInput, referee: { userId?: string; email?: string | null }): Promise<boolean> {
+  if (input.repeatOrdersOfBoundReferee && input.refereeUserId) {
+    const bound = await isEligibleBoundReferee(d1, { userId: input.refereeUserId, referrerUserId: input.referrerUserId, excludeSourceId: input.sourceId });
+    if (bound !== null) return bound;
+  }
+  return isEligibleReferee(d1, { ...referee, excludeSourceId: input.sourceId });
 }
 
 /** Collects every fact `assessReferral` needs for one paid referred order. */
@@ -102,9 +105,7 @@ export async function gatherFraudSnapshot(d1: D1DatabaseLike, input: FraudSignal
   }
   return {
     selfReferral: await isSelfReferral(d1, input.referrerUserId, referee),
-    refereePreviouslyPaid: input.repeatOrdersOfBoundReferee && (await isBoundTo(d1, input.refereeUserId, input.referrerUserId))
-      ? false
-      : !(await isEligibleReferee(d1, { ...referee, excludeSourceId: input.sourceId })),
+    refereePreviouslyPaid: !(await refereeStillEligible(d1, input, referee)),
     referrerLocked: profile?.locked_at != null,
     refereeEmail,
     sharedIp: await sharedSignupIp(d1, input.referrerUserId, input.refereeUserId),

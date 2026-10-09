@@ -20,6 +20,8 @@ export interface CourseTransferNotice {
   paymentRef: string | null;
   rawType: string;
   transactedAt?: number | null;
+  /** Transfer content (may name the payer): the referral fraud check compares it with the referrer. */
+  payerText?: string | null;
 }
 
 export interface CoursePaymentResult { outcome: CoursePaymentOutcome; order_code: string | null }
@@ -66,7 +68,7 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
       if (current) await markCourseOrderAttention(d1, current, 'late_payment', extra);
       return { outcome: 'needs_attention', order_code: order.code };
     }
-    await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' });
+    await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, n.payerText ?? null);
     return { outcome: 'paid', order_code: order.code };
   } catch (err) {
     await releaseCoursePaymentEvent(d1, 'sepay', n.eventId);
@@ -92,7 +94,8 @@ const DISPUTE_REVOKE = new Set(['dispute.opened', 'dispute.accepted', 'dispute.l
 const DISPUTE_RESTORE = new Set(['dispute.won', 'dispute.cancelled']);
 
 async function orderByPaymentId(d1: D1DatabaseLike, paymentId: string): Promise<CourseOrder | null> {
-  const row = await d1.prepare("SELECT * FROM course_orders WHERE provider = 'dodo' AND provider_payment_id = ?").bind(paymentId).first<Row>();
+  // Any provider: a card payment landing on a SePay order is flagged but still refundable through Dodo.
+  const row = await d1.prepare('SELECT * FROM course_orders WHERE provider_payment_id = ?').bind(paymentId).first<Row>();
   return row ? rowToCourseOrder(row) : null;
 }
 
@@ -107,12 +110,13 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   const d = payload.data;
   const paymentId = text(d, 'payment_id');
   let order: CourseOrder | null = null;
+  let userMismatch = false;
   if (type === 'payment.succeeded' || type === 'payment.failed') {
     const meta = isRecord(d.metadata) ? d.metadata : {};
     const code = text(meta, 'course_order');
     if (!code) return null;
     order = await getCourseOrderByCode(d1, code);
-    if (order && text(meta, 'user_id') !== order.user_id) order = null;
+    userMismatch = order !== null && text(meta, 'user_id') !== order.user_id;
   } else if (type.startsWith('refund.') || type.startsWith('dispute.')) {
     if (!paymentId) return null;
     order = await orderByPaymentId(d1, paymentId);
@@ -129,7 +133,7 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   try {
     if (!order) return { outcome: 'unmatched', order_code: null };
     if (type === 'payment.failed') return { outcome: 'ignored', order_code: order.code };
-    if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId });
+    if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch });
     if (type === 'refund.succeeded') {
       return { outcome: (await reverseCourseOrder(d1, order, 'refunded', 'dodo_refund')) ? 'reversed' : 'ignored', order_code: order.code };
     }
@@ -147,13 +151,21 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
 }
 
 async function applyDodoCoursePayment(
-  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, p: { paymentId: string | null; amount: number | null; currency: string | null; eventId: string },
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder,
+  p: { paymentId: string | null; amount: number | null; currency: string | null; eventId: string; userMismatch: boolean },
 ): Promise<CoursePaymentResult> {
   if (order.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
   const extra = { amount: p.amount ?? 0, currency: p.currency ?? undefined, ref: p.paymentId, eventId: p.eventId };
-  // A charge in USD below the quoted price means the checkout was tampered with or misconfigured.
-  if (order.provider !== 'dodo' || (p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents)) {
-    await markCourseOrderAttention(d1, order, order.provider !== 'dodo' ? 'provider_mismatch' : 'underpaid', extra);
+  // Another account's checkout, a SePay order, or a USD charge below the quote (tampered or misconfigured checkout):
+  // the card money is captured, so the order is flagged with its payment id for a grant or a Dodo refund.
+  const reason = p.userMismatch ? 'user_mismatch'
+    : order.provider !== 'dodo' ? 'provider_mismatch'
+      : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid' : null;
+  if (reason) {
+    await markCourseOrderAttention(d1, order, reason, extra);
+    if (p.paymentId) {
+      await d1.prepare('UPDATE course_orders SET provider_payment_id = COALESCE(provider_payment_id, ?) WHERE id = ?').bind(p.paymentId, order.id).run();
+    }
     return { outcome: 'needs_attention', order_code: order.code };
   }
   const nowIso = iso(membersRuntime.now());

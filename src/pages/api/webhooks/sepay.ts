@@ -40,6 +40,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         orderCode: transfer.courseCode,
         paymentRef: transfer.referenceCode ?? transfer.eventId,
         rawType: 'transfer_in',
+        payerText: transfer.content,
         transactedAt: transfer.transactedAt,
       }));
     }

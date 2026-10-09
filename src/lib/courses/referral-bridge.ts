@@ -2,7 +2,8 @@
  * The seam between course orders and the referral program (src/lib/referrals).
  *
  * - An account bound to a referrer gets the referee discount and earns its referrer commission on EVERY
- *   course it buys, as long as the referrer is still active (not locked, not paused) and is not the buyer.
+ *   course it buys, as long as the referrer is still active (not locked, not paused), is not the buyer, and
+ *   nobody behind the account or mailbox had paid before the binding.
  * - An unbound account follows the program's first-order rule (typed code or `zr_ref` cookie, never paid
  *   before, one discounted checkout open at a time); a typed code binds the account once the order exists.
  * - Paid orders capture a commission on what was actually collected; refunds, chargebacks and disputes
@@ -17,7 +18,7 @@ import { bindEnteredReferral, parseReferralCodeField, resolveCheckoutReferral } 
 import { getReferralProfile } from '../referrals/codes';
 import { captureReferralCommission } from '../referrals/commissions';
 import { getReferralSettings } from '../referrals/config';
-import { isActiveReferrer, isSelfReferral } from '../referrals/eligibility';
+import { isActiveReferrer, isEligibleBoundReferee, isSelfReferral } from '../referrals/eligibility';
 import { effectiveRate, membershipSplit } from '../referrals/rates';
 import { reverseCommission } from '../referrals/refunds';
 import type { CheckoutReferral } from '../referrals/resolve-checkout-referral';
@@ -51,6 +52,7 @@ async function boundReferral(d1: D1DatabaseLike, userId: string): Promise<Checko
   if (!profile || profile.locked_at) return null;
   if (!(await isActiveReferrer(d1, referrerId))) return null;
   if (await isSelfReferral(d1, referrerId, { userId })) return null;
+  if (!(await isEligibleBoundReferee(d1, { userId, referrerUserId: referrerId }))) return null;
   const rate = effectiveRate(profile, await getReferralSettings(d1));
   if (rate <= 0) return null;
   return { referrerUserId: referrerId, code: profile.code, rate, ...membershipSplit(profile.discount_percent, rate), source: 'bound' };
@@ -77,9 +79,9 @@ export async function bindCourseReferral(d1: D1DatabaseLike, env: RuntimeEnv, us
 }
 
 /** Called after a course order is paid; `captureReferralCommission` never throws into the payment path. */
-export async function onCourseOrderPaid(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrderRef): Promise<void> {
+export async function onCourseOrderPaid(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrderRef, payerText: string | null = null): Promise<void> {
   if (!order.referrer_user_id) return;
-  await captureReferralCommission(d1, env, { kind: 'course_order', id: order.id });
+  await captureReferralCommission(d1, env, { kind: 'course_order', id: order.id, payerText });
 }
 
 /** Called after a paid course order is refunded, charged back or disputed. */

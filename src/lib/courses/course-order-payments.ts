@@ -52,7 +52,7 @@ export async function markCourseOrderAttention(d1: D1DatabaseLike, order: Course
  * Grants the course for a paid order, notifies the referral program and emails a receipt.
  * Referral and email failures are logged and never undo the purchase.
  */
-export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder): Promise<void> {
+export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<void> {
   const granted = await grantCourse(d1, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' });
   if (!granted) {
     // Bought twice (two open checkouts paid): keep the money traceable for a manual refund.
@@ -61,7 +61,7 @@ export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, ord
   }
   await logActivity(d1, order.user_id, 'courses.order_paid', { code: order.code, course_id: order.course_id, provider: order.provider });
   try {
-    await onCourseOrderPaid(d1, env, order);
+    await onCourseOrderPaid(d1, env, order, payerText);
   } catch (err) {
     console.error(`referral capture for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
   }

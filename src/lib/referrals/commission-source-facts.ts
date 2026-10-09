@@ -96,7 +96,7 @@ export async function sourceFacts(d1: D1DatabaseLike, env: RuntimeEnv, source: C
     return {
       referrerUserId: s.referrer, commissionPercent: s.percent, refereeUserId: userId, refereeEmail: await emailOf(d1, userId),
       baseCents: Math.max(baseCents, 0), paidAt, holdFrom: paidAt,
-      paymentId: strOrNull(r, 'provider_payment_id') ?? strOrNull(r, 'payment_ref'), payerText: null, payerEmail: null,
+      paymentId: strOrNull(r, 'provider_payment_id') ?? strOrNull(r, 'payment_ref'), payerText: source.payerText ?? null, payerEmail: null,
     };
   }
   const r = await d1.prepare('SELECT * FROM bookings WHERE id = ?').bind(source.id).first<Row>();

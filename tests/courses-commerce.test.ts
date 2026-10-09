@@ -164,5 +164,18 @@ describe('Dodo course payments, refunds and disputes', () => {
     const res = await dodo('evt_low', 'payment.succeeded', { payment_id: 'pay_low', total_amount: 100, currency: 'USD', metadata: { course_order: code, user_id: lan.userId } });
     expect(res).toMatchObject({ outcome: 'needs_attention' });
     expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    // The flagged order keeps its payment id, so a Dodo refund still closes it (an admin grant can no longer follow).
+    expect(await dodo('evt_low_refund', 'refund.succeeded', { payment_id: 'pay_low' })).toMatchObject({ outcome: 'reversed' });
+    expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+  });
+
+  it('flags a card payment whose checkout belongs to another account instead of dropping it', async () => {
+    await publishedCourse();
+    const lan = await member('lan@example.com');
+    const card = await read(await checkout(lan, { provider: 'dodo', accept_terms: true }));
+    const code = String(field(card.data, 'code'));
+    const res = await dodo('evt_other', 'payment.succeeded', { payment_id: 'pay_other', total_amount: 4900, currency: 'USD', metadata: { course_order: code, user_id: 'usr_someone_else' } });
+    expect(res).toMatchObject({ outcome: 'needs_attention' });
+    expect((await getCourseOrderByCode(state.d1, code))?.attention_reason).toBe('user_mismatch');
   });
 });
