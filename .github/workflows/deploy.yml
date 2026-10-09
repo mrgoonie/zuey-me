@@ -42,6 +42,10 @@ jobs:
       - name: Build Application
         run: bun run build
 
+      # Bundles the scheduler Worker without uploading, so a broken Worker fails the PR.
+      - name: Build scheduler Worker
+        run: bunx wrangler deploy --dry-run --config workers/scheduler/wrangler.toml --outdir .wrangler/scheduler-dry-run
+
       - name: Deploy to Cloudflare Pages (Production)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.CLOUDFLARE_API_TOKEN != ''
         uses: cloudflare/wrangler-action@v3
@@ -50,3 +54,13 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # The commit hash ties each Cloudflare deployment to the main commit it was built from.
           command: pages deploy dist --project-name=zuey-me --branch=main --commit-hash=${{ github.sha }}
+
+      # The cron Worker that calls the Pages app's scheduled endpoints. Deploying keeps
+      # its CRON_SECRET secret; set that once with `wrangler secret put` (see docs/env-setup.vi.md).
+      - name: Deploy scheduler Worker (Production)
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config workers/scheduler/wrangler.toml
