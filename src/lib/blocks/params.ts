@@ -4,6 +4,7 @@ import type { Locale } from '../i18n/locales';
 import type { ArticleAccess } from './schema';
 import { SORTS } from './articles';
 import type { ArticleSort, ListOptions } from './articles';
+import { MAX_ARTICLE_PAGE } from './pagination';
 
 /** Optional `?lang=` (or another name) query parameter; an unknown value is a 400, not a silent fallback. */
 export function localeParam(url: URL, name = 'lang'): Locale | undefined {
@@ -30,6 +31,8 @@ function shortParam(url: URL, name: string, max = 80): string | undefined {
 
 export interface DiscoveryQuery extends ListOptions {
   q?: string;
+  /** 1-based page of `limit` (default 20) results; see `queryWindow` in ./pagination. */
+  page?: number;
 }
 
 /** Shared parsing of discovery filters for the REST list, the /articles page and MCP. */
@@ -53,6 +56,15 @@ export function parseDiscoveryQuery(url: URL): DiscoveryQuery {
     if (!Number.isInteger(v) || v < 1 || v > 100) throw new AppError(400, 'invalid_field', 'limit must be an integer 1–100', { field: 'limit' });
     limit = v;
   }
+  const pageRaw = url.searchParams.get('page');
+  let page: number | undefined;
+  if (pageRaw) {
+    const v = Number(pageRaw);
+    if (!Number.isInteger(v) || v < 1 || v > MAX_ARTICLE_PAGE) {
+      throw new AppError(400, 'invalid_field', `page must be an integer 1–${MAX_ARTICLE_PAGE}`, { field: 'page' });
+    }
+    page = v;
+  }
   return {
     q: shortParam(url, 'q', 200),
     locale: localeParam(url),
@@ -62,5 +74,6 @@ export function parseDiscoveryQuery(url: URL): DiscoveryQuery {
     access,
     sort,
     limit,
+    page,
   };
 }

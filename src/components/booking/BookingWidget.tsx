@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isValidTimeZone, zonedDateKey } from '../../lib/booking/timezone';
+import { ReferralCodeField } from '../referral/ReferralCodeField';
+import { useReferralQuote } from '../referral/referral-quote';
 
 // ---------------------------------------------------------------------------
 // Types and API helpers (responses are validated, never blindly cast)
@@ -29,6 +31,8 @@ interface GuestBooking {
   can_reschedule: boolean;
   reschedule_blocked_reason: string | null;
   sepay: SepayInfo | null;
+  /** Referral discount the server snapshotted on the hold (null without a referral). */
+  referral_discount_percent: number | null;
 }
 
 type ApiResult = { ok: true; data: Record<string, unknown> } | { ok: false; code: string; message: string };
@@ -90,8 +94,11 @@ function parseBooking(d: Record<string, unknown>): GuestBooking {
     can_reschedule: d.can_reschedule === true,
     reschedule_blocked_reason: typeof d.reschedule_blocked_reason === 'string' ? d.reschedule_blocked_reason : null,
     sepay: parseSepay(d.sepay),
+    referral_discount_percent: typeof d.referral_discount_percent === 'number' ? d.referral_discount_percent : null,
   };
 }
+
+const usd = (cents: number) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: cents % 100 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`;
 
 function browserTimeZone(): string {
   try {
@@ -297,6 +304,8 @@ interface HoldState {
   token: string;
   /** Hosted PayPal checkout the guest is sent to; payment is confirmed server-side only. */
   checkoutUrl: string | null;
+  /** PayPal amount the server charges (after any referral discount). */
+  paypalCents: number | null;
   sepay: SepayInfo | null;
 }
 
@@ -319,6 +328,8 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
   const [error, setError] = useState<string | null>(null);
   const [hold, setHold] = useState<HoldState | null>(null);
   const remaining = useCountdown(hold?.booking.hold_expires_at ?? null);
+  const referral = useReferralQuote();
+  const bookingQuote = referral.quote?.referral && referral.quote.referral.booking_discount_percent > 0 ? referral.quote : null;
 
   const formValid = form.name.trim().length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
 
@@ -328,7 +339,10 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
     setError(null);
     const held = await callApi('/api/v1/booking/hold', {
       method: 'POST',
-      body: JSON.stringify({ slot_start: slot.start, ...form, timezone: tz, payment_method: method }),
+      body: JSON.stringify({
+        slot_start: slot.start, ...form, timezone: tz, payment_method: method,
+        ...(referral.enteredCode ? { referral_code: referral.enteredCode } : {}),
+      }),
     });
     if (!held.ok) {
       setBusy(false);
@@ -337,6 +351,8 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
         setSlot(null);
         setStep(1);
         reload();
+      } else if (held.code === 'referral_code_invalid') {
+        setError('Mã giới thiệu không áp dụng được cho email này (mã không hoạt động, là mã của bạn, hoặc email đã từng thanh toán). Bỏ mã để đặt lịch giá thường.');
       } else if (held.code === 'payment_unconfigured') {
         setError(`Phương thức thanh toán này chưa sẵn sàng (${held.message}). Vui lòng chọn phương thức khác hoặc email hi@zuey.me.`);
       } else setError(held.message);
@@ -353,6 +369,7 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
       manageUrl,
       token,
       checkoutUrl: co.ok && typeof co.data.url === 'string' ? co.data.url : null,
+      paypalCents: co.ok && typeof co.data.amount_usd_cents === 'number' ? co.data.amount_usd_cents : null,
       sepay: co.ok ? parseSepay(co.data) : null,
     });
     if (!co.ok) setError(co.code === 'payment_unconfigured' ? `Thanh toán chưa được cấu hình: ${co.message}` : co.message);
@@ -439,6 +456,15 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
               ))}
             </fieldset>
           )}
+          {bookingQuote?.referral && (
+            <p className="text-sm tabular-nums">
+              Ưu đãi giới thiệu −{bookingQuote.referral.booking_discount_percent}%:{' '}
+              <span className="line-through text-stone-500">{usd(bookingQuote.booking.amount_usd_cents)}</span>{' '}
+              <strong className="text-emerald-800">{usd(bookingQuote.booking.discounted_usd_cents)}</strong>
+              <span className="block text-xs text-stone-600">Số tiền cuối cùng được xác nhận khi giữ chỗ (chỉ áp dụng cho email chưa từng thanh toán).</span>
+            </p>
+          )}
+          <ReferralCodeField state={referral} percent={null} />
           <p className="text-xs text-stone-600">Khi bấm “Giữ chỗ”, khung giờ được giữ cho bạn trong 15 phút để hoàn tất thanh toán. Lịch chỉ được xác nhận khi hệ thống nhận được thanh toán.</p>
           <div className="mt-2 flex flex-wrap justify-between gap-2">
             <button type="button" className={btnGhost} onClick={() => setStep(2)} disabled={busy}>Quay lại</button>
@@ -455,9 +481,12 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
           <p className={`text-center text-3xl font-bold tabular-nums ${expired ? 'text-rose-700' : ''}`} role="timer" aria-live="polite" aria-atomic="true">
             {expired ? 'Hết thời gian giữ chỗ' : mmss(remaining)}
           </p>
+          {hold.booking.referral_discount_percent !== null && hold.booking.referral_discount_percent > 0 && (
+            <p className="rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm p-3">Đã áp dụng giảm giá giới thiệu −{hold.booking.referral_discount_percent}%.</p>
+          )}
           {!expired && hold.checkoutUrl && (
             <>
-              <a href={hold.checkoutUrl} className={`${btnPrimary} w-full`}>Thanh toán $1,999 qua PayPal</a>
+              <a href={hold.checkoutUrl} className={`${btnPrimary} w-full`}>Thanh toán {hold.paypalCents !== null ? usd(hold.paypalCents) : ''} qua PayPal</a>
               <p className="text-xs text-stone-600">Sau khi bạn bấm thanh toán trên PayPal, Zuey ghi nhận khoản tiền và đưa bạn về trang quản lý lịch. Lịch chỉ được xác nhận khi hệ thống thấy khoản thanh toán đã hoàn tất.</p>
             </>
           )}
@@ -627,6 +656,7 @@ export function BookingManage({ bookingId }: { bookingId: string }) {
             <div><dt className="inline font-semibold">Trạng thái: </dt><dd className="inline">{STATUS_TEXT[booking.status] ?? booking.status}</dd></div>
             <div><dt className="inline font-semibold">Thời gian: </dt><dd className="inline">{formatFull(booking.slot_start, tz)} – {formatTime(booking.slot_end, tz)} ({tz})</dd></div>
             <div><dt className="inline font-semibold">Mã đặt lịch: </dt><dd className="inline font-mono">{booking.code}</dd></div>
+            {booking.referral_discount_percent ? <div><dt className="inline font-semibold">Ưu đãi giới thiệu: </dt><dd className="inline">−{booking.referral_discount_percent}%</dd></div> : null}
           </dl>
 
           {booking.status === 'held' && (
@@ -635,7 +665,7 @@ export function BookingManage({ bookingId }: { bookingId: string }) {
               <p className="text-xs text-stone-600">Trang tự cập nhật khi thanh toán được ghi nhận.</p>
               {booking.payment_method === 'paypal' && (
                 <button type="button" className={`${btnPrimary} w-full`} onClick={payWithPaypal} disabled={busy || remaining === 0}>
-                  {busy ? 'Đang xử lý…' : 'Thanh toán $1,999 qua PayPal'}
+                  {busy ? 'Đang xử lý…' : booking.referral_discount_percent ? `Thanh toán qua PayPal (đã giảm ${booking.referral_discount_percent}%)` : 'Thanh toán $1,999 qua PayPal'}
                 </button>
               )}
               {booking.sepay && (

@@ -1,6 +1,6 @@
 import { AppError, jsonOk } from '../../../../../../../lib/http';
 import { NO_STORE, memberRoute, requireJsonBody } from '../../../../../../../lib/members/account';
-import { consumeRateLimit } from '../../../../../../../lib/courses/course-abuse-guards';
+import { consumeRateLimit, requestIpHash } from '../../../../../../../lib/courses/course-abuse-guards';
 import { gradeQuiz, submitQuiz } from '../../../../../../../lib/courses/course-learning';
 import { requireReadableLesson } from '../../../../../../../lib/courses/course-views';
 import { findQuiz, parseStoredLesson } from '../../../../../../../lib/courses/lesson-blocks';
@@ -10,12 +10,14 @@ import { findQuiz, parseStoredLesson } from '../../../../../../../lib/courses/le
  * and explanations are returned only here, after submission. Callers without an account (admin keys,
  * visitors on a trial lesson) are graded but nothing is stored; admins grade the draft of unpublished lessons.
  */
-export const POST = memberRoute(async ({ request, params }, { d1, principal }) => {
+export const POST = memberRoute(async ({ request, params }, { d1, env, principal }) => {
   const body = await requireJsonBody(request);
   if (typeof body.block_id !== 'string') throw new AppError(400, 'invalid_field', 'block_id is required', { field: 'block_id' });
   const { lesson } = await requireReadableLesson(d1, principal, params.course ?? '', params.lesson ?? '');
   const draft = principal.kind === 'admin' && lesson.status !== 'published';
   if (!principal.userId || draft) {
+    // Visitors share the per-user quiz budget, keyed by hashed client IP.
+    if (!principal.userId) await consumeRateLimit(d1, 'quiz', `ip:${(await requestIpHash(env, request)) ?? 'unknown'}`);
     const doc = parseStoredLesson(draft ? lesson.draft_json : lesson.published_json);
     const quiz = doc ? findQuiz(doc, body.block_id) : null;
     if (!quiz) throw new AppError(404, 'quiz_not_found', 'Quiz not found in this lesson');

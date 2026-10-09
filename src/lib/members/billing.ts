@@ -5,9 +5,11 @@ import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billin
 import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
 import type { SepayTransferInfo } from '../payments/sepay';
 import { SEPAY_BILLING_PREFIX, extractBillingCode, extractCourseOrderCode, missingSepayBankConfig, parseSepayTime, vietQrTransfer } from '../payments/sepay';
+import { bindEnteredReferral, parseReferralCodeField, resolveCheckoutReferral, sepayReferralAmounts } from '../referrals/checkout';
+import { captureReferralCommission } from '../referrals/commissions';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
 import type { BillingMonths, Entitlement, PlanId } from './plans';
-import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, parseUsdVndRate, prepayUsdCents, prepayVnd } from './plans';
+import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, parseUsdVndRate } from './plans';
 import type { Row } from './runtime';
 import { DAY_MS, iso, isUniqueViolation, membersRuntime, num, numOrNull, randomCode, randomId, siteUrl, str, strOrNull } from './runtime';
 import type { SubscriptionView } from './subscriptions';
@@ -38,6 +40,11 @@ export interface BillingOrder {
   amount_paid: number | null;
   payment_ref: string | null;
   attention_reason: string | null;
+  /** Referral terms snapshotted at order creation (null without a referral). */
+  referrer_user_id: string | null;
+  referral_discount_percent: number | null;
+  /** Prepaid VND total before the referral discount. */
+  amount_before_referral: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +61,9 @@ export interface OrderView {
   paid_at: string | null;
   amount_paid: number | null;
   attention_reason: string | null;
+  /** Referral discount applied after the prepay discount, and the VND total before it (null without a referral). */
+  referral_discount_percent: number | null;
+  amount_before_referral_vnd: number | null;
   created_at: string;
   /** VietQR transfer instructions while the order is payable; null otherwise. */
   transfer: SepayTransferInfo | null;
@@ -81,6 +91,9 @@ export function rowToOrder(row: Row): BillingOrder {
     amount_paid: numOrNull(row, 'amount_paid'),
     payment_ref: strOrNull(row, 'payment_ref'),
     attention_reason: strOrNull(row, 'attention_reason'),
+    referrer_user_id: strOrNull(row, 'referrer_user_id'),
+    referral_discount_percent: numOrNull(row, 'referral_discount_percent'),
+    amount_before_referral: numOrNull(row, 'amount_before_referral'),
     created_at: str(row, 'created_at'),
     updated_at: str(row, 'updated_at'),
   };
@@ -115,6 +128,8 @@ export function toOrderView(order: BillingOrder, env: RuntimeEnv): OrderView {
     paid_at: order.paid_at,
     amount_paid: order.amount_paid,
     attention_reason: order.attention_reason,
+    referral_discount_percent: order.referrer_user_id ? order.referral_discount_percent : null,
+    amount_before_referral_vnd: order.referrer_user_id ? order.amount_before_referral : null,
     created_at: order.created_at,
     transfer: payable ? vietQrTransfer(env, order.amount_vnd, order.code) : null,
   };
@@ -146,11 +161,16 @@ export async function listOrders(d1: D1DatabaseLike, userId: string, limit = 50)
   return (results ?? []).map(rowToOrder);
 }
 
-/** Creates a prepaid SePay order for 1/3/6/12 months with the term discount (PREPAY_DISCOUNT_PERCENT). */
+/**
+ * Creates a prepaid SePay order for 1/3/6/12 months with the term discount (PREPAY_DISCOUNT_PERCENT), then
+ * the referral discount when one applies (optional `referral_code`, the account binding or the `zr_ref`
+ * cookie). Amounts are always computed here; the referral terms are snapshotted on the order.
+ */
 export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: string, body: Record<string, unknown>, request?: Request): Promise<BillingOrder> {
   if (!isPlanId(body.plan)) throw new AppError(400, 'invalid_field', "plan must be one of 'knowledges', 'ai', 'combo', 'community'", { field: 'plan' });
   const months = body.months ?? 1;
   if (!isBillingMonths(months)) throw new AppError(400, 'invalid_field', `months must be one of ${BILLING_MONTHS.join(', ')}`, { field: 'months' });
+  const enteredCode = parseReferralCodeField(body);
   const rate = requireBillingConfigured(env);
   await expireStaleOrders(d1, userId);
   const pending = await d1.prepare("SELECT COUNT(*) AS n FROM billing_orders WHERE user_id = ? AND status = 'pending'").bind(userId).first<Row>();
@@ -159,19 +179,27 @@ export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: s
   }
 
   const plan = getPlan(body.plan);
+  const referral = await resolveCheckoutReferral(d1, { userId, enteredCode, request, product: 'membership' });
+  const amounts = sepayReferralAmounts(plan.id, months, rate, referral?.discountPercent ?? 0);
   const now = membersRuntime.now();
   const id = randomId('ord');
   for (let attempt = 0; attempt < 3; attempt++) {
     const code = SEPAY_BILLING_PREFIX + randomCode(8);
     try {
       await d1.prepare(
-        `INSERT INTO billing_orders (id, code, user_id, plan, months, amount_usd_cents, usd_vnd_rate, amount_vnd, status, expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-      ).bind(id, code, userId, plan.id, months, prepayUsdCents(plan.price_usd_cents, months), rate, prepayVnd(plan.price_usd_cents, months, rate),
-        iso(now + ORDER_TTL_MS), iso(now), iso(now)).run();
+        `INSERT INTO billing_orders (id, code, user_id, plan, months, amount_usd_cents, usd_vnd_rate, amount_vnd, status, expires_at, created_at, updated_at,
+           referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, code, userId, plan.id, months, amounts.usdCents, rate, amounts.vnd, iso(now + ORDER_TTL_MS), iso(now), iso(now),
+        referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
+        referral ? amounts.beforeVnd : null).run();
       const order = await getOrderByCode(d1, code);
       if (!order) throw new AppError(500, 'internal_error', 'Order was not persisted');
-      await logActivity(d1, userId, 'billing.order_created', { code, plan: plan.id, months, amount_vnd: order.amount_vnd }, request);
+      // A typed code binds only now that the order exists, never for a checkout that failed validation.
+      await bindEnteredReferral(d1, env, userId, referral, request);
+      await logActivity(d1, userId, 'billing.order_created', {
+        code, plan: plan.id, months, amount_vnd: order.amount_vnd, referral_discount_percent: referral?.discountPercent ?? null,
+      }, request);
       return order;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
@@ -216,7 +244,11 @@ export async function createMemberCheckout(
     if (body.months !== undefined && body.months !== 1) {
       throw new AppError(400, 'invalid_field', 'Card subscriptions renew monthly; months must be 1 or omitted', { field: 'months' });
     }
-    return { ...(await startCardCheckout(d1, env, userId, body.plan, request)), provider: 'dodo' };
+    const enteredCode = parseReferralCodeField(body);
+    const referral = await resolveCheckoutReferral(d1, { userId, enteredCode, request, product: 'membership' });
+    const checkout = await startCardCheckout(d1, env, userId, body.plan, request, referral);
+    await bindEnteredReferral(d1, env, userId, referral, request);
+    return { ...checkout, provider: 'dodo' };
   }
   if (provider !== 'sepay') throw new AppError(400, 'invalid_field', `provider must be one of ${CHECKOUT_PROVIDERS.join(', ')}`, { field: 'provider' });
   const view = toOrderView(await createOrder(d1, env, userId, body, request), env);
@@ -233,6 +265,8 @@ export interface BillingPaymentNotice {
   orderCode: string;
   paymentRef: string | null;
   rawType: string;
+  /** Bank transfer content (may carry the payer's name); used only as a referral fraud signal. */
+  payerText?: string | null;
   /** Bank booking time from SePay (epoch ms); decides on-time payment when the notice arrives late. */
   transactedAt?: number | null;
 }
@@ -332,6 +366,7 @@ export async function applyBillingPayment(d1: D1DatabaseLike, env: RuntimeEnv, n
     ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id, paidIso).run();
     if (res.meta?.changes === 1) {
       await fulfilOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount });
+      if (order.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'billing_order', id: order.id, payerText: n.payerText ?? null });
       return { outcome: 'paid', order_code: order.code };
     }
     const current = await getOrderByCode(d1, order.code);
@@ -407,6 +442,8 @@ export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv, applyC
       orderCode: code,
       paymentRef: typeof tx.reference_number === 'string' && tx.reference_number ? tx.reference_number : id,
       rawType: 'reconcile',
+      // The transfer content may name the payer: same referral fraud signal as the webhook path.
+      payerText: typeof tx.transaction_content === 'string' ? tx.transaction_content : null,
       transactedAt: parseSepayTime(tx.transaction_date),
     };
     const result = billingCode || !applyCourse ? await applyBillingPayment(d1, env, notice) : await applyCourse(notice);

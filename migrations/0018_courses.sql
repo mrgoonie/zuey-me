@@ -265,3 +265,46 @@ CREATE TABLE IF NOT EXISTS rate_counters (
   window_start INTEGER NOT NULL,
   count INTEGER NOT NULL
 );
+
+-- Referral program: course orders earn commission. SQLite cannot alter a CHECK, so the two tables whose
+-- source_kind is constrained are rebuilt with 'course_order' added (no other table references them).
+CREATE TABLE referral_commissions_next (
+  id TEXT PRIMARY KEY,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('billing_order', 'card_subscription', 'booking', 'course_order')),
+  source_id TEXT NOT NULL,
+  referrer_user_id TEXT NOT NULL REFERENCES users (id),
+  referee_user_id TEXT REFERENCES users (id),
+  referee_email TEXT,
+  base_amount_cents INTEGER NOT NULL CHECK (base_amount_cents >= 0),
+  commission_percent INTEGER NOT NULL CHECK (commission_percent BETWEEN 0 AND 50),
+  commission_cents INTEGER NOT NULL CHECK (commission_cents >= 0),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'review', 'approved', 'reversed', 'blocked')),
+  review_reasons TEXT,
+  hold_until TEXT NOT NULL,
+  provider_payment_id TEXT,
+  paid_at TEXT,
+  approved_at TEXT,
+  reversed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (source_kind, source_id)
+);
+INSERT INTO referral_commissions_next SELECT id, source_kind, source_id, referrer_user_id, referee_user_id, referee_email, base_amount_cents,
+  commission_percent, commission_cents, status, review_reasons, hold_until, provider_payment_id, paid_at, approved_at, reversed_at, created_at, updated_at
+  FROM referral_commissions;
+DROP TABLE referral_commissions;
+ALTER TABLE referral_commissions_next RENAME TO referral_commissions;
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_referrer ON referral_commissions (referrer_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_hold ON referral_commissions (status, hold_until);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_paid ON referral_commissions (paid_at);
+
+CREATE TABLE referral_source_reversals_next (
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('billing_order', 'card_subscription', 'booking', 'course_order')),
+  source_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (source_kind, source_id)
+);
+INSERT INTO referral_source_reversals_next SELECT source_kind, source_id, reason, created_at FROM referral_source_reversals;
+DROP TABLE referral_source_reversals;
+ALTER TABLE referral_source_reversals_next RENAME TO referral_source_reversals;

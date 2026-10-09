@@ -75,6 +75,7 @@ const WATCH_HTML = (desc: string) =>
   `<html><script>var x = {"lengthSeconds":"877","publishDate":"2026-03-02T05:00:00-08:00","shortDescription":${JSON.stringify(desc)}};</script></html>`;
 
 let anymdCalls: string[] = [];
+let anymdLanguages: unknown[] = [];
 
 async function fakeFetch(input: string, init?: RequestInit): Promise<Response> {
   if (input.startsWith('https://anymd.cc/')) {
@@ -82,6 +83,7 @@ async function fakeFetch(input: string, init?: RequestInit): Promise<Response> {
     const url = typeof body === 'object' && body !== null && 'url' in body && typeof body.url === 'string' ? body.url : '';
     const id = parseYoutubeId(url) ?? '';
     anymdCalls.push(id);
+    anymdLanguages.push(typeof body === 'object' && body !== null && 'language' in body ? body.language : undefined);
     if (id === BROKEN_ID) return new Response(JSON.stringify({ error: 'upstream exploded' }), { status: 502 });
     const md = FIXTURES[id];
     return md ? new Response(md, { status: 200, headers: { 'Content-Type': 'text/markdown' } }) : new Response('not found', { status: 404 });
@@ -149,6 +151,7 @@ function insertArticle(slug: string, access: 'free' | 'knowledges', texts: strin
 beforeEach(() => {
   d1 = createTestD1();
   anymdCalls = [];
+  anymdLanguages = [];
 });
 
 // ---------- Pure helpers ----------
@@ -199,6 +202,8 @@ describe('adding videos', () => {
     expect(vi.transcript_status).toBe('ready');
     const en = await addVideo(deps(), { url: `https://www.youtube.com/watch?v=${EN_ID}`, locale: 'en', pair_with: vi.video.id });
     expect(en.video.id).toBe(vi.video.id);
+    // Captions are requested in each edition's language (YouTube can mis-detect Vietnamese speech).
+    expect(anymdLanguages).toEqual(['vi', 'en']);
 
     const video = await getVideo(d1, EN_ID, { transcript: true });
     expect(video?.editions.map(e => e.locale)).toEqual(['vi', 'en']);

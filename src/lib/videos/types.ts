@@ -6,6 +6,10 @@ export type VideoLocale = (typeof VIDEO_LOCALES)[number];
 export const TRANSCRIPT_STATUSES = ['pending', 'ready', 'unavailable', 'failed'] as const;
 export type TranscriptStatus = (typeof TRANSCRIPT_STATUSES)[number];
 
+/** AI cleanup of the raw captions: none (not attempted / no AI binding), ready, or failed (raw text kept). */
+export const TRANSCRIPT_REWRITE_STATUSES = ['none', 'ready', 'failed'] as const;
+export type TranscriptRewriteStatus = (typeof TRANSCRIPT_REWRITE_STATUSES)[number];
+
 export const ZUEYTUBE_CHANNEL_URL = 'https://www.youtube.com/@imzuey';
 export const ZUEYTUBE_SUBSCRIBE_URL = 'https://www.youtube.com/@imzuey?sub_confirmation=1';
 
@@ -14,6 +18,10 @@ export const ZUEYTUBE_OPEN_EVENT = 'zueytube:open';
 
 export function isVideoLocale(value: unknown): value is VideoLocale {
   return value === 'vi' || value === 'en';
+}
+
+export function isTranscriptRewriteStatus(value: unknown): value is TranscriptRewriteStatus {
+  return typeof value === 'string' && (TRANSCRIPT_REWRITE_STATUSES as readonly string[]).includes(value);
 }
 
 export function isTranscriptStatus(value: unknown): value is TranscriptStatus {
@@ -35,6 +43,10 @@ export interface VideoEdition {
   transcript_error: string | null;
   transcript_fetched_at: string | null;
   word_count: number;
+  /** "ready" means `transcript` is the AI-cleaned text and its timestamps are estimates. */
+  transcript_rewrite_status: TranscriptRewriteStatus;
+  transcript_rewrite_error: string | null;
+  transcript_rewritten_at: string | null;
   watch_url: string;
   embed_url: string;
   /** Present only on detail reads (`getVideo(..., { transcript: true })`). */

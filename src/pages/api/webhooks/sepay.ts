@@ -28,6 +28,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         orderCode: transfer.billingCode,
         paymentRef: transfer.referenceCode ?? transfer.eventId,
         rawType: 'transfer_in',
+        payerText: transfer.content,
         transactedAt: transfer.transactedAt,
       });
       return jsonOk(result);
@@ -52,6 +53,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       paymentRef: transfer.referenceCode ?? transfer.eventId,
       bookingId: null,
       bookingCode: transfer.bookingCode,
+      payerText: transfer.content,
     });
     return jsonOk(result);
   } catch (err) {

@@ -9,10 +9,11 @@ import { chatOpenApi } from '../ai/openapi';
 import { oauthOpenApi } from '../oauth/openapi';
 import { experienceOpenApi } from '../experience/openapi';
 import { taxonomyOpenApi } from '../taxonomy/openapi';
+import { referralsOpenApi } from '../referrals/openapi';
 import { videosOpenApi } from '../videos/openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
 export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [
   readsOpenApi, coursesOpenApi, coursesAdminOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
-  chatOpenApi, oauthOpenApi, experienceOpenApi, videosOpenApi,
+  chatOpenApi, oauthOpenApi, experienceOpenApi, videosOpenApi, referralsOpenApi,
 ];

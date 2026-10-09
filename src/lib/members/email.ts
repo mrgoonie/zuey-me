@@ -4,7 +4,7 @@ import { sendEmail } from '../integrations/resend';
 import type { Row } from './runtime';
 import { escapeHtml, isUniqueViolation, membersRuntime, nowIso, str } from './runtime';
 
-export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'course_receipt';
+export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'referral_payout' | 'course_receipt';
 export type LoggedEmailStatus = 'sent' | 'skipped' | 'failed' | 'duplicate';
 
 export interface LoggedEmail {

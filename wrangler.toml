@@ -19,6 +19,12 @@ PUBLIC_POSTHOG_HOST = "https://us.i.posthog.com"
 [ai]
 binding = "AI"
 
+# Private R2 bucket for referral payout national-ID images (no public domain).
+# Objects live only until an admin approves or rejects the payout profile.
+[[r2_buckets]]
+binding = "REFERRAL_KYC"
+bucket_name = "zuey-referral-kyc"
+
 # Private course audio and downloads. Uncomment after creating the bucket
 # (`wrangler r2 bucket create zuey-course-files`); deploys fail while the bucket is missing.
 # [[r2_buckets]]

@@ -6,6 +6,10 @@ interface QrCodeModalProps {
   onClose: () => void;
   url?: string;
   lang: 'en' | 'vi';
+  /** Overrides for reuse beyond the profile QR (e.g. a referral link). */
+  title?: string;
+  hint?: string;
+  fileName?: string;
 }
 
 export const QrCodeModal: React.FC<QrCodeModalProps> = ({
@@ -13,6 +17,9 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   onClose,
   url,
   lang,
+  title,
+  hint,
+  fileName = 'zuey-me-qrcode.png',
 }) => {
   const [qrSrc, setQrSrc] = useState<string>('');
   const [copied, setCopied] = useState(false);
@@ -55,7 +62,7 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
     if (!qrSrc) return;
     const a = document.createElement('a');
     a.href = qrSrc;
-    a.download = 'zuey-me-qrcode.png';
+    a.download = fileName;
     a.click();
   };
 
@@ -67,7 +74,7 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
       >
         <div className="flex items-center justify-between pb-3 border-b border-stone-100">
           <h2 className="text-base font-bold text-stone-900 font-sans tracking-tight">
-            {lang === 'vi' ? 'Quét mã QR Profile' : 'Scan Profile QR'}
+            {title ?? (lang === 'vi' ? 'Quét mã QR Profile' : 'Scan Profile QR')}
           </h2>
           <button
             onClick={onClose}
@@ -107,9 +114,9 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
           </p>
 
           <p className="mt-2 text-xs text-stone-600 max-w-xs">
-            {lang === 'vi'
+            {hint ?? (lang === 'vi'
               ? 'Sử dụng camera điện thoại để quét mã và truy cập profile ngay lập tức.'
-              : 'Scan with your mobile camera to instantly access the live profile.'}
+              : 'Scan with your mobile camera to instantly access the live profile.')}
           </p>
         </div>
 

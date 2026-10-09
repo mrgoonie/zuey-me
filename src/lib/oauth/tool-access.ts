@@ -37,6 +37,7 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   video_update: ADMIN,
   video_delete: ADMIN,
   video_refetch_transcript: ADMIN,
+  video_rewrite_transcript: ADMIN,
   // Courses (paid lesson bodies are browser-only; the lesson tool returns the denial)
   course_list: PUBLIC,
   course_get: PUBLIC,
@@ -124,6 +125,15 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   community_sweep: ADMIN,
   github_activity_get: PUBLIC,
   weather_get: PUBLIC,
+  // Referral program (admin only; national-ID images are never returned)
+  referral_settings_get: ADMIN,
+  referral_settings_set: ADMIN,
+  referral_referrer_update: ADMIN,
+  referral_review_list: ADMIN,
+  referral_commission_decide: ADMIN,
+  referral_payouts_list: ADMIN,
+  referral_payout_mark_paid: ADMIN,
+  referral_leaderboard: ADMIN,
 };
 
 export function toolAccess(name: string): ToolAccess {

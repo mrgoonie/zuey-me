@@ -1,0 +1,73 @@
+/* "Ask Zuey AI" selection tooltip and the article drawer that hosts the Zuey AI panel. */
+
+.zaa-tip {
+  position: fixed;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 40px;
+  padding: 0 0.9rem;
+  border: 0;
+  border-radius: 999px;
+  background: #1c1917;
+  color: #fff7ed;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 10px 28px -10px rgba(28, 25, 23, 0.6);
+  cursor: pointer;
+  animation: zaa-pop 140ms ease-out;
+}
+.zaa-tip:hover { background: #292524; }
+.zaa-tip:focus-visible { outline: 2px solid #f59e0b; outline-offset: 2px; }
+.zaa-tip svg { color: #fbbf24; }
+
+.zaa-drawer {
+  position: fixed;
+  z-index: 70;
+  right: 12px;
+  top: 12px;
+  bottom: 12px;
+  width: min(460px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 28px;
+  animation: zaa-slide-in 200ms ease-out;
+}
+.zaa-drawer[hidden] { display: none; }
+.zaa-drawer > .zai { min-height: 100%; }
+.zaa-drawer .zai-log { max-height: none; min-height: 12rem; flex: 1; }
+.zaa-loading {
+  margin: 0;
+  padding: 1rem;
+  border-radius: 28px;
+  background: #f5efeb;
+  color: #57534e;
+  font-size: 0.9rem;
+}
+
+/* Phones: a bottom sheet over the article, leaving the top of the page visible. */
+@media (max-width: 639px) {
+  .zaa-drawer {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    max-height: 85dvh;
+    border-radius: 24px 24px 0 0;
+    animation-name: zaa-sheet-in;
+  }
+  .zaa-drawer > .zai { border-radius: 24px 24px 0 0; padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+}
+
+@keyframes zaa-pop { from { opacity: 0; transform: translateX(-50%) translateY(4px); } to { opacity: 1; transform: translateX(-50%); } }
+@keyframes zaa-slide-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes zaa-sheet-in { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .zaa-tip, .zaa-drawer { animation: none; }
+}

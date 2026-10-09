@@ -84,9 +84,10 @@ zuey links list --section products
 zuey links add --section products --title "AgentKit" --url "https://agentkit.best" --subtitle "AI engineering framework"
 zuey links reorder prod-agentkit prod-dewee prod-tose
 zuey theme set ivory
-zuey videos add https://youtu.be/<id> --locale vi            # transcript fetched once via AnyMD
+zuey videos add https://youtu.be/<id> --locale vi            # transcript fetched once via AnyMD, then cleaned up by AI
 zuey videos add https://youtu.be/<id> --locale en --pair vid_…  # English edition of the same video
 zuey videos refetch <youtube_id>
+zuey videos rewrite <youtube_id>                             # clean up the transcript with AI again
 zuey videos feature <video_id> [--off]
 zuey videos delete <video_id | youtube_id>
 ```

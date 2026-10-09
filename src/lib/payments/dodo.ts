@@ -104,19 +104,74 @@ export interface DodoCheckoutInput {
   returnUrl: string;
   /** Echoed back on the subscription and payment webhooks. */
   metadata: Record<string, string>;
+  /** Server-created discount codes to pre-apply (referral checkouts only). */
+  discountCodes?: string[];
 }
 
-/** Builds the checkout session request: one subscription product, no discount codes, fixed currency. */
+/**
+ * Whether the hosted checkout shows its own discount-code input. Buyers must never type codes there:
+ * referral discounts are created server-side and pre-applied through `discount_codes`.
+ * Dodo documents this flag as UI-only ("hide the input"), so a pre-applied code should still apply with it
+ * off. NOT YET VERIFIED in Dodo test mode (`POST /checkouts/preview` → `current_breakup.discount`). If the
+ * code is ignored, flip this to `true` for referral checkouts only (the field shows, pre-filled).
+ */
+export const DODO_ALLOW_DISCOUNT_CODE_INPUT = false;
+
+export function dodoFeatureFlags(): Record<string, boolean> {
+  return { allow_discount_code: DODO_ALLOW_DISCOUNT_CODE_INPUT, allow_currency_selection: false };
+}
+
+/** Builds the checkout session request: one subscription product, optional pre-applied codes, fixed currency. */
 export function dodoCheckoutPayload(productId: string, input: DodoCheckoutInput): Record<string, unknown> {
   const customer: Record<string, string> = { email: input.customerEmail };
   if (input.customerName) customer.name = input.customerName;
-  return {
+  const payload: Record<string, unknown> = {
     product_cart: [{ product_id: productId, quantity: 1 }],
     customer,
     return_url: input.returnUrl,
     metadata: input.metadata,
-    feature_flags: { allow_discount_code: false, allow_currency_selection: false },
+    feature_flags: dodoFeatureFlags(),
   };
+  if (input.discountCodes?.length) payload.discount_codes = input.discountCodes;
+  return payload;
+}
+
+export interface DodoDiscountInput {
+  productId: string;
+  /** Whole percent off (1–100); sent to Dodo in basis points. */
+  percent: number;
+  expiresAt: string;
+  metadata: Record<string, string>;
+}
+
+/**
+ * Discount request for one referred checkout: single use, first billing cycle only, this product only,
+ * short expiry. Dodo generates the code.
+ */
+export function dodoDiscountPayload(input: DodoDiscountInput): Record<string, unknown> {
+  const percent = Math.trunc(input.percent);
+  if (!Number.isFinite(percent) || percent < 1 || percent > 100) {
+    throw new AppError(500, 'invalid_discount', `Discount percent must be 1-100, got ${input.percent}`);
+  }
+  return {
+    type: 'percentage',
+    amount: percent * 100,
+    usage_limit: 1,
+    subscription_cycles: 1,
+    restricted_to: [input.productId],
+    expires_at: input.expiresAt,
+    name: `Referral ${percent}%`,
+    metadata: input.metadata,
+  };
+}
+
+/** Creates a one-off referral discount and returns its id and code. */
+export async function createDodoDiscount(env: RuntimeEnv, input: DodoDiscountInput, fetchImpl: FetchLike): Promise<{ discountId: string; code: string }> {
+  const body = await dodoRequest(env, '/discounts', { method: 'POST', body: dodoDiscountPayload(input) }, fetchImpl, 'discount creation');
+  if (typeof body.discount_id !== 'string' || typeof body.code !== 'string' || !body.code) {
+    throw new AppError(502, 'payment_provider_error', 'Dodo Payments returned no discount code');
+  }
+  return { discountId: body.discount_id, code: body.code };
 }
 
 /** Creates a hosted checkout session and returns its id and URL. */
@@ -204,6 +259,8 @@ export interface DodoPaymentData {
   subscriptionId: string | null;
   status: string | null;
   totalAmount: number | null;
+  /** Tax included in `totalAmount`, minor units (null when Dodo sends none). */
+  tax: number | null;
   currency: string | null;
   customerId: string | null;
   customerEmail: string | null;
@@ -284,6 +341,7 @@ export function parseDodoEvent(payload: unknown): DodoEvent | null {
         subscriptionId: strOrNull(d, 'subscription_id'),
         status: strOrNull(d, 'status'),
         totalAmount: intOrNull(d.total_amount),
+        tax: intOrNull(d.tax),
         currency: strOrNull(d, 'currency')?.toUpperCase() ?? null,
         customerId: customer.id,
         customerEmail: customer.email,
@@ -292,4 +350,43 @@ export function parseDodoEvent(payload: unknown): DodoEvent | null {
     };
   }
   return null;
+}
+
+/** Why a payment's money went back: a completed refund, or a chargeback opened or lost. */
+export type DodoReversalKind = 'refund' | 'dispute_opened' | 'dispute_lost';
+
+const REVERSAL_EVENTS: Record<string, DodoReversalKind> = {
+  'refund.succeeded': 'refund',
+  'dispute.opened': 'dispute_opened',
+  'dispute.lost': 'dispute_lost',
+};
+
+export interface DodoReversalEvent {
+  type: string;
+  kind: DodoReversalKind;
+  /** Refund or dispute id. */
+  objectId: string | null;
+  /** The charged payment; refunds and disputes carry no subscription id. */
+  paymentId: string;
+  amount: number | null;
+  currency: string | null;
+  isPartial: boolean;
+}
+
+/** Parses refund.succeeded / dispute.opened / dispute.lost; null for any other event or a missing payment id. */
+export function parseDodoReversalEvent(payload: unknown): DodoReversalEvent | null {
+  if (!isRecord(payload) || typeof payload.type !== 'string' || !isRecord(payload.data)) return null;
+  const kind = REVERSAL_EVENTS[payload.type];
+  const d = payload.data;
+  const paymentId = strOrNull(d, 'payment_id');
+  if (!kind || !paymentId) return null;
+  return {
+    type: payload.type,
+    kind,
+    objectId: strOrNull(d, kind === 'refund' ? 'refund_id' : 'dispute_id'),
+    paymentId,
+    amount: intOrNull(d.amount),
+    currency: strOrNull(d, 'currency')?.toUpperCase() ?? null,
+    isPartial: d.is_partial === true,
+  };
 }

@@ -6,23 +6,26 @@ export interface WorkersAiLike {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
-/** Minimal shape of an R2 object body returned by `get`. */
+/** Object read back from R2 (only the members this app uses). */
 export interface R2ObjectBodyLike {
   body: ReadableStream;
   size: number;
   httpEtag?: string;
   httpMetadata?: { contentType?: string };
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 
-/** Minimal shape of the Cloudflare R2 bucket binding used for private course files. */
+/** Minimal shape of a Cloudflare R2 bucket binding used by this app (referral KYC images, private course files). */
 export interface R2BucketLike {
   get(key: string, options?: { range?: { offset: number; length?: number } }): Promise<R2ObjectBodyLike | null>;
   put(key: string, value: ReadableStream | ArrayBuffer | Uint8Array | string, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
-  delete(key: string): Promise<void>;
+  delete(keys: string | string[]): Promise<void>;
 }
 
 export interface RuntimeEnv {
   DB?: D1DatabaseLike;
+  /** Private bucket `zuey-referral-kyc`: referrers' national-ID images, deleted when an admin decides. */
+  REFERRAL_KYC?: R2BucketLike;
   AI?: WorkersAiLike;
   /** Private R2 bucket with course audio and downloadable files (never public). */
   COURSE_FILES?: R2BucketLike;
@@ -37,6 +40,12 @@ export interface RuntimeEnv {
   // Zuey Reads
   ANYMD_API_KEY?: string;
   READS_SUMMARY_MODEL?: string;
+  /** Workers AI model that cleans up Zueytube transcripts when OpenRouter is absent or fails (default @cf/meta/llama-3.3-70b-instruct-fp8-fast). */
+  VIDEOS_REWRITE_MODEL?: string;
+  /** OpenRouter key; when set it is the first provider for Zueytube transcript cleanup. */
+  OPENROUTER_API_KEY?: string;
+  /** OpenRouter model for transcript cleanup (default google/gemma-4-31b-it). */
+  VIDEOS_REWRITE_OPENROUTER_MODEL?: string;
   // Booking, payments, email
   GOOGLE_CALENDAR_REFRESH_TOKEN?: string;
   GOOGLE_CALENDAR_ID?: string;

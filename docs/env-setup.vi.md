@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0015_zueytube_videos.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0017_zueytube_transcript_rewrite.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -44,9 +44,14 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 
 ## 2a. Zueytube
 
-1. Chạy migration `0015_zueytube_videos.sql` (xem mục 0).
+1. Chạy migration `0015_zueytube_videos.sql` và `0017_zueytube_transcript_rewrite.sql` (xem mục 0).
 2. Zueytube dùng chung secret `ANYMD_API_KEY` với Reads để lấy transcript (mỗi video YouTube tốn 3 credit AnyMD, chỉ lấy một lần khi thêm). Không có key thì AnyMD vẫn chạy với quota ẩn danh nhỏ.
 3. Thêm video: Studio → tab **Zueytube**, hoặc `zuey videos add <link> --locale vi|en [--pair <video_id>]`, MCP `video_add`, REST `POST /api/v1/videos` (admin). Video không có phụ đề vẫn được thêm, với trạng thái transcript `unavailable`; lỗi AnyMD cho trạng thái `failed`, bấm *Refetch* để lấy lại.
+4. Transcript vừa lấy được viết lại bằng AI: thêm dấu câu, chia đoạn, bỏ từ đệm, giữ nguyên ngôn ngữ và không tóm tắt. Mốc thời gian của từng đoạn là ước lượng. Bản phụ đề gốc được giữ trong cột `transcript_source`. Nếu AI lỗi, hoặc kết quả mất quá nhiều chữ, thì transcript gốc được giữ lại và trạng thái AI là `failed`. Chạy lại bằng nút ✨ trong Studio, `zuey videos rewrite <youtube_id>`, MCP `video_rewrite_transcript` hoặc `POST /api/v1/videos/{id}/rewrite` (admin, không tốn credit AnyMD).
+5. Provider AI được thử theo thứ tự cho từng đoạn transcript:
+   - **OpenRouter** (chính): đặt secret `OPENROUTER_API_KEY`. Model mặc định `google/gemma-4-31b-it`, đổi bằng biến `VIDEOS_REWRITE_OPENROUTER_MODEL` (không bắt buộc).
+   - **Workers AI** (dự phòng, hoặc là provider duy nhất khi không có key OpenRouter): dùng binding `AI` có sẵn. Model mặc định `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, đổi bằng biến `VIDEOS_REWRITE_MODEL`.
+   Cột `transcript_rewrite_model` ghi provider đã tạo ra bản viết lại.
 
 ## 3. Google Calendar / Meet
 
@@ -112,7 +117,7 @@ Lưu ý vận hành:
 
 Khoá học thay cho AI Workflows. Mã nguồn ở `src/lib/courses/`; quyết định thiết kế ở `plans/261009-1605-courses/plan.md`. Thiếu biến nào thì API trả `503` kèm tên biến (`payment_unconfigured`, `media_unconfigured`), phần còn lại vẫn chạy.
 
-1. **Migration** `migrations/0016_courses.sql`: tạo bookmark Time Travel cho D1 trước (`wrangler d1 time-travel info zuey_me_db`), rồi `wrangler d1 migrations apply zuey_me_db --remote`. Migration này **xoá bảng workflows**.
+1. **Migration** `migrations/0018_courses.sql`: tạo bookmark Time Travel cho D1 trước (`wrangler d1 time-travel info zuey_me_db`), rồi `wrangler d1 migrations apply zuey_me_db --remote`. Migration này **xoá bảng workflows** và dựng lại hai bảng `referral_commissions`, `referral_source_reversals` (giữ nguyên dữ liệu) để thêm nguồn `course_order`; vì vậy phải chạy sau `0016_referrals.sql` và `0017_zueytube_transcript_rewrite.sql`.
 2. **Thanh toán**:
    - SePay dùng lại cấu hình mục 5 và `USD_VND_RATE`. Mã chuyển khoản khoá học có dạng `ZSC…`; webhook và job đối soát đã nhận dạng mã này.
    - Dodo: tạo **một** product *One-time*, bật *Pay What You Want* (giá tối thiểu $1), tiền USD. Lưu ID vào `DODO_PRODUCT_COURSE`. Checkout tự đặt số tiền theo giá đã giảm.
@@ -131,7 +136,12 @@ Khoá học thay cho AI Workflows. Mã nguồn ở `src/lib/courses/`; quyết �
    - Mở bài trả phí: hiện yêu cầu đăng nhập hoặc mua khoá học.
    - Mua bằng chuyển khoản nhỏ; trang `/courses/orders/ZSC…` phải chuyển sang "đã thanh toán", và email biên nhận được gửi tới.
 
-Chương trình giới thiệu: hoa hồng cho mọi khoá học người được giới thiệu mua, và giảm giá referral, được nối qua `src/lib/courses/referral-bridge.ts`. Việc nối này chỉ làm sau khi PR chương trình giới thiệu được merge. Trước đó `referral_code` được nhận nhưng chưa tạo giảm giá hay hoa hồng.
+Chương trình giới thiệu (`src/lib/courses/referral-bridge.ts`):
+
+- Tài khoản đã gắn referrer được giảm giá referral và mang hoa hồng cho referrer ở **mọi khoá học** nó mua, miễn referrer còn hoạt động. Giảm giá không cộng dồn với giảm giá gói; luôn lấy mức cao hơn.
+- Tài khoản chưa gắn theo luật đơn đầu của chương trình: nhập mã hoặc có cookie `zr_ref`, chưa từng trả tiền. Mã nhập tay sẽ gắn tài khoản vĩnh viễn sau khi đơn được tạo.
+- Hoa hồng (`source_kind = course_order`) tính trên số tiền thực thu. Với SePay, số VND được quy đổi theo tỷ giá đã chốt trên đơn.
+- Hoàn tiền, chargeback hay dispute đều đảo hoa hồng. Job recapture tự bắt lại các đơn đã trả mà ghi hoa hồng bị lỗi.
 
 ## 5. SePay (chuyển khoản, VND)
 
@@ -223,3 +233,28 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
    - Booking chuyển sang `confirmed`.
    - Có link Meet.
    - Email kèm file ICS được gửi tới.
+
+## 12. Chương trình giới thiệu (referral)
+
+Migration `0016_referrals.sql` chỉ thêm bảng và cột, không sửa dữ liệu cũ. Vẫn ghi lại bookmark Time Travel trước khi chạy (mục 0).
+
+1. **R2 cho ảnh CCCD:** tạo bucket riêng tư, không bật public access, không gắn custom domain:
+   ```bash
+   wrangler r2 bucket create zuey-referral-kyc
+   ```
+   Binding `REFERRAL_KYC` đã khai báo trong `wrangler.toml`. Thiếu binding thì upload ảnh trả `503`. Ảnh chỉ admin xem được (qua Studio, `Cache-Control: no-store`) và bị xoá ngay khi admin duyệt hoặc từ chối hồ sơ, hoặc khi referrer xoá tài khoản.
+2. **Cron:** Worker `zuey-me-scheduler` gọi thêm `POST /api/v1/referrals/jobs/run` mỗi 5 phút (dùng chung `CRON_SECRET`). Job idempotent: ghi bù hoa hồng bị lỗi lúc thanh toán (ví dụ thiếu tỷ giá; nguồn đã hoàn tiền hoặc huỷ thì không ghi bù), chuyển hoa hồng hết hạn giữ sang `approved`, cập nhật bậc, và vào ngày 1 (giờ Việt Nam) chốt danh sách payout. Sau khi merge phải deploy lại worker:
+   ```bash
+   cd workers/scheduler && wrangler deploy
+   ```
+3. **Dodo (mã giảm giá một lần):** khi người được giới thiệu trả bằng thẻ, hệ thống tạo một discount code dùng một lần cho chu kỳ đầu và truyền vào checkout. Checkout đang tắt ô nhập mã (`DODO_ALLOW_DISCOUNT_CODE_INPUT = false` trong `src/lib/payments/dodo.ts`). **Cần kiểm tra ở Test Mode** rằng Dodo vẫn áp mã khi ô nhập mã bị tắt (xem giá trong trang checkout hoặc `POST /checkouts/preview`). Nếu không áp, đổi hằng số thành `true` (ô mã hiện ra nhưng mã đã được điền sẵn). Nếu lần trừ tiền đầu tiên (chưa tính thuế) cao hơn giá đã giảm, thẻ chuyển sang `needs_attention` với lý do `referral_discount_not_applied`: hệ thống không tự gọi Dodo, admin tự hoàn phần chênh lệch rồi xử lý thẻ. Hoa hồng vẫn tính trên số tiền đã thu. Webhook Dodo cần thêm sự kiện `refund.succeeded`, `dispute.opened` và `dispute.lost` để đảo hoa hồng khi hoàn tiền.
+4. **PayPal (booking):** thêm sự kiện `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` và `CUSTOMER.DISPUTE.CREATED` vào webhook PayPal để đảo hoa hồng.
+5. **Cấu hình (Studio → Referrals → Settings, hoặc `PATCH /api/v1/admin/referrals/settings`):** bảng bậc, số ngày giữ (30), tỷ lệ booking (10%), ngưỡng chi trả ($50), số ngày cookie (30), mức khấu trừ VN (10%, nhãn "Thuế TNCN") và PayPal (18%, nhãn "Phí xử lý & thuế"). **Mức khấu trừ cần kế toán xác nhận** trước kỳ chi trả đầu tiên; đổi trong Settings, không cần deploy.
+6. **Quy trình chi trả hằng tháng:**
+   - Ngày 1: job tự chốt kỳ. Mỗi referrer có số dư đã duyệt ≥ ngưỡng và hồ sơ nhận tiền đã duyệt được tạo một payout, đã trừ khấu trừ, quy VND theo `USD_VND_RATE` lúc chốt. Thông tin người nhận (tên, ngân hàng, số tài khoản, CCCD, PayPal) được chụp lại vào payout lúc chốt: danh sách, CSV và Studio hiển thị bản chụp này, referrer sửa hồ sơ sau đó không làm đổi người nhận của kỳ đã chốt. Khoản hoàn tiền phát sinh sau khi đã trả được trừ vào kỳ sau.
+   - Ngày 1–10: vào Studio → Referrals → Payouts, tải CSV (`GET /api/v1/admin/referrals/payouts.csv?period=YYYY-MM`), chuyển khoản ngân hàng hoặc PayPal thủ công, rồi bấm *Mark paid* kèm mã giao dịch (`POST /api/v1/admin/referrals/payouts/{id}/paid`). Payout không có bản chụp người nhận đã duyệt thì *Mark paid* trả `409 payee_unverified`. Người nhận được email xác nhận. Payout sai thì *Cancel* để số tiền trở lại số dư.
+   - Hàng chờ duyệt (Studio → Referrals → Review): hoa hồng có dấu hiệu gian lận mềm (IP đăng ký hoặc nhập mã trùng IP đăng nhập của referrer, người chuyển khoản hoặc email PayPal trùng referrer, email dùng một lần, quá nhiều tài khoản gắn với referrer trong 24 giờ quanh lúc người được giới thiệu gắn mã) và hồ sơ KYC chờ duyệt. **Mọi hoa hồng từ booking tư vấn đều vào hàng chờ** (lý do `booking_manual_review`) vì email khách booking chưa được xác minh; các chặn cứng (tự giới thiệu, đã từng trả tiền, referrer bị khoá) vẫn áp dụng.
+   - Duyệt hồ sơ KYC (`POST /api/v1/admin/referrals/payout-profiles/{userId}/{approve|reject}`) phải gửi kèm `updated_at` của hồ sơ đang xem. Nếu referrer sửa hồ sơ hoặc tải ảnh mới trong lúc đó, API trả `409 profile_changed`: tải lại và duyệt lại.
+   - Mỗi người được giới thiệu chỉ có một đơn giảm giá đang chờ thanh toán (đơn SePay, checkout thẻ, hoặc lịch booking đang giữ chỗ theo cùng email). Đơn tạo thêm trong lúc đó tính giá gốc, không báo lỗi.
+7. **Kiểm tra sau khi deploy:** mở `/r/<mã>` → phải chuyển hướng về trang chủ và có cookie `zr_ref`; `/pricing` hiện giá đã giảm cho tài khoản chưa từng trả tiền; `/docs` có nhóm Referrals.
+

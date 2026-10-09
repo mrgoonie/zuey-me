@@ -7,9 +7,14 @@ import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, numOrNull, randomId, siteUrl, str, strOrNull } from '../members/runtime';
 import { recomputeSubscription } from '../members/subscriptions';
 import { getUserById, logActivity } from '../members/users';
-import type { DodoEvent, DodoMetadata } from './dodo';
+import { captureReferralCommission } from '../referrals/commissions';
+import type { ReversalOutcome } from '../referrals/refunds';
+import { reverseCommission } from '../referrals/refunds';
+import type { CheckoutReferral } from '../referrals/resolve-checkout-referral';
+import { allowedSubscriptionAmounts, minimumChargeCents, referralDiscountNotApplied } from './dodo-card-referral-pricing';
+import type { DodoEvent, DodoMetadata, DodoReversalEvent } from './dodo';
 import {
-  cancelDodoSubscription, createDodoCheckout, createDodoPortalLink, dodoProductId, planForDodoProduct, requireDodoPlan,
+  cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, planForDodoProduct, requireDodoPlan,
 } from './dodo';
 
 /**
@@ -41,6 +46,11 @@ export interface CardSubscription {
   customer_email: string | null;
   attention_reason: string | null;
   last_event_at: string | null;
+  /** Referral snapshot (null without a referral); the discount covers the first charge only. */
+  referrer_user_id: string | null;
+  referral_discount_percent: number | null;
+  /** Id of the first successful Dodo payment: refunds and disputes are matched to the card through it. */
+  first_payment_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +67,8 @@ export interface CardSubscriptionView {
   amount_cents: number | null;
   currency: string | null;
   attention_reason: string | null;
+  /** Referral discount on the first charge only (null without a referral). */
+  referral_discount_percent: number | null;
   can_manage: boolean;
   can_cancel: boolean;
   created_at: string;
@@ -85,6 +97,9 @@ function rowToCard(row: Row): CardSubscription {
     customer_email: strOrNull(row, 'customer_email'),
     attention_reason: strOrNull(row, 'attention_reason'),
     last_event_at: strOrNull(row, 'last_event_at'),
+    referrer_user_id: strOrNull(row, 'referrer_user_id'),
+    referral_discount_percent: numOrNull(row, 'referral_discount_percent'),
+    first_payment_id: strOrNull(row, 'first_payment_id'),
     created_at: str(row, 'created_at'),
     updated_at: str(row, 'updated_at'),
   };
@@ -104,6 +119,7 @@ export function toCardView(card: CardSubscription, env: RuntimeEnv): CardSubscri
     amount_cents: card.amount_cents,
     currency: card.currency,
     attention_reason: card.attention_reason,
+    referral_discount_percent: card.referrer_user_id ? card.referral_discount_percent : null,
     can_manage: card.provider_customer_id !== null && status !== 'pending',
     can_cancel: card.provider_subscription_id !== null && status === 'active' && !card.cancel_at_period_end,
     created_at: card.created_at,
@@ -144,11 +160,15 @@ export interface CardCheckout extends CardSubscriptionView {
   checkout_url: string;
 }
 
-/** Starts a monthly card subscription for a plan via a Dodo hosted checkout session. */
+/**
+ * Starts a monthly card subscription for a plan via a Dodo hosted checkout session. With a referral, a
+ * single-use first-cycle discount is created at Dodo first and pre-applied to the session; the referral
+ * terms are snapshotted on the pending row (`referral_ref` = Dodo discount id).
+ */
 export async function startCardCheckout(
-  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, plan: PlanId, request?: Request
+  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, plan: PlanId, request?: Request, referral: CheckoutReferral | null = null
 ): Promise<CardCheckout> {
-  requireDodoPlan(env, plan);
+  const { productId } = requireDodoPlan(env, plan);
   const user = await getUserById(d1, userId);
   if (!user) throw new AppError(403, 'member_account_required', 'This action requires a member account');
 
@@ -166,18 +186,34 @@ export async function startCardCheckout(
   }
 
   const id = randomId('csub');
+  const discounted = referral !== null && referral.discountPercent > 0;
   await d1.prepare(
-    `INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, created_at, updated_at)
-     VALUES (?, 'dodo', ?, ?, 'pending', ?, ?, ?)`
-  ).bind(id, userId, plan, user.email, iso(nowMs), iso(nowMs)).run();
+    `INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, created_at, updated_at,
+       referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral)
+     VALUES (?, 'dodo', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, userId, plan, user.email, iso(nowMs), iso(nowMs),
+    referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
+    referral ? getPlan(plan).price_usd_cents : null).run();
   let session: { sessionId: string; url: string };
   try {
+    let discountCodes: string[] | undefined;
+    if (discounted) {
+      const discount = await createDodoDiscount(env, {
+        productId,
+        percent: referral.discountPercent,
+        expiresAt: iso(nowMs + CARD_PENDING_TTL_MS),
+        metadata: { referral_order: id, card_ref: id, referrer_user_id: referral.referrerUserId },
+      }, membersRuntime.fetch);
+      await d1.prepare('UPDATE card_subscriptions SET referral_ref = ? WHERE id = ?').bind(discount.discountId, id).run();
+      discountCodes = [discount.code];
+    }
     session = await createDodoCheckout(env, {
       plan,
       customerEmail: user.email,
       customerName: user.name,
       returnUrl: `${siteUrl(env)}/billing/card/${id}`,
       metadata: { user_id: userId, plan, card_ref: id },
+      discountCodes,
     }, membersRuntime.fetch);
   } catch (err) {
     // Nothing was created at Dodo, so the placeholder row has no meaning.
@@ -185,7 +221,7 @@ export async function startCardCheckout(
     throw err;
   }
   await d1.prepare('UPDATE card_subscriptions SET provider_session_id = ?, updated_at = ? WHERE id = ?').bind(session.sessionId, iso(nowMs), id).run();
-  await logActivity(d1, userId, 'billing.card_checkout', { plan, card_subscription_id: id }, request);
+  await logActivity(d1, userId, 'billing.card_checkout', { plan, card_subscription_id: id, referral_discount_percent: referral?.discountPercent ?? null }, request);
   const card = await getCard(d1, id);
   if (!card) throw new AppError(500, 'internal_error', 'Card subscription was not persisted');
   return { ...toCardView(card, env), checkout_url: session.url };
@@ -266,10 +302,15 @@ function metadataMatches(card: CardSubscription, meta: DodoMetadata): boolean {
   return meta.userId === card.user_id && meta.plan === card.plan;
 }
 
-/** Price check for a plan: the configured product, the list price and USD. */
-function subscriptionMismatch(env: RuntimeEnv, plan: PlanId, productId: string | null, amountCents: number | null, currency: string | null): string | null {
+/**
+ * Price check for a plan: the configured product, USD, and the recurring amount at list price (or, on a
+ * referral card's first activation, the snapshotted discounted first-cycle price, in case Dodo reports it).
+ */
+function subscriptionMismatch(env: RuntimeEnv, card: CardSubscription, plan: PlanId, productId: string | null, amountCents: number | null, currency: string | null): string | null {
   if (productId !== dodoProductId(env, plan)) return 'product_mismatch';
-  if (amountCents !== getPlan(plan).price_usd_cents || currency !== 'USD') return 'amount_mismatch';
+  // A row still `pending` has never been activated, so this event is the first cycle.
+  const allowed = allowedSubscriptionAmounts(card, plan, card.status === 'pending');
+  if (amountCents === null || !allowed.has(amountCents) || currency !== 'USD') return 'amount_mismatch';
   return null;
 }
 
@@ -312,7 +353,7 @@ async function applySubscriptionEvent(
     status = 'needs_attention';
     reason = card.user_id === null ? (reason ?? 'metadata_missing') : 'metadata_mismatch';
   } else if (target === 'active') {
-    const mismatch = subscriptionMismatch(env, card.plan, data.productId, data.amountCents, data.currency);
+    const mismatch = subscriptionMismatch(env, card, card.plan, data.productId, data.amountCents, data.currency);
     if (mismatch) {
       status = 'needs_attention';
       reason = mismatch;
@@ -352,18 +393,27 @@ async function applySubscriptionEvent(
 }
 
 async function applyPaymentEvent(
-  d1: D1DatabaseLike, card: CardSubscription, event: DodoEvent & { kind: 'payment' }, identityOk: boolean
+  d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'payment' }, identityOk: boolean
 ): Promise<CardOutcome> {
   const data = event.data;
   const nowIso = iso(membersRuntime.now());
+  const succeeded = event.type === 'payment.succeeded';
+  // The first successful charge is stored with its amount and tax, so a failed commission capture can be retried.
+  const first = succeeded ? [data.paymentId, data.totalAmount, data.tax ?? 0, event.occurredAt ?? nowIso] : [null, null, null, null];
   await d1.prepare(
     `UPDATE card_subscriptions SET provider_subscription_id = COALESCE(provider_subscription_id, ?),
-       provider_customer_id = COALESCE(provider_customer_id, ?), updated_at = ? WHERE id = ?`
-  ).bind(data.subscriptionId, data.customerId, nowIso, card.id).run();
+       provider_customer_id = COALESCE(provider_customer_id, ?),
+       first_payment_cents = CASE WHEN first_payment_id IS NULL THEN ? ELSE first_payment_cents END,
+       first_payment_tax_cents = CASE WHEN first_payment_id IS NULL THEN ? ELSE first_payment_tax_cents END,
+       first_payment_at = CASE WHEN first_payment_id IS NULL THEN ? ELSE first_payment_at END,
+       first_payment_id = COALESCE(first_payment_id, ?), updated_at = ? WHERE id = ?`
+  ).bind(data.subscriptionId, data.customerId, first[1], first[2], first[3], first[0], nowIso, card.id).run();
+  const isFirstPayment = succeeded && (card.first_payment_id ?? data.paymentId) === data.paymentId;
 
   let reason: string | null = null;
   if (!identityOk || card.user_id === null || card.plan === null) reason = card.user_id === null ? 'metadata_missing' : 'metadata_mismatch';
-  else if (event.type === 'payment.succeeded' && (data.currency !== 'USD' || data.totalAmount === null || data.totalAmount < getPlan(card.plan).price_usd_cents)) {
+  else if (succeeded && (data.currency !== 'USD' || data.totalAmount === null || data.totalAmount < minimumChargeCents(card, card.plan, isFirstPayment))) {
+    // `total_amount` includes tax, so it is never below the price owed: discounted first charge, list price after.
     reason = 'amount_mismatch';
   }
   if (reason) {
@@ -379,6 +429,23 @@ async function applyPaymentEvent(
     await d1.prepare("UPDATE card_subscriptions SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'").bind(nowIso, card.id).run();
     if (card.user_id) await logActivity(d1, card.user_id, 'billing.card_ended', { plan: card.plan, card_subscription_id: card.id, status: 'failed' });
     return 'deactivated';
+  }
+  if (isFirstPayment && card.referrer_user_id && data.totalAmount !== null) {
+    const collected = data.totalAmount - (data.tax ?? 0);
+    // Commission is on the amount collected, as for any referred charge.
+    await captureReferralCommission(d1, env, { kind: 'card_subscription', id: card.id, paymentId: data.paymentId, collectedCents: collected });
+    if (card.plan && referralDiscountNotApplied(card, card.plan, collected)) {
+      // Dodo ignored the pre-applied referral discount: flag it so the admin refunds the difference.
+      const reasonText = 'referral_discount_not_applied';
+      await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reasonText, nowIso, card.id).run();
+      if (card.user_id) {
+        await recomputeSubscription(d1, card.user_id, card.plan);
+        await logActivity(d1, card.user_id, 'billing.needs_attention', {
+          plan: card.plan, card_subscription_id: card.id, reason: reasonText, amount: data.totalAmount, tax: data.tax ?? 0, currency: data.currency,
+        });
+      }
+      return 'needs_attention';
+    }
   }
   return 'updated';
 }
@@ -405,10 +472,31 @@ export async function applyDodoEvent(
     const identityOk = via === 'subscription' || metadataMatches(card, event.data.metadata);
     const outcome = event.kind === 'subscription'
       ? await applySubscriptionEvent(d1, env, card, event, identityOk)
-      : await applyPaymentEvent(d1, card, event, identityOk);
+      : await applyPaymentEvent(d1, env, card, event, identityOk);
     return { outcome, card_subscription_id: card.id };
   } catch (err) {
     await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('dodo', eventId).run().catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * Refund or chargeback on a Dodo payment. Only the card's first payment carries a referral commission, so
+ * the event is matched through `first_payment_id`; anything else (renewals, unknown payments) is ignored.
+ * Reversal is idempotent, so webhook retries need no separate event record.
+ */
+export async function applyDodoReversal(
+  d1: D1DatabaseLike, event: DodoReversalEvent
+): Promise<{ outcome: ReversalOutcome | 'ignored'; card_subscription_id: string | null }> {
+  const row = await d1.prepare("SELECT id, user_id, plan FROM card_subscriptions WHERE provider = 'dodo' AND first_payment_id = ?").bind(event.paymentId).first<Row>();
+  if (!row) return { outcome: 'ignored', card_subscription_id: null };
+  const cardId = str(row, 'id');
+  const result = await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind);
+  const userId = strOrNull(row, 'user_id');
+  if (userId) {
+    await logActivity(d1, userId, 'billing.card_reversal', {
+      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial,
+    });
+  }
+  return { outcome: result.outcome, card_subscription_id: cardId };
 }
