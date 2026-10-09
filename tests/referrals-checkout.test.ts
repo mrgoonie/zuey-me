@@ -7,7 +7,7 @@ import { prepayUsdCents, prepayVnd } from '../src/lib/members/plans';
 import { membersRuntime } from '../src/lib/members/runtime';
 import { createMemberSession } from '../src/lib/members/session';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
-import { DODO_ALLOW_DISCOUNT_CODE_INPUT, dodoCheckoutPayload, signDodoPayload } from '../src/lib/payments/dodo';
+import { dodoCheckoutPayload, signDodoPayload } from '../src/lib/payments/dodo';
 import { resetPaypalTokenCache } from '../src/lib/payments/paypal';
 import { sepayReferralAmounts } from '../src/lib/referrals/checkout';
 import { ensureReferralProfile } from '../src/lib/referrals/codes';
@@ -240,7 +240,7 @@ describe('Dodo card checkout with a referral', () => {
     });
     const session: unknown = JSON.parse(checkoutCall?.body ?? '{}');
     expect(field(session, 'discount_codes')).toEqual(['REF1XYZ']);
-    expect(field(session, 'feature_flags')).toEqual({ allow_discount_code: DODO_ALLOW_DISCOUNT_CODE_INPUT, allow_currency_selection: false });
+    expect(field(session, 'feature_flags')).toEqual({ allow_discount_code: true, allow_currency_selection: false });
     // Webhook metadata is unchanged by the referral.
     expect(field(session, 'metadata')).toEqual({ user_id: m.userId, plan: 'combo', card_ref: id });
 
@@ -258,7 +258,9 @@ describe('Dodo card checkout with a referral', () => {
     const m = await member('lan@example.com');
     expect((await checkout(m, { plan: 'combo', provider: 'dodo' })).status).toBe(201);
     expect(calls.some(c => c.url === `${DODO_BASE}/discounts`)).toBe(false);
-    expect(field(dodoCheckoutPayload('pdt', { plan: 'ai', customerEmail: 'a@b.co', customerName: null, returnUrl: 'x', metadata: {} }), 'discount_codes')).toBeUndefined();
+    const plain = dodoCheckoutPayload('pdt', { plan: 'ai', customerEmail: 'a@b.co', customerName: null, returnUrl: 'x', metadata: {} });
+    expect(field(plain, 'discount_codes')).toBeUndefined();
+    expect(field(plain, 'feature_flags')).toEqual({ allow_discount_code: false, allow_currency_selection: false });
   });
 
   it('checks payment.succeeded against the discounted amount and stores the first payment id', async () => {
