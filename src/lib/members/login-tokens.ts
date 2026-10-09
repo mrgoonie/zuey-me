@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
+import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { emailChangeNoticeEmail, emailChangeVerifyEmail, magicLinkEmail, sendLoggedEmail } from './email';
 import type { Row } from './runtime';
 import {
@@ -159,8 +160,8 @@ export async function confirmEmailChange(
   const oldEmail = user.email;
   const now = iso(membersRuntime.now());
   try {
-    await d1.prepare('UPDATE users SET email = ?, email_verified_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL')
-      .bind(token.email, now, now, user.id).run();
+    await d1.prepare('UPDATE users SET email = ?, canonical_email = ?, email_verified_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL')
+      .bind(token.email, normalizeEmailForSelfCheck(token.email), now, now, user.id).run();
   } catch (err) {
     if (isUniqueViolation(err)) throw new AppError(409, 'email_taken', 'That email now belongs to another account');
     throw err;

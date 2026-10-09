@@ -200,6 +200,7 @@ interface SubOpts {
   next?: string;
   cancel?: boolean;
   metadata?: Record<string, unknown>;
+  email?: string;
 }
 
 function subscriptionPayload(type: string, o: SubOpts): string {
@@ -216,7 +217,7 @@ function subscriptionPayload(type: string, o: SubOpts): string {
       currency: o.currency ?? 'USD',
       next_billing_date: o.next ?? new Date(now + 30 * DAY).toISOString(),
       cancel_at_next_billing_date: o.cancel ?? false,
-      customer: { customer_id: 'cus_1', email: 'lan@example.com', name: 'Lan' },
+      customer: { customer_id: 'cus_1', email: o.email ?? 'lan@example.com', name: 'Lan' },
       metadata: o.metadata ?? {},
     },
   });
@@ -356,11 +357,15 @@ describe('Dodo card subscription lifecycle', () => {
 
     // The redirect alone grants nothing: still pending until Dodo confirms.
     expect(field(await cardOf(m, id), 'status')).toBe('pending');
+    const canonicalEmail = () => d1.raw.query('SELECT canonical_email AS c FROM card_subscriptions WHERE id = ?').get(id);
+    expect(canonicalEmail()).toEqual({ c: 'lan@example.com' });
     expect(await entitlements(m)).toEqual([]);
 
     const firstEnd = '2026-11-05T00:00:00.000Z';
-    const active = await sendDodo(subscriptionPayload('subscription.active', { metadata, next: firstEnd }));
+    const active = await sendDodo(subscriptionPayload('subscription.active', { metadata, next: firstEnd, email: 'L.an+card@Example.com' }));
     expect(active.outcome).toBe('activated');
+    // The webhook's customer email replaces the stored one, and its canonical mailbox follows.
+    expect(canonicalEmail()).toEqual({ c: 'l.an@example.com' });
     const view = await cardOf(m, id);
     expect(field(view, 'status')).toBe('active');
     expect(field(view, 'current_period_end')).toBe(firstEnd);
@@ -472,6 +477,7 @@ describe('Dodo card subscription lifecycle', () => {
     const row = await d1.prepare("SELECT * FROM card_subscriptions WHERE provider_subscription_id = 'sub_orphan'").first<Record<string, unknown>>();
     expect(row?.status).toBe('needs_attention');
     expect(row?.attention_reason).toBe('metadata_missing');
+    expect(row?.canonical_email).toBe('lan@example.com');
     expect(row?.user_id).toBeNull();
     expect(row?.plan).toBe('combo');
     expect(await entitlements(m)).toEqual([]);

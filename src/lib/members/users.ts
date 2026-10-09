@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
+import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { exportReferralData, prepareReferralAccountDeletion, scrubReferralAccountData } from '../referrals/referral-account-data';
 import type { Row } from './runtime';
 import { isUniqueViolation, nowIso, randomId, str, strOrNull, userAgent } from './runtime';
@@ -68,9 +69,9 @@ export async function findOrCreateVerifiedUser(
   const id = randomId('usr');
   try {
     await d1.prepare(
-      `INSERT INTO users (id, email, email_verified_at, name, avatar_url, locale, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'vi', ?, ?)`
-    ).bind(id, input.email, now, input.name ?? null, input.avatarUrl ?? null, now, now).run();
+      `INSERT INTO users (id, email, canonical_email, email_verified_at, name, avatar_url, locale, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'vi', ?, ?)`
+    ).bind(id, input.email, normalizeEmailForSelfCheck(input.email), now, input.name ?? null, input.avatarUrl ?? null, now, now).run();
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
     const raced = await getUserByEmail(d1, input.email);
@@ -222,7 +223,7 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
   await prepareReferralAccountDeletion(d1, env, user);
   const now = nowIso();
   const res = await d1.prepare(
-    `UPDATE users SET email = ?, email_verified_at = NULL, name = NULL, avatar_url = NULL, deleted_at = ?, updated_at = ?
+    `UPDATE users SET email = ?, canonical_email = NULL, email_verified_at = NULL, name = NULL, avatar_url = NULL, deleted_at = ?, updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`
   ).bind(`deleted+${user.id}@deleted.invalid`, now, now, user.id).run();
   if (!res.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');

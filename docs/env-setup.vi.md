@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0017_zueytube_transcript_rewrite.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0019_canonical_emails.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -258,4 +258,15 @@ Migration `0016_referrals.sql` chỉ thêm bảng và cột, không sửa dữ l
    - Duyệt hồ sơ KYC (`POST /api/v1/admin/referrals/payout-profiles/{userId}/{approve|reject}`) phải gửi kèm `updated_at` của hồ sơ đang xem. Nếu referrer sửa hồ sơ hoặc tải ảnh mới trong lúc đó, API trả `409 profile_changed`: tải lại và duyệt lại.
    - Mỗi người được giới thiệu chỉ có một đơn giảm giá đang chờ thanh toán (đơn SePay, checkout thẻ, hoặc lịch booking đang giữ chỗ theo cùng email). Đơn tạo thêm trong lúc đó tính giá gốc, không báo lỗi.
 7. **Kiểm tra sau khi deploy:** mở `/r/<mã>` → phải chuyển hướng về trang chủ và có cookie `zr_ref`; `/pricing` hiện giá đã giảm cho tài khoản chưa từng trả tiền; `/docs` có nhóm Referrals.
+8. **Email chuẩn hoá có index (migration `0019_canonical_emails.sql`):** kiểm tra "người này đã từng trả tiền chưa" (chạy ở mỗi lần xem `/pricing` và trang booking khi đã đăng nhập, mỗi checkout và trong ảnh chụp chống gian lận) tra cột `canonical_email` của `users`, `card_subscriptions` và `bookings` bằng phép so sánh bằng có index, thay vì quét mọi dòng cùng tên miền (với Gmail là toàn bộ dòng Gmail). Cách chuẩn hoá giống module referral: chữ thường, bỏ `+tag`, với Gmail bỏ dấu chấm và gộp `googlemail.com` vào `gmail.com`. Ứng dụng ghi cột này ở mọi lần thêm hoặc sửa email; tài khoản đã xoá để `NULL`. Migration chỉ thêm cột và index, **không** điền dữ liệu cũ; dữ liệu cũ do script `scripts/backfill-canonical-emails.ts` điền. Thứ tự triển khai:
+   1. Ghi lại bookmark Time Travel (mục 0) và lưu giá trị bookmark.
+   2. Chạy migration: `wrangler d1 execute zuey_me_db --remote --file=./migrations/0019_canonical_emails.sql -y`. Code cũ vẫn chạy bình thường với các cột mới.
+   3. Export `CLOUDFLARE_ACCOUNT_ID` và `CLOUDFLARE_API_TOKEN` (từ `.env`), xem trước rồi chạy backfill:
+      ```bash
+      bun scripts/backfill-canonical-emails.ts --remote --dry-run
+      bun scripts/backfill-canonical-emails.ts --remote
+      ```
+      Bản dry-run in số dòng cần cập nhật mỗi bảng và đường dẫn file SQL để đọc trước. Mỗi câu `UPDATE` khớp cả email gốc, nên dòng có email vừa đổi sẽ không bị ghi đè.
+   4. Merge PR. CI tự deploy (không chạy `wrangler pages deploy` bằng tay).
+   5. Chạy lại `bun scripts/backfill-canonical-emails.ts --remote` sau khi deploy xong, để điền các dòng mà code cũ ghi trong khoảng giữa bước 3 và bước 4. Script idempotent: lần chạy sau đó phải báo `Nothing to backfill.`
 
