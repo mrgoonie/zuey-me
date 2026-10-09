@@ -15,6 +15,7 @@ export const LAB200_FEATURED_SLUGS = [
   'agent-harness-foundations',
   'lam-chu-tu-duy-trong-thoi-dai-ai-tu-duy-he-thong-cach-giao-viec-va-quan-ly-agent',
   'thiet-ke-he-thong-uoc-luong-tai-load-balancer-cache-queue-replication-va-partitioning',
+  'xay-copilot-ho-tro-nguoi-truc-chat-tu-cau-chuyen-that-den-san-pham-chay-duoc',
 ];
 
 export interface Lab200Course {
