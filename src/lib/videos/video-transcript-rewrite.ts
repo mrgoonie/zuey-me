@@ -1,5 +1,5 @@
 /**
- * AI cleanup of raw YouTube captions with Workers AI.
+ * AI cleanup of raw YouTube captions (OpenRouter and/or Workers AI, see video-transcript-rewrite-providers.ts).
  *
  * AnyMD often returns one long unpunctuated block per caption track, so the raw text is split into
  * chunks of roughly CHUNK_WORDS words, each chunk is rewritten into readable paragraphs (same
@@ -7,11 +7,9 @@
  * its words sit inside the chunk's time span. The output uses the stored transcript line format
  * ("m:ss text"), so the player, search and Zuey AI read it unchanged.
  */
-import type { WorkersAiLike } from '../../env';
 import { AppError } from '../http';
 import { transcriptSegments } from './anymd-transcript-parser';
-
-export const DEFAULT_REWRITE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+import type { TranscriptRewriter } from './video-transcript-rewrite-providers';
 
 const CHUNK_WORDS = 600;
 /** Speaking rate used when the end of the last caption is unknown (no video duration). */
@@ -24,11 +22,12 @@ const MIN_WORD_RATIO = 0.55;
 /** Far more words than the input means the model added content. */
 const MAX_WORD_RATIO = 1.6;
 
+// "Roughly as long as the input" keeps smaller models from condensing; verified on real captions.
 const SYSTEM_PROMPT = [
-  'You clean up raw auto-generated YouTube captions.',
-  'Keep the original language and meaning. Do not summarize, translate, comment or add facts.',
-  'Fix punctuation, capitalization and obviously mis-heard words, remove filler words (uh, um, you know, à, ờ, thì là) and false starts,',
-  'and split the text into short readable paragraphs of 2-5 sentences.',
+  'You are a transcript editor. Clean up raw auto-generated YouTube captions into readable text.',
+  'This is light copy-editing, NOT summarizing: keep every sentence and every idea in the original order, in the original language. Do not shorten, paraphrase, translate, comment or add facts.',
+  'Only fix punctuation, capitalization and obviously mis-heard words, remove filler words (uh, um, you know, like, à, ờ, thì là) and repeated false starts.',
+  'Split the text into short readable paragraphs of 2-5 sentences. Your output should be roughly as long as the input.',
   'Output only the cleaned paragraphs separated by blank lines, with no headings, lists or notes.',
 ].join(' ');
 
@@ -108,20 +107,6 @@ export function placeParagraphs(chunk: TranscriptChunk, paragraphs: string[]): s
   });
 }
 
-/** Text from a Workers AI chat result: Llama-style `response` or OpenAI-style `choices`. */
-function responseText(result: unknown): string | null {
-  if (typeof result !== 'object' || result === null) return null;
-  if ('response' in result && typeof result.response === 'string') return result.response;
-  if ('choices' in result && Array.isArray(result.choices)) {
-    const first: unknown = result.choices[0];
-    if (typeof first === 'object' && first !== null && 'message' in first) {
-      const message: unknown = first.message;
-      if (typeof message === 'object' && message !== null && 'content' in message && typeof message.content === 'string') return message.content;
-    }
-  }
-  return null;
-}
-
 /** Splits model output into single-line paragraphs, dropping markdown headings or list markers it may add. */
 export function parseParagraphs(text: string): string[] {
   return text
@@ -140,44 +125,50 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-async function rewriteChunk(ai: WorkersAiLike, model: string, chunk: TranscriptChunk): Promise<string[]> {
-  let lastError = 'unknown error';
-  for (let attempt = 0; attempt < 2; attempt++) {
+/**
+ * Cleans one chunk, trying each provider in order (a single provider gets one retry).
+ * Returns the paragraphs and the label of the provider that produced them.
+ */
+async function rewriteChunk(rewriters: TranscriptRewriter[], chunk: TranscriptChunk): Promise<{ paragraphs: string[]; label: string }> {
+  const attempts = rewriters.length === 1 ? [rewriters[0], rewriters[0]] : rewriters;
+  const errors: string[] = [];
+  for (const rewriter of attempts) {
     try {
-      const result = await withTimeout(ai.run(model, {
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: chunk.text }],
-        max_tokens: MAX_TOKENS,
-      }), CALL_TIMEOUT_MS);
-      const text = responseText(result);
-      if (!text) { lastError = 'unexpected response shape'; continue; }
-      const paragraphs = parseParagraphs(text);
+      const paragraphs = parseParagraphs(await withTimeout(rewriter.complete(SYSTEM_PROMPT, chunk.text, MAX_TOKENS), CALL_TIMEOUT_MS));
       const ratio = paragraphs.reduce((n, p) => n + words(p).length, 0) / chunk.words;
-      if (ratio < MIN_WORD_RATIO || ratio > MAX_WORD_RATIO) { lastError = `output kept ${Math.round(ratio * 100)}% of the words`; continue; }
-      return paragraphs;
+      if (ratio >= MIN_WORD_RATIO && ratio <= MAX_WORD_RATIO) return { paragraphs, label: rewriter.label };
+      errors.push(`${rewriter.label}: output kept ${Math.round(ratio * 100)}% of the words`);
     } catch (err) {
-      lastError = err instanceof Error ? err.message : 'request failed';
+      errors.push(`${rewriter.label}: ${err instanceof Error ? err.message : 'request failed'}`);
     }
   }
-  throw new AppError(502, 'rewrite_failed', `AI rewrite failed: ${lastError}`);
+  throw new AppError(502, 'rewrite_failed', `AI rewrite failed: ${errors[errors.length - 1] ?? 'no provider'}`);
 }
 
-export interface RewriteOutcome { transcript: string; model: string }
+export interface RewriteOutcome {
+  transcript: string;
+  /** Provider label(s) that produced the text, comma-separated when a fallback handled some chunks. */
+  model: string;
+}
 
 /** Rewrites a stored raw transcript; throws AppError when any chunk cannot be cleaned (the caller keeps the raw text). */
 export async function rewriteTranscript(
-  ai: WorkersAiLike, source: string, opts: { durationSeconds?: number | null; model?: string } = {},
+  rewriters: TranscriptRewriter[], source: string, opts: { durationSeconds?: number | null } = {},
 ): Promise<RewriteOutcome> {
-  const model = opts.model?.trim() || DEFAULT_REWRITE_MODEL;
+  if (rewriters.length === 0) throw new AppError(503, 'llm_unconfigured', 'No AI provider is configured for transcript rewrites');
   const chunks = chunkTranscript(source, opts.durationSeconds);
   if (chunks.length === 0) throw new AppError(409, 'transcript_empty', 'There is no transcript text to rewrite');
   const results: string[][] = new Array(chunks.length);
+  const labels = new Set<string>();
   let next = 0;
   const worker = async () => {
     while (next < chunks.length) {
       const i = next++;
-      results[i] = placeParagraphs(chunks[i], await rewriteChunk(ai, model, chunks[i]));
+      const out = await rewriteChunk(rewriters, chunks[i]);
+      labels.add(out.label);
+      results[i] = placeParagraphs(chunks[i], out.paragraphs);
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, worker));
-  return { transcript: results.flat().join('\n'), model };
+  return { transcript: results.flat().join('\n'), model: [...labels].join(', ') };
 }

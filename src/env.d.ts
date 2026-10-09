@@ -20,8 +20,12 @@ export interface RuntimeEnv {
   // Zuey Reads
   ANYMD_API_KEY?: string;
   READS_SUMMARY_MODEL?: string;
-  /** Workers AI model that cleans up Zueytube transcripts (default @cf/meta/llama-3.3-70b-instruct-fp8-fast). */
+  /** Workers AI model that cleans up Zueytube transcripts when OpenRouter is absent or fails (default @cf/meta/llama-3.3-70b-instruct-fp8-fast). */
   VIDEOS_REWRITE_MODEL?: string;
+  /** OpenRouter key; when set it is the first provider for Zueytube transcript cleanup. */
+  OPENROUTER_API_KEY?: string;
+  /** OpenRouter model for transcript cleanup (default google/gemma-4-31b-it). */
+  VIDEOS_REWRITE_OPENROUTER_MODEL?: string;
   // Booking, payments, email
   GOOGLE_CALENDAR_REFRESH_TOKEN?: string;
   GOOGLE_CALENDAR_ID?: string;

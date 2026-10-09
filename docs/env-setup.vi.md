@@ -47,8 +47,11 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 1. Chạy migration `0015_zueytube_videos.sql` và `0016_zueytube_transcript_rewrite.sql` (xem mục 0).
 2. Zueytube dùng chung secret `ANYMD_API_KEY` với Reads để lấy transcript (mỗi video YouTube tốn 3 credit AnyMD, chỉ lấy một lần khi thêm). Không có key thì AnyMD vẫn chạy với quota ẩn danh nhỏ.
 3. Thêm video: Studio → tab **Zueytube**, hoặc `zuey videos add <link> --locale vi|en [--pair <video_id>]`, MCP `video_add`, REST `POST /api/v1/videos` (admin). Video không có phụ đề vẫn được thêm, với trạng thái transcript `unavailable`; lỗi AnyMD cho trạng thái `failed`, bấm *Refetch* để lấy lại.
-4. Transcript vừa lấy được viết lại bằng Workers AI qua binding `AI` có sẵn: thêm dấu câu, chia đoạn, bỏ từ đệm, giữ nguyên ngôn ngữ và không tóm tắt. Mốc thời gian của từng đoạn là ước lượng. Bản phụ đề gốc được giữ trong cột `transcript_source`. Nếu AI lỗi, hoặc kết quả mất quá nhiều chữ, thì transcript gốc được giữ lại và trạng thái AI là `failed`. Chạy lại bằng nút ✨ trong Studio, `zuey videos rewrite <youtube_id>`, MCP `video_rewrite_transcript` hoặc `POST /api/v1/videos/{id}/rewrite` (admin, không tốn credit AnyMD).
-5. Model mặc định là `@cf/meta/llama-3.3-70b-instruct-fp8-fast`. Muốn đổi thì đặt biến `VIDEOS_REWRITE_MODEL` (không bắt buộc). Không cần thêm secret: app dùng binding `AI`, còn `CLOUDFLARE_API_TOKEN` chỉ dùng cho wrangler.
+4. Transcript vừa lấy được viết lại bằng AI: thêm dấu câu, chia đoạn, bỏ từ đệm, giữ nguyên ngôn ngữ và không tóm tắt. Mốc thời gian của từng đoạn là ước lượng. Bản phụ đề gốc được giữ trong cột `transcript_source`. Nếu AI lỗi, hoặc kết quả mất quá nhiều chữ, thì transcript gốc được giữ lại và trạng thái AI là `failed`. Chạy lại bằng nút ✨ trong Studio, `zuey videos rewrite <youtube_id>`, MCP `video_rewrite_transcript` hoặc `POST /api/v1/videos/{id}/rewrite` (admin, không tốn credit AnyMD).
+5. Provider AI được thử theo thứ tự cho từng đoạn transcript:
+   - **OpenRouter** (chính): đặt secret `OPENROUTER_API_KEY`. Model mặc định `google/gemma-4-31b-it`, đổi bằng biến `VIDEOS_REWRITE_OPENROUTER_MODEL` (không bắt buộc).
+   - **Workers AI** (dự phòng, hoặc là provider duy nhất khi không có key OpenRouter): dùng binding `AI` có sẵn. Model mặc định `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, đổi bằng biến `VIDEOS_REWRITE_MODEL`.
+   Cột `transcript_rewrite_model` ghi provider đã tạo ra bản viết lại.
 
 ## 3. Google Calendar / Meet
 

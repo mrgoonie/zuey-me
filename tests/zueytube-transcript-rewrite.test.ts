@@ -10,8 +10,11 @@ import { transcriptSegments } from '../src/lib/videos/anymd-transcript-parser';
 import { getEdition, getTranscriptSource } from '../src/lib/videos/store';
 import { addVideo, refetchTranscript, rewriteEditionTranscript } from '../src/lib/videos/video-ingest-service';
 import {
-  chunkTranscript, DEFAULT_REWRITE_MODEL, formatTimestamp, parseParagraphs, placeParagraphs, rewriteTranscript, timedWords,
+  chunkTranscript, formatTimestamp, parseParagraphs, placeParagraphs, rewriteTranscript, timedWords,
 } from '../src/lib/videos/video-transcript-rewrite';
+import {
+  DEFAULT_OPENROUTER_REWRITE_MODEL, DEFAULT_WORKERS_AI_REWRITE_MODEL, workersAiRewriter,
+} from '../src/lib/videos/video-transcript-rewrite-providers';
 import { searchVideos } from '../src/lib/videos/video-search';
 import { parseYoutubeId } from '../src/lib/videos/youtube-url';
 import { POST as rewriteApi } from '../src/pages/api/v1/videos/[id]/rewrite';
@@ -102,8 +105,9 @@ describe('AI rewrite', () => {
     const ai = cleaningAi();
     let model = '';
     const spy: WorkersAiLike = { run: (m, input) => { model = m; return ai.run(m, input); } };
-    const out = await rewriteTranscript(spy, RAW_LINES[0], { durationSeconds: 60 });
-    expect(model).toBe(DEFAULT_REWRITE_MODEL);
+    const out = await rewriteTranscript([workersAiRewriter(spy)], RAW_LINES[0], { durationSeconds: 60 });
+    expect(model).toBe(DEFAULT_WORKERS_AI_REWRITE_MODEL);
+    expect(out.model).toBe(`workers-ai:${DEFAULT_WORKERS_AI_REWRITE_MODEL}`);
     const segs = transcriptSegments(out.transcript);
     expect(segs.length).toBe(2);
     expect(segs[0].start).toBe(0);
@@ -112,7 +116,8 @@ describe('AI rewrite', () => {
   });
 
   it('rejects output that drops most of the words (summaries)', async () => {
-    await expect(rewriteTranscript(summarizingAi, RAW_LINES[0])).rejects.toMatchObject({ code: 'rewrite_failed' });
+    await expect(rewriteTranscript([workersAiRewriter(summarizingAi)], RAW_LINES[0])).rejects.toMatchObject({ code: 'rewrite_failed' });
+    await expect(rewriteTranscript([], RAW_LINES[0])).rejects.toMatchObject({ status: 503 });
   });
 
   it('runs after a fetch, keeps the raw source and re-indexes the cleaned text', async () => {
@@ -130,6 +135,34 @@ describe('AI rewrite', () => {
     const raw = await getEdition(d1, VID, { transcript: true });
     expect(raw?.transcript_rewrite_status).toBe('none');
     expect(raw?.transcript).toBe(RAW_LINES[0]);
+  });
+
+  it('prefers OpenRouter and falls back to Workers AI per chunk', async () => {
+    await addVideo({ db: d1, fetchImpl: fakeFetch }, { url: VID, locale: 'vi' });
+    const sent: Array<{ model: string; auth: string | null }> = [];
+    const openRouter = (status: number) => async (input: string, init?: RequestInit): Promise<Response> => {
+      if (!input.startsWith('https://openrouter.ai/')) return fakeFetch(input, init);
+      const body: unknown = JSON.parse(String(init?.body));
+      const model = typeof body === 'object' && body !== null && 'model' in body && typeof body.model === 'string' ? body.model : '';
+      sent.push({ model, auth: new Headers(init?.headers).get('Authorization') });
+      if (status !== 200) return new Response(JSON.stringify({ error: { message: 'no capacity' } }), { status });
+      const user = typeof body === 'object' && body !== null && 'messages' in body ? userText({ messages: body.messages }) : '';
+      return new Response(JSON.stringify({ choices: [{ message: { content: `${user}.` } }] }), { status: 200 });
+    };
+    const modelOf = () => d1.raw.query("SELECT transcript_rewrite_model AS m FROM video_editions WHERE youtube_id = ?").get(VID);
+
+    const viaOpenRouter = await rewriteEditionTranscript({ db: d1, fetchImpl: openRouter(200), openRouterApiKey: 'test-key', ai: brokenAi }, VID);
+    expect(viaOpenRouter.transcript_rewrite_status).toBe('ready');
+    expect(sent[0]).toEqual({ model: DEFAULT_OPENROUTER_REWRITE_MODEL, auth: 'Bearer test-key' });
+    expect(modelOf()).toEqual({ m: `openrouter:${DEFAULT_OPENROUTER_REWRITE_MODEL}` });
+
+    const fallback = await rewriteEditionTranscript({ db: d1, fetchImpl: openRouter(503), openRouterApiKey: 'test-key', ai: cleaningAi() }, VID);
+    expect(fallback.transcript_rewrite_status).toBe('ready');
+    expect(modelOf()).toEqual({ m: `workers-ai:${DEFAULT_WORKERS_AI_REWRITE_MODEL}` });
+
+    const bothDown = await rewriteEditionTranscript({ db: d1, fetchImpl: openRouter(503), openRouterApiKey: 'test-key', ai: brokenAi }, VID);
+    expect(bothDown.transcript_rewrite_status).toBe('failed');
+    expect(bothDown.transcript_rewrite_error).toContain('model overloaded');
   });
 
   it('keeps the raw text and records the error when the model fails', async () => {

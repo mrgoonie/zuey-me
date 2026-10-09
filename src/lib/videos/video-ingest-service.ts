@@ -2,7 +2,8 @@
  * Admin write flows shared by REST, MCP, Studio and the CLI: add a YouTube link (optionally as the
  * other-language edition of an existing video) and (re)fetch its transcript through AnyMD.
  * A transcript failure never blocks the add: the edition is stored with a visible failed/unavailable status.
- * When the Workers AI binding is present, a fetched transcript is then cleaned up by AI; a failed rewrite keeps the raw text.
+ * When an AI provider is configured (OpenRouter first, Workers AI as fallback), a fetched transcript is then cleaned up by AI;
+ * a failed rewrite keeps the raw text.
  */
 import type { D1DatabaseLike } from '../../db/store';
 import type { WorkersAiLike } from '../../env';
@@ -15,7 +16,8 @@ import {
   saveRewriteResult, saveTranscriptResult,
 } from './store';
 import type { TranscriptRewriteStatus, VideoItem, VideoLocale } from './types';
-import { DEFAULT_REWRITE_MODEL, rewriteTranscript } from './video-transcript-rewrite';
+import { rewriteTranscript } from './video-transcript-rewrite';
+import { openRouterRewriter, workersAiRewriter, type TranscriptRewriter } from './video-transcript-rewrite-providers';
 import { fetchWatchMetadata } from './youtube-watch-metadata';
 import { parseYoutubeId, thumbnailUrl } from './youtube-url';
 
@@ -23,9 +25,21 @@ export interface IngestDeps {
   db: D1DatabaseLike;
   anymdApiKey?: string;
   fetchImpl?: FetchLike;
-  /** Workers AI binding; without it transcripts stay as raw captions. */
+  /** OpenRouter key: preferred provider for the transcript rewrite. */
+  openRouterApiKey?: string;
+  openRouterModel?: string;
+  /** Workers AI binding: fallback provider (or the only one without an OpenRouter key). */
   ai?: WorkersAiLike;
   rewriteModel?: string;
+}
+
+/** Providers in the order they are tried; empty means transcripts stay as raw captions. */
+export function transcriptRewriters(deps: IngestDeps): TranscriptRewriter[] {
+  const list: TranscriptRewriter[] = [];
+  const key = deps.openRouterApiKey?.trim();
+  if (key) list.push(openRouterRewriter(key, deps.openRouterModel?.trim() || undefined, deps.fetchImpl));
+  if (deps.ai) list.push(workersAiRewriter(deps.ai, deps.rewriteModel?.trim() || undefined));
+  return list;
 }
 
 export interface AddVideoInput {
@@ -63,13 +77,13 @@ interface RefreshOutcome {
 }
 
 /** Cleans up the stored raw transcript with Workers AI and stores the outcome (the raw text stays on failure). */
-async function applyRewrite(deps: IngestDeps, youtubeId: string, ai: WorkersAiLike): Promise<{ status: TranscriptRewriteStatus; error: string | null }> {
+async function applyRewrite(deps: IngestDeps, youtubeId: string, rewriters: TranscriptRewriter[]): Promise<{ status: TranscriptRewriteStatus; error: string | null }> {
   const source = await getTranscriptSource(deps.db, youtubeId);
   const edition = await getEdition(deps.db, youtubeId);
   if (!source || !edition) throw new AppError(409, 'transcript_not_ready', 'This edition has no transcript to rewrite yet');
-  const model = deps.rewriteModel?.trim() || DEFAULT_REWRITE_MODEL;
+  const model = rewriters.map(r => r.label).join(', ');
   try {
-    const out = await rewriteTranscript(ai, source, { durationSeconds: edition.duration_seconds, model });
+    const out = await rewriteTranscript(rewriters, source, { durationSeconds: edition.duration_seconds });
     const wordCount = transcriptPlainText(out.transcript).split(/\s+/).filter(Boolean).length;
     await saveRewriteResult(deps.db, youtubeId, { status: 'ready', transcript: out.transcript, word_count: wordCount, model: out.model });
     await reindexEdition(deps.db, youtubeId);
@@ -107,8 +121,9 @@ export async function refreshEdition(deps: IngestDeps, youtubeId: string, opts: 
     thumbnail_url: parsed.thumbnail_url, ...meta,
   });
   await reindexEdition(deps.db, youtubeId);
-  if (status !== 'ready' || !deps.ai) return { status, error, rewrite_status: 'none', rewrite_error: null };
-  const rewrite = await applyRewrite(deps, youtubeId, deps.ai);
+  const rewriters = transcriptRewriters(deps);
+  if (status !== 'ready' || rewriters.length === 0) return { status, error, rewrite_status: 'none', rewrite_error: null };
+  const rewrite = await applyRewrite(deps, youtubeId, rewriters);
   return { status, error, rewrite_status: rewrite.status, rewrite_error: rewrite.error };
 }
 
@@ -168,9 +183,10 @@ export async function rewriteEditionTranscript(deps: IngestDeps, ref: string): P
   const youtubeId = parseYoutubeId(ref) ?? ref;
   const edition = await getEdition(deps.db, youtubeId);
   if (!edition) throw new AppError(404, 'video_not_found', 'No Zueytube edition has that YouTube id');
-  if (!deps.ai) throw new AppError(503, 'llm_unconfigured', 'The Workers AI binding (AI) is not configured');
+  const rewriters = transcriptRewriters(deps);
+  if (rewriters.length === 0) throw new AppError(503, 'llm_unconfigured', 'No AI provider is configured (OPENROUTER_API_KEY or the Workers AI binding)');
   if (edition.transcript_status !== 'ready') throw new AppError(409, 'transcript_not_ready', 'This edition has no transcript to rewrite yet');
-  const rewrite = await applyRewrite(deps, youtubeId, deps.ai);
+  const rewrite = await applyRewrite(deps, youtubeId, rewriters);
   const video = await getVideo(deps.db, edition.video_id);
   if (!video) throw new AppError(404, 'video_not_found', 'Video not found');
   return ingestResult(video, youtubeId, { status: edition.transcript_status, error: edition.transcript_error, rewrite_status: rewrite.status, rewrite_error: rewrite.error });
