@@ -144,7 +144,7 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
 2. Mỗi email có `List-Unsubscribe` và `List-Unsubscribe-Post` (huỷ một chạm theo RFC 8058, Gmail/Yahoo bắt buộc với người gửi số lượng lớn), có phần text thuần, và HTML dưới ngưỡng 102 KB để Gmail không cắt.
 3. Không gửi trong giờ yên lặng (23:00–07:00 giờ Việt Nam): email chờ tới sáng để được mở nhiều hơn.
 4. DNS: SPF/DKIM của Resend cho `send.zuey.me` đã có. Cần thêm **DMARC** (`_dmarc.zuey.me` TXT `v=DMARC1; p=none; …`), sau vài tuần ổn định thì nâng dần lên `p=quarantine`.
-5. Nên tách người gửi bản tin sang subdomain riêng (ví dụ `news.zuey.me`, verify trong Resend, đặt `ARTICLE_EMAIL_FROM`) để uy tín email đăng nhập/thanh toán không bị ảnh hưởng nếu bản tin bị đánh dấu spam. Hộp thư nhận phản hồi (`ARTICLE_EMAIL_REPLY_TO`) phải nhận được thư thật.
+5. Bản tin gửi từ subdomain riêng `news.zuey.me` (`ARTICLE_EMAIL_FROM=Zuey <hi@news.zuey.me>`, domain đã verify trong Resend, vùng `ap-northeast-1`; DKIM/SPF/return-path nằm ở `resend._domainkey.news`, `send.news`, `rsend.news`), nên uy tín email đăng nhập/thanh toán (`zuey.me`) không bị ảnh hưởng nếu bản tin bị đánh dấu spam. Hộp thư nhận phản hồi (`ARTICLE_EMAIL_REPLY_TO`) phải nhận được thư thật.
 6. Theo dõi tỷ lệ bounce (< 2%) và spam (< 0,1%) trong Resend và Google Postmaster Tools.
 
 ## 7. Thành viên & gói
