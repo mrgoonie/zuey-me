@@ -26,10 +26,12 @@ function describeStatus(status: number): string {
 /**
  * Returns AnyMD's Markdown for the video. Works without a key (small anonymous quota);
  * with ANYMD_API_KEY the call is billed to the account (YouTube = 3 credits, cached hits free).
+ * `language` picks the caption track: YouTube sometimes mis-detects Vietnamese speech and serves
+ * auto-captions in another language unless the track is requested explicitly.
  */
 export async function fetchVideoMarkdown(
   youtubeId: string,
-  opts: { apiKey?: string; fresh?: boolean; fetchImpl?: FetchLike; baseUrl?: string } = {},
+  opts: { apiKey?: string; fresh?: boolean; language?: string; fetchImpl?: FetchLike; baseUrl?: string } = {},
 ): Promise<string> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/markdown' };
@@ -41,7 +43,10 @@ export async function fetchVideoMarkdown(
     res = await fetchImpl(`${opts.baseUrl ?? ANYMD_BASE_URL}/convert`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ url: watchUrl(youtubeId), format: 'markdown', save: false, frontmatter: true, fresh: Boolean(opts.fresh) }),
+      body: JSON.stringify({
+        url: watchUrl(youtubeId), format: 'markdown', save: false, frontmatter: true, fresh: Boolean(opts.fresh),
+        ...(opts.language ? { language: opts.language } : {}),
+      }),
       signal: controller.signal,
     });
   } catch (err) {
