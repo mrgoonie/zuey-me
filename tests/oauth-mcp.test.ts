@@ -11,6 +11,7 @@ import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import { allMcpTools } from '../src/lib/mcp/dispatch';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { loadConsent, startAuthorization } from '../src/lib/oauth/authorize';
+import { ACCESS_TOKEN_TTL_MS } from '../src/lib/oauth/config';
 import { pkceChallenge } from '../src/lib/oauth/tokens';
 import { TOOL_ACCESS } from '../src/lib/oauth/tool-access';
 import { GET as asMetadataApi } from '../src/pages/.well-known/oauth-authorization-server';
@@ -528,7 +529,7 @@ describe('/mcp resource server', () => {
     expect(anon.res.headers.get('WWW-Authenticate')).toBe(`Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`);
 
     const f = await fullFlow('lan@example.com');
-    now += 2 * HOUR;
+    now += ACCESS_TOKEN_TTL_MS + HOUR;
     const expired = await mcp('tools/list', {}, { token: f.access });
     expect(expired.status).toBe(401);
     const challenge = expired.res.headers.get('WWW-Authenticate') ?? '';

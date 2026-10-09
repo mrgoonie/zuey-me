@@ -13,8 +13,13 @@ export type OAuthScope = (typeof OAUTH_SCOPES)[number];
 /** Scopes requested when a client asks for none (everything a member can grant, never admin). */
 export const DEFAULT_MEMBER_SCOPES: UserKeyScope[] = [...USER_KEY_SCOPES];
 
-export const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
-export const REFRESH_TOKEN_TTL_MS = 30 * DAY_MS;
+/**
+ * Long-lived on purpose: some MCP clients (Claude Code) refresh only while connected and ask for a new
+ * sign-in when they reconnect with an expired access token. Every request still checks the token row,
+ * consent and user in D1, so revoking a connected app takes effect immediately.
+ */
+export const ACCESS_TOKEN_TTL_MS = 30 * DAY_MS;
+export const REFRESH_TOKEN_TTL_MS = 90 * DAY_MS;
 export const CODE_TTL_MS = 2 * 60 * 1000;
 export const REQUEST_TTL_MS = 10 * 60 * 1000;
 /** Cached Client ID Metadata Documents are refetched after this long. */
