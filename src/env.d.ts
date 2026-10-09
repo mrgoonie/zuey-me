@@ -6,8 +6,23 @@ export interface WorkersAiLike {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
+/** Object read back from R2 (only the members this app uses). */
+export interface R2ObjectBodyLike {
+  httpMetadata?: { contentType?: string };
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+/** Minimal shape of a Cloudflare R2 bucket binding used by this app. */
+export interface R2BucketLike {
+  put(key: string, value: ArrayBuffer | Uint8Array, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
+  get(key: string): Promise<R2ObjectBodyLike | null>;
+  delete(keys: string | string[]): Promise<void>;
+}
+
 export interface RuntimeEnv {
   DB?: D1DatabaseLike;
+  /** Private bucket `zuey-referral-kyc`: referrers' national-ID images, deleted when an admin decides. */
+  REFERRAL_KYC?: R2BucketLike;
   AI?: WorkersAiLike;
   PUBLIC_SITE_URL?: string;
   PUBLIC_POSTHOG_KEY?: string;
