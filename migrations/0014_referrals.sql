@@ -62,6 +62,11 @@ ALTER TABLE card_subscriptions ADD COLUMN referral_commission_percent INTEGER;
 ALTER TABLE card_subscriptions ADD COLUMN amount_before_referral INTEGER;
 ALTER TABLE card_subscriptions ADD COLUMN referral_ref TEXT;
 ALTER TABLE card_subscriptions ADD COLUMN first_payment_id TEXT;
+-- First successful charge as reported by Dodo (total incl. tax, and the tax part), so a commission whose capture
+-- failed can be recaptured later from stored facts.
+ALTER TABLE card_subscriptions ADD COLUMN first_payment_cents INTEGER;
+ALTER TABLE card_subscriptions ADD COLUMN first_payment_tax_cents INTEGER;
+ALTER TABLE card_subscriptions ADD COLUMN first_payment_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_card_subscriptions_first_payment ON card_subscriptions (first_payment_id) WHERE first_payment_id IS NOT NULL;
 
 ALTER TABLE bookings ADD COLUMN referrer_user_id TEXT;
@@ -70,6 +75,11 @@ ALTER TABLE bookings ADD COLUMN referral_discount_percent INTEGER;
 ALTER TABLE bookings ADD COLUMN referral_commission_percent INTEGER;
 ALTER TABLE bookings ADD COLUMN amount_before_referral INTEGER;
 ALTER TABLE bookings ADD COLUMN referral_ref TEXT;
+-- VND per USD at hold time: a VND booking's commission converts at this rate, not at the rate on payment day.
+ALTER TABLE bookings ADD COLUMN usd_vnd_rate REAL;
+
+-- Hashed client IP of each member sign-in, compared with a referee's signup IP (OAuth logins leave no login_tokens).
+ALTER TABLE member_sessions ADD COLUMN ip_hash TEXT;
 
 -- 5. One commission per referred source order; the unique key makes webhook retries idempotent.
 CREATE TABLE IF NOT EXISTS referral_commissions (
@@ -145,6 +155,14 @@ CREATE TABLE IF NOT EXISTS referral_payouts (
   usd_vnd_rate REAL,
   net_vnd INTEGER,
   status TEXT NOT NULL CHECK (status IN ('pending', 'paid', 'cancelled')),
+  -- Payee snapshotted from the verified payout profile at close: later profile edits never redirect this payout.
+  payee_full_name TEXT,
+  payee_bank_name TEXT,
+  payee_bank_account TEXT,
+  payee_national_id TEXT,
+  payee_address TEXT,
+  payee_paypal_email TEXT,
+  payee_verified_at TEXT,
   transaction_ref TEXT,
   paid_at TEXT,
   paid_by TEXT,
@@ -164,3 +182,20 @@ CREATE TABLE IF NOT EXISTS referral_events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_referral_events_subject ON referral_events (subject_user_id, id);
+
+-- 10. Canonical-email hashes of deleted accounts that had paid, so deleting and re-registering never makes a
+--     previous customer an eligible (discounted, commissionable) referee again.
+CREATE TABLE IF NOT EXISTS referral_paid_email_hashes (
+  email_hash TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+
+-- 11. Sources refunded or cancelled before any commission existed (e.g. capture had failed), so a later
+--     recapture never creates a commission for money that was given back.
+CREATE TABLE IF NOT EXISTS referral_source_reversals (
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('billing_order', 'card_subscription', 'booking')),
+  source_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (source_kind, source_id)
+);

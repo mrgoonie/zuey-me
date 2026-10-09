@@ -8,6 +8,7 @@ import { createMemberSession, isSameOriginRequest, memberCookie, readCookie, res
 import type { UserRecord } from './users';
 import { findOrCreateVerifiedUser, getUserById, logActivity, normalizeEmail } from './users';
 import { bindReferrerOnSignup } from '../referrals/attribution';
+import { ipHash } from './login-tokens';
 
 export type OAuthProvider = 'google' | 'github';
 export const OAUTH_PROVIDERS: OAuthProvider[] = ['google', 'github'];
@@ -255,7 +256,7 @@ export async function handleMemberOAuthCallback(request: Request, env: RuntimeEn
       if (linked) await logActivity(d1, user.id, 'identity.linked', { provider }, request);
       return redirect(cookie.next, [stateCookie('', 0)]);
     }
-    const { token } = await createMemberSession(d1, user.id, request);
+    const { token } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
     await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: provider }, request);
     const clearRef = created ? await bindReferrerOnSignup(d1, user, request, env) : null;
     return redirect(cookie.next, [stateCookie('', 0), memberCookie(token), ...(clearRef ? [clearRef] : [])]);

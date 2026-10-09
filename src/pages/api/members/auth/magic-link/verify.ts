@@ -16,7 +16,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const d1 = requireMembersDb(env);
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
-    const result = await consumeMagicLink(d1, request, body.token);
+    const result = await consumeMagicLink(d1, request, body.token, env);
     const response = jsonOk({ next: result.next, created: result.created }, 200, {
       'Cache-Control': 'no-store',
       'Set-Cookie': memberCookie(result.sessionToken),

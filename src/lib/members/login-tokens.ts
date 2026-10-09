@@ -114,11 +114,11 @@ export async function requestMagicLink(
 
 /** Consumes a magic link: verifies the email, creates the account if needed and opens a session. */
 export async function consumeMagicLink(
-  d1: D1DatabaseLike, request: Request, rawToken: unknown,
+  d1: D1DatabaseLike, request: Request, rawToken: unknown, env: RuntimeEnv = {},
 ): Promise<{ user: UserRecord; created: boolean; next: string; sessionToken: string }> {
   const token = await consumeToken(d1, rawToken, 'magic_link');
   const { user, created } = await findOrCreateVerifiedUser(d1, { email: token.email });
-  const { token: sessionToken } = await createMemberSession(d1, user.id, request);
+  const { token: sessionToken } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
   await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: 'magic_link' }, request);
   return { user, created, next: safeNextPath(token.next_path), sessionToken };
 }
