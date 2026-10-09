@@ -11,7 +11,8 @@ import type { PaypalReversalEvent } from '../payments/paypal';
 import { missingSepayConfig, parseVndPrice, transferContent, vietQrTransfer } from '../payments/sepay';
 import type { SepayTransferInfo } from '../payments/sepay';
 import { BOOKING_PRICE_USD_CENTS, parseReferralCodeField, resolveCheckoutReferral } from '../referrals/checkout';
-import { captureReferralCommission } from '../referrals/commissions';
+import { parseUsdVndRate } from '../members/plans';
+import { captureReferralCommission, rescheduleBookingCommissionHold } from '../referrals/commissions';
 import { applyPercent } from '../referrals/rates';
 import type { ReversalOutcome } from '../referrals/refunds';
 import { reverseCommission } from '../referrals/refunds';
@@ -361,7 +362,8 @@ export function bookingAmountDue(row: BookingRow, env: RuntimeEnv): { amount: nu
 
 /**
  * Holds a slot. A referral (typed code or `zr_ref` cookie, matched against the guest email) is resolved
- * and snapshotted now, so the price shown at checkout cannot change during the hold.
+ * and snapshotted now, so the price shown at checkout cannot change during the hold. Today's USD_VND_RATE is
+ * snapshotted too: a VND booking's commission converts at the rate the guest was quoted.
  */
 export async function createHold(
   d1: D1DatabaseLike, env: RuntimeEnv, input: HoldInput, opts: { request?: Request } = {}
@@ -388,13 +390,13 @@ export async function createHold(
       await d1.prepare(
         `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email,
           company, notes, guest_timezone, payment_method, manage_token_hash, reschedule_count, created_at, updated_at,
-          referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral)
-         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`
+          referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral, usd_vnd_rate)
+         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, code, slot.start, slot.end, slot.duration_min, iso(now + HOLD_MS), input.name, input.email,
         input.company, input.notes, input.timezone, input.payment_method, tokenHash, nowIso, nowIso,
         referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
-        referral ? listAmount : null
+        referral ? listAmount : null, parseUsdVndRate(env)
       ).run();
       const row = await getBookingRow(d1, id);
       if (!row) throw new Error('Inserted booking not found');
@@ -548,8 +550,10 @@ export interface PaymentNotice {
   bookingId: string | null;
   bookingCode?: string | null;
   checkoutId?: string | null;
-  /** Bank transfer content (may carry the payer's name); used only as a referral fraud signal. */
+  /** Bank transfer content or PayPal payer name; used only as a referral fraud signal. */
   payerText?: string | null;
+  /** PayPal payer email; used only as a referral fraud signal. */
+  payerEmail?: string | null;
 }
 
 export type PaymentOutcome =
@@ -628,7 +632,9 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
     if (changes === 1) {
       const confirmed = await getBookingRow(d1, row.id);
       if (confirmed) await fulfilBooking(d1, env, confirmed, 'confirmed');
-      if (row.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id: row.id, payerText: n.payerText ?? null });
+      if (row.referrer_user_id) {
+        await captureReferralCommission(d1, env, { kind: 'booking', id: row.id, payerText: n.payerText ?? null, payerEmail: n.payerEmail ?? null });
+      }
       return { outcome: 'confirmed', booking_id: row.id };
     }
     const current = await getBookingRow(d1, row.id);
@@ -692,6 +698,9 @@ export async function capturePaypalBooking(
       paymentRef: capture.id,
       bookingId: capture.customId ?? row.id,
       checkoutId: order.orderId,
+      // The webhook's capture resource has no payer; whichever path confirms first decides, so this is best-effort.
+      payerText: order.payer?.name ?? null,
+      payerEmail: order.payer?.email ?? null,
     });
     status = result.outcome === 'needs_attention' ? 'needs_attention' : 'confirmed';
   }
@@ -841,6 +850,7 @@ export async function rescheduleBooking(
   if (changes !== 1) throw new AppError(409, 'reschedule_not_allowed', 'Booking changed concurrently; reload and try again');
   const updated = await getBookingRow(d1, row.id);
   if (!updated) throw new AppError(404, 'booking_not_found', 'Booking not found');
+  if (updated.referrer_user_id) await rescheduleBookingCommissionHold(d1, updated.id, updated.slot_end);
   const fulfilled = await fulfilBooking(d1, env, updated, 'rescheduled');
   return toGuestView(fulfilled, env, bookingRuntime.now());
 }
@@ -849,8 +859,9 @@ export type AdminAction = 'cancel' | 'resolve' | 'mark_attention' | 'note';
 export const ADMIN_ACTIONS: AdminAction[] = ['cancel', 'resolve', 'mark_attention', 'note'];
 
 /**
- * Admin-only state changes. `cancel` never refunds automatically; `resolve` confirms a booking
- * whose payment the admin verified manually (still guarded by the active-slot unique index).
+ * Admin-only state changes. `cancel` never refunds automatically but reverses the referral commission;
+ * `resolve` confirms a booking whose payment the admin verified manually (still guarded by the active-slot
+ * unique index) and captures its referral commission like a webhook-confirmed one.
  */
 export async function adminUpdateBooking(
   d1: D1DatabaseLike, env: RuntimeEnv, id: string, action: AdminAction, note: string | null
@@ -863,6 +874,7 @@ export async function adminUpdateBooking(
     await d1.prepare('UPDATE bookings SET admin_note = ?, updated_at = ? WHERE id = ?').bind(noteValue, nowIso, id).run();
   } else if (action === 'cancel') {
     await d1.prepare("UPDATE bookings SET status = 'cancelled', admin_note = ?, updated_at = ? WHERE id = ?").bind(noteValue, nowIso, id).run();
+    if (row.referrer_user_id) await reverseCommission(d1, { sourceKind: 'booking', sourceId: id }, 'admin_cancel', 'admin');
   } else if (action === 'mark_attention') {
     await d1.prepare("UPDATE bookings SET status = 'needs_attention', attention_reason = COALESCE(attention_reason, 'admin'), admin_note = ?, updated_at = ? WHERE id = ? AND status <> 'cancelled'")
       .bind(noteValue, nowIso, id).run();
@@ -877,6 +889,7 @@ export async function adminUpdateBooking(
     }
     const confirmed = await getBookingRow(d1, id);
     if (confirmed && confirmed.meet_status !== 'sent') await fulfilBooking(d1, env, confirmed, 'confirmed');
+    if (row.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id });
   }
   const updated = await getBookingRow(d1, id);
   if (!updated) throw new AppError(404, 'booking_not_found', 'Booking not found');

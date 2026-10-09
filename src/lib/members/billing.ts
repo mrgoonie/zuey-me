@@ -5,7 +5,7 @@ import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billin
 import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
 import type { SepayTransferInfo } from '../payments/sepay';
 import { SEPAY_BILLING_PREFIX, extractBillingCode, missingSepayBankConfig, vietQrTransfer } from '../payments/sepay';
-import { parseReferralCodeField, resolveCheckoutReferral, sepayReferralAmounts } from '../referrals/checkout';
+import { bindEnteredReferral, parseReferralCodeField, resolveCheckoutReferral, sepayReferralAmounts } from '../referrals/checkout';
 import { captureReferralCommission } from '../referrals/commissions';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
 import type { BillingMonths, Entitlement, PlanId } from './plans';
@@ -195,6 +195,8 @@ export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: s
         referral ? amounts.beforeVnd : null).run();
       const order = await getOrderByCode(d1, code);
       if (!order) throw new AppError(500, 'internal_error', 'Order was not persisted');
+      // A typed code binds only now that the order exists, never for a checkout that failed validation.
+      await bindEnteredReferral(d1, env, userId, referral, request);
       await logActivity(d1, userId, 'billing.order_created', {
         code, plan: plan.id, months, amount_vnd: order.amount_vnd, referral_discount_percent: referral?.discountPercent ?? null,
       }, request);
@@ -244,7 +246,9 @@ export async function createMemberCheckout(
     }
     const enteredCode = parseReferralCodeField(body);
     const referral = await resolveCheckoutReferral(d1, { userId, enteredCode, request, product: 'membership' });
-    return { ...(await startCardCheckout(d1, env, userId, body.plan, request, referral)), provider: 'dodo' };
+    const checkout = await startCardCheckout(d1, env, userId, body.plan, request, referral);
+    await bindEnteredReferral(d1, env, userId, referral, request);
+    return { ...checkout, provider: 'dodo' };
   }
   if (provider !== 'sepay') throw new AppError(400, 'invalid_field', `provider must be one of ${CHECKOUT_PROVIDERS.join(', ')}`, { field: 'provider' });
   const view = toOrderView(await createOrder(d1, env, userId, body, request), env);
@@ -413,6 +417,8 @@ export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv): Promi
       orderCode: code,
       paymentRef: typeof tx.reference_number === 'string' && tx.reference_number ? tx.reference_number : id,
       rawType: 'reconcile',
+      // The transfer content may name the payer: same referral fraud signal as the webhook path.
+      payerText: typeof tx.transaction_content === 'string' ? tx.transaction_content : null,
     });
     out.matched += 1;
     out.results.push({ transaction_id: id, order_code: code, outcome: result.outcome });

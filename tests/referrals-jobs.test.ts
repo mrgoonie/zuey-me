@@ -5,14 +5,14 @@ import { JPEG_BYTES, PNG_BYTES, createFakeR2 } from './helpers/r2';
 import type { RuntimeEnv } from '../src/env';
 import { AppError } from '../src/lib/http';
 import { membersRuntime } from '../src/lib/members/runtime';
-import { findOrCreateVerifiedUser } from '../src/lib/members/users';
+import { deleteAccount, exportAccount, findOrCreateVerifiedUser, getUserById } from '../src/lib/members/users';
 import { ensureReferralProfile, getReferralProfile } from '../src/lib/referrals/codes';
 import { getReferralSettings } from '../src/lib/referrals/config';
 import { closePayoutPeriod, creditApprovedCommissions, matureCommissions, recomputeTiers } from '../src/lib/referrals/jobs';
 import { balanceCents } from '../src/lib/referrals/ledger';
 import { decidePayoutProfile, readIdImage } from '../src/lib/referrals/payout-profile-review';
 import { getPayoutProfile, savePayoutProfile, uploadIdImage } from '../src/lib/referrals/payout-profiles';
-import { cancelPayout, listPayouts, markPayoutPaid, payoutsCsv } from '../src/lib/referrals/payouts';
+import { cancelPayout, getPayout, listPayouts, markPayoutPaid, payoutsCsv } from '../src/lib/referrals/payouts';
 import { effectiveRate } from '../src/lib/referrals/rates';
 import { reverseCommission } from '../src/lib/referrals/refunds';
 import { nextCloseDate, previousSaigonMonth, saigonMonthRange } from '../src/lib/referrals/saigon-calendar';
@@ -326,7 +326,7 @@ describe('admin payout actions', () => {
 
   it('exports a period as CSV with payee details and formula-safe cells', async () => {
     const { id } = await onePayout();
-    await d1.prepare("UPDATE referral_payout_profiles SET address = '=HYPERLINK(\"x\")' WHERE 1 = 1").run();
+    await d1.prepare("UPDATE referral_payouts SET payee_address = '=HYPERLINK(\"x\")' WHERE id = ?").bind(id).run();
     const csv = await payoutsCsv(d1, '2026-10');
     const lines = csv.trim().split('\r\n');
     expect(lines).toHaveLength(2);
@@ -334,9 +334,31 @@ describe('admin payout actions', () => {
     expect(lines[1]).toContain(`"${id}","2026-10","pending","ref@example.com","vn_bank","Nguyen Van A","001234567890","'=HYPERLINK(""x"")"`);
     expect(lines[1]).toContain('"80.00","1000","8.00","72.00","26350","1897200"');
   });
+
+  it('pays the payee snapshotted at close: later profile edits change neither the list, the CSV nor mark-paid', async () => {
+    const { ref, id } = await onePayout();
+    // The referrer (or a stolen session) points the profile at another account after the close.
+    await savePayoutProfile(d1, env(), ref, { ...VN_DETAILS, full_name: 'Tran Van B', bank_account: '55554444', national_id: '009999999999' });
+    const [listed] = await listPayouts(d1, { period: '2026-10' });
+    expect(listed.payee).toMatchObject({ full_name: 'Nguyen Van A', bank_account: '0011223344', national_id: '001234567890' });
+    expect(listed.payee.verified_at).not.toBeNull();
+    const csv = await payoutsCsv(d1, '2026-10');
+    expect(csv).toContain('"0011223344"');
+    expect(csv).not.toContain('55554444');
+    expect((await markPayoutPaid(d1, env(), id, 'VCB-1', 'boss@example.com')).outcome).toBe('paid');
+  });
+
+  it('refuses mark-paid for a payout without a verified payee snapshot', async () => {
+    const { id } = await onePayout();
+    await d1.prepare('UPDATE referral_payouts SET payee_verified_at = NULL WHERE id = ?').bind(id).run();
+    expect((await rejectsWith(markPayoutPaid(d1, env(), id, 'VCB-1', 'boss@example.com')))?.code).toBe('payee_unverified');
+    expect((await getPayout(d1, id))?.status).toBe('pending');
+  });
 });
 
 describe('payout profiles and national-ID images', () => {
+  const version = async (userId: string): Promise<string | undefined> => (await getPayoutProfile(d1, userId))?.updated_at;
+
   it('requires both images before review, replaces images, and approval deletes both R2 objects in the same request', async () => {
     const ref = await referrer('ref@example.com');
     const saved = await savePayoutProfile(d1, env(), ref, VN_DETAILS);
@@ -357,7 +379,7 @@ describe('payout profiles and national-ID images', () => {
     const viewed = await d1.prepare("SELECT actor FROM referral_events WHERE action = 'payout_profile.image_viewed'").first();
     expect(viewed).toEqual({ actor: 'boss@example.com' });
 
-    const approved = await decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com');
+    const approved = await decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com', undefined, ready.updated_at);
     expect(approved).toMatchObject({ status: 'verified', verified_by: 'boss@example.com', has_id_front: false, has_id_back: false });
     expect(r2.objects.size).toBe(0);
     const keys = await d1.prepare('SELECT id_front_key, id_back_key FROM referral_payout_profiles WHERE user_id = ?').bind(ref).first();
@@ -375,7 +397,7 @@ describe('payout profiles and national-ID images', () => {
     expect((await rejectsWith(decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com')))?.code).toBe('invalid_state');
     await uploadIdImage(d1, env(), ref, 'back', imageRequest(JPEG_BYTES, 'image/jpeg'));
     expect((await rejectsWith(decidePayoutProfile(d1, env(), ref, 'reject', 'boss@example.com')))?.status).toBe(400);
-    const rejected = await decidePayoutProfile(d1, env(), ref, 'reject', 'boss@example.com', 'Ảnh mờ');
+    const rejected = await decidePayoutProfile(d1, env(), ref, 'reject', 'boss@example.com', 'Ảnh mờ', await version(ref));
     expect(rejected).toMatchObject({ status: 'rejected', reject_reason: 'Ảnh mờ' });
     expect(r2.objects.size).toBe(0);
 
@@ -383,7 +405,36 @@ describe('payout profiles and national-ID images', () => {
     const paypal = await savePayoutProfile(d1, env(), ref, { method: 'paypal', paypal_email: 'Me@Example.com' });
     expect(paypal).toMatchObject({ status: 'submitted', paypal_email: 'me@example.com', full_name: null, has_id_front: false });
     expect(r2.objects.size).toBe(0);
-    expect((await decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com')).status).toBe('verified');
+    expect((await decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com', undefined, paypal.updated_at)).status).toBe('verified');
+  });
+
+  it('refuses a decision on details changed since the admin loaded them, and keeps images until a guarded decision succeeds', async () => {
+    const ref = await referrer('ref@example.com');
+    await savePayoutProfile(d1, env(), ref, VN_DETAILS);
+    await uploadIdImage(d1, env(), ref, 'front', imageRequest(JPEG_BYTES, 'image/jpeg'));
+    const shown = await uploadIdImage(d1, env(), ref, 'back', imageRequest(PNG_BYTES, 'image/png'));
+    expect(shown.status).toBe('submitted');
+
+    // The member changes the bank account after the admin loaded the profile.
+    now += 1000;
+    await savePayoutProfile(d1, env(), ref, { ...VN_DETAILS, bank_account: '99887766' });
+    expect((await rejectsWith(decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com', undefined, shown.updated_at)))?.code).toBe('profile_changed');
+    expect((await getPayoutProfile(d1, ref))?.status).toBe('submitted');
+    expect(r2.objects.size).toBe(2);
+
+    // An image replaced after the admin loaded the profile is refused too, and the new image is not orphaned.
+    const current = await getPayoutProfile(d1, ref);
+    now += 1000;
+    await uploadIdImage(d1, env(), ref, 'front', imageRequest(JPEG_BYTES, 'image/jpeg'));
+    expect((await rejectsWith(decidePayoutProfile(d1, env(), ref, 'reject', 'boss@example.com', 'blurry', current?.updated_at)))?.code).toBe('profile_changed');
+    const keys = await d1.prepare('SELECT id_front_key, id_back_key FROM referral_payout_profiles WHERE user_id = ?').bind(ref).first<{ id_front_key: string; id_back_key: string }>();
+    expect(r2.objects.has(keys?.id_front_key ?? '')).toBe(true);
+    expect(r2.objects.size).toBe(2);
+    expect((await rejectsWith(decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com')))?.code).toBe('invalid_field');
+
+    const fresh = await getPayoutProfile(d1, ref);
+    expect((await decidePayoutProfile(d1, env(), ref, 'approve', 'boss@example.com', undefined, fresh?.updated_at)).bank_account).toBe('99887766');
+    expect(r2.objects.size).toBe(0);
   });
 
   it('validates details and uploads, and names the missing REFERRAL_KYC binding', async () => {
@@ -439,5 +490,55 @@ describe('POST /api/v1/referrals/jobs/run', () => {
     expect(text).toContain('"period":"2026-11"');
     expect(await balanceCents(d1, ref)).toBe(0);
     expect(await listPayouts(d1, { period: '2026-11' })).toHaveLength(1);
+  });
+});
+
+describe('account deletion and export', () => {
+  async function userRecord(id: string) {
+    const user = await getUserById(d1, id);
+    if (!user) throw new Error('user missing');
+    return user;
+  }
+
+  it('exports referral data, then deletion removes the payout profile, its ID images and the referee email but keeps payouts', async () => {
+    const ref = await referrer('ref@example.com');
+    await verifiedProfile(ref, 'vn_bank');
+    await credit(ref, 8_000);
+    now = NOV_1;
+    const [payout] = (await closePayoutPeriod(d1, env(), now)).created;
+    await savePayoutProfile(d1, env(), ref, VN_DETAILS);
+    await uploadIdImage(d1, env(), ref, 'front', imageRequest(JPEG_BYTES, 'image/jpeg'));
+    await uploadIdImage(d1, env(), ref, 'back', imageRequest(PNG_BYTES, 'image/png'));
+    expect(r2.objects.size).toBe(2);
+    // This member was also someone else's referee.
+    const other = await referrer('other@example.com');
+    const asReferee = await commission(other);
+    await d1.prepare('UPDATE referral_commissions SET referee_user_id = ?, referee_email = ? WHERE id = ?').bind(ref, 'ref@example.com', asReferee).run();
+
+    const exported = await exportAccount(d1, await userRecord(ref));
+    const referral = exported.referral as Record<string, unknown>;
+    expect((referral.profile as Record<string, unknown>).code).toBeTruthy();
+    expect((referral.payout_profile as Record<string, unknown>).status).toBe('submitted');
+    expect(referral.payouts).toHaveLength(1);
+    expect(JSON.stringify(referral)).not.toContain('kyc/');
+
+    await deleteAccount(d1, await userRecord(ref), env());
+    expect(await getPayoutProfile(d1, ref)).toBeNull();
+    expect(r2.objects.size).toBe(0);
+    const scrubbed = await d1.prepare('SELECT referee_email FROM referral_commissions WHERE id = ?').bind(asReferee).first<{ referee_email: string | null }>();
+    expect(scrubbed?.referee_email).toBeNull();
+    const [kept] = await listPayouts(d1, { period: '2026-10' });
+    expect(kept.id).toBe(payout.id);
+    expect(kept.payee.bank_account).toBe('0011223344');
+  });
+
+  it('still deletes the account when the ID-image bucket is not bound', async () => {
+    const ref = await referrer('ref@example.com');
+    await savePayoutProfile(d1, env(), ref, VN_DETAILS);
+    await uploadIdImage(d1, env(), ref, 'front', imageRequest(JPEG_BYTES, 'image/jpeg'));
+    envOverrides = { REFERRAL_KYC: undefined };
+    await deleteAccount(d1, await userRecord(ref), env());
+    expect(await getPayoutProfile(d1, ref)).toBeNull();
+    expect((await d1.prepare('SELECT deleted_at FROM users WHERE id = ?').bind(ref).first<{ deleted_at: string | null }>())?.deleted_at).toBeTruthy();
   });
 });

@@ -209,8 +209,8 @@ export async function updateReferralMe(d1: D1DatabaseLike, env: RuntimeEnv, user
 }
 
 /** `POST bind`: a signed-in member without a referrer enters a code. */
-export async function bindReferralCode(d1: D1DatabaseLike, userId: string, code: unknown): Promise<{ bound: true; code: string }> {
-  const result = await bindReferrerByCode(d1, userId, code);
+export async function bindReferralCode(d1: D1DatabaseLike, userId: string, code: unknown, ipHash: string | null = null): Promise<{ bound: true; code: string }> {
+  const result = await bindReferrerByCode(d1, userId, code, ipHash);
   if (result.bound) {
     const profile = await getReferralProfile(d1, result.referrerUserId);
     return { bound: true, code: profile?.code ?? String(code).trim().toLowerCase() };

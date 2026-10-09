@@ -182,11 +182,28 @@ export interface PaypalCapture {
   customId: string | null;
 }
 
+/** Who paid, as PayPal reports it on the order (used only as a referral fraud signal). */
+export interface PaypalPayer {
+  email: string | null;
+  /** Given name + surname. */
+  name: string | null;
+}
+
 export interface PaypalOrderState {
   orderId: string;
   /** Order status (COMPLETED, APPROVED, PAYER_ACTION_REQUIRED, …) or NOT_APPROVED when the payer never approved. */
   status: string;
   capture: PaypalCapture | null;
+  payer?: PaypalPayer | null;
+}
+
+function parsePayer(v: unknown): PaypalPayer | null {
+  if (!isRecord(v)) return null;
+  const email = typeof v.email_address === 'string' && v.email_address.trim() ? v.email_address.trim() : null;
+  const n = isRecord(v.name) ? v.name : {};
+  const parts = [n.given_name, n.surname].filter((p): p is string => typeof p === 'string' && p.trim() !== '').map(p => p.trim());
+  const name = parts.length ? parts.join(' ') : null;
+  return email || name ? { email, name } : null;
 }
 
 function parseCapture(v: unknown, fallbackCustomId: string | null): PaypalCapture | null {
@@ -211,6 +228,7 @@ export function parsePaypalOrder(body: unknown): PaypalOrderState | null {
     orderId: body.id,
     status: typeof body.status === 'string' ? body.status : 'UNKNOWN',
     capture: captures.length > 0 ? parseCapture(captures[0], unitCustomId) : null,
+    payer: parsePayer(body.payer),
   };
 }
 

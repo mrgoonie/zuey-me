@@ -3,8 +3,8 @@ import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { hashString } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
-import { membersRuntime } from '../src/lib/members/runtime';
-import { findOrCreateVerifiedUser } from '../src/lib/members/users';
+import { membersRuntime, safeNextPath } from '../src/lib/members/runtime';
+import { deleteAccount, findOrCreateVerifiedUser, getUserById } from '../src/lib/members/users';
 import { REF_COOKIE, bindReferrerByCode, bindReferrerOnSignup, readRefCookie } from '../src/lib/referrals/attribution';
 import { ensureReferralProfile } from '../src/lib/referrals/codes';
 import { isEligibleReferee } from '../src/lib/referrals/eligibility';
@@ -146,6 +146,58 @@ describe('binding on sign-up', () => {
        VALUES ('bo1', 'ZM1', ?, 'ai', 1, 1900, 26000, 494000, 'paid', ?, ?, ?, ?)`
     ).bind(paid, at(T0), at(T0), at(T0), at(T0)).run();
     expect(await bindReferrerByCode(d1, paid, code)).toEqual({ bound: false, reason: 'not_eligible' });
+  });
+
+  it('records the hashed client IP of a checkout-code binding for the shared-IP check', async () => {
+    const { code } = await referrer('ref@example.com');
+    const fresh = await member('fresh@example.com');
+    await bindReferrerByCode(d1, fresh, code, 'iphash-1');
+    const row = await d1.prepare('SELECT referral_signup_ip_hash FROM users WHERE id = ?').bind(fresh).first<{ referral_signup_ip_hash: string }>();
+    expect(row?.referral_signup_ip_hash).toBe('iphash-1');
+  });
+});
+
+describe('redirect target of /r/{code}', () => {
+  it('only follows same-site paths', async () => {
+    const { code } = await referrer('ref@example.com');
+    for (const next of ['/%09/evil.com', '/%5Cevil.com', '//evil.com', '/\\evil.com', 'https://evil.com', '%2F%2Fevil.com']) {
+      const res = await follow(code, undefined, `?next=${next}`);
+      expect(res.headers.get('Location')).toBe('/');
+    }
+    expect((await follow(code, undefined, '?next=/pricing%3Fplan%3Dai')).headers.get('Location')).toBe('/pricing?plan=ai');
+  });
+
+  it('safeNextPath rejects control characters, whitespace, backslashes and other origins', () => {
+    for (const bad of ['/\t/evil.com', '/\n/evil.com', '/ /evil.com', '/\\evil.com', '//evil.com', '///evil.com', 'evil.com', '', '/'.padEnd(301, 'a')]) {
+      expect(safeNextPath(bad, '/fallback')).toBe('/fallback');
+    }
+    expect(safeNextPath(null)).toBe('/account');
+    expect(safeNextPath('/%09/evil.com')).toBe('/%09/evil.com');
+    expect(safeNextPath('  /account/billing?tab=1#top  ')).toBe('/account/billing?tab=1#top');
+    expect(safeNextPath('/a/../b')).toBe('/b');
+  });
+});
+
+describe('deleted accounts', () => {
+  it('keeps a paying mailbox ineligible after the account is deleted and re-registered', async () => {
+    const paid = await member('jane.doe@gmail.com');
+    await d1.prepare(
+      `INSERT INTO billing_orders (id, code, user_id, plan, months, amount_usd_cents, usd_vnd_rate, amount_vnd, status, expires_at, paid_at, created_at, updated_at)
+       VALUES ('bo1', 'ZM1', ?, 'ai', 1, 1900, 26000, 494000, 'paid', ?, ?, ?, ?)`
+    ).bind(paid, at(T0), at(T0), at(T0), at(T0)).run();
+    const user = await getUserById(d1, paid);
+    if (!user) throw new Error('user missing');
+    await deleteAccount(d1, user, env);
+    expect(await isEligibleReferee(d1, { email: 'jane.doe@gmail.com' })).toBe(false);
+    const again = await member('janedoe+new@googlemail.com');
+    expect(await isEligibleReferee(d1, { userId: again })).toBe(false);
+
+    // A deleted account that never paid leaves no trace.
+    const never = await member('never@example.com');
+    const neverUser = await getUserById(d1, never);
+    if (!neverUser) throw new Error('user missing');
+    await deleteAccount(d1, neverUser, env);
+    expect(await isEligibleReferee(d1, { userId: await member('never@example.com') })).toBe(true);
   });
 });
 

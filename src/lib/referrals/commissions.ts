@@ -1,15 +1,14 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
-import { AppError } from '../http';
-import { parseUsdVndRate } from '../members/plans';
 import type { Row } from '../members/runtime';
-import { DAY_MS, iso, membersRuntime, num, numOrNull, randomId, str, strOrNull } from '../members/runtime';
+import { DAY_MS, iso, membersRuntime, num, randomId, str, strOrNull } from '../members/runtime';
+import { sourceFacts } from './commission-source-facts';
 import { getReferralSettings } from './config';
 import { assessReferral } from './fraud';
 import type { FraudAssessment } from './fraud';
 import { gatherFraudSnapshot } from './fraud-signals';
 import { logReferralEvent } from './ledger';
-import { applyPercent } from './rates';
+import { isSourceReversed } from './source-reversals';
 
 /**
  * One commission per paid referred order, captured from the paid-webhook path. The order's snapshotted
@@ -24,8 +23,11 @@ export type CommissionSource =
   | { kind: 'billing_order'; id: string; payerText?: string | null }
   /** Dodo card subscription's first charge; `collectedCents` = total_amount − tax, USD. */
   | { kind: 'card_subscription'; id: string; paymentId: string; collectedCents: number }
-  /** Consultation booking (SePay or PayPal). */
-  | { kind: 'booking'; id: string; payerText?: string | null };
+  /**
+   * Consultation booking (SePay or PayPal). `payerText` is the SePay content or the PayPal payer's name,
+   * `payerEmail` the PayPal payer's email.
+   */
+  | { kind: 'booking'; id: string; payerText?: string | null; payerEmail?: string | null };
 
 export interface ReferralCommission {
   id: string;
@@ -94,94 +96,13 @@ export async function getCommissionBySource(d1: D1DatabaseLike, kind: Commission
   return row ? rowToCommission(row) : null;
 }
 
-/** Facts read from the paid source row: who referred whom, the snapshotted percent and the collected base. */
-interface SourceFacts {
-  referrerUserId: string;
-  commissionPercent: number;
-  refereeUserId: string | null;
-  refereeEmail: string | null;
-  baseCents: number;
-  paidAt: string;
-  /** Start of the hold: payment time, or the consultation's end for bookings. */
-  holdFrom: string;
-  paymentId: string | null;
-  payerText: string | null;
-}
-
-/** VND → USD cents at the given VND-per-USD rate. */
-function vndToUsdCents(vnd: number, rate: number): number {
-  return Math.round((vnd / rate) * 100);
-}
-
-function validPercent(p: number | null): p is number {
-  return p !== null && Number.isInteger(p) && p >= 0 && p <= 50;
-}
-
-async function emailOf(d1: D1DatabaseLike, userId: string | null): Promise<string | null> {
-  if (!userId) return null;
-  const row = await d1.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<Row>();
-  return row ? str(row, 'email') : null;
-}
-
-async function sourceFacts(d1: D1DatabaseLike, env: RuntimeEnv, source: CommissionSource, nowIso: string): Promise<SourceFacts | null> {
-  if (source.kind === 'billing_order') {
-    const r = await d1.prepare('SELECT * FROM billing_orders WHERE id = ?').bind(source.id).first<Row>();
-    const referrer = r ? strOrNull(r, 'referrer_user_id') : null;
-    const percent = r ? numOrNull(r, 'referral_commission_percent') : null;
-    if (!r || !referrer || !validPercent(percent) || r.status !== 'paid') return null;
-    // Commission on what was collected, never on an overpayment beyond the order total.
-    const collectedVnd = Math.min(numOrNull(r, 'amount_paid') ?? 0, num(r, 'amount_vnd'));
-    const userId = str(r, 'user_id');
-    const paidAt = strOrNull(r, 'paid_at') ?? nowIso;
-    return {
-      referrerUserId: referrer, commissionPercent: percent, refereeUserId: userId, refereeEmail: await emailOf(d1, userId),
-      baseCents: vndToUsdCents(collectedVnd, num(r, 'usd_vnd_rate')), paidAt, holdFrom: paidAt,
-      paymentId: strOrNull(r, 'payment_ref'), payerText: source.payerText ?? null,
-    };
-  }
-  if (source.kind === 'card_subscription') {
-    const r = await d1.prepare('SELECT * FROM card_subscriptions WHERE id = ?').bind(source.id).first<Row>();
-    const referrer = r ? strOrNull(r, 'referrer_user_id') : null;
-    const percent = r ? numOrNull(r, 'referral_commission_percent') : null;
-    if (!r || !referrer || !validPercent(percent)) return null;
-    const userId = strOrNull(r, 'user_id');
-    return {
-      referrerUserId: referrer, commissionPercent: percent, refereeUserId: userId,
-      refereeEmail: (await emailOf(d1, userId)) ?? strOrNull(r, 'customer_email'),
-      baseCents: Math.max(Math.trunc(source.collectedCents), 0), paidAt: nowIso, holdFrom: nowIso,
-      paymentId: source.paymentId, payerText: null,
-    };
-  }
-  const r = await d1.prepare('SELECT * FROM bookings WHERE id = ?').bind(source.id).first<Row>();
-  const referrer = r ? strOrNull(r, 'referrer_user_id') : null;
-  const percent = r ? numOrNull(r, 'referral_commission_percent') : null;
-  if (!r || !referrer || !validPercent(percent) || r.status !== 'confirmed') return null;
-  const vnd = r.payment_method === 'sepay';
-  const paid = numOrNull(r, 'amount_paid') ?? 0;
-  // Owed = the checkout amount, or the snapshotted list price minus the referral discount when the guest
-  // paid without opening checkout. Commission never applies to an overpayment.
-  const before = numOrNull(r, 'amount_before_referral');
-  const owed = numOrNull(r, 'amount_expected') ?? (before === null ? null : applyPercent(before, numOrNull(r, 'referral_discount_percent') ?? 0, vnd ? 'VND' : 'USD'));
-  const collected = Math.min(paid, owed ?? paid);
-  let baseCents = collected;
-  // The rail decides the currency (`currency` stays null when the guest paid without opening checkout).
-  if (vnd) {
-    // Bookings carry no stored exchange rate, so the VND transfer converts at today's USD_VND_RATE.
-    const rate = parseUsdVndRate(env);
-    if (rate === null) throw new AppError(503, 'billing_unconfigured', 'USD_VND_RATE is required to convert a VND booking commission');
-    baseCents = vndToUsdCents(collected, rate);
-  }
-  return {
-    referrerUserId: referrer, commissionPercent: percent, refereeUserId: null, refereeEmail: strOrNull(r, 'guest_email'),
-    baseCents, paidAt: nowIso, holdFrom: str(r, 'slot_end'), paymentId: strOrNull(r, 'payment_ref'), payerText: source.payerText ?? null,
-  };
-}
-
 const STATUS_FOR_VERDICT: Record<FraudAssessment['verdict'], CommissionStatus> = { ok: 'pending', review: 'review', block: 'blocked' };
 
 /**
  * Creates the commission for a paid referred order, at most once per (source kind, source id): a replayed
- * webhook returns the existing row with `created: false`. Orders without a referral snapshot return null.
+ * webhook returns the existing row with `created: false`. Orders without a referral snapshot, and orders
+ * refunded or cancelled before any commission existed, return null. Booking commissions always start in
+ * `review` (guest emails are unverified), unless a hard signal blocks them.
  */
 export async function recordReferralCommission(
   d1: D1DatabaseLike, env: RuntimeEnv, source: CommissionSource,
@@ -190,12 +111,13 @@ export async function recordReferralCommission(
   if (existing) return { created: false, commission: existing };
   const nowMs = membersRuntime.now();
   const nowIso = iso(nowMs);
+  if (await isSourceReversed(d1, source.kind, source.id)) return { created: false, commission: null };
   const facts = await sourceFacts(d1, env, source, nowIso);
   if (!facts) return { created: false, commission: null };
 
   const assessment = assessReferral(await gatherFraudSnapshot(d1, {
     referrerUserId: facts.referrerUserId, refereeUserId: facts.refereeUserId, refereeEmail: facts.refereeEmail,
-    sourceId: source.id, payerText: facts.payerText,
+    sourceId: source.id, payerText: facts.payerText, payerEmail: facts.payerEmail, manualReview: source.kind === 'booking',
   }));
   const status = STATUS_FOR_VERDICT[assessment.verdict];
   const { hold_days } = await getReferralSettings(d1);
@@ -236,4 +158,19 @@ export async function captureReferralCommission(d1: D1DatabaseLike, env: Runtime
     console.error(`referral commission for ${source.kind} ${source.id} failed: ${message}`);
     await logReferralEvent(d1, { actor: 'system', action: 'commission.failed', detail: { source_kind: source.kind, source_id: source.id, error: message } });
   }
+}
+
+/**
+ * A rescheduled consultation moves its commission's hold: it ends `hold_days` after the NEW slot end. Only
+ * commissions still in their hold (pending or review) move; approved/reversed/blocked ones are final.
+ */
+export async function rescheduleBookingCommissionHold(d1: D1DatabaseLike, bookingId: string, slotEnd: string): Promise<boolean> {
+  const endMs = Date.parse(slotEnd);
+  if (Number.isNaN(endMs)) return false;
+  const { hold_days } = await getReferralSettings(d1);
+  const res = await d1.prepare(
+    `UPDATE referral_commissions SET hold_until = ?, updated_at = ?
+     WHERE source_kind = 'booking' AND source_id = ? AND status IN ('pending', 'review')`
+  ).bind(iso(endMs + hold_days * DAY_MS), iso(membersRuntime.now()), bookingId).run();
+  return res.meta?.changes === 1;
 }

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import type { RuntimeEnv } from '../src/env';
-import { bookingRuntime, setAvailability } from '../src/lib/booking/store';
+import { adminUpdateBooking, bookingRuntime, capturePaypalBooking, rescheduleBooking, setAvailability } from '../src/lib/booking/store';
+import { reconcileSepay } from '../src/lib/members/billing';
+import { resolveBillingOrder } from '../src/lib/members/billing-attention';
+import { ipHash } from '../src/lib/members/login-tokens';
 import { membersRuntime } from '../src/lib/members/runtime';
 import { createMemberSession } from '../src/lib/members/session';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
@@ -13,6 +16,7 @@ import { getCommissionBySource, recordReferralCommission } from '../src/lib/refe
 import { isDisposableEmail } from '../src/lib/referrals/disposable-domains';
 import { assessReferral, payerTextMatches } from '../src/lib/referrals/fraud';
 import type { ReferralFraudSnapshot } from '../src/lib/referrals/fraud';
+import { runReferralJobs } from '../src/lib/referrals/jobs';
 import { appendLedger, balanceCents } from '../src/lib/referrals/ledger';
 import { reverseCommission } from '../src/lib/referrals/refunds';
 import { POST as holdApi } from '../src/pages/api/v1/booking/hold';
@@ -214,8 +218,11 @@ describe('SePay commission capture', () => {
     const ref = await referrer('ref@example.com', 10);
     const m = await member('lan@example.com');
     const first = await sepayOrder(m, { plan: 'ai', referral_code: ref.code });
-    const second = await sepayOrder(m, { plan: 'knowledges' });
     expect(await sepayTransfer('9201', first.code, first.amount)).toBe('paid');
+    const second = await sepayOrder(m, { plan: 'knowledges' });
+    // A stale referral snapshot on a later order (e.g. created before the first was paid) never earns twice.
+    await d1.prepare('UPDATE billing_orders SET referrer_user_id = ?, referral_rate = 20, referral_discount_percent = 10, referral_commission_percent = 10 WHERE id = ?')
+      .bind(ref.id, second.id).run();
     expect(await sepayTransfer('9202', second.code, second.amount)).toBe('paid');
     expect((await getCommissionBySource(d1, 'billing_order', first.id))?.status).toBe('pending');
     const repeat = await getCommissionBySource(d1, 'billing_order', second.id);
@@ -379,7 +386,9 @@ describe('booking commissions and PayPal refunds', () => {
   it('holds a booking commission until slot end + 30 days and reverses it on PAYMENT.CAPTURE.REFUNDED', async () => {
     const { id, referrerId } = await paypalBooking();
     const c = await getCommissionBySource(d1, 'booking', id);
-    expect(c?.status).toBe('pending');
+    // Guest emails are unverified: booking commissions always wait for an admin decision.
+    expect(c?.status).toBe('review');
+    expect(c?.review_reasons).toEqual(['booking_manual_review']);
     expect(c?.referrer_user_id).toBe(referrerId);
     expect(c?.referee_email).toBe('lan@example.com');
     expect(c?.base_amount_cents).toBe(189_905);
@@ -412,6 +421,8 @@ describe('booking commissions and PayPal refunds', () => {
     const held = await dataOf(holdRes);
     const code = String(field(field(held, 'booking'), 'code'));
     const id = String(field(field(held, 'booking'), 'id'));
+    // A hold without a rate snapshot (held before the snapshot existed) and no configured rate cannot convert.
+    await d1.prepare('UPDATE bookings SET usd_vnd_rate = NULL WHERE id = ?').bind(id).run();
     envOverrides = { USD_VND_RATE: undefined };
     const res = await sepayWebhook(ctx({
       method: 'POST', headers: { Authorization: 'Apikey sepay-key' },
@@ -427,5 +438,154 @@ describe('booking commissions and PayPal refunds', () => {
     const recorded = await recordReferralCommission(d1, env(), { kind: 'booking', id });
     expect(recorded.created).toBe(true);
     expect(recorded.commission?.base_amount_cents).toBe(Math.round((49_400_000 / RATE) * 100));
+  });
+});
+
+describe('fraud signals from sign-in IPs, binding windows and provider payer details', () => {
+  it('flags a referee who entered the code from an IP the referrer signed in from (member session)', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const ip = { 'cf-connecting-ip': '198.51.100.23' };
+    // The referrer signed in (e.g. Google) from this IP: only the session records it, no magic-link token.
+    await createMemberSession(d1, ref.id, undefined, await ipHash(env(), new Request(ORIGIN, { headers: ip })));
+    const m = await member('lan@example.com');
+    const res = await ordersApi(ctx({ method: 'POST', body: { plan: 'ai', referral_code: ref.code }, headers: { cookie: m.cookie, Origin: ORIGIN, ...ip } }));
+    expect(res.status).toBe(201);
+    const bound = await d1.prepare('SELECT referred_by_user_id, referral_signup_ip_hash FROM users WHERE id = ?').bind(m.userId).first<{ referred_by_user_id: string; referral_signup_ip_hash: string | null }>();
+    expect(bound?.referred_by_user_id).toBe(ref.id);
+    expect(bound?.referral_signup_ip_hash).toBeTruthy();
+    const code = String(field(await dataOf(res), 'code'));
+    const order = await d1.prepare('SELECT id, amount_vnd FROM billing_orders WHERE code = ?').bind(code).first<{ id: string; amount_vnd: number }>();
+    expect(await sepayTransfer('9501', code, order?.amount_vnd ?? 0)).toBe('paid');
+    const c = await getCommissionBySource(d1, 'billing_order', order?.id ?? '');
+    expect(c?.status).toBe('review');
+    expect(c?.review_reasons).toEqual(['shared_ip']);
+  });
+
+  it('counts accounts bound around the referee’s own binding time, however late they pay', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const m = await member('lan@example.com');
+    const boundAt = new Date(T0 - 20 * DAY).toISOString();
+    const farm = [m.userId];
+    for (let i = 0; i < 5; i++) farm.push((await findOrCreateVerifiedUser(d1, { email: `farm${i}@example.com` })).user.id);
+    for (const id of farm) await d1.prepare('UPDATE users SET referred_by_user_id = ?, referred_at = ? WHERE id = ?').bind(ref.id, boundAt, id).run();
+    const order = await sepayOrder(m, { plan: 'ai' });
+    expect(await sepayTransfer('9502', order.code, order.amount)).toBe('paid');
+    const c = await getCommissionBySource(d1, 'billing_order', order.id);
+    expect(c?.status).toBe('review');
+    expect(c?.review_reasons).toEqual(['signup_velocity']);
+  });
+
+  it('feeds the SePay reconcile transfer content into the payer check', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const stamp = new Date(T0).toISOString();
+    await d1.prepare("INSERT INTO referral_payout_profiles (user_id, method, full_name, bank_account, status, created_at, updated_at) VALUES (?, 'vn_bank', 'Trần Văn Đức', '9704123456', 'verified', ?, ?)")
+      .bind(ref.id, stamp, stamp).run();
+    const m = await member('lan@example.com');
+    const order = await sepayOrder(m, { plan: 'ai', referral_code: ref.code });
+    envOverrides = { SEPAY_API_TOKEN: 'sepay-api' };
+    const transactions = [{ id: 7001, amount_in: String(order.amount), transaction_content: `TRAN VAN DUC chuyen tien ${order.code}`, reference_number: 'FT7001' }];
+    membersRuntime.fetch = async (input: string) => input.startsWith('https://my.sepay.vn/') ? json({ transactions }) : fakeFetch(input);
+    const result = await reconcileSepay(d1, env());
+    expect(result.results[0]?.outcome).toBe('paid');
+    expect((await getCommissionBySource(d1, 'billing_order', order.id))?.review_reasons).toEqual(['payer_matches_referrer']);
+  });
+});
+
+describe('commission capture on admin actions and the recapture job', () => {
+  async function sepayBookingHold(code: string): Promise<{ id: string; code: string; token: string }> {
+    const held = await dataOf(await holdApi(ctx({ method: 'POST', body: { slot_start: SLOT, name: 'Lan', email: 'lan@example.com', payment_method: 'sepay', referral_code: code } })));
+    return { id: String(field(field(held, 'booking'), 'id')), code: String(field(field(held, 'booking'), 'code')), token: String(field(held, 'manage_token')) };
+  }
+
+  it('captures the commission when an admin activates a flagged referred order', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const m = await member('lan@example.com');
+    const order = await sepayOrder(m, { plan: 'ai', referral_code: ref.code });
+    await d1.prepare("UPDATE billing_orders SET status = 'needs_attention', attention_reason = 'amount_mismatch' WHERE id = ?").bind(order.id).run();
+    expect((await resolveBillingOrder(d1, env(), order.code, { action: 'activate', note: null }, 'boss@example.com')).outcome).toBe('activated');
+    expect((await getCommissionBySource(d1, 'billing_order', order.id))?.status).toBe('pending');
+  });
+
+  it('captures on an admin-resolved booking and reverses on an admin cancel', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const hold = await sepayBookingHold(ref.code);
+    await d1.prepare("UPDATE bookings SET status = 'needs_attention', attention_reason = 'amount_mismatch' WHERE id = ?").bind(hold.id).run();
+    expect((await adminUpdateBooking(d1, env(), hold.id, 'resolve', 'paid by transfer')).status).toBe('confirmed');
+    const c = await getCommissionBySource(d1, 'booking', hold.id);
+    expect(c?.status).toBe('review');
+    expect(c?.review_reasons).toEqual(['booking_manual_review']);
+
+    expect((await adminUpdateBooking(d1, env(), hold.id, 'cancel', null)).status).toBe('cancelled');
+    expect((await getCommissionBySource(d1, 'booking', hold.id))?.status).toBe('reversed');
+    const event = await d1.prepare("SELECT actor, detail FROM referral_events WHERE action = 'commission.reversed'").first<{ actor: string; detail: string }>();
+    expect(event?.actor).toBe('admin');
+    expect(event?.detail).toContain('admin_cancel');
+  });
+
+  it('converts a SePay booking at the rate snapshotted at hold, and moves the hold after a reschedule', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const hold = await sepayBookingHold(ref.code);
+    expect((await d1.prepare('SELECT usd_vnd_rate FROM bookings WHERE id = ?').bind(hold.id).first<{ usd_vnd_rate: number }>())?.usd_vnd_rate).toBe(RATE);
+    envOverrides = { USD_VND_RATE: '30000' };
+    const res = await sepayWebhook(ctx({
+      method: 'POST', headers: { Authorization: 'Apikey sepay-key' },
+      body: { id: 'sp-2', transferType: 'in', transferAmount: 49_400_000, content: `ZBK${hold.code}`, referenceCode: 'FT2' },
+    }));
+    expect(field(await dataOf(res), 'outcome')).toBe('confirmed');
+    const c = await getCommissionBySource(d1, 'booking', hold.id);
+    expect(c?.base_amount_cents).toBe(Math.round((49_400_000 / RATE) * 100));
+
+    const newStart = '2026-10-08T02:00:00.000Z';
+    await rescheduleBooking(d1, env(), hold.id, hold.token, newStart);
+    const moved = await getCommissionBySource(d1, 'booking', hold.id);
+    expect(moved?.hold_until).toBe(new Date(Date.parse('2026-10-08T03:30:00.000Z') + 30 * DAY).toISOString());
+  });
+
+  it('recaptures a commission whose capture failed at payment time, but never one refunded before capture', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const hold = await sepayBookingHold(ref.code);
+    await d1.prepare('UPDATE bookings SET usd_vnd_rate = NULL WHERE id = ?').bind(hold.id).run();
+    envOverrides = { USD_VND_RATE: undefined };
+    await sepayWebhook(ctx({
+      method: 'POST', headers: { Authorization: 'Apikey sepay-key' },
+      body: { id: 'sp-3', transferType: 'in', transferAmount: 49_400_000, content: `ZBK${hold.code}`, referenceCode: 'FT3' },
+    }));
+    expect(await getCommissionBySource(d1, 'booking', hold.id)).toBeNull();
+    const stillFailing = await runReferralJobs(d1, env(), T0);
+    expect(stillFailing.recapture.status === 'ok' && stillFailing.recapture.failed.length).toBe(1);
+
+    envOverrides = {};
+    const repaired = await runReferralJobs(d1, env(), T0);
+    expect(repaired.recapture.status === 'ok' && repaired.recapture.created).toBe(1);
+    expect((await getCommissionBySource(d1, 'booking', hold.id))?.status).toBe('review');
+
+    // A paid order whose capture failed and that was then refunded must stay without commission.
+    const m = await member('mai@example.com');
+    const order = await sepayOrder(m, { plan: 'ai', referral_code: ref.code });
+    expect(await sepayTransfer('9601', order.code, order.amount)).toBe('paid');
+    await d1.prepare("DELETE FROM referral_commissions WHERE source_kind = 'billing_order' AND source_id = ?").bind(order.id).run();
+    expect((await reverseCommission(d1, { sourceKind: 'billing_order', sourceId: order.id }, 'admin_refund', 'admin')).outcome).toBe('not_found');
+    const after = await runReferralJobs(d1, env(), T0);
+    expect(after.recapture.status === 'ok' && after.recapture.created).toBe(0);
+    expect(await getCommissionBySource(d1, 'billing_order', order.id)).toBeNull();
+  });
+});
+
+describe('PayPal payer details', () => {
+  it('flags a booking paid from the referrer’s own PayPal account (capture on return)', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const held = await dataOf(await holdApi(ctx({ method: 'POST', body: { slot_start: SLOT, name: 'Lan', email: 'lan@example.com', payment_method: 'paypal', referral_code: ref.code } })));
+    const id = String(field(field(held, 'booking'), 'id'));
+    const token = String(field(held, 'manage_token'));
+    await bookingCheckoutApi(ctx({ method: 'POST', body: { token }, params: { id } }));
+    const captured = {
+      id: 'ORDER-1', status: 'COMPLETED', payer: { email_address: 'Ref@Example.com', name: { given_name: 'Someone', surname: 'Else' } },
+      purchase_units: [{ custom_id: id, payments: { captures: [{ id: 'CAPTURE-9', status: 'COMPLETED', amount: { currency_code: 'USD', value: '1899.05' }, custom_id: id }] } }],
+    };
+    bookingRuntime.fetch = async (input: string) => input === `${PAYPAL_BASE}/v2/checkout/orders/ORDER-1/capture` ? json(captured, 201) : fakeFetch(input);
+    expect((await capturePaypalBooking(d1, env(), id, token)).capture_status).toBe('confirmed');
+    const c = await getCommissionBySource(d1, 'booking', id);
+    expect(c?.status).toBe('review');
+    expect(c?.review_reasons).toEqual(['payer_matches_referrer', 'booking_manual_review']);
   });
 });

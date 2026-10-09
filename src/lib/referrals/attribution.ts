@@ -100,8 +100,11 @@ export type BindByCodeResult =
   | { bound: true; referrerUserId: string }
   | { bound: false; reason: 'already_bound' | 'invalid_code' | 'self_referral' | 'not_eligible' };
 
-/** Checkout code entry: binds only an unbound, never-paid member to an active referrer that is not themselves. */
-export async function bindReferrerByCode(d1: D1DatabaseLike, userId: string, code: unknown): Promise<BindByCodeResult> {
+/**
+ * Checkout or Referral-app code entry: binds only an unbound, never-paid member to an active referrer that is
+ * not themselves. `ipHash` (salted, see `ipHash`) is stored like a signup IP for the shared-IP fraud check.
+ */
+export async function bindReferrerByCode(d1: D1DatabaseLike, userId: string, code: unknown, ipHash: string | null = null): Promise<BindByCodeResult> {
   const user = await d1.prepare('SELECT email, referred_by_user_id FROM users WHERE id = ? AND deleted_at IS NULL').bind(userId).first<Row>();
   if (!user) return { bound: false, reason: 'not_eligible' };
   if (strOrNull(user, 'referred_by_user_id')) return { bound: false, reason: 'already_bound' };
@@ -109,6 +112,6 @@ export async function bindReferrerByCode(d1: D1DatabaseLike, userId: string, cod
   if (!profile) return { bound: false, reason: 'invalid_code' };
   if (await isSelfReferral(d1, profile.user_id, { userId })) return { bound: false, reason: 'self_referral' };
   if (!(await isEligibleReferee(d1, { userId }))) return { bound: false, reason: 'not_eligible' };
-  if (!(await bindReferrer(d1, userId, profile.user_id, null, 'checkout_code'))) return { bound: false, reason: 'already_bound' };
+  if (!(await bindReferrer(d1, userId, profile.user_id, ipHash, 'checkout_code'))) return { bound: false, reason: 'already_bound' };
   return { bound: true, referrerUserId: profile.user_id };
 }

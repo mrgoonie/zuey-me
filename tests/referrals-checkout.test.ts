@@ -290,6 +290,94 @@ describe('Dodo card checkout with a referral', () => {
     expect(await sendDodo('payment.succeeded', payment('pay_low', 1500))).toBe('needs_attention');
     expect((await row('card_subscriptions', 'id', id)).attention_reason).toBe('amount_mismatch');
   });
+
+  async function referredCard(): Promise<{ id: string; payment: (paymentId: string, total: number, tax?: number) => Record<string, unknown> }> {
+    const ref = await referrer('ref@example.com', 15);
+    const m = await member('lan@example.com');
+    const id = String(field((await checkout(m, { plan: 'combo', provider: 'dodo', referral_code: ref.code })).data, 'id'));
+    const metadata = { user_id: m.userId, plan: 'combo', card_ref: id };
+    return {
+      id,
+      payment: (paymentId, total, tax = 0) => ({
+        payload_type: 'Payment', payment_id: paymentId, subscription_id: 'sub_1', total_amount: total, tax, currency: 'USD', status: 'succeeded',
+        customer: { customer_id: 'cus_1', email: 'lan@example.com' }, metadata,
+      }),
+    };
+  }
+
+  it('flags a first charge above the quoted discounted price, still earning commission on what was collected', async () => {
+    const { id, payment } = await referredCard();
+    // The referee was quoted $16.15 but Dodo charged list price: the pre-applied discount was not honoured.
+    const callsBefore = calls.length;
+    expect(await sendDodo('payment.succeeded', payment('pay_first', 2090, 190))).toBe('needs_attention');
+    const card = await row('card_subscriptions', 'id', id);
+    expect(card.status).toBe('needs_attention');
+    expect(card.attention_reason).toBe('referral_discount_not_applied');
+    expect(card.first_payment_id).toBe('pay_first');
+    expect(card.first_payment_cents).toBe(2090);
+    expect(card.first_payment_tax_cents).toBe(190);
+    const commission = await d1.prepare("SELECT base_amount_cents FROM referral_commissions WHERE source_kind = 'card_subscription' AND source_id = ?")
+      .bind(id).first<{ base_amount_cents: number }>();
+    expect(commission?.base_amount_cents).toBe(1900);
+    // Flag only: nothing is changed or refunded at Dodo.
+    expect(calls.slice(callsBefore).filter(c => c.url.startsWith(DODO_BASE))).toHaveLength(0);
+  });
+
+  it('applies the discounted floor to the first charge only: a discounted renewal is flagged', async () => {
+    const { id, payment } = await referredCard();
+    expect(await sendDodo('payment.succeeded', payment('pay_first', 1615))).toBe('updated');
+    expect(await sendDodo('payment.succeeded', payment('pay_second', 1615))).toBe('needs_attention');
+    expect((await row('card_subscriptions', 'id', id)).attention_reason).toBe('amount_mismatch');
+  });
+
+  it('binds a typed code only after the card checkout was created', async () => {
+    const ref = await referrer('ref@example.com', 15);
+    const m = await member('lan@example.com');
+    membersRuntime.fetch = async (input: string, init?: RequestInit) => input === `${DODO_BASE}/checkouts` ? json({ message: 'down' }, 500) : fakeFetch(input, init);
+    const failed = await checkout(m, { plan: 'combo', provider: 'dodo', referral_code: ref.code });
+    expect(failed.status).toBeGreaterThanOrEqual(500);
+    expect((await row('users', 'id', m.userId)).referred_by_user_id).toBeNull();
+  });
+});
+
+describe('one open discounted checkout per referee', () => {
+  it('gives list price with no referral snapshot while a discounted order, card checkout or booking hold is open', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const m = await member('lan@example.com');
+    const first = await checkout(m, { plan: 'ai', referral_code: ref.code });
+    expect(first.status).toBe(201);
+    const firstCode = String(field(first.data, 'code'));
+    expect((await row('billing_orders', 'code', firstCode)).referrer_user_id).toBe(ref.id);
+
+    // The member is bound now; a second order while the first is unpaid is not discounted, and not an error.
+    const second = await checkout(m, { plan: 'ai' });
+    expect(second.status).toBe(201);
+    const secondRow = await row('billing_orders', 'code', String(field(second.data, 'code')));
+    expect(secondRow.referrer_user_id).toBeNull();
+    expect(secondRow.amount_before_referral).toBeNull();
+    expect(secondRow.amount_usd_cents).toBe(prepayUsdCents(900, 1));
+    const card = await checkout(m, { plan: 'combo', provider: 'dodo' });
+    expect(card.status).toBe(201);
+    expect((await row('card_subscriptions', 'id', String(field(card.data, 'id')))).referrer_user_id).toBeNull();
+    expect(calls.some(c => c.url === `${DODO_BASE}/discounts`)).toBe(false);
+    const quote = await quoteApi(ctx({ path: '/api/v1/referrals/quote', headers: { cookie: m.cookie } }));
+    expect(field((await read(quote)).data, 'referral')).toBeNull();
+
+    // Once the discounted order is gone, the next checkout is discounted again.
+    await d1.prepare("UPDATE billing_orders SET status = 'expired' WHERE code = ?").bind(firstCode).run();
+    const third = await checkout(m, { plan: 'ai' });
+    expect((await row('billing_orders', 'code', String(field(third.data, 'code')))).referrer_user_id).toBe(ref.id);
+  });
+
+  it('counts a guest booking hold on the same canonical mailbox', async () => {
+    const ref = await referrer('ref@example.com', 10);
+    const held = await holdApi(ctx({ method: 'POST', body: { slot_start: SLOT, name: 'Lan', email: 'l.a.n+x@gmail.com', payment_method: 'sepay', referral_code: ref.code } }));
+    expect(held.status).toBe(201);
+    const m = await member('lan@gmail.com');
+    const order = await checkout(m, { plan: 'ai', referral_code: ref.code });
+    expect(order.status).toBe(201);
+    expect((await row('billing_orders', 'code', String(field(order.data, 'code')))).referrer_user_id).toBeNull();
+  });
 });
 
 describe('Consultation booking with a referral', () => {

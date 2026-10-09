@@ -3,10 +3,12 @@ import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { BillingMonths, PlanId } from '../members/plans';
 import { BILLING_MONTHS, PLANS, PREPAY_DISCOUNT_PERCENT, getPlan, parseUsdVndRate, prepayUsdCents, prepayVnd } from '../members/plans';
+import { ipHash } from '../members/login-tokens';
 import { parseVndPrice } from '../payments/sepay';
 import { activeReferrerByCode, bindReferrerByCode, readRefCookie } from './attribution';
 import { normalizeReferralCode } from './codes';
 import { getReferralSettings } from './config';
+import { hasPendingReferralCheckout } from './pending-referral-checkout';
 import { bookingSplit, effectiveRate, membershipSplit, applyPercent } from './rates';
 import type { CheckoutReferral, ReferralProduct } from './resolve-checkout-referral';
 import { resolveReferralForCheckout } from './resolve-checkout-referral';
@@ -62,13 +64,15 @@ export function parseReferralCodeField(body: Record<string, unknown>): string | 
 /**
  * Resolves the referral for a checkout from the account binding, a typed code and the `zr_ref` cookie.
  * A typed code that cannot apply (unknown, paused, self, previously paid) is a 400 rather than a silent
- * full-price charge; an account already bound to a referrer keeps that referrer. A typed code that applies
- * binds an unbound account permanently.
+ * full-price charge; an account already bound to a referrer keeps that referrer. While another discounted
+ * checkout of this referee is still open, no referral applies (list price, not an error). A typed code is
+ * NOT bound here: call `bindEnteredReferral` once the order or checkout row is persisted.
  */
 export async function resolveCheckoutReferral(
   d1: D1DatabaseLike,
   input: { userId?: string; email?: string | null; enteredCode: string | null; request?: Request; product: ReferralProduct },
 ): Promise<CheckoutReferral | null> {
+  if (await hasPendingReferralCheckout(d1, { userId: input.userId, email: input.email })) return null;
   const referral = await resolveReferralForCheckout(d1, {
     userId: input.userId,
     email: input.email,
@@ -79,8 +83,18 @@ export async function resolveCheckoutReferral(
   if (input.enteredCode && (!referral || referral.source === 'cookie')) {
     throw new AppError(400, 'referral_code_invalid', 'This referral code cannot be applied to your purchase', { field: 'referral_code' });
   }
-  if (referral?.source === 'entered' && input.userId) await bindReferrerByCode(d1, input.userId, referral.code);
   return referral;
+}
+
+/**
+ * After the order or card checkout row exists: a code typed by an unbound member binds them permanently to
+ * that referrer, with the hashed client IP for the shared-IP fraud check. No-op for other referral sources.
+ */
+export async function bindEnteredReferral(
+  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, referral: CheckoutReferral | null, request?: Request,
+): Promise<void> {
+  if (referral?.source !== 'entered') return;
+  await bindReferrerByCode(d1, userId, referral.code, request ? await ipHash(env, request) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +144,8 @@ interface QuoteTerms {
 async function quoteTerms(d1: D1DatabaseLike, input: { userId?: string; enteredCode: string | null; cookieCode: string | null }): Promise<QuoteTerms | null> {
   const settings = await getReferralSettings(d1);
   if (input.userId) {
+    // Mirrors checkout: no discount is quoted while another discounted checkout is still open.
+    if (await hasPendingReferralCheckout(d1, { userId: input.userId })) return null;
     const r = await resolveReferralForCheckout(d1, { userId: input.userId, enteredCode: input.enteredCode, cookieCode: input.cookieCode, product: 'membership' });
     if (!r) return null;
     const booking = bookingSplit(r.discountPercent, r.rate, settings.booking_rate);

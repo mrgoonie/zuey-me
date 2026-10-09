@@ -330,7 +330,11 @@ describe('admin referral endpoints', () => {
     expect(audit).toEqual({ actor: 'admin-api-key', subject_user_id: ref.userId });
 
     expect((await call(profileAction, { method: 'POST', headers: admin(), params: { userId: ref.userId, action: 'reject' } })).status).toBe(400);
-    const approved = await call(profileAction, { method: 'POST', headers: admin(), params: { userId: ref.userId, action: 'approve' } });
+    const reviewedAt = String(field(queue.data, 'profiles', 0, 'updated_at'));
+    expect((await call(profileAction, { method: 'POST', headers: admin(), params: { userId: ref.userId, action: 'approve' } })).code).toBe('invalid_field');
+    expect((await call(profileAction, { method: 'POST', body: { updated_at: '2020-01-01T00:00:00.000Z' }, headers: admin(), params: { userId: ref.userId, action: 'approve' } })).code)
+      .toBe('profile_changed');
+    const approved = await call(profileAction, { method: 'POST', body: { updated_at: reviewedAt }, headers: admin(), params: { userId: ref.userId, action: 'approve' } });
     expect(approved.data).toMatchObject({ status: 'verified', has_id_front: false, has_id_back: false });
     expect(r2.objects.size).toBe(0);
     expect((await call(imageGet, { headers: admin(), params: { userId: ref.userId, side: 'front' } })).status).toBe(404);
@@ -339,8 +343,8 @@ describe('admin referral endpoints', () => {
   it('lists, exports, pays and cancels payouts', async () => {
     const ref = await referrerMember('ref@example.com');
     await d1.prepare(
-      `INSERT INTO referral_payout_profiles (user_id, method, paypal_email, status, created_at, updated_at) VALUES (?, 'paypal', 'pp@example.com', 'verified', ?, ?)`
-    ).bind(ref.userId, new Date(T0).toISOString(), new Date(T0).toISOString()).run();
+      `INSERT INTO referral_payout_profiles (user_id, method, paypal_email, status, verified_at, created_at, updated_at) VALUES (?, 'paypal', 'pp@example.com', 'verified', ?, ?, ?)`
+    ).bind(ref.userId, new Date(T0).toISOString(), new Date(T0).toISOString(), new Date(T0).toISOString()).run();
     const c = await commission(ref.userId, { status: 'approved', cents: 9000 });
     now = Date.parse('2026-10-31T18:00:00.000Z');
     await creditApprovedCommissions(d1, now, c);
@@ -429,5 +433,22 @@ describe('OpenAPI and MCP registration', () => {
     expect(field(await referralsMcpModule.call('referral_payouts_list', { period: '2026-10' }, mcpCtx(adminKey)), 'payouts')).toEqual([]);
     expect(await failure('referral_payout_mark_paid', { id: 'rpo_missing', transaction_ref: 'x' }, adminKey)).toBe(404);
     expect(await failure('referral_commission_decide', { id: 'rcm_missing', action: 'approve' }, adminKey)).toBe(404);
+  });
+
+  it('masks the national ID and bank account in referral_payouts_list', async () => {
+    const ref = await referrerMember('ref@example.com');
+    const stamp = new Date(T0).toISOString();
+    await d1.prepare(
+      `INSERT INTO referral_payout_profiles (user_id, method, full_name, bank_name, bank_account, national_id, address, status, verified_at, created_at, updated_at)
+       VALUES (?, 'vn_bank', 'Nguyen Van A', 'VCB', '0011223344', '001234567890', '1 Le Loi', 'verified', ?, ?, ?)`
+    ).bind(ref.userId, stamp, stamp, stamp).run();
+    const c = await commission(ref.userId, { status: 'approved', cents: 9000 });
+    now = Date.parse('2026-10-31T18:00:00.000Z');
+    await creditApprovedCommissions(d1, now, c);
+    await closePayoutPeriod(d1, env(), now);
+    const listed = await referralsMcpModule.call('referral_payouts_list', { period: '2026-10' }, mcpCtx(adminKey));
+    expect(field(listed, 'payouts', 0, 'payee')).toMatchObject({ full_name: 'Nguyen Van A', bank_account: '••••••3344', national_id: '•••••••••890' });
+    expect(JSON.stringify(listed)).not.toContain('0011223344');
+    expect(JSON.stringify(listed)).not.toContain('001234567890');
   });
 });

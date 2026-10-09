@@ -7,11 +7,11 @@ import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, numOrNull, randomId, siteUrl, str, strOrNull } from '../members/runtime';
 import { recomputeSubscription } from '../members/subscriptions';
 import { getUserById, logActivity } from '../members/users';
-import { cardFirstChargeCents } from '../referrals/checkout';
 import { captureReferralCommission } from '../referrals/commissions';
 import type { ReversalOutcome } from '../referrals/refunds';
 import { reverseCommission } from '../referrals/refunds';
 import type { CheckoutReferral } from '../referrals/resolve-checkout-referral';
+import { allowedSubscriptionAmounts, minimumChargeCents, referralDiscountNotApplied } from './dodo-card-referral-pricing';
 import type { DodoEvent, DodoMetadata, DodoReversalEvent } from './dodo';
 import {
   cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, planForDodoProduct, requireDodoPlan,
@@ -303,20 +303,13 @@ function metadataMatches(card: CardSubscription, meta: DodoMetadata): boolean {
 }
 
 /**
- * Smallest first charge expected for a card row: the list price, or the referral-discounted price snapshotted
- * at checkout. Renewals are at list price, which is never below this.
- */
-function expectedFirstChargeCents(card: CardSubscription, plan: PlanId): number {
-  return card.referrer_user_id && card.referral_discount_percent ? cardFirstChargeCents(plan, card.referral_discount_percent) : getPlan(plan).price_usd_cents;
-}
-
-/**
- * Price check for a plan: the configured product, USD, and the recurring amount at list price (or, for a
- * referral card, the snapshotted discounted first-cycle price, in case Dodo reports the discounted amount).
+ * Price check for a plan: the configured product, USD, and the recurring amount at list price (or, on a
+ * referral card's first activation, the snapshotted discounted first-cycle price, in case Dodo reports it).
  */
 function subscriptionMismatch(env: RuntimeEnv, card: CardSubscription, plan: PlanId, productId: string | null, amountCents: number | null, currency: string | null): string | null {
   if (productId !== dodoProductId(env, plan)) return 'product_mismatch';
-  const allowed = new Set([getPlan(plan).price_usd_cents, expectedFirstChargeCents(card, plan)]);
+  // A row still `pending` has never been activated, so this event is the first cycle.
+  const allowed = allowedSubscriptionAmounts(card, plan, card.status === 'pending');
   if (amountCents === null || !allowed.has(amountCents) || currency !== 'USD') return 'amount_mismatch';
   return null;
 }
@@ -405,16 +398,22 @@ async function applyPaymentEvent(
   const data = event.data;
   const nowIso = iso(membersRuntime.now());
   const succeeded = event.type === 'payment.succeeded';
+  // The first successful charge is stored with its amount and tax, so a failed commission capture can be retried.
+  const first = succeeded ? [data.paymentId, data.totalAmount, data.tax ?? 0, event.occurredAt ?? nowIso] : [null, null, null, null];
   await d1.prepare(
     `UPDATE card_subscriptions SET provider_subscription_id = COALESCE(provider_subscription_id, ?),
-       provider_customer_id = COALESCE(provider_customer_id, ?), first_payment_id = COALESCE(first_payment_id, ?), updated_at = ? WHERE id = ?`
-  ).bind(data.subscriptionId, data.customerId, succeeded ? data.paymentId : null, nowIso, card.id).run();
+       provider_customer_id = COALESCE(provider_customer_id, ?),
+       first_payment_cents = CASE WHEN first_payment_id IS NULL THEN ? ELSE first_payment_cents END,
+       first_payment_tax_cents = CASE WHEN first_payment_id IS NULL THEN ? ELSE first_payment_tax_cents END,
+       first_payment_at = CASE WHEN first_payment_id IS NULL THEN ? ELSE first_payment_at END,
+       first_payment_id = COALESCE(first_payment_id, ?), updated_at = ? WHERE id = ?`
+  ).bind(data.subscriptionId, data.customerId, first[1], first[2], first[3], first[0], nowIso, card.id).run();
   const isFirstPayment = succeeded && (card.first_payment_id ?? data.paymentId) === data.paymentId;
 
   let reason: string | null = null;
   if (!identityOk || card.user_id === null || card.plan === null) reason = card.user_id === null ? 'metadata_missing' : 'metadata_mismatch';
-  else if (succeeded && (data.currency !== 'USD' || data.totalAmount === null || data.totalAmount < expectedFirstChargeCents(card, card.plan))) {
-    // `total_amount` includes tax, so it is never below the (discounted) price actually owed.
+  else if (succeeded && (data.currency !== 'USD' || data.totalAmount === null || data.totalAmount < minimumChargeCents(card, card.plan, isFirstPayment))) {
+    // `total_amount` includes tax, so it is never below the price owed: discounted first charge, list price after.
     reason = 'amount_mismatch';
   }
   if (reason) {
@@ -432,9 +431,21 @@ async function applyPaymentEvent(
     return 'deactivated';
   }
   if (isFirstPayment && card.referrer_user_id && data.totalAmount !== null) {
-    await captureReferralCommission(d1, env, {
-      kind: 'card_subscription', id: card.id, paymentId: data.paymentId, collectedCents: data.totalAmount - (data.tax ?? 0),
-    });
+    const collected = data.totalAmount - (data.tax ?? 0);
+    // Commission is on the amount collected, as for any referred charge.
+    await captureReferralCommission(d1, env, { kind: 'card_subscription', id: card.id, paymentId: data.paymentId, collectedCents: collected });
+    if (card.plan && referralDiscountNotApplied(card, card.plan, collected)) {
+      // Dodo ignored the pre-applied referral discount: flag it so the admin refunds the difference.
+      const reasonText = 'referral_discount_not_applied';
+      await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reasonText, nowIso, card.id).run();
+      if (card.user_id) {
+        await recomputeSubscription(d1, card.user_id, card.plan);
+        await logActivity(d1, card.user_id, 'billing.needs_attention', {
+          plan: card.plan, card_subscription_id: card.id, reason: reasonText, amount: data.totalAmount, tax: data.tax ?? 0, currency: data.currency,
+        });
+      }
+      return 'needs_attention';
+    }
   }
   return 'updated';
 }

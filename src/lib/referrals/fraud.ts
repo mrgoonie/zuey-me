@@ -7,7 +7,7 @@ import { isDisposableEmail } from './disposable-domains';
 export type FraudVerdict = 'block' | 'review' | 'ok';
 
 export type BlockReason = 'self_referral' | 'referee_previously_paid' | 'referrer_locked';
-export type ReviewReason = 'shared_ip' | 'payer_matches_referrer' | 'disposable_email' | 'signup_velocity';
+export type ReviewReason = 'shared_ip' | 'payer_matches_referrer' | 'disposable_email' | 'signup_velocity' | 'booking_manual_review';
 export type FraudReason = BlockReason | ReviewReason;
 
 /** More bound signups than this for one referrer within 24 hours is a velocity signal. */
@@ -22,10 +22,12 @@ export interface ReferralFraudSnapshot {
   refereeEmail: string | null;
   /** Referee's signup IP hash equals one the referrer recently signed in from. */
   sharedIp: boolean;
-  /** Bank transfer payer name/account matches the referrer's payout profile. */
+  /** Payer (bank transfer name/account, PayPal name/email) matches the referrer's payout profile or mailboxes. */
   payerMatchesReferrer: boolean;
-  /** Accounts bound to this referrer in the 24 hours before this order. */
+  /** Accounts bound to this referrer within 24 hours either side of this referee's binding. */
   boundSignupsLast24h: number;
+  /** Always route to admin review (bookings: the guest email is unverified). Hard blocks still win. */
+  manualReview?: boolean;
 }
 
 export interface FraudAssessment {
@@ -43,6 +45,7 @@ export function assessReferral(s: ReferralFraudSnapshot): FraudAssessment {
   if (s.payerMatchesReferrer) review.push('payer_matches_referrer');
   if (isDisposableEmail(s.refereeEmail)) review.push('disposable_email');
   if (s.boundSignupsLast24h > VELOCITY_MAX_SIGNUPS_24H) review.push('signup_velocity');
+  if (s.manualReview) review.push('booking_manual_review');
   if (block.length) return { verdict: 'block', reasons: [...block, ...review] };
   if (review.length) return { verdict: 'review', reasons: review };
   return { verdict: 'ok', reasons: [] };

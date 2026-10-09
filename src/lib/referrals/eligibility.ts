@@ -3,11 +3,13 @@ import type { Row } from '../members/runtime';
 import { str, strOrNull } from '../members/runtime';
 import { getEntitlements } from '../members/subscriptions';
 import { getReferralProfile, normalizeEmailForSelfCheck } from './codes';
+import { isPaidEmailRecorded } from './paid-email-hashes';
 
 /**
  * Who may refer and who may be referred.
  * Referrer: not locked, and admin-enabled or holding an active plan (the link pauses while the plan lapses).
- * Referee: never paid for anything before, matched by account and by canonical email (Gmail dots, +tags).
+ * Referee: never paid for anything before, matched by account and by canonical email (Gmail dots, +tags),
+ * including mailboxes of deleted accounts that had paid (kept only as hashes, see `paid-email-hashes.ts`).
  */
 
 /** Card subscription statuses that are only reachable after a successful first charge. */
@@ -37,7 +39,7 @@ function domainSuffixes(canonical: string): string[] {
  * Distinct raw values of `column` in `table` whose canonical email equals `canonical`. SQL narrows by
  * domain (exact suffix, no LIKE wildcards); the canonical comparison happens here.
  */
-async function rawEmailsMatching(d1: D1DatabaseLike, table: 'users' | 'bookings' | 'card_subscriptions', column: string, canonical: string): Promise<string[]> {
+export async function rawEmailsMatching(d1: D1DatabaseLike, table: 'users' | 'bookings' | 'card_subscriptions', column: string, canonical: string): Promise<string[]> {
   const out = new Set<string>();
   for (const suffix of domainSuffixes(canonical)) {
     const { results } = await d1.prepare(`SELECT DISTINCT ${column} AS email FROM ${table} WHERE ${column} IS NOT NULL AND substr(lower(${column}), -?) = ?`)
@@ -50,8 +52,12 @@ async function rawEmailsMatching(d1: D1DatabaseLike, table: 'users' | 'bookings'
   return [...out];
 }
 
-/** Live and deleted accounts that are the referee: the given user plus every account on the same canonical mailbox. */
-async function refereeUserIds(d1: D1DatabaseLike, userId: string | undefined, canonical: string | null): Promise<string[]> {
+/**
+ * Accounts that are the referee: the given user plus every live account on the same canonical mailbox.
+ * Deleted accounts no longer carry their email (it is scrubbed), so they are covered by the paid-email
+ * hashes in `isEligibleReferee` instead.
+ */
+export async function refereeUserIds(d1: D1DatabaseLike, userId: string | undefined, canonical: string | null): Promise<string[]> {
   const ids = new Set<string>(userId ? [userId] : []);
   if (canonical) {
     const emails = await rawEmailsMatching(d1, 'users', 'email', canonical);
@@ -69,7 +75,7 @@ async function anyRow(d1: D1DatabaseLike, sql: string, params: unknown[]): Promi
 
 /**
  * True when nobody behind this account or mailbox has ever paid: no paid SePay order, no card subscription
- * that got past its first charge, no paid or confirmed booking. Commission is first-order only.
+ * that got past its first charge, no paid or confirmed booking, and no deleted account on this mailbox that had paid. Commission is first-order only.
  * `excludeSourceId` ignores one order/card/booking (ids are prefixed per table, so they never collide):
  * at commission time the order being paid must not count as "paid before".
  */
@@ -91,6 +97,7 @@ export async function isEligibleReferee(
     if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`, [...ids, exclude])) return false;
   }
   if (!canonical) return true;
+  if (await isPaidEmailRecorded(d1, canonical)) return false;
   const cardEmails = await rawEmailsMatching(d1, 'card_subscriptions', 'customer_email', canonical);
   if (cardEmails.length && await anyRow(d1,
     `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`,
@@ -103,7 +110,7 @@ export async function isEligibleReferee(
 }
 
 /** Canonical mailboxes of an account: its email plus the emails of its linked OAuth identities. */
-async function accountMailboxes(d1: D1DatabaseLike, userId: string): Promise<Set<string>> {
+export async function accountMailboxes(d1: D1DatabaseLike, userId: string): Promise<Set<string>> {
   const out = new Set<string>();
   const user = await d1.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<Row>();
   const userEmail = user ? normalizeEmailForSelfCheck(str(user, 'email')) : null;

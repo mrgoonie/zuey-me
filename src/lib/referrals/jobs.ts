@@ -6,9 +6,12 @@ import { DAY_MS, iso, randomId, str, strOrNull, num } from '../members/runtime';
 import { getReferralSettings } from './config';
 import type { ReferralSettings } from './config';
 import { logReferralEvent } from './ledger';
+import { PAYEE_COLUMNS, payeeValuesFromProfile } from './payout-payee-snapshot';
 import { ensurePayoutLedgerLine } from './payouts';
 import type { PayoutMethod } from './payouts';
 import { tierRateFor } from './rates';
+import type { RecaptureResult } from './recapture-commissions';
+import { recaptureMissingCommissions } from './recapture-commissions';
 import { previousSaigonMonth, saigonParts } from './saigon-calendar';
 
 /**
@@ -103,7 +106,8 @@ export interface CloseResult {
  * Day-1 close (Asia/Saigon). Every referrer whose balance reaches the threshold and whose payout profile
  * is verified gets one pending payout for the month that ended: gross = balance, minus the method's
  * deduction (VN bank `vn_deduction_bp`, PayPal `paypal_deduction_bp`); VN payouts are converted at
- * `USD_VND_RATE`. The ledger books −gross, so negative balances (refunds after a payout) simply carry over.
+ * `USD_VND_RATE`. The verified payee details are snapshotted onto the payout, so editing the profile afterwards
+ * never changes where this payout goes. The ledger books −gross, so negative balances (refunds after a payout) simply carry over.
  * UNIQUE (referrer, period) makes repeated runs on day 1 create nothing twice.
  */
 export async function closePayoutPeriod(d1: D1DatabaseLike, env: RuntimeEnv, nowMs: number, settings?: ReferralSettings): Promise<CloseResult> {
@@ -115,6 +119,7 @@ export async function closePayoutPeriod(d1: D1DatabaseLike, env: RuntimeEnv, now
   const threshold = Math.max(s.payout_threshold_cents, 1);
   const { results } = await d1.prepare(
     `SELECT l.referrer_user_id AS user_id, SUM(l.amount_cents) AS balance, pp.method, pp.status AS profile_status, rp.locked_at,
+       pp.full_name, pp.bank_name, pp.bank_account, pp.national_id, pp.address, pp.paypal_email, pp.verified_at,
        (SELECT 1 FROM referral_payouts x WHERE x.referrer_user_id = l.referrer_user_id AND x.period = ?) AS closed
      FROM referral_ledger l
      LEFT JOIN referral_payout_profiles pp ON pp.user_id = l.referrer_user_id
@@ -143,10 +148,10 @@ export async function closePayoutPeriod(d1: D1DatabaseLike, env: RuntimeEnv, now
     const id = randomId('rpo');
     const res = await d1.prepare(
       `INSERT INTO referral_payouts (id, referrer_user_id, period, method, gross_cents, deduction_bp, deduction_cents, net_cents,
-         usd_vnd_rate, net_vnd, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+         usd_vnd_rate, net_vnd, status, created_at, updated_at, ${PAYEE_COLUMNS.join(', ')})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ${PAYEE_COLUMNS.map(() => '?').join(', ')})
        ON CONFLICT (referrer_user_id, period) DO NOTHING`
-    ).bind(id, userId, period, method, gross, bp, deduction, net, rate, netVnd, now, now).run();
+    ).bind(id, userId, period, method, gross, bp, deduction, net, rate, netVnd, now, now, ...payeeValuesFromProfile(r)).run();
     if (res.meta?.changes !== 1) { result.skipped.push({ user_id: userId, reason: 'already_closed' }); continue; }
     await ensurePayoutLedgerLine(d1, id);
     await logReferralEvent(d1, {
@@ -171,17 +176,19 @@ async function runJob<T>(name: string, job: () => Promise<T>): Promise<JobOutcom
 }
 
 /**
- * All referral jobs in dependency order: maturity first (so tiers and the close see fresh approvals),
- * then tiers, then the day-1 close. A failing job is reported as `status: "error"` (the scheduler flags
- * it) without stopping the others.
+ * All referral jobs in dependency order: recapture of commissions whose capture failed on the payment path,
+ * then maturity (so tiers and the close see fresh approvals), then tiers, then the day-1 close. A failing job
+ * is reported as `status: "error"` (the scheduler flags it) without stopping the others.
  */
 export async function runReferralJobs(d1: D1DatabaseLike, env: RuntimeEnv, nowMs: number): Promise<{
+  recapture: JobOutcome<RecaptureResult>;
   mature: JobOutcome<{ approved: number; credited: number }>;
   tiers: JobOutcome<{ updated: number }>;
   close: JobOutcome<CloseResult>;
 }> {
+  const recapture = await runJob('recapture', () => recaptureMissingCommissions(d1, env));
   const mature = await runJob('mature', () => matureCommissions(d1, nowMs));
   const tiers = await runJob('tiers', () => recomputeTiers(d1, nowMs));
   const close = await runJob('close', () => closePayoutPeriod(d1, env, nowMs));
-  return { mature, tiers, close };
+  return { recapture, mature, tiers, close };
 }

@@ -4,6 +4,7 @@ import { iso, membersRuntime } from '../members/runtime';
 import type { CommissionSourceKind, ReferralCommission } from './commissions';
 import { getCommission, getCommissionBySource } from './commissions';
 import { appendLedger, logReferralEvent } from './ledger';
+import { markSourceReversed } from './source-reversals';
 
 /**
  * Refunds, chargebacks and admin reversals. A commission still in its hold (pending/review) simply becomes
@@ -39,11 +40,18 @@ async function reverseLedgerCredit(d1: D1DatabaseLike, c: ReferralCommission, re
 
 /**
  * Reverses a commission by id or by its source order. `reason` is recorded on the audit trail (e.g.
- * `refund`, `dispute_opened`, `admin_refund`); `actor` is `system` for webhooks or the admin's identity.
+ * `refund`, `dispute_opened`, `admin_cancel`); `actor` is `system` for webhooks or the admin's identity.
+ * A referred source with no commission yet (capture failed or pending retry) is marked reversed instead, so a
+ * later recapture never creates one.
  */
 export async function reverseCommission(d1: D1DatabaseLike, ref: CommissionRef, reason: string, actor = 'system'): Promise<ReversalResult> {
   const commission = await findCommission(d1, ref);
-  if (!commission) return { outcome: 'not_found', commission: null, ledger_reversed: false };
+  if (!commission) {
+    if ('sourceKind' in ref && await markSourceReversed(d1, ref.sourceKind, ref.sourceId, reason)) {
+      await logReferralEvent(d1, { actor, action: 'source.reversed_before_commission', detail: { source_kind: ref.sourceKind, source_id: ref.sourceId, reason } });
+    }
+    return { outcome: 'not_found', commission: null, ledger_reversed: false };
+  }
   if (commission.status === 'blocked') return { outcome: 'not_reversible', commission, ledger_reversed: false };
 
   const nowIso = iso(membersRuntime.now());
