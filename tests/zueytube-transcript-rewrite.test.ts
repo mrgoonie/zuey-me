@@ -179,8 +179,8 @@ describe('AI rewrite', () => {
 
 describe('proper-noun glossary', () => {
   it('parses extra names with mis-hearings and lets them override defaults', () => {
-    const extra = parseGlossary('Hermes = Han Harris | Hermit,\n Kongming ,, codex = Codecs');
-    expect(extra).toEqual([{ term: 'Hermes', heardAs: ['Han Harris', 'Hermit'] }, { term: 'Kongming' }, { term: 'codex', heardAs: ['Codecs'] }]);
+    const extra = parseGlossary('Hermes = Han Harris | Hermit,\n Zhuge Liang ,, codex = Codecs');
+    expect(extra).toEqual([{ term: 'Hermes', heardAs: ['Han Harris', 'Hermit'] }, { term: 'Zhuge Liang' }, { term: 'codex', heardAs: ['Codecs'] }]);
     const merged = mergeGlossary(DEFAULT_REWRITE_GLOSSARY, extra);
     expect(merged.length).toBe(DEFAULT_REWRITE_GLOSSARY.length + 2);
     expect(merged.find(t => t.term.toLowerCase() === 'codex')).toEqual({ term: 'codex', heardAs: ['Codecs'] });
