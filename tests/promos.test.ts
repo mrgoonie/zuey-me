@@ -293,6 +293,35 @@ describe('SePay membership order with a promo code', () => {
     expect(again.reason).toBe('already_used');
   });
 
+  it('lets a customer replace their own unpaid checkout, and still counts the replaced order if it is paid', async () => {
+    const promo = await createPromo({ code: 'MINE', percent: 20, max_uses: 1 });
+    const a = await member('a@example.com');
+    const first = await checkout(a, { plan: 'ai', discount_code: 'MINE' });
+    expect(first.status).toBe(201);
+    // Same buyer, new checkout: neither max_uses nor once-per-customer counts their own open hold.
+    const second = await checkout(a, { plan: 'combo', discount_code: 'MINE' });
+    expect(second.status).toBe(201);
+    const uses = await d1.prepare('SELECT status FROM promo_redemptions WHERE promo_code_id = ? ORDER BY created_at, rowid').bind(promo.id).all<{ status: string }>();
+    expect((uses.results ?? []).map(r => r.status)).toEqual(['released', 'reserved']);
+    // Another buyer is still capped by the live hold.
+    expect((await checkout(await member('b@example.com'), { plan: 'ai', discount_code: 'MINE' })).reason).toBe('exhausted');
+    // The superseded order is paid after all: its use is redeemed, not lost.
+    expect(await payByTransfer(String(field(first.data, 'code')), Number(field(first.data, 'amount_vnd')))).toBe('paid');
+    expect((await row('promo_redemptions', 'source_code', String(field(first.data, 'code')))).status).toBe('redeemed');
+  });
+
+  it('ignores the limits of a promo that loses to the referral', async () => {
+    await createPromo({ code: 'COMBOTEN', percent: 10, plans: ['combo'] });
+    const ref = await referrer('ref@example.com', 20);
+    const m = await member('lan@example.com');
+    expect((await checkout(m, { plan: 'ai', discount_code: ref.code })).status).toBe(201);
+    await d1.prepare("UPDATE billing_orders SET status = 'expired'").run();
+    const res = await checkout(m, { plan: 'ai', discount_code: 'COMBOTEN' });
+    expect(res.status).toBe(201);
+    expect(field(res.data, 'promo_code')).toBeNull();
+    expect(field(res.data, 'referral_discount_percent')).toBe(20);
+  });
+
   it('checks the date window and product / plan / term limits', async () => {
     await createPromo({ code: 'LATER', percent: 10, starts_at: new Date(T0 + 86_400_000).toISOString() });
     await createPromo({ code: 'GONE', percent: 10, ends_at: new Date(T0 - 1000).toISOString() });
@@ -376,6 +405,28 @@ describe('Dodo card checkout with a promo code', () => {
     expect(field(res.data, 'status')).toBe('paid');
     expect(field(res.data, 'months')).toBe(freeCardMonths(3));
     expect(calls.some(c => c.url.startsWith(DODO_BASE))).toBe(false);
+  });
+
+  it('does not apply the prepaid minimum term to monthly card subscriptions', async () => {
+    await createPromo({ code: 'LONGCARD', percent: 30, min_months: 6 });
+    const m = await member('lan@example.com');
+    const res = await checkout(m, { plan: 'ai', provider: 'dodo', discount_code: 'LONGCARD' });
+    expect(res.status).toBe(201);
+    expect(field(res.data, 'provider')).toBe('dodo');
+  });
+
+  it('frees the held use when the first card charge fails', async () => {
+    const promo = await createPromo({ code: 'CARDONE', percent: 20, max_uses: 1 });
+    const m = await member('lan@example.com');
+    const res = await checkout(m, { plan: 'ai', provider: 'dodo', discount_code: 'CARDONE' });
+    const id = String(field(res.data, 'id'));
+    const failed = {
+      payload_type: 'Payment', payment_id: 'pay_x', total_amount: 760, tax: 0, currency: 'USD', status: 'failed',
+      customer: { customer_id: 'cus_1', email: 'lan@example.com' }, metadata: { user_id: m.userId, plan: 'ai', card_ref: id },
+    };
+    expect(await sendDodo('payment.failed', failed)).toBe('deactivated');
+    expect((await row('promo_redemptions', 'promo_code_id', promo.id)).status).toBe('released');
+    expect((await checkout(await member('b@example.com'), { plan: 'ai', discount_code: 'CARDONE' })).status).toBe(201);
   });
 
   it('rejects an invoice request on the card rail', async () => {
@@ -468,6 +519,23 @@ describe('public quote, OpenAPI and MCP', () => {
     expect(old.code).toBe('promo_code_invalid');
     expect(old.reason).toBe('expired');
     expect((await read(await quoteApi(ctx({ path: '/api/v1/promos/quote?code=nothing' })))).code).toBe('promo_code_not_found');
+  });
+
+  it('rate-limits public lookups per network', async () => {
+    let last: Result | null = null;
+    for (let i = 0; i < 31; i++) last = await read(await quoteApi(ctx({ path: '/api/v1/promos/quote?code=GUESS', headers: { 'CF-Connecting-IP': '203.0.113.9' } })));
+    expect(last?.status).toBe(429);
+    const other = await read(await quoteApi(ctx({ path: '/api/v1/promos/quote?code=GUESS', headers: { 'CF-Connecting-IP': '203.0.113.10' } })));
+    expect(other.code).toBe('promo_code_not_found');
+  });
+
+  it('lists more codes than one query can bind, each with its stats', async () => {
+    for (let i = 0; i < 120; i++) await createPromo({ code: `BULK${i}`, percent: 5 });
+    const res = await read(await promoList(ctx({ path: '/api/v1/admin/promo-codes?limit=500', headers: admin() })));
+    expect(res.status).toBe(200);
+    const items = field(res.data, 'promo_codes');
+    expect(Array.isArray(items) ? items.length : 0).toBe(120);
+    expect(field(Array.isArray(items) ? items[0] : null, 'stats', 'redeemed')).toBe(0);
   });
 
   it('documents the paths and registers admin-only MCP tools', async () => {

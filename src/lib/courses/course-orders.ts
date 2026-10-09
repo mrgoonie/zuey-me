@@ -239,10 +239,10 @@ export async function createCourseCheckout(
   const invoice = parseInvoiceField(body, provider);
   const entry = await readDiscountCode(d1, body);
   const resolved = await resolveCourseReferral(d1, env, userId, { referral_code: entry.referralCode ?? undefined }, request);
-  if (entry.promo) await requirePromoApplicable(d1, entry.promo, { product: 'course', courseId: course.id, userId });
   const quote = await quoteForUser(d1, env, course, userId, resolved.pct, entry.promo?.percent ?? 0);
   // The promo is used only when it set the price; then the order carries no referrer (no stacking, no commission).
   const promo = quote.discount_source === 'promo' ? entry.promo : null;
+  if (promo) await requirePromoApplicable(d1, promo, { product: 'course', courseId: course.id, userId });
   const referral = promo ? NO_REFERRAL : resolved;
   const free = quote.amount_usd_cents === 0;
   const amountVnd = provider === 'sepay' && rate ? (free ? 0 : monthlyVnd(quote.amount_usd_cents, rate)) : null;

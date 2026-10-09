@@ -188,8 +188,8 @@ export async function markInvoiceIssued(d1: D1DatabaseLike, id: string, body: Re
 
 function csvCell(value: unknown): string {
   const s = value === null || value === undefined ? '' : String(value);
-  // Leading =, +, - or @ would run as a formula in a spreadsheet.
-  const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
+  // Leading =, +, -, @, tab or CR would run as a formula in a spreadsheet.
+  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
   return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 

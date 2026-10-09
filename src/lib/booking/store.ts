@@ -390,9 +390,9 @@ export async function createHold(
   const entry = await readDiscountCode(d1, input.codes);
   const resolved = await resolveCheckoutReferral(d1, { email: input.email, enteredCode: entry.referralCode, request: opts.request, product: 'booking' });
   const target = { product: 'booking' as const, email: input.email };
-  if (entry.promo) await requirePromoApplicable(d1, entry.promo, target);
-  // One discount per order: the larger percent wins, a tie goes to the referral.
+  // One discount per order: the larger percent wins, a tie goes to the referral. Only a winning promo is checked.
   const promo = entry.promo && promoWins(entry.promo.percent, resolved?.discountPercent) ? entry.promo : null;
+  if (promo) await requirePromoApplicable(d1, promo, target);
   const referral = promo ? null : resolved;
   const listAmount = listPrice(env, input.payment_method).amount;
 

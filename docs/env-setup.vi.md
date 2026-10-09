@@ -284,6 +284,9 @@ wrangler d1 execute zuey_me_db --remote --file=./migrations/0020_promo_codes_and
 - Chỉ giảm theo %, 1–100. Áp cho gói SePay, thẻ Dodo, buổi tư vấn và khoá học; giới hạn theo sản phẩm, gói, khoá học, số tháng trả trước tối thiểu, khung thời gian, tổng lượt dùng và mỗi khách một lần (theo tài khoản, hoặc hộp thư đã chuẩn hoá với booking).
 - Khách nhập ở một ô **"Mã ưu đãi"** (body `discount_code`; `referral_code` cũ vẫn nhận). Mã promo được tra trước; tên mã promo và mã giới thiệu không bao giờ trùng nhau. **Không cộng dồn**: lấy % lớn hơn giữa referral và promo, bằng nhau thì giữ referral (referrer vẫn có hoa hồng). Khoá học: thành viên > referral > promo khi bằng nhau.
 - Mỗi checkout giữ một lượt đến khi đơn hết hạn (giải phóng tự động khi hết hạn, không cần cron); trả tiền xong lượt thành `redeemed`. Đơn dùng promo không tính là "đơn đầu" của chương trình giới thiệu.
+- Khách checkout lại với cùng mã thì lượt giữ cũ của chính họ được nhả (không tự khoá mình); thẻ Dodo trừ tiền lần đầu thất bại cũng nhả lượt. Mã thua referral thì bị bỏ qua, không chặn checkout. `min_months` chỉ áp cho đơn SePay trả trước, không áp cho thẻ.
+- `max_uses` là trần **mềm**: đơn đã hết hạn hoặc bị thay thế mà khách vẫn chuyển khoản thì vẫn được ghi nhận `redeemed`, nên số lượt có thể vượt trần một chút.
+- `GET /api/v1/promos/quote` giới hạn 30 lượt tra / 10 phút / mạng (`429 rate_limited`).
 - Mã 100%: đơn 0đ được kích hoạt ngay. Trên thẻ Dodo, mã 100% thành đơn trả trước 0đ với số tháng bằng `card_cycles` (làm tròn xuống 1/3/6/12).
 - Thẻ Dodo: hệ thống tạo discount Dodo một lần dùng với `subscription_cycles = card_cycles`; webhook chấp nhận giá đã giảm trong số chu kỳ đó. Lần trừ đầu cao hơn giá đã giảm → thẻ `needs_attention` lý do `promo_discount_not_applied`, admin tự xử lý.
 - Đổi tên mã đã có người dùng bị chặn (`409 code_in_use`): tạo mã mới.

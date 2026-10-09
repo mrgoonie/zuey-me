@@ -223,7 +223,7 @@ export async function startCardCheckout(
   if (promo) {
     try {
       await reservePromo(d1, {
-        promo, kind: 'card_subscription', sourceId: id, sourceCode: null, target: { product: 'membership', plan, months: 1, userId },
+        promo, kind: 'card_subscription', sourceId: id, sourceCode: null, target: { product: 'membership', plan, userId },
         currency: 'USD', amountBefore: listCents, amountDue: applyPercent(listCents, promo.percent, 'USD'), expiresAt,
       });
     } catch (err) {
@@ -485,6 +485,7 @@ async function applyPaymentEvent(
   if (event.type === 'payment.failed' && card.status === 'pending') {
     // The first charge failed: no subscription starts. Renewal failures arrive as subscription.on_hold.
     await d1.prepare("UPDATE card_subscriptions SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'").bind(nowIso, card.id).run();
+    if (card.promo_code_id) await releasePromo(d1, 'card_subscription', card.id);
     if (card.user_id) await logActivity(d1, card.user_id, 'billing.card_ended', { plan: card.plan, card_subscription_id: card.id, status: 'failed' });
     return 'deactivated';
   }

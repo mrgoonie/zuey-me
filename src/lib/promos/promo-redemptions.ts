@@ -31,6 +31,8 @@ export interface PromoTarget {
 
 /** Counts toward limits: redeemed, or reserved by a checkout that has not expired yet. */
 const ACTIVE_USE = "(r.status = 'redeemed' OR (r.status = 'reserved' AND r.expires_at > ?))";
+/** Rows of this customer: same account or same canonical mailbox. Binds: userId, userId, canonical, canonical. */
+const SAME_CUSTOMER = '((? IS NOT NULL AND r.user_id = ?) OR (? IS NOT NULL AND r.email_canonical = ?))';
 
 async function customerCanonical(d1: D1DatabaseLike, target: PromoTarget): Promise<string | null> {
   const direct = normalizeEmailForSelfCheck(target.email);
@@ -39,7 +41,11 @@ async function customerCanonical(d1: D1DatabaseLike, target: PromoTarget): Promi
   return row ? normalizeEmailForSelfCheck(str(row, 'email')) : null;
 }
 
-/** First reason the code cannot be used for this purchase, or null when it applies. Read-only. */
+/**
+ * First reason the code cannot be used for this purchase, or null when it applies. Read-only. The customer's
+ * own open reservations are ignored: a new checkout with the same code supersedes them (see reservePromo), so
+ * abandoning a checkout or switching rail never locks the buyer out of their code.
+ */
 export async function promoRejection(d1: D1DatabaseLike, promo: PromoCode, target: PromoTarget): Promise<PromoRejection | null> {
   const now = iso(membersRuntime.now());
   if (promo.status !== 'active') return 'disabled';
@@ -48,19 +54,22 @@ export async function promoRejection(d1: D1DatabaseLike, promo: PromoCode, targe
   if (promo.products && !promo.products.includes(target.product)) return 'product_not_eligible';
   if (target.product === 'membership') {
     if (promo.plans && (!target.plan || !promo.plans.includes(target.plan))) return 'plan_not_eligible';
-    if (promo.min_months && (target.months ?? 1) < promo.min_months) return 'term_too_short';
+    // Card subscriptions pass no months: the minimum prepaid term only limits SePay orders.
+    if (promo.min_months && target.months !== undefined && target.months < promo.min_months) return 'term_too_short';
   }
   if (target.product === 'course' && promo.course_ids && (!target.courseId || !promo.course_ids.includes(target.courseId))) return 'course_not_eligible';
+  const userId = target.userId ?? null;
+  const canonical = await customerCanonical(d1, target);
   if (promo.max_uses !== null) {
-    const used = await d1.prepare(`SELECT COUNT(*) AS n FROM promo_redemptions r WHERE r.promo_code_id = ? AND ${ACTIVE_USE}`).bind(promo.id, now).first<Row>();
+    const used = await d1.prepare(
+      `SELECT COUNT(*) AS n FROM promo_redemptions r WHERE r.promo_code_id = ? AND ${ACTIVE_USE} AND NOT (r.status = 'reserved' AND ${SAME_CUSTOMER})`
+    ).bind(promo.id, now, userId, userId, canonical, canonical).first<Row>();
     if (Number(used?.n ?? 0) >= promo.max_uses) return 'exhausted';
   }
   if (promo.once_per_customer) {
-    const canonical = await customerCanonical(d1, target);
     const hit = await d1.prepare(
-      `SELECT 1 AS hit FROM promo_redemptions r WHERE r.promo_code_id = ? AND ${ACTIVE_USE}
-         AND ((? IS NOT NULL AND r.user_id = ?) OR (? IS NOT NULL AND r.email_canonical = ?)) LIMIT 1`
-    ).bind(promo.id, now, target.userId ?? null, target.userId ?? null, canonical, canonical).first<Row>();
+      `SELECT 1 AS hit FROM promo_redemptions r WHERE r.promo_code_id = ? AND r.status = 'redeemed' AND ${SAME_CUSTOMER} LIMIT 1`
+    ).bind(promo.id, userId, userId, canonical, canonical).first<Row>();
     if (hit) return 'already_used';
   }
   return null;
@@ -89,13 +98,18 @@ export interface PromoReservation {
 }
 
 /**
- * Takes one use of the code for an order about to be inserted. The INSERT re-checks the window, the total-use
- * cap and once-per-customer in the same statement, so two concurrent checkouts cannot both take the last use.
+ * Takes one use of the code for a new order. The customer's earlier open reservations of the same code are
+ * released first (that checkout was abandoned or replaced; if it is paid after all, redeemPromo still counts
+ * it). The INSERT then re-checks the window, the total-use cap and once-per-customer in the same statement, so
+ * two concurrent checkouts cannot both take the last use.
  */
 export async function reservePromo(d1: D1DatabaseLike, r: PromoReservation): Promise<void> {
   const now = iso(membersRuntime.now());
   const canonical = await customerCanonical(d1, r.target);
   const userId = r.target.userId ?? null;
+  await d1.prepare(`UPDATE promo_redemptions SET status = 'released', updated_at = ? WHERE promo_code_id = ? AND status = 'reserved'
+      AND id IN (SELECT r.id FROM promo_redemptions r WHERE r.promo_code_id = ? AND r.status = 'reserved' AND ${SAME_CUSTOMER})`)
+    .bind(now, r.promo.id, r.promo.id, userId, userId, canonical, canonical).run();
   const res = await d1.prepare(
     `INSERT INTO promo_redemptions (id, promo_code_id, code, source_kind, source_id, source_code, user_id, email_canonical, percent, currency,
        amount_before, amount_due, status, expires_at, created_at, updated_at)
@@ -105,7 +119,7 @@ export async function reservePromo(d1: D1DatabaseLike, r: PromoReservation): Pro
        AND (p.max_uses IS NULL OR (SELECT COUNT(*) FROM promo_redemptions r WHERE r.promo_code_id = p.id AND ${ACTIVE_USE}) < p.max_uses)
        AND (p.once_per_customer = 0 OR NOT EXISTS (
          SELECT 1 FROM promo_redemptions r WHERE r.promo_code_id = p.id AND ${ACTIVE_USE}
-           AND ((? IS NOT NULL AND r.user_id = ?) OR (? IS NOT NULL AND r.email_canonical = ?))))`
+           AND ${SAME_CUSTOMER}))`
   ).bind(randomId('prr'), r.kind, r.sourceId, r.sourceCode, userId, canonical, r.currency, r.amountBefore, r.amountDue, r.expiresAt, now, now,
     r.promo.id, now, now, now, now, userId, userId, canonical, canonical).run();
   if (res.meta?.changes === 1) return;
@@ -119,11 +133,15 @@ export async function releasePromo(d1: D1DatabaseLike, kind: PromoSourceKind, so
     .bind(iso(membersRuntime.now()), kind, sourceId).run();
 }
 
-/** The order was paid: the use becomes permanent and the collected amount is recorded for revenue reports. */
+/**
+ * The order was paid: the use becomes permanent and the collected amount is recorded for revenue reports.
+ * A released or lapsed reservation is redeemed too (a late payment, or a checkout the buyer replaced and then
+ * paid anyway), so every paid order counts; `max_uses` is therefore a soft cap for such late payments.
+ */
 export async function redeemPromo(d1: D1DatabaseLike, kind: PromoSourceKind, sourceId: string, amountPaid: number | null): Promise<void> {
   const now = iso(membersRuntime.now());
   await d1.prepare(
-    "UPDATE promo_redemptions SET status = 'redeemed', amount_paid = ?, redeemed_at = ?, updated_at = ? WHERE source_kind = ? AND source_id = ? AND status = 'reserved'"
+    "UPDATE promo_redemptions SET status = 'redeemed', amount_paid = ?, redeemed_at = ?, updated_at = ? WHERE source_kind = ? AND source_id = ? AND status IN ('reserved', 'released')"
   ).bind(amountPaid, now, now, kind, sourceId).run();
 }
 
@@ -181,12 +199,13 @@ export async function listPromosWithStats(d1: D1DatabaseLike, filter: { q?: stri
   if (q) { where.push('(code LIKE ? OR label LIKE ?)'); binds.push(`%${q.toUpperCase()}%`, `%${q}%`); }
   const limit = typeof filter.limit === 'number' && Number.isInteger(filter.limit) ? Math.min(Math.max(filter.limit, 1), 500)
     : typeof filter.limit === 'string' && /^\d+$/.test(filter.limit) ? Math.min(Math.max(Number(filter.limit), 1), 500) : 200;
-  const { results } = await d1.prepare(`SELECT * FROM promo_codes ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ?`)
-    .bind(...binds, limit).all<Row>();
+  const page = `SELECT * FROM promo_codes ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ?`;
+  const { results } = await d1.prepare(page).bind(...binds, limit).all<Row>();
   const promos = (results ?? []).map(rowToPromo);
   if (!promos.length) return [];
-  const stats = await d1.prepare(`${STATS_SQL} WHERE promo_code_id IN (${promos.map(() => '?').join(', ')}) GROUP BY promo_code_id`)
-    .bind(iso(membersRuntime.now()), ...promos.map(p => p.id)).all<Row>();
+  // Same page as a subquery: binding one id per code would exceed D1's 100-parameter limit.
+  const stats = await d1.prepare(`${STATS_SQL} WHERE promo_code_id IN (SELECT id FROM (${page})) GROUP BY promo_code_id`)
+    .bind(iso(membersRuntime.now()), ...binds, limit).all<Row>();
   const byId = new Map((stats.results ?? []).map(r => [str(r, 'promo_code_id'), r]));
   return promos.map(p => withStats(p, statsFrom(byId.get(p.id))));
 }

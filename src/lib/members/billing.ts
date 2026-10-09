@@ -204,8 +204,9 @@ export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: s
 
   const plan = getPlan(body.plan);
   const referral = await resolveCheckoutReferral(d1, { userId, enteredCode: entry.referralCode, request, product: 'membership' });
-  if (entry.promo) await requirePromoApplicable(d1, entry.promo, { product: 'membership', plan: plan.id, months, userId });
   const usePromo = entry.promo !== null && promoWins(entry.promo.percent, referral?.discountPercent);
+  // A promo that loses to the referral is ignored rather than checked: its limits must not block the checkout.
+  if (usePromo && entry.promo) await requirePromoApplicable(d1, entry.promo, { product: 'membership', plan: plan.id, months, userId });
   return insertSepayOrder(d1, env, userId, { plan, months, rate, referral: usePromo ? null : referral, promo: usePromo ? entry.promo : null, invoice }, request);
 }
 
@@ -327,8 +328,8 @@ export async function createMemberCheckout(
     parseInvoiceField(body, 'dodo');
     const entry = await readDiscountCode(d1, body);
     const referral = await resolveCheckoutReferral(d1, { userId, enteredCode: entry.referralCode, request, product: 'membership' });
-    if (entry.promo) await requirePromoApplicable(d1, entry.promo, { product: 'membership', plan: body.plan, months: 1, userId });
     const promo = entry.promo !== null && promoWins(entry.promo.percent, referral?.discountPercent) ? entry.promo : null;
+    if (promo) await requirePromoApplicable(d1, promo, { product: 'membership', plan: body.plan, userId });
     if (promo && promo.percent >= 100) {
       // Nothing to charge: grant the covered months as a paid 0 VND prepaid order instead of a card subscription.
       const rate = parseUsdVndRate(env);
