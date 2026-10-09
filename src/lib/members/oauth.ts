@@ -7,6 +7,8 @@ import { base64Url, iso, isUniqueViolation, membersRuntime, randomId, randomSecr
 import { createMemberSession, isSameOriginRequest, memberCookie, readCookie, resolveMemberSession } from './session';
 import type { UserRecord } from './users';
 import { findOrCreateVerifiedUser, getUserById, logActivity, normalizeEmail } from './users';
+import { bindReferrerOnSignup } from '../referrals/attribution';
+import { ipHash } from './login-tokens';
 
 export type OAuthProvider = 'google' | 'github';
 export const OAUTH_PROVIDERS: OAuthProvider[] = ['google', 'github'];
@@ -254,9 +256,10 @@ export async function handleMemberOAuthCallback(request: Request, env: RuntimeEn
       if (linked) await logActivity(d1, user.id, 'identity.linked', { provider }, request);
       return redirect(cookie.next, [stateCookie('', 0)]);
     }
-    const { token } = await createMemberSession(d1, user.id, request);
+    const { token } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
     await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: provider }, request);
-    return redirect(cookie.next, [stateCookie('', 0), memberCookie(token)]);
+    const clearRef = created ? await bindReferrerOnSignup(d1, user, request, env) : null;
+    return redirect(cookie.next, [stateCookie('', 0), memberCookie(token), ...(clearRef ? [clearRef] : [])]);
   } catch (err) {
     const code = err instanceof AppError ? err.code : 'oauth_failed';
     if (!(err instanceof AppError)) console.error('member OAuth error:', err instanceof Error ? err.message : 'unknown');

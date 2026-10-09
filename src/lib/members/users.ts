@@ -1,5 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
+import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
+import { exportReferralData, prepareReferralAccountDeletion, scrubReferralAccountData } from '../referrals/referral-account-data';
 import type { Row } from './runtime';
 import { isUniqueViolation, nowIso, randomId, str, strOrNull, userAgent } from './runtime';
 
@@ -206,14 +208,18 @@ export async function exportAccount(d1: D1DatabaseLike, user: UserRecord): Promi
     billing_orders: await rows(d1, 'SELECT code, plan, months, amount_vnd, status, expires_at, paid_at, amount_paid, created_at FROM billing_orders WHERE user_id = ? ORDER BY created_at DESC', user.id),
     emails: await rows(d1, 'SELECT kind, status, created_at FROM email_log WHERE user_id = ? ORDER BY id DESC', user.id),
     activity: await listActivity(d1, user.id, 200),
+    referral: await exportReferralData(d1, user.id),
   };
 }
 
 /**
  * Deletes the account: credentials, identities and activity are removed and the profile is scrubbed.
- * Billing orders are retained (accounting record) but no longer linked to a live email address.
+ * Billing orders are retained (accounting record) but no longer linked to a live email address. Referral
+ * data: national-ID images and the payout profile are deleted, and a mailbox that ever paid is remembered
+ * as a hash so re-registering never makes it a "never paid" referee again (`env` reaches the KYC bucket).
  */
-export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord): Promise<void> {
+export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: RuntimeEnv = {}): Promise<void> {
+  await prepareReferralAccountDeletion(d1, env, user);
   const now = nowIso();
   const res = await d1.prepare(
     `UPDATE users SET email = ?, email_verified_at = NULL, name = NULL, avatar_url = NULL, deleted_at = ?, updated_at = ?
@@ -226,4 +232,5 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord): Promi
   await d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email).run();
   await d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id).run();
   await d1.prepare("UPDATE email_log SET to_email = '' WHERE user_id = ?").bind(user.id).run();
+  await scrubReferralAccountData(d1, user.id);
 }

@@ -97,10 +97,25 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
 }
 
-/** Only same-site relative paths are accepted as post-login destinations. */
+/** Placeholder origin used only to resolve a candidate path; never emitted. */
+const NEXT_PATH_BASE = 'https://x.invalid';
+
+/**
+ * Only same-site relative paths are accepted as post-login or post-redirect destinations. Browsers strip
+ * tabs/newlines and treat `\` as `/` while parsing a Location, so `/\t/evil.com` or `/\evil.com` would become
+ * a protocol-relative URL to another host: any control character, whitespace or backslash is rejected, and
+ * the path must resolve to the same origin. The normalized path + query + fragment is returned.
+ */
 export function safeNextPath(value: unknown, fallback = '/account'): string {
   if (typeof value !== 'string') return fallback;
   const v = value.trim();
-  if (!v.startsWith('/') || v.startsWith('//') || v.startsWith('/\\') || v.length > 300 || /[\r\n]/.test(v)) return fallback;
-  return v;
+  if (!v.startsWith('/') || v.length > 300 || /[\u0000-\u001F\u007F\s\\]/.test(v)) return fallback;
+  let url: URL;
+  try {
+    url = new URL(v, NEXT_PATH_BASE);
+  } catch {
+    return fallback;
+  }
+  if (url.origin !== NEXT_PATH_BASE) return fallback;
+  return `${url.pathname}${url.search}${url.hash}`;
 }

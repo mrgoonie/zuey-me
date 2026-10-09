@@ -253,6 +253,7 @@ export const billingOpenApi: OpenApiFragment = {
             plan: { type: 'string', enum: PLAN_IDS },
             provider: { type: 'string', enum: ['sepay', 'dodo'], default: 'sepay' },
             months: { type: 'integer', enum: [...BILLING_MONTHS], default: 1, description: 'SePay only; card subscriptions are monthly' },
+            referral_code: { type: 'string', pattern: '^[A-Za-z0-9]{6,16}$', description: 'Optional referral code. Applies only to a first paid order; the account binding or the `zr_ref` cookie is used when omitted. 400 `referral_code_invalid` when it cannot apply.' },
           },
         }),
         responses: {
@@ -421,7 +422,9 @@ export const billingOpenApi: OpenApiFragment = {
         status: { type: 'string', enum: ['pending', 'active', 'on_hold', 'paused', 'cancelled', 'failed', 'expired', 'needs_attention'] },
         current_period_end: { type: ['string', 'null'], description: "Provider's next billing date: renewal date, or end of access once cancellation is scheduled" },
         cancel_at_period_end: { type: 'boolean' }, amount_cents: { type: ['integer', 'null'] }, currency: { type: ['string', 'null'] },
-        attention_reason: { type: ['string', 'null'] }, can_manage: { type: 'boolean' }, can_cancel: { type: 'boolean' },
+        attention_reason: { type: ['string', 'null'] },
+        referral_discount_percent: { type: ['integer', 'null'], description: 'Referral discount on the first monthly charge only' },
+        can_manage: { type: 'boolean' }, can_cancel: { type: 'boolean' },
         created_at: { type: 'string' }, updated_at: { type: 'string' }, status_url: { type: 'string' },
       },
     },

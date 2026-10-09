@@ -5,7 +5,7 @@ import type { AccentId, ThemeMode, WallpaperId } from './look';
 const en = {
   apps: {
     about: 'About', ai: 'Zuey AI', knowledges: 'Knowledges', reads: 'Zuey Reads', zueytube: 'Zueytube', github: 'GitHub',
-    pricing: 'Membership', business: 'Business', mcp: 'MCP & API', account: 'Account', appearance: 'Appearance', '200lab': '200lab',
+    pricing: 'Membership', business: 'Business', mcp: 'MCP & API', account: 'Account', referral: 'Referral', appearance: 'Appearance', '200lab': '200lab',
   } satisfies Record<AppId, string>,
   links: { workflows: 'AI Workflows', docs: 'API docs', articles: 'All articles' },
   skip: 'Skip to windows',
@@ -63,7 +63,7 @@ export type OsStrings = typeof en;
 const vi: OsStrings = {
   apps: {
     about: 'Giới thiệu', ai: 'Zuey AI', knowledges: 'Bài viết', reads: 'Zuey Reads', zueytube: 'Zueytube', github: 'GitHub',
-    pricing: 'Gói thành viên', business: 'Doanh nghiệp', mcp: 'MCP & API', account: 'Tài khoản', appearance: 'Giao diện', '200lab': '200lab',
+    pricing: 'Gói thành viên', business: 'Doanh nghiệp', mcp: 'MCP & API', account: 'Tài khoản', referral: 'Giới thiệu bạn bè', appearance: 'Giao diện', '200lab': '200lab',
   },
   links: { workflows: 'AI Workflows', docs: 'Tài liệu API', articles: 'Tất cả bài viết' },
   skip: 'Bỏ qua tới cửa sổ',
@@ -119,7 +119,7 @@ const vi: OsStrings = {
 const zh: OsStrings = {
   apps: {
     about: '关于', ai: 'Zuey AI', knowledges: '文章', reads: 'Zuey 阅读', zueytube: 'Zueytube', github: 'GitHub',
-    pricing: '会员', business: '企业', mcp: 'MCP 与 API', account: '账户', appearance: '外观', '200lab': '200lab',
+    pricing: '会员', business: '企业', mcp: 'MCP 与 API', account: '账户', referral: '推荐好友', appearance: '外观', '200lab': '200lab',
   },
   links: { workflows: 'AI 工作流', docs: 'API 文档', articles: '全部文章' },
   skip: '跳到窗口',
@@ -175,7 +175,7 @@ const zh: OsStrings = {
 const ko: OsStrings = {
   apps: {
     about: '소개', ai: 'Zuey AI', knowledges: '글', reads: 'Zuey 리즈', zueytube: 'Zueytube', github: 'GitHub',
-    pricing: '멤버십', business: '비즈니스', mcp: 'MCP & API', account: '계정', appearance: '화면 설정', '200lab': '200lab',
+    pricing: '멤버십', business: '비즈니스', mcp: 'MCP & API', account: '계정', referral: '친구 추천', appearance: '화면 설정', '200lab': '200lab',
   },
   links: { workflows: 'AI 워크플로', docs: 'API 문서', articles: '모든 글' },
   skip: '창으로 건너뛰기',
@@ -231,7 +231,7 @@ const ko: OsStrings = {
 const ja: OsStrings = {
   apps: {
     about: 'プロフィール', ai: 'Zuey AI', knowledges: '記事', reads: 'Zuey Reads', zueytube: 'Zueytube', github: 'GitHub',
-    pricing: 'メンバーシップ', business: 'ビジネス', mcp: 'MCP と API', account: 'アカウント', appearance: '外観', '200lab': '200lab',
+    pricing: 'メンバーシップ', business: 'ビジネス', mcp: 'MCP と API', account: 'アカウント', referral: '友だち紹介', appearance: '外観', '200lab': '200lab',
   },
   links: { workflows: 'AI ワークフロー', docs: 'API ドキュメント', articles: 'すべての記事' },
   skip: 'ウィンドウへスキップ',

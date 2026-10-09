@@ -32,7 +32,8 @@ function requireEmailConfigured(env: RuntimeEnv, feature: string): void {
   }
 }
 
-async function ipHash(env: RuntimeEnv, request: Request): Promise<string | null> {
+/** Salted SHA-256 of the client IP (never the raw IP); null when the request carries none. */
+export async function ipHash(env: RuntimeEnv, request: Request): Promise<string | null> {
   const ip = clientIp(request);
   return ip ? sha256Hex(`ip:${ip}:${env.MEMBER_HASH_SALT ?? ''}`) : null;
 }
@@ -113,11 +114,11 @@ export async function requestMagicLink(
 
 /** Consumes a magic link: verifies the email, creates the account if needed and opens a session. */
 export async function consumeMagicLink(
-  d1: D1DatabaseLike, request: Request, rawToken: unknown,
+  d1: D1DatabaseLike, request: Request, rawToken: unknown, env: RuntimeEnv = {},
 ): Promise<{ user: UserRecord; created: boolean; next: string; sessionToken: string }> {
   const token = await consumeToken(d1, rawToken, 'magic_link');
   const { user, created } = await findOrCreateVerifiedUser(d1, { email: token.email });
-  const { token: sessionToken } = await createMemberSession(d1, user.id, request);
+  const { token: sessionToken } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
   await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: 'magic_link' }, request);
   return { user, created, next: safeNextPath(token.next_path), sessionToken };
 }
