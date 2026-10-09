@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, RefreshCw, Star, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, RefreshCw, Sparkles, Star, Trash2 } from 'lucide-react';
 import type { VideoEdition, VideoItem, VideoLocale } from '../../lib/videos/types';
 import { formatDuration } from '../../lib/videos/youtube-url';
 import { parseVideoList } from '../zueytube/zueytube-api-client';
@@ -79,7 +79,10 @@ export const VideosPanel: React.FC = () => {
     if (!isRecord(data)) return 'Added.';
     const status = typeof data.transcript_status === 'string' ? data.transcript_status : 'unknown';
     const err = typeof data.transcript_error === 'string' ? ` (${data.transcript_error})` : '';
-    return `Transcript: ${status}${err}`;
+    const rewrite = typeof data.transcript_rewrite_status === 'string' && data.transcript_rewrite_status !== 'none'
+      ? ` · AI rewrite: ${data.transcript_rewrite_status}${typeof data.transcript_rewrite_error === 'string' ? ` (${data.transcript_rewrite_error})` : ''}`
+      : '';
+    return `Transcript: ${status}${err}${rewrite}`;
   };
 
   const add = (e: React.SyntheticEvent<HTMLFormElement>) => {
@@ -108,6 +111,9 @@ export const VideosPanel: React.FC = () => {
   const refetch = (youtubeId: string) =>
     run(`refetch:${youtubeId}`, async () => transcriptNote(await call(`/api/v1/videos/${encodeURIComponent(youtubeId)}/refetch`, { method: 'POST' })));
 
+  const rewrite = (youtubeId: string) =>
+    run(`rewrite:${youtubeId}`, async () => transcriptNote(await call(`/api/v1/videos/${encodeURIComponent(youtubeId)}/rewrite`, { method: 'POST' })));
+
   // Swapping positions with the neighbour keeps the curated order explicit and stable.
   const move = (index: number, dir: -1 | 1) => {
     const a = items[index];
@@ -128,7 +134,7 @@ export const VideosPanel: React.FC = () => {
       <div className="mb-4">
         <h2 className="text-lg font-bold font-serif text-white">Zueytube</h2>
         <p className="text-xs text-stone-400 mt-1">
-          Paste a YouTube link from @imzuey. The transcript is fetched once via AnyMD (3 credits); videos without captions are still added. {items.length} videos.
+          Paste a YouTube link from @imzuey. The transcript is fetched once via AnyMD (3 credits) and cleaned up by Workers AI; videos without captions are still added. {items.length} videos.
         </p>
       </div>
 
@@ -177,11 +183,21 @@ export const VideosPanel: React.FC = () => {
                     <a href={e.watch_url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-white hover:text-red-300 break-words">{e.title}</a>
                     <div className="text-[11px] text-stone-500 flex flex-wrap gap-x-2 items-center">
                       <span className={`px-1.5 py-0.5 rounded-md font-semibold ${STATUS_STYLE[e.transcript_status]}`}>transcript {e.transcript_status}</span>
+                      {e.transcript_rewrite_status !== 'none' && (
+                        <span className={`px-1.5 py-0.5 rounded-md font-semibold ${e.transcript_rewrite_status === 'ready' ? 'bg-sky-400/15 text-sky-300' : 'bg-red-500/15 text-red-300'}`} title={e.transcript_rewrite_error ?? undefined}>
+                          AI {e.transcript_rewrite_status}
+                        </span>
+                      )}
                       {e.word_count > 0 && <span>{e.word_count} words</span>}
                       {e.duration_seconds !== null && <span>{formatDuration(e.duration_seconds)}</span>}
                       {e.transcript_error && <span className="text-stone-400">{e.transcript_error}</span>}
                     </div>
                   </div>
+                  {e.transcript_status === 'ready' && (
+                    <button type="button" className={iconBtn} onClick={() => void rewrite(e.youtube_id)} disabled={busy !== null} aria-label="Rewrite transcript with AI" title="Rewrite transcript with AI">
+                      <Sparkles size={14} className={busy === `rewrite:${e.youtube_id}` ? 'animate-pulse' : ''} />
+                    </button>
+                  )}
                   <button type="button" className={iconBtn} onClick={() => void refetch(e.youtube_id)} disabled={busy !== null} aria-label="Refetch transcript" title="Refetch transcript">
                     <RefreshCw size={14} className={busy === `refetch:${e.youtube_id}` ? 'animate-spin' : ''} />
                   </button>

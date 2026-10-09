@@ -4,8 +4,9 @@ import { requireDb } from '../taxonomy/common';
 import { listVideos } from './store';
 import { applyVideoPatch, parseAddVideoInput, removeVideoOrEdition } from './video-admin-operations';
 import { getVideoDetail } from './video-detail';
-import { addVideo, refetchTranscript } from './video-ingest-service';
+import { addVideo, refetchTranscript, rewriteEditionTranscript } from './video-ingest-service';
 import { searchVideos } from './video-search';
+import { ingestDeps } from './route-helpers';
 
 const idProp = { type: 'string', description: 'Video id (vid_…), YouTube id or YouTube link' };
 
@@ -78,6 +79,11 @@ export const videosMcpModule: McpToolModule = {
       description: 'Admin only: fetch the transcript of one edition again through AnyMD (e.g. after YouTube added captions).',
       inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'YouTube id or link of the edition' } }, required: ['id'] },
     },
+    {
+      name: 'video_rewrite_transcript',
+      description: 'Admin only: clean up one edition\'s raw captions again with Workers AI (punctuation, paragraphs, filler words; same language, no summary). Timestamps become estimates; a failed rewrite keeps the raw text.',
+      inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'YouTube id or link of the edition' } }, required: ['id'] },
+    },
   ],
 
   async call(name, args, ctx) {
@@ -95,7 +101,7 @@ export const videosMcpModule: McpToolModule = {
     }
     if (name === 'video_add') {
       await ctx.requireAdmin();
-      return addVideo({ db: db, anymdApiKey: ctx.env.ANYMD_API_KEY }, parseAddVideoInput(args));
+      return addVideo({ ...ingestDeps(ctx.env), db }, parseAddVideoInput(args));
     }
     if (name === 'video_update') {
       await ctx.requireAdmin();
@@ -107,7 +113,11 @@ export const videosMcpModule: McpToolModule = {
     }
     if (name === 'video_refetch_transcript') {
       await ctx.requireAdmin();
-      return refetchTranscript({ db: db, anymdApiKey: ctx.env.ANYMD_API_KEY }, requireRef(args));
+      return refetchTranscript({ ...ingestDeps(ctx.env), db }, requireRef(args));
+    }
+    if (name === 'video_rewrite_transcript') {
+      await ctx.requireAdmin();
+      return rewriteEditionTranscript({ ...ingestDeps(ctx.env), db }, requireRef(args));
     }
     throw new AppError(400, 'unknown_tool', `Unknown tool: ${name}`);
   },

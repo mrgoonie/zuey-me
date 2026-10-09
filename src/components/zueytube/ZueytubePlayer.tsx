@@ -113,21 +113,24 @@ export const ZueytubePlayer: React.FC<ZueytubePlayerProps> = ({ video, related, 
         ) : segments.length === 0 ? (
           <TranscriptStatusNote edition={edition} strings={strings} />
         ) : (
-          <ol className="max-h-80 overflow-y-auto pr-1 flex flex-col gap-1.5 text-sm leading-relaxed text-stone-700">
-            {shown.map((seg, i) => (
-              <li key={`${seg.start}-${i}`} className="flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setStart(seg.start)}
-                  className="shrink-0 font-mono text-[11px] font-bold text-red-700 hover:text-red-900 tabular-nums pt-0.5"
-                  aria-label={`${strings.jumpTo} ${seg.label}`}
-                >
-                  {seg.label}
-                </button>
-                <span className="break-words min-w-0">{seg.text}</span>
-              </li>
-            ))}
-          </ol>
+          <>
+            {edition.transcript_rewrite_status === 'ready' && <p className="text-[11px] text-stone-500 mb-2">{strings.transcriptRewritten}</p>}
+            <ol className="max-h-80 overflow-y-auto pr-1 flex flex-col gap-1.5 text-sm leading-relaxed text-stone-700">
+              {shown.map((seg, i) => (
+                <li key={`${seg.start}-${i}`} className="flex gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setStart(seg.start)}
+                    className="shrink-0 font-mono text-[11px] font-bold text-red-700 hover:text-red-900 tabular-nums pt-0.5"
+                    aria-label={`${strings.jumpTo} ${seg.label}`}
+                  >
+                    {seg.label}
+                  </button>
+                  <span className="break-words min-w-0">{seg.text}</span>
+                </li>
+              ))}
+            </ol>
+          </>
         )}
       </section>
 

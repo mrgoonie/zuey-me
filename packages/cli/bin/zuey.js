@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const DEFAULT_API_URL = 'https://zuey.me';
 
 // ---------------------------------------------------------------------------
@@ -238,8 +238,9 @@ ADMIN COMMANDS (admin API key):
   theme view | set <name>              Switch theme (ivory | dark | minimal | glass)
   mcp                                  Stdio MCP bridge to /api/mcp
   videos add <url> [--locale vi|en] [--pair <video_id>] [--title <t>]
-                                       Add a YouTube video (transcript fetched once via AnyMD)
+                                       Add a YouTube video (transcript fetched once via AnyMD, cleaned up by AI)
   videos refetch <youtube_id>          Fetch the transcript again
+  videos rewrite <youtube_id>          Clean up the stored transcript with AI again (no AnyMD call)
   videos feature <video_id> [--off]    Pin a video to the top (or unpin)
   videos delete <id>                   Delete a video (video_id) or one edition (youtube_id)
 
@@ -339,7 +340,7 @@ function printVideoTranscriptStatus(e) {
 
 async function cmdVideos(args) {
   const sub = args[1] || 'list';
-  const usage = 'Usage: zuey videos list [--q <query>] | get <id> | add <url> [--locale vi|en] [--pair <video_id>] [--title <t>] | refetch <youtube_id> | feature <video_id> [--off] | delete <id>';
+  const usage = 'Usage: zuey videos list [--q <query>] | get <id> | add <url> [--locale vi|en] [--pair <video_id>] [--title <t>] | refetch <youtube_id> | rewrite <youtube_id> | feature <video_id> [--off] | delete <id>';
   const id = args[2];
   const needId = () => {
     if (!id || id.startsWith('--')) {
@@ -401,12 +402,18 @@ async function cmdVideos(args) {
     if (title) body.title = title;
     console.log('Adding video and fetching its transcript (this can take up to a minute)…');
     const { data } = await requestApi('/api/v1/videos', 'POST', body, { auth: true });
-    console.log(`Added ${data.youtube_id} to ${data.video.id} — transcript: ${data.transcript_status}${data.transcript_error ? ` (${data.transcript_error})` : ''}`);
+    console.log(`Added ${data.youtube_id} to ${data.video.id} — transcript: ${data.transcript_status}${data.transcript_error ? ` (${data.transcript_error})` : ''}${data.transcript_rewrite_status && data.transcript_rewrite_status !== 'none' ? ` · AI rewrite: ${data.transcript_rewrite_status}${data.transcript_rewrite_error ? ` (${data.transcript_rewrite_error})` : ''}` : ''}`);
     return;
   }
   if (sub === 'refetch') {
     const { data } = await requestApi(`/api/v1/videos/${needId()}/refetch`, 'POST', {}, { auth: true });
-    console.log(`Transcript: ${data.transcript_status}${data.transcript_error ? ` (${data.transcript_error})` : ''}`);
+    console.log(`Transcript: ${data.transcript_status}${data.transcript_error ? ` (${data.transcript_error})` : ''}${data.transcript_rewrite_status && data.transcript_rewrite_status !== 'none' ? ` · AI rewrite: ${data.transcript_rewrite_status}${data.transcript_rewrite_error ? ` (${data.transcript_rewrite_error})` : ''}` : ''}`);
+    return;
+  }
+  if (sub === 'rewrite') {
+    console.log('Rewriting the transcript with AI (this can take up to a minute)…');
+    const { data } = await requestApi(`/api/v1/videos/${needId()}/rewrite`, 'POST', {}, { auth: true });
+    console.log(`AI rewrite: ${data.transcript_rewrite_status}${data.transcript_rewrite_error ? ` (${data.transcript_rewrite_error})` : ''}`);
     return;
   }
   if (sub === 'feature') {

@@ -1,7 +1,7 @@
 /** Client-side validation of /api/v1/videos responses (untrusted JSON → typed values). */
 import { isRecord } from '../home/storage';
 import type { RelatedArticle, VideoEdition, VideoHit, VideoItem } from '../../lib/videos/types';
-import { isTranscriptStatus, isVideoLocale } from '../../lib/videos/types';
+import { isTranscriptRewriteStatus, isTranscriptStatus, isVideoLocale } from '../../lib/videos/types';
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -35,6 +35,9 @@ export function parseEdition(v: unknown): VideoEdition | null {
     transcript_error: str(v.transcript_error),
     transcript_fetched_at: str(v.transcript_fetched_at),
     word_count: num(v.word_count) ?? 0,
+    transcript_rewrite_status: isTranscriptRewriteStatus(v.transcript_rewrite_status) ? v.transcript_rewrite_status : 'none',
+    transcript_rewrite_error: str(v.transcript_rewrite_error),
+    transcript_rewritten_at: str(v.transcript_rewritten_at),
     watch_url: watch,
     embed_url: embed,
   };

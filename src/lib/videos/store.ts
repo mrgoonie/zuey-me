@@ -3,7 +3,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import { spaceCjk } from '../search/text';
 import { transcriptPlainText } from './anymd-transcript-parser';
 import type { TranscriptStatus, VideoEdition, VideoItem, VideoLocale } from './types';
-import { isTranscriptStatus, isVideoLocale } from './types';
+import { isTranscriptRewriteStatus, isTranscriptStatus, isVideoLocale } from './types';
 import { embedUrl, thumbnailUrl, watchUrl } from './youtube-url';
 
 type Row = Record<string, unknown>;
@@ -18,7 +18,8 @@ const optNum = (row: Row, key: string): number | null => {
 };
 
 const EDITION_COLUMNS = `youtube_id, video_id, locale, title, description, author, thumbnail_url, duration_seconds, published_at,
-  transcript_status, transcript_error, transcript_fetched_at, word_count`;
+  transcript_status, transcript_error, transcript_fetched_at, word_count,
+  transcript_rewrite_status, transcript_rewrite_error, transcript_rewritten_at`;
 
 function now(): string {
   return new Date().toISOString();
@@ -32,6 +33,7 @@ function toEdition(row: Row, withTranscript: boolean): VideoEdition {
   const youtubeId = str(row, 'youtube_id');
   const locale = str(row, 'locale');
   const status = str(row, 'transcript_status');
+  const rewrite = str(row, 'transcript_rewrite_status');
   const edition: VideoEdition = {
     youtube_id: youtubeId,
     video_id: str(row, 'video_id'),
@@ -46,6 +48,9 @@ function toEdition(row: Row, withTranscript: boolean): VideoEdition {
     transcript_error: optStr(row, 'transcript_error'),
     transcript_fetched_at: optStr(row, 'transcript_fetched_at'),
     word_count: optNum(row, 'word_count') ?? 0,
+    transcript_rewrite_status: isTranscriptRewriteStatus(rewrite) ? rewrite : 'none',
+    transcript_rewrite_error: optStr(row, 'transcript_rewrite_error'),
+    transcript_rewritten_at: optStr(row, 'transcript_rewritten_at'),
     watch_url: watchUrl(youtubeId),
     embed_url: embedUrl(youtubeId),
   };
@@ -152,7 +157,10 @@ export interface TranscriptUpdate {
   published_at?: string | null;
 }
 
-/** Stores a transcript fetch outcome; metadata fields only overwrite when a non-empty value is provided. */
+/**
+ * Stores a transcript fetch outcome; metadata fields only overwrite when a non-empty value is provided.
+ * A newly fetched transcript replaces both the raw source and the displayed text and clears any earlier AI rewrite.
+ */
 export async function saveTranscriptResult(db: D1DatabaseLike, youtubeId: string, u: TranscriptUpdate): Promise<void> {
   const ts = now();
   const keepTranscript = u.status !== 'ready' && u.transcript === undefined;
@@ -160,6 +168,11 @@ export async function saveTranscriptResult(db: D1DatabaseLike, youtubeId: string
     `UPDATE video_editions SET
        transcript_status = ?, transcript_error = ?, transcript_fetched_at = ?,
        transcript = CASE WHEN ? THEN transcript ELSE ? END,
+       transcript_source = CASE WHEN ? THEN transcript_source ELSE ? END,
+       transcript_rewrite_status = CASE WHEN ? THEN transcript_rewrite_status ELSE 'none' END,
+       transcript_rewrite_error = CASE WHEN ? THEN transcript_rewrite_error ELSE NULL END,
+       transcript_rewrite_model = CASE WHEN ? THEN transcript_rewrite_model ELSE NULL END,
+       transcript_rewritten_at = CASE WHEN ? THEN transcript_rewritten_at ELSE NULL END,
        word_count = CASE WHEN ? THEN word_count ELSE ? END,
        title = COALESCE(NULLIF(?, ''), title), description = COALESCE(NULLIF(?, ''), description),
        author = COALESCE(NULLIF(?, ''), author), thumbnail_url = COALESCE(?, thumbnail_url),
@@ -167,9 +180,39 @@ export async function saveTranscriptResult(db: D1DatabaseLike, youtubeId: string
      WHERE youtube_id = ?`,
   ).bind(u.status, u.error ?? null, ts,
     keepTranscript ? 1 : 0, u.transcript ?? null,
+    keepTranscript ? 1 : 0, u.transcript ?? null,
+    keepTranscript ? 1 : 0, keepTranscript ? 1 : 0, keepTranscript ? 1 : 0, keepTranscript ? 1 : 0,
     keepTranscript ? 1 : 0, u.word_count ?? 0,
     u.title ?? '', u.description ?? '', u.author ?? '', u.thumbnail_url ?? null,
     u.duration_seconds ?? null, u.published_at ?? null, ts, youtubeId).run();
+}
+
+/** The raw caption text an AI rewrite starts from (older rows only have `transcript`). */
+export async function getTranscriptSource(db: D1DatabaseLike, youtubeId: string): Promise<string | null> {
+  const row = await db.prepare('SELECT COALESCE(transcript_source, transcript) AS source FROM video_editions WHERE youtube_id = ?')
+    .bind(youtubeId).first<Row>();
+  return row ? optStr(row, 'source') : null;
+}
+
+export type RewriteUpdate =
+  | { status: 'ready'; transcript: string; word_count: number; model: string }
+  | { status: 'failed'; error: string; model: string };
+
+/** Stores an AI rewrite outcome; a failure keeps the current transcript text untouched. */
+export async function saveRewriteResult(db: D1DatabaseLike, youtubeId: string, u: RewriteUpdate): Promise<void> {
+  const ts = now();
+  if (u.status === 'ready') {
+    await db.prepare(
+      `UPDATE video_editions SET transcript_source = COALESCE(transcript_source, transcript), transcript = ?, word_count = ?,
+         transcript_rewrite_status = 'ready', transcript_rewrite_error = NULL, transcript_rewrite_model = ?, transcript_rewritten_at = ?, updated_at = ?
+       WHERE youtube_id = ?`,
+    ).bind(u.transcript, u.word_count, u.model, ts, ts, youtubeId).run();
+    return;
+  }
+  await db.prepare(
+    `UPDATE video_editions SET transcript_rewrite_status = 'failed', transcript_rewrite_error = ?, transcript_rewrite_model = ?, updated_at = ?
+     WHERE youtube_id = ?`,
+  ).bind(u.error, u.model, ts, youtubeId).run();
 }
 
 export interface EditionPatch { title?: string; description?: string; locale?: VideoLocale }
