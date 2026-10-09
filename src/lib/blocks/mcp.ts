@@ -10,6 +10,7 @@ import {
   parseArticleInput, publishArticle, setTagsForArticle, toSummary, updateArticle,
 } from './articles';
 import { discoverArticles } from './discovery';
+import { MAX_ARTICLE_PAGE } from './pagination';
 import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
 import type { ArticleDocument } from './schema';
@@ -116,6 +117,7 @@ function discoveryFromArgs(args: Record<string, unknown>) {
   }
   if (typeof args.locale === 'string' && args.locale) url.searchParams.set('lang', args.locale);
   if (typeof args.limit === 'number') url.searchParams.set('limit', String(args.limit));
+  if (typeof args.page === 'number') url.searchParams.set('page', String(args.page));
   return parseDiscoveryQuery(url);
 }
 
@@ -131,6 +133,7 @@ export const articlesMcpModule: McpToolModule = {
           include_drafts: { type: 'boolean' }, q: { type: 'string' }, ...localeProp, category: { type: 'string' }, tag: { type: 'string' },
           label: { type: 'string', description: '<kind>:<slug>, e.g. freshness:current' }, access: { type: 'string', enum: ['free', 'knowledges'] },
           sort: { type: 'string', enum: [...SORTS] }, limit: { type: 'integer', minimum: 1, maximum: 100 },
+          page: { type: 'integer', minimum: 1, maximum: MAX_ARTICLE_PAGE, description: '1-based page; limit (default 20) is the page size' },
         },
       },
     },

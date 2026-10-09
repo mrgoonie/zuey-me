@@ -56,6 +56,11 @@ export interface KnowledgeStrings {
   semanticOff: string;
   loading: string;
   loadFailed: string;
+  loadMore: string;
+  loadingMore: string;
+  loadMoreFailed: string;
+  /** Screen-reader note after a page is appended; `{n}` is the number of new articles. */
+  loadedMore: string;
 }
 
 const vi: KnowledgeStrings = {
@@ -111,6 +116,10 @@ const vi: KnowledgeStrings = {
   semanticOff: 'Tìm theo từ khoá',
   loading: 'Đang tải…',
   loadFailed: 'Không tải được danh sách bài.',
+  loadMore: 'Xem thêm bài',
+  loadingMore: 'Đang tải thêm…',
+  loadMoreFailed: 'Không tải được — thử lại',
+  loadedMore: 'Đã tải thêm {n} bài',
 };
 
 const en: KnowledgeStrings = {
@@ -166,6 +175,10 @@ const en: KnowledgeStrings = {
   semanticOff: 'Keyword search',
   loading: 'Loading…',
   loadFailed: 'Could not load articles.',
+  loadMore: 'Load more articles',
+  loadingMore: 'Loading more…',
+  loadMoreFailed: 'Could not load — try again',
+  loadedMore: 'Loaded {n} more articles',
 };
 
 const zh: KnowledgeStrings = {
@@ -221,6 +234,10 @@ const zh: KnowledgeStrings = {
   semanticOff: '关键词搜索',
   loading: '加载中…',
   loadFailed: '无法加载文章列表。',
+  loadMore: '加载更多文章',
+  loadingMore: '正在加载…',
+  loadMoreFailed: '加载失败——重试',
+  loadedMore: '已加载另外 {n} 篇',
 };
 
 const ko: KnowledgeStrings = {
@@ -276,6 +293,10 @@ const ko: KnowledgeStrings = {
   semanticOff: '키워드 검색',
   loading: '불러오는 중…',
   loadFailed: '글 목록을 불러오지 못했습니다.',
+  loadMore: '글 더 보기',
+  loadingMore: '더 불러오는 중…',
+  loadMoreFailed: '불러오지 못했습니다 — 다시 시도',
+  loadedMore: '글 {n}개를 더 불러왔습니다',
 };
 
 const ja: KnowledgeStrings = {
@@ -331,6 +352,10 @@ const ja: KnowledgeStrings = {
   semanticOff: 'キーワード検索',
   loading: '読み込み中…',
   loadFailed: '記事一覧を読み込めませんでした。',
+  loadMore: 'さらに記事を表示',
+  loadingMore: '読み込み中…',
+  loadMoreFailed: '読み込めませんでした — 再試行',
+  loadedMore: 'さらに {n} 件を読み込みました',
 };
 
 export const KNOWLEDGE_STRINGS: Record<Locale, KnowledgeStrings> = { vi, en, zh, ko, ja };
