@@ -1,7 +1,7 @@
 ---
 title: "Referral program (Zuey OS app)"
 description: "Referral links, tiered rates with admin override, referrer-chosen split, first-order commission ledger, fraud review, monthly manual payouts and a monthly top-10 leaderboard."
-status: in-progress
+status: completed
 priority: P1
 effort: 5d
 branch: claude/zuey-referral-program-268600
@@ -41,7 +41,7 @@ Accepted outcome, constraints and non-goals come from the confirmed advise sessi
 | 5 | [Cron: maturity, tiers, monthly close; payout profiles and R2](phase-05-cron-payouts-profiles.md) | completed | 4 |
 | 6 | [REST, OpenAPI and MCP surfaces](phase-06-rest-openapi-mcp.md) | completed | 5 |
 | 7 | [UI: Zuey OS referral app, leaderboard, checkout and admin](phase-07-ui-os-app-admin.md) | completed | 6 |
-| 8 | [Docs, remote migration, verification and PR](phase-08-docs-deploy-verify.md) | in-progress (PR open; remote rollout pending) | 7 |
+| 8 | [Docs, remote migration, verification and PR](phase-08-docs-deploy-verify.md) | completed | 7 |
 
 Phases are sequential (shared files: billing.ts, dodo-billing.ts, booking/store.ts, registries).
 
