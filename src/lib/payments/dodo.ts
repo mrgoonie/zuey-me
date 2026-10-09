@@ -109,16 +109,12 @@ export interface DodoCheckoutInput {
 }
 
 /**
- * Whether the hosted checkout shows its own discount-code input. Buyers must never type codes there:
- * referral discounts are created server-side and pre-applied through `discount_codes`.
- * Dodo documents this flag as UI-only ("hide the input"), so a pre-applied code should still apply with it
- * off. NOT YET VERIFIED in Dodo test mode (`POST /checkouts/preview` → `current_breakup.discount`). If the
- * code is ignored, flip this to `true` for referral checkouts only (the field shows, pre-filled).
+ * Hosted checkout feature flags. Dodo rejects `discount_codes` with 422 ("Discount code is not allowed if
+ * allow_discount_code is false"), verified in test mode, so the code input is enabled only when a server-created
+ * referral code is pre-applied (it shows pre-filled). Plain checkouts keep the input hidden.
  */
-export const DODO_ALLOW_DISCOUNT_CODE_INPUT = false;
-
-export function dodoFeatureFlags(): Record<string, boolean> {
-  return { allow_discount_code: DODO_ALLOW_DISCOUNT_CODE_INPUT, allow_currency_selection: false };
+export function dodoFeatureFlags(hasDiscountCodes = false): Record<string, boolean> {
+  return { allow_discount_code: hasDiscountCodes, allow_currency_selection: false };
 }
 
 /** Builds the checkout session request: one subscription product, optional pre-applied codes, fixed currency. */
@@ -130,7 +126,7 @@ export function dodoCheckoutPayload(productId: string, input: DodoCheckoutInput)
     customer,
     return_url: input.returnUrl,
     metadata: input.metadata,
-    feature_flags: dodoFeatureFlags(),
+    feature_flags: dodoFeatureFlags(Boolean(input.discountCodes?.length)),
   };
   if (input.discountCodes?.length) payload.discount_codes = input.discountCodes;
   return payload;
