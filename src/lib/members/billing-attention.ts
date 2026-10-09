@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
+import { captureReferralCommission } from '../referrals/commissions';
 import type { BillingOrder, OrderView } from './billing';
 import { fulfilOrder, getOrderByCode, rowToOrder, toOrderView } from './billing';
 import type { PlanId } from './plans';
@@ -192,6 +193,8 @@ async function activate(d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder
   }
   const paid: BillingOrder = { ...order, status: 'paid', paid_at: nowIso, updated_at: nowIso };
   const subscription = await fulfilOrder(d1, env, paid);
+  // An admin-activated referred order earns its commission like a webhook-paid one (base capped at collected/owed).
+  if (order.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'billing_order', id: order.id });
   await logActivity(d1, order.user_id, 'billing.attention_resolved', {
     code: order.code, action: 'activate', reason: order.attention_reason, note: input.note, admin,
     period_end: subscription?.current_period_end ?? null,

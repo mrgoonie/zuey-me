@@ -18,3 +18,9 @@ PUBLIC_POSTHOG_HOST = "https://us.i.posthog.com"
 # Workers AI binding (Zuey Reads summaries)
 [ai]
 binding = "AI"
+
+# Private R2 bucket for referral payout national-ID images (no public domain).
+# Objects live only until an admin approves or rejects the payout profile.
+[[r2_buckets]]
+binding = "REFERRAL_KYC"
+bucket_name = "zuey-referral-kyc"

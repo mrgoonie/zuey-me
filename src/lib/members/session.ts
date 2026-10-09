@@ -74,7 +74,13 @@ function rowToSession(row: Row): MemberSession {
   };
 }
 
-export async function createMemberSession(d1: D1DatabaseLike, userId: string, request?: Request): Promise<{ token: string; session: MemberSession }> {
+/**
+ * Opens a session. `ipHash` (salted hash of the sign-in IP, see `ipHash` in login-tokens) is kept only as a
+ * referral fraud signal: a referee binding from an IP the referrer signs in from goes to review.
+ */
+export async function createMemberSession(
+  d1: D1DatabaseLike, userId: string, request?: Request, ipHash: string | null = null,
+): Promise<{ token: string; session: MemberSession }> {
   const token = TOKEN_PREFIX + randomSecret(32);
   const now = membersRuntime.now();
   const session: MemberSession = {
@@ -86,8 +92,8 @@ export async function createMemberSession(d1: D1DatabaseLike, userId: string, re
     user_agent: request ? userAgent(request) : null,
   };
   await d1.prepare(
-    'INSERT INTO member_sessions (id, token_hash, user_id, created_at, expires_at, last_seen_at, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(session.id, await sha256Hex(token), userId, session.created_at, session.expires_at, session.last_seen_at, session.user_agent).run();
+    'INSERT INTO member_sessions (id, token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(session.id, await sha256Hex(token), userId, session.created_at, session.expires_at, session.last_seen_at, session.user_agent, ipHash).run();
   return { token, session };
 }
 

@@ -57,6 +57,7 @@ const ERROR_COPY: Record<string, string> = {
   csrf_rejected: 'Yêu cầu bị chặn vì không xuất phát từ zuey.me. Vui lòng tải lại trang.',
   confirmation_required: 'Email xác nhận không khớp với email tài khoản.',
   database_unavailable: 'Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.',
+  referral_code_invalid: 'Mã giới thiệu không áp dụng được cho đơn này (mã không hoạt động, là mã của bạn, hoặc tài khoản đã từng thanh toán). Bỏ mã để thanh toán giá thường.',
 };
 
 export function errorText(code: string, message: string): string {

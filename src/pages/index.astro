@@ -13,6 +13,7 @@ import { AccountApp } from '../components/members/AccountApp';
 import { LoginForm } from '../components/members/MemberAuth';
 import { ConnectedApps } from '../components/account/ConnectedApps';
 import { CommunityAccess } from '../components/home/CommunityAccess';
+import { ReferralApp } from '../components/referral/ReferralApp';
 import { getProfile, getLinks } from '../db/store';
 import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
 import { plansCatalog } from '../lib/members/account';
@@ -62,6 +63,8 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
   ambient={false}
 >
   <script is:inline slot="head" set:html={LOOK_BOOT_SCRIPT} />
+  <!-- Fonts for the 200lab app window (200lab design tokens). -->
+  <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" />
   <ZueyOS client:load locale={locale} profile={profile} links={links} signedIn={member !== null}>
     <div slot="ai" class="min-w-0 h-full">
       <ZueyAiPanel client:visible locale={locale} />
@@ -99,6 +102,9 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
           <a href="/pricing" class="text-xs font-semibold text-stone-200 hover:text-white underline">Xem các gói thành viên</a>
         </div>
       )}
+    </div>
+    <div slot="referral" class="min-w-0 mx-auto w-full max-w-[720px]">
+      <ReferralApp client:visible locale={locale} signedIn={member !== null} />
     </div>
   </ZueyOS>
 </Layout>

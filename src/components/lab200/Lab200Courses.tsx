@@ -6,6 +6,7 @@ import {
 import { LAB200_AUTHOR, lab200Copy } from '../../lib/lab200/copy';
 import type { Lab200Snapshot } from '../../lib/lab200/store';
 import { trackEvent } from '../../lib/posthog';
+import './lab200.css';
 
 /** Where a click came from: the Zuey OS window, the /200lab page, or the "Duy's picks" section of either. */
 type ClickSource = 'app' | 'route' | 'featured';
@@ -24,20 +25,8 @@ function formatTime(iso: string, locale: Locale): string {
   });
 }
 
-/** 16:9 thumbnail (200lab's og:image is 1280×720); a soft placeholder keeps the layout when it is missing. */
-const CourseThumb: React.FC<{ image?: string | null; link: React.AnchorHTMLAttributes<HTMLAnchorElement>; className: string }> = ({
-  image, link, className,
-}) => (
-  // Duplicate of the title link, so it is hidden from keyboard and screen readers.
-  <a {...link} tabIndex={-1} aria-hidden="true" className={`block overflow-hidden rounded-xl bg-stone-200/70 aspect-video shrink-0 ${className}`}>
-    {image && (
-      <img src={image} alt="" loading="lazy" decoding="async" width={1280} height={720} className="w-full h-full object-cover" />
-    )}
-  </a>
-);
-
-const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: Locale; highlight?: boolean }> = ({
-  course, source, locale, highlight = false,
+const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: Locale; index: number }> = ({
+  course, source, locale, index,
 }) => {
   const t = lab200Copy(locale);
   const price = course.free ? null : coursePrice(course.status);
@@ -47,45 +36,42 @@ const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: 
     rel: 'sponsored noopener',
     onClick: () => trackEvent('200lab_course_click', { slug: course.slug, source }),
   };
-  // Picks stack the image above the text; the full list puts a smaller image beside it when wide (`.lab200-row`).
   return (
-    <li className={`rounded-2xl border p-4 min-w-0 ${highlight ? 'bg-amber-50/90 border-amber-200' : 'lab200-row bg-white/80 border-stone-200/90'}`}>
-      <CourseThumb image={course.image} link={link} className="lab200-thumb mb-3" />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-stone-500 mb-1.5">
-          {course.lessons !== null && <span>{t.lessons(course.lessons)}</span>}
-          {course.status && !price && (
-            <span className={`px-2 py-0.5 rounded-full font-semibold ${course.free ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-900 text-[#F5EFEB]'}`}>
-              {course.free ? t.free : course.status.replace(/^Đang mở bán,\s*/i, '')}
-            </span>
-          )}
+    <li className="lab200-tile">
+      {/* 16:9 thumbnail (200lab's og:image is 1280×720). It repeats the title link, so it is hidden from keyboard and screen readers. */}
+      <a {...link} tabIndex={-1} aria-hidden="true" className="lab200-thumb">
+        {course.image && <img src={course.image} alt="" loading="lazy" decoding="async" width={1280} height={720} />}
+      </a>
+      <div className="lab200-tile-body">
+        <div className="lab200-meta">
+          <span className="lab200-kicker">Fig. {String(index + 1).padStart(2, '0')}</span>
+          {course.lessons !== null && <span className="lab200-kicker">{t.lessons(course.lessons)}</span>}
         </div>
-        <a
-          {...link}
-          className="block font-serif text-lg font-bold leading-snug text-stone-900 hover:text-amber-700 break-words"
-        >
-          {course.title}
-        </a>
-        {price && (
-          <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-sm">
-            <span className="text-stone-500">
-              {t.basePrice}{price.from ? ` ${t.priceFrom}` : ''} <s>{formatVnd(price.base)}</s>
-            </span>
-            <span className="font-bold text-emerald-800">
-              {t.refPrice}: {formatVnd(price.discounted)}
-            </span>
-            <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
-              −{Math.round(LAB200_REF_DISCOUNT * 100)}%
-            </span>
-          </p>
-        )}
-        {course.summary && <p className="text-sm text-stone-700 mt-1.5 leading-relaxed break-words">{course.summary}</p>}
-        <a
-          {...link}
-          className="inline-flex mt-3 text-xs font-semibold text-amber-800 hover:text-amber-950"
-        >
-          {t.view} →
-        </a>
+        <a {...link} className="lab200-course-title">{course.title}</a>
+        {course.summary && <p className="lab200-summary">{course.summary}</p>}
+        <div className="lab200-buy">
+          <div>
+            {price ? (
+              <>
+                <div className="lab200-was">
+                  <span>{t.basePrice}</span>
+                  <s>{formatVnd(price.base)}</s>
+                  <span className="lab200-chip">−{Math.round(LAB200_REF_DISCOUNT * 100)}%</span>
+                </div>
+                <div className="lab200-price">
+                  {price.from && <small>{t.priceFrom}</small>}
+                  <span>{formatVnd(price.discounted)}</span>
+                  <small>{t.refPrice.toLowerCase()}</small>
+                </div>
+              </>
+            ) : (
+              <div className={`lab200-price${course.free ? ' lab200-price--free' : ''}`}>
+                {course.free ? t.free : course.status.replace(/^Đang mở bán,\s*/i, '')}
+              </div>
+            )}
+          </div>
+          <a {...link} className="lab200-btn">{t.view} →</a>
+        </div>
       </div>
     </li>
   );
@@ -98,65 +84,67 @@ export const Lab200Courses: React.FC<Lab200CoursesProps> = ({ snapshot, locale, 
   const source: ClickSource = variant === 'window' ? 'app' : 'route';
 
   return (
-    <main className="relative w-full flex flex-col items-center justify-start py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6 z-10">
-      <div className="w-full max-w-[720px] bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] md:rounded-[40px] border border-stone-200/90 shadow-floating-card px-3.5 py-6 sm:px-6 sm:py-8 md:p-8 flex flex-col min-w-0">
-        <header className="mb-5 sm:mb-6">
-          {variant === 'page' && <a href="/" className="text-xs font-semibold text-stone-500 hover:text-stone-900">{t.back}</a>}
-          <h1 className="font-serif text-3xl sm:text-4xl font-black tracking-tight text-stone-900 mt-2">{t.title}</h1>
-          <p className="text-sm text-stone-700 mt-2 leading-relaxed">{t.intro}</p>
-          <p className="text-sm text-stone-700 mt-2 leading-relaxed">
-            {t.author.before}<strong className="font-semibold text-stone-900">{LAB200_AUTHOR.name}</strong>{t.author.after}
-            <a href={LAB200_AUTHOR.companyUrl} target="_blank" rel="noopener" className="font-semibold text-amber-800 hover:text-amber-950 underline underline-offset-2">
-              {LAB200_AUTHOR.company}
-            </a>.
+    <main className={`lab200 lab200--${variant}`}>
+      <div className="lab200-shell">
+        <header>
+          {variant === 'page' && <a href="/" className="lab200-back">{t.back}</a>}
+          <p className="lab200-kicker" style={{ marginTop: variant === 'page' ? 16 : 0 }}>
+            <b>200Lab</b> · {t.kicker}
           </p>
-          <p className="inline-flex mt-3 text-xs font-bold text-amber-900 bg-amber-100/80 border border-amber-200 rounded-full px-3 py-1.5">
-            🏷 {t.discount}
+          <h1 className="lab200-title">{t.heading}</h1>
+          <p className="lab200-body">{t.intro}</p>
+          <p className="lab200-body">
+            {t.author.before}<strong>{LAB200_AUTHOR.name}</strong>{t.author.after}
+            <a href={LAB200_AUTHOR.companyUrl} target="_blank" rel="noopener" className="lab200-link">{LAB200_AUTHOR.company}</a>.
           </p>
+          <div className="lab200-offer">
+            <span className="lab200-offer-badge" aria-hidden="true">−{Math.round(LAB200_REF_DISCOUNT * 100)}%</span>
+            <div>
+              <p className="lab200-offer-title">{t.discount}</p>
+              <p className="lab200-offer-code">{t.code} <code>{LAB200_REF}</code></p>
+            </div>
+          </div>
         </header>
 
         {snapshot.courses.length === 0 ? (
-          <div className="text-center py-10 text-sm text-stone-600 flex flex-col items-center gap-3">
+          <div className="lab200-empty">
             <p>{t.empty}</p>
-            <a
-              href={`${LAB200_ORIGIN}/?ref=${LAB200_REF}`}
-              target="_blank"
-              rel="sponsored noopener"
-              className="px-4 py-2 rounded-full bg-stone-900 text-[#F5EFEB] text-xs font-semibold hover:bg-stone-700"
-            >
+            <a href={`${LAB200_ORIGIN}/?ref=${LAB200_REF}`} target="_blank" rel="sponsored noopener" className="lab200-btn">
               {t.openSite} →
             </a>
           </div>
         ) : (
           <>
             {featured.length > 0 && (
-              <section className="mb-6" aria-label={t.featured}>
-                <h2 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 mb-2.5">★ {t.featured}</h2>
-                <ul className="grid gap-3 sm:grid-cols-2">
-                  {featured.map(c => <CourseCard key={c.slug} course={c} source="featured" locale={locale} highlight />)}
+              <section className="lab200-section" aria-label={t.featured}>
+                <h2 className="lab200-h2">★ {t.featured}</h2>
+                <ul className="lab200-grid">
+                  {featured.map((c, i) => <CourseCard key={c.slug} course={c} source="featured" locale={locale} index={i} />)}
                 </ul>
               </section>
             )}
             {others.length > 0 && (
-              <section aria-label={t.all}>
-                <h2 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 mb-2.5">
-                  {t.all} ({snapshot.courses.length})
-                </h2>
-                <ul className="lab200-list flex flex-col gap-3">
-                  {others.map(c => <CourseCard key={c.slug} course={c} source={source} locale={locale} />)}
+              <section className="lab200-section" aria-label={t.all}>
+                <h2 className="lab200-h2">{t.all} <small>{t.results(snapshot.courses.length)}</small></h2>
+                <ul className="lab200-list">
+                  {others.map((c, i) => (
+                    <CourseCard key={c.slug} course={c} source={source} locale={locale} index={featured.length + i} />
+                  ))}
                 </ul>
               </section>
             )}
           </>
         )}
 
-        <footer className="mt-6 flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-500">
-          <span>
-            {snapshot.syncedAt ? `${t.updated(formatTime(snapshot.syncedAt, locale))} · ` : ''}
-            {t.disclosure}
-            {snapshot.courses.some(c => !c.free && coursePrice(c.status)) && <span className="block mt-1">{t.priceNote}</span>}
-          </span>
-          <a href="/200lab.md" className="font-semibold hover:text-stone-900">200lab.md</a>
+        <footer className="lab200-footer">
+          <div>
+            <p>
+              {snapshot.syncedAt ? `${t.updated(formatTime(snapshot.syncedAt, locale))} · ` : ''}
+              {t.disclosure}
+            </p>
+            {snapshot.courses.some(c => !c.free && coursePrice(c.status)) && <p>{t.priceNote}</p>}
+          </div>
+          <a href="/200lab.md">200lab.md</a>
         </footer>
       </div>
     </main>

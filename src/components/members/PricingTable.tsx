@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { PlansCatalog } from '../../lib/members/account';
+import { ReferralCodeField } from '../referral/ReferralCodeField';
+import { useReferralQuote } from '../referral/referral-quote';
 import { alertError, alertInfo, btnGhost, btnPrimary, callApi, fmtUsd, fmtVnd, isRecord, jsonBody, loginUrl, str } from './member-ui';
 
 interface Props {
@@ -15,12 +17,17 @@ type Provider = 'sepay' | 'dodo';
 /**
  * Plan cards. SePay prepays 1/3/6/12 months by VietQR; when Dodo is configured a plan can also be a
  * monthly USD card subscription. Checkout is an explicit click; the status page shows the server state.
+ * Referral prices come from the client-side quote so the page itself stays publicly cacheable.
  */
 export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
   const [months, setMonths] = useState(catalog.months.includes(initialMonths) ? initialMonths : 1);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cardPlans = new Set(catalog.card_plans);
+  const referral = useReferralQuote();
+  const referralPercent = referral.quote?.referral?.discount_percent ?? 0;
+  const quoteFor = (plan: string) => (referralPercent > 0 ? referral.quote?.plans.find(p => p.plan === plan && p.months === months) ?? null : null);
+  const cardFirst = (plan: string) => (referralPercent > 0 ? referral.quote?.card_first_month.find(c => c.plan === plan) ?? null : null);
   // The prepay discount depends only on the term, so any plan's price list carries it.
   const discountFor = (m: number) => catalog.plans[0]?.prices.find(p => p.months === m)?.discount_percent ?? 0;
   const discountNote = catalog.months.filter(m => discountFor(m) > 0).map(m => `${m} tháng −${discountFor(m)}%`).join(', ');
@@ -29,7 +36,8 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
     if (busy) return;
     setBusy(`${planId}:${provider}`);
     setError(null);
-    const payload = provider === 'dodo' ? { plan: planId, provider } : { plan: planId, months, provider };
+    const code = referral.enteredCode ? { referral_code: referral.enteredCode } : {};
+    const payload = provider === 'dodo' ? { plan: planId, provider, ...code } : { plan: planId, months, provider, ...code };
     const res = await callApi('/api/v1/billing/orders', { method: 'POST', body: jsonBody(payload) });
     if (res.ok && isRecord(res.data)) {
       if (provider === 'dodo' && str(res.data, 'checkout_url')) {
@@ -65,6 +73,11 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
         <p className="mt-2 text-center text-xs text-stone-300">Áp dụng cho chuyển khoản ngân hàng (VietQR): trả trước, không tự động gia hạn{discountNote && `; giảm giá khi trả trước: ${discountNote}`}.</p>
       </fieldset>
 
+      <ReferralCodeField
+        state={referral} percent={referralPercent} className="mx-auto w-full max-w-[520px]"
+        note="Giảm cho đơn đầu tiên, sau giảm giá trả trước (thẻ quốc tế: tháng đầu)."
+      />
+
       <div aria-live="polite" role="status" className="empty:hidden mx-auto w-full max-w-[720px]">
         {error && <p className={alertError}>{error}</p>}
         {!catalog.billing_configured && cardPlans.size === 0 && <p className={alertInfo}>Thanh toán đang tạm đóng trong lúc cấu hình. Bạn vẫn có thể xem các gói; vui lòng quay lại sau.</p>}
@@ -73,6 +86,8 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 min-w-0">
         {catalog.plans.map(plan => {
           const price = plan.prices.find(p => p.months === months);
+          const ref = quoteFor(plan.id);
+          const card = cardFirst(plan.id);
           const highlighted = plan.id === initialPlan;
           const titleId = `plan-${plan.id}`;
           return (
@@ -85,6 +100,13 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
                   ? <>{MONTH_LABEL[months]}: <strong>{fmtVnd(price.amount_vnd)}</strong>{price.discount_percent > 0 && <> <span className="text-emerald-700 font-semibold">(−{price.discount_percent}%)</span></>}</>
                   : <>{MONTH_LABEL[months]}: {price ? fmtUsd(price.amount_usd_cents) : '—'}</>}
               </p>
+              {ref && ref.amount_vnd !== null && ref.discounted_vnd !== null && (
+                <p className="mt-1 text-sm tabular-nums">
+                  <span className="text-stone-500 line-through">{fmtVnd(ref.amount_vnd)}</span>{' '}
+                  <strong className="text-emerald-800">{fmtVnd(ref.discounted_vnd)}</strong>{' '}
+                  <span className="text-xs font-semibold text-emerald-800">giới thiệu −{referralPercent}%</span>
+                </p>
+              )}
               <ul className="mt-4 grid gap-1.5 text-sm text-stone-800 flex-1">
                 {plan.features.map(f => (
                   <li key={f} className="flex gap-2 min-w-0"><span aria-hidden="true" className="text-amber-600">✓</span><span className="min-w-0 break-words">{f}</span></li>
@@ -107,7 +129,7 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
                   disabled={busy !== null}
                   aria-describedby={titleId}
                 >
-                  {busy === `${plan.id}:dodo` ? 'Đang mở trang thanh toán…' : 'Thẻ quốc tế (USD, Dodo)'}
+                  {busy === `${plan.id}:dodo` ? 'Đang mở trang thanh toán…' : card ? `Thẻ quốc tế · tháng đầu ${fmtUsd(card.discounted_usd_cents)}` : 'Thẻ quốc tế (USD, Dodo)'}
                 </button>
               )}
               {!catalog.billing_configured && !cardPlans.has(plan.id) && (

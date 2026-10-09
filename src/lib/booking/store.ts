@@ -7,8 +7,15 @@ import type { FetchLike } from '../integrations/google-calendar';
 import { createMeetEvent, rescheduleMeetEvent } from '../integrations/google-calendar';
 import { sendEmail } from '../integrations/resend';
 import { capturePaypalOrder, createPaypalOrder, missingPaypalConfig } from '../payments/paypal';
-import { buildSepayTransfer, missingSepayConfig, parseVndPrice } from '../payments/sepay';
+import type { PaypalReversalEvent } from '../payments/paypal';
+import { missingSepayConfig, parseVndPrice, transferContent, vietQrTransfer } from '../payments/sepay';
 import type { SepayTransferInfo } from '../payments/sepay';
+import { BOOKING_PRICE_USD_CENTS, parseReferralCodeField, resolveCheckoutReferral } from '../referrals/checkout';
+import { parseUsdVndRate } from '../members/plans';
+import { captureReferralCommission, rescheduleBookingCommissionHold } from '../referrals/commissions';
+import { applyPercent } from '../referrals/rates';
+import type { ReversalOutcome } from '../referrals/refunds';
+import { reverseCommission } from '../referrals/refunds';
 import type { AvailabilityException, AvailabilityRule, Slot } from './availability';
 import {
   DEFAULT_SLOT_MINUTES,
@@ -28,7 +35,7 @@ export const bookingRuntime: { fetch: FetchLike; now: () => number } = {
 
 export const ORGANIZER_EMAIL = 'hi@zuey.me';
 /** One-off consultation price charged on the USD card rail (PayPal): $1,999.00. */
-export const CONSULTATION_PRICE_USD_CENTS = 199_900;
+export const CONSULTATION_PRICE_USD_CENTS = BOOKING_PRICE_USD_CENTS;
 
 export type BookingStatus = 'held' | 'confirmed' | 'expired' | 'cancelled' | 'needs_attention';
 export type PaymentMethod = 'sepay' | 'paypal';
@@ -70,6 +77,14 @@ export interface BookingRow {
   email_error: string | null;
   attention_reason: string | null;
   admin_note: string | null;
+  /** Referral snapshot taken when the hold was created (all null without a referral). */
+  referrer_user_id: string | null;
+  referral_rate: number | null;
+  referral_discount_percent: number | null;
+  referral_commission_percent: number | null;
+  /** List price in the booking's currency (VND for SePay, USD cents for PayPal) before the referral discount. */
+  amount_before_referral: number | null;
+  referral_ref: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -90,6 +105,8 @@ export interface GuestBookingView {
   payment_method: string;
   amount_expected: number | null;
   currency: string | null;
+  /** Referral discount on the consultation (null without a referral). */
+  referral_discount_percent: number | null;
   meet_url: string | null;
   reschedule_count: number;
   can_reschedule: boolean;
@@ -259,6 +276,8 @@ export interface HoldInput {
   notes: string | null;
   timezone: string | null;
   payment_method: PaymentMethod;
+  /** Optional referral code typed by the guest (validated shape; applicability is checked at hold time). */
+  referral_code: string | null;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -288,6 +307,7 @@ export function parseHoldInput(body: Record<string, unknown>): HoldInput {
     notes: notes || null,
     timezone: tz && isValidTimeZone(tz) ? tz : null,
     payment_method: method,
+    referral_code: parseReferralCodeField(body),
   };
 }
 
@@ -322,12 +342,37 @@ async function expireStaleHolds(d1: D1DatabaseLike, nowIso: string, slotStart?: 
   }
 }
 
+/** List price of the consultation on a rail: VND (CONSULTATION_PRICE_VND) for SePay, USD cents for PayPal. */
+function listPrice(env: RuntimeEnv, method: PaymentMethod): { amount: number | null; currency: 'VND' | 'USD' } {
+  return method === 'sepay' ? { amount: parseVndPrice(env), currency: 'VND' } : { amount: CONSULTATION_PRICE_USD_CENTS, currency: 'USD' };
+}
+
+/**
+ * What the guest owes: the list price snapshotted at hold time (or today's list price) minus the referral
+ * discount. Always computed server-side from the snapshot.
+ */
+export function bookingAmountDue(row: BookingRow, env: RuntimeEnv): { amount: number | null; currency: 'VND' | 'USD' } {
+  const method: PaymentMethod = row.payment_method === 'sepay' ? 'sepay' : 'paypal';
+  const list = listPrice(env, method);
+  const base = row.amount_before_referral ?? list.amount;
+  if (base === null) return list;
+  const discount = row.referrer_user_id ? row.referral_discount_percent ?? 0 : 0;
+  return { amount: applyPercent(base, discount, list.currency), currency: list.currency };
+}
+
+/**
+ * Holds a slot. A referral (typed code or `zr_ref` cookie, matched against the guest email) is resolved
+ * and snapshotted now, so the price shown at checkout cannot change during the hold. Today's USD_VND_RATE is
+ * snapshotted too: a VND booking's commission converts at the rate the guest was quoted.
+ */
 export async function createHold(
-  d1: D1DatabaseLike, env: RuntimeEnv, input: HoldInput
+  d1: D1DatabaseLike, env: RuntimeEnv, input: HoldInput, opts: { request?: Request } = {}
 ): Promise<{ booking: GuestBookingView; manage_token: string; manage_url: string }> {
   assertPaymentConfigured(env, input.payment_method);
   const slot = await findRuleSlot(d1, input.slot_start);
   if (!slot) throw new AppError(409, 'slot_unavailable', 'This time is not an open consultation slot');
+  const referral = await resolveCheckoutReferral(d1, { email: input.email, enteredCode: input.referral_code, request: opts.request, product: 'booking' });
+  const listAmount = listPrice(env, input.payment_method).amount;
 
   const now = bookingRuntime.now();
   const nowIso = iso(now);
@@ -344,11 +389,14 @@ export async function createHold(
     try {
       await d1.prepare(
         `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email,
-          company, notes, guest_timezone, payment_method, manage_token_hash, reschedule_count, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+          company, notes, guest_timezone, payment_method, manage_token_hash, reschedule_count, created_at, updated_at,
+          referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral, usd_vnd_rate)
+         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, code, slot.start, slot.end, slot.duration_min, iso(now + HOLD_MS), input.name, input.email,
-        input.company, input.notes, input.timezone, input.payment_method, tokenHash, nowIso, nowIso
+        input.company, input.notes, input.timezone, input.payment_method, tokenHash, nowIso, nowIso,
+        referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
+        referral ? listAmount : null, parseUsdVndRate(env)
       ).run();
       const row = await getBookingRow(d1, id);
       if (!row) throw new Error('Inserted booking not found');
@@ -395,7 +443,8 @@ export function toGuestView(row: BookingRow, env: RuntimeEnv, now: number): Gues
   const effectiveStatus: BookingStatus = row.status === 'held' && row.hold_expires_at < iso(now) ? 'expired' : row.status;
   let sepay: SepayTransferInfo | null = null;
   if (effectiveStatus === 'held' && row.payment_method === 'sepay' && missingSepayConfig(env).length === 0) {
-    sepay = buildSepayTransfer(env, row.code);
+    const due = bookingAmountDue(row, env).amount;
+    if (due !== null) sepay = vietQrTransfer(env, due, transferContent(row.code));
   }
   return {
     id: row.id,
@@ -411,6 +460,7 @@ export function toGuestView(row: BookingRow, env: RuntimeEnv, now: number): Gues
     payment_method: row.payment_method,
     amount_expected: row.amount_expected,
     currency: row.currency,
+    referral_discount_percent: row.referrer_user_id ? row.referral_discount_percent : null,
     meet_url: row.status === 'confirmed' ? row.meet_url : null,
     reschedule_count: row.reschedule_count,
     can_reschedule: blocked === null,
@@ -449,7 +499,7 @@ export async function listBookings(d1: D1DatabaseLike, filter: BookingListFilter
 // ---------------------------------------------------------------------------
 
 export type CheckoutResult =
-  | { provider: 'paypal'; url: string; order_id: string; expires_at: string }
+  | { provider: 'paypal'; url: string; order_id: string; amount_usd_cents: number; expires_at: string }
   | (SepayTransferInfo & { expires_at: string });
 
 export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null): Promise<CheckoutResult> {
@@ -463,21 +513,23 @@ export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: str
     throw new AppError(409, 'payment_method_retired', 'This payment method is no longer offered. Please choose a slot again or email hi@zuey.me.');
   }
   assertPaymentConfigured(env, method);
+  const due = bookingAmountDue(row, env).amount;
+  if (due === null) throw new AppError(503, 'payment_unconfigured', 'The consultation price is not configured', { missing: ['CONSULTATION_PRICE_VND'] });
   if (method === 'paypal') {
     // PayPal appends its own `token` (the order id) to these URLs, so the manage token travels as `manage`.
     const base = `${siteUrl(env)}/booking/${row.id}?manage=${encodeURIComponent(token ?? '')}`;
     const order = await createPaypalOrder(env, {
       bookingId: row.id,
       bookingCode: row.code,
-      amountCents: CONSULTATION_PRICE_USD_CENTS,
+      amountCents: due,
       returnUrl: `${base}&paypal=return`,
       cancelUrl: `${base}&paypal=cancel`,
     }, bookingRuntime.fetch, now);
     await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, payment_ref = ?, updated_at = ? WHERE id = ?')
-      .bind(CONSULTATION_PRICE_USD_CENTS, 'USD', order.id, iso(now), row.id).run();
-    return { provider: 'paypal', url: order.approveUrl, order_id: order.id, expires_at: row.hold_expires_at };
+      .bind(due, 'USD', order.id, iso(now), row.id).run();
+    return { provider: 'paypal', url: order.approveUrl, order_id: order.id, amount_usd_cents: due, expires_at: row.hold_expires_at };
   }
-  const transfer = buildSepayTransfer(env, row.code);
+  const transfer = vietQrTransfer(env, due, transferContent(row.code));
   await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, updated_at = ? WHERE id = ?')
     .bind(transfer.amount, 'VND', iso(now), row.id).run();
   return { ...transfer, expires_at: row.hold_expires_at };
@@ -498,6 +550,10 @@ export interface PaymentNotice {
   bookingId: string | null;
   bookingCode?: string | null;
   checkoutId?: string | null;
+  /** Bank transfer content or PayPal payer name; used only as a referral fraud signal. */
+  payerText?: string | null;
+  /** PayPal payer email; used only as a referral fraud signal. */
+  payerEmail?: string | null;
 }
 
 export type PaymentOutcome =
@@ -508,8 +564,8 @@ export type PaymentOutcome =
   | 'needs_attention';
 
 function expectedAmount(row: BookingRow, env: RuntimeEnv): { amount: number | null; currency: string } {
-  if (row.payment_method === 'sepay') return { amount: row.amount_expected ?? parseVndPrice(env), currency: 'VND' };
-  return { amount: row.amount_expected ?? CONSULTATION_PRICE_USD_CENTS, currency: 'USD' };
+  const due = bookingAmountDue(row, env);
+  return { amount: row.amount_expected ?? due.amount, currency: due.currency };
 }
 
 async function findBookingForPayment(d1: D1DatabaseLike, n: PaymentNotice): Promise<BookingRow | null> {
@@ -576,6 +632,9 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
     if (changes === 1) {
       const confirmed = await getBookingRow(d1, row.id);
       if (confirmed) await fulfilBooking(d1, env, confirmed, 'confirmed');
+      if (row.referrer_user_id) {
+        await captureReferralCommission(d1, env, { kind: 'booking', id: row.id, payerText: n.payerText ?? null, payerEmail: n.payerEmail ?? null });
+      }
       return { outcome: 'confirmed', booking_id: row.id };
     }
     const current = await getBookingRow(d1, row.id);
@@ -587,6 +646,23 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
     await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind(n.provider, n.eventId).run().catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * PayPal refund, reversal or dispute on a booking's capture: reverses its referral commission. The booking
+ * is matched by custom_id (booking id) or by the capture id stored as `payment_ref`; its status is left for
+ * the admin. Idempotent through the commission reversal.
+ */
+export async function applyPaypalReversal(
+  d1: D1DatabaseLike, event: PaypalReversalEvent
+): Promise<{ outcome: ReversalOutcome | 'unmatched'; booking_id: string | null }> {
+  let row = event.customId ? await getBookingRow(d1, event.customId) : null;
+  if ((!row || row.payment_method !== 'paypal') && event.captureId) {
+    row = await d1.prepare("SELECT * FROM bookings WHERE payment_method = 'paypal' AND payment_ref = ?").bind(event.captureId).first<BookingRow>();
+  }
+  if (!row || row.payment_method !== 'paypal') return { outcome: 'unmatched', booking_id: null };
+  const result = await reverseCommission(d1, { sourceKind: 'booking', sourceId: row.id }, `paypal_${event.kind}`);
+  return { outcome: result.outcome, booking_id: row.id };
 }
 
 export type CaptureStatus = 'confirmed' | 'pending' | 'not_approved' | 'declined' | 'needs_attention' | 'unchanged';
@@ -622,6 +698,9 @@ export async function capturePaypalBooking(
       paymentRef: capture.id,
       bookingId: capture.customId ?? row.id,
       checkoutId: order.orderId,
+      // The webhook's capture resource has no payer; whichever path confirms first decides, so this is best-effort.
+      payerText: order.payer?.name ?? null,
+      payerEmail: order.payer?.email ?? null,
     });
     status = result.outcome === 'needs_attention' ? 'needs_attention' : 'confirmed';
   }
@@ -771,6 +850,7 @@ export async function rescheduleBooking(
   if (changes !== 1) throw new AppError(409, 'reschedule_not_allowed', 'Booking changed concurrently; reload and try again');
   const updated = await getBookingRow(d1, row.id);
   if (!updated) throw new AppError(404, 'booking_not_found', 'Booking not found');
+  if (updated.referrer_user_id) await rescheduleBookingCommissionHold(d1, updated.id, updated.slot_end);
   const fulfilled = await fulfilBooking(d1, env, updated, 'rescheduled');
   return toGuestView(fulfilled, env, bookingRuntime.now());
 }
@@ -779,8 +859,9 @@ export type AdminAction = 'cancel' | 'resolve' | 'mark_attention' | 'note';
 export const ADMIN_ACTIONS: AdminAction[] = ['cancel', 'resolve', 'mark_attention', 'note'];
 
 /**
- * Admin-only state changes. `cancel` never refunds automatically; `resolve` confirms a booking
- * whose payment the admin verified manually (still guarded by the active-slot unique index).
+ * Admin-only state changes. `cancel` never refunds automatically but reverses the referral commission;
+ * `resolve` confirms a booking whose payment the admin verified manually (still guarded by the active-slot
+ * unique index) and captures its referral commission like a webhook-confirmed one.
  */
 export async function adminUpdateBooking(
   d1: D1DatabaseLike, env: RuntimeEnv, id: string, action: AdminAction, note: string | null
@@ -793,6 +874,7 @@ export async function adminUpdateBooking(
     await d1.prepare('UPDATE bookings SET admin_note = ?, updated_at = ? WHERE id = ?').bind(noteValue, nowIso, id).run();
   } else if (action === 'cancel') {
     await d1.prepare("UPDATE bookings SET status = 'cancelled', admin_note = ?, updated_at = ? WHERE id = ?").bind(noteValue, nowIso, id).run();
+    if (row.referrer_user_id) await reverseCommission(d1, { sourceKind: 'booking', sourceId: id }, 'admin_cancel', 'admin');
   } else if (action === 'mark_attention') {
     await d1.prepare("UPDATE bookings SET status = 'needs_attention', attention_reason = COALESCE(attention_reason, 'admin'), admin_note = ?, updated_at = ? WHERE id = ? AND status <> 'cancelled'")
       .bind(noteValue, nowIso, id).run();
@@ -807,6 +889,7 @@ export async function adminUpdateBooking(
     }
     const confirmed = await getBookingRow(d1, id);
     if (confirmed && confirmed.meet_status !== 'sent') await fulfilBooking(d1, env, confirmed, 'confirmed');
+    if (row.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id });
   }
   const updated = await getBookingRow(d1, id);
   if (!updated) throw new AppError(404, 'booking_not_found', 'Booking not found');

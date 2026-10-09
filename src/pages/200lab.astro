@@ -20,5 +20,7 @@ Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
   url="https://zuey.me/200lab"
   lang={LOCALE_LABELS[locale].htmlLang}
 >
+  <!-- 200lab design tokens use Inter and JetBrains Mono. -->
+  <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" />
   <Lab200Courses client:load snapshot={snapshot} locale={locale} variant="page" />
 </Layout>
