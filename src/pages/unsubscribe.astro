@@ -1,0 +1,50 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { card, btnPrimary, btnGhost, alertError, alertOk, alertInfo } from '../components/members/member-ui';
+import { getArticleEmailSubscription, unsubscribeSecret, verifyUnsubscribeToken } from '../lib/notifications/article-email-subscription';
+
+// Viewing this page never changes anything: link scanners open email links. Changes need the button (POST).
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+const env = Astro.locals.runtime?.env ?? {};
+const token = Astro.url.searchParams.get('token') ?? '';
+const done = Astro.url.searchParams.get('done');
+const userId = await verifyUnsubscribeToken(unsubscribeSecret(env), token);
+const state = userId && env.DB ? await getArticleEmailSubscription(env.DB, userId) : null;
+const maskedEmail = state ? state.email.replace(/^(.)(.*)(@.*)$/, (_m, a: string, b: string, c: string) => `${a}${'•'.repeat(Math.min(b.length, 6))}${c}`) : '';
+---
+
+<Layout title="Email bài viết mới — Zuey" description="Quản lý việc nhận email khi Zuey đăng bài viết mới." url="https://zuey.me/unsubscribe" lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center py-6 sm:py-12 px-4 z-10">
+    <section class={`${card} max-w-[460px]`} aria-labelledby="unsub-title">
+      <h1 id="unsub-title" class="text-2xl sm:text-3xl font-bold font-serif">Email bài viết mới</h1>
+      <div class="mt-4 grid gap-4" role="status" aria-live="polite">
+        {!state && (
+          <p class={alertError}>Liên kết không hợp lệ hoặc tài khoản không còn tồn tại. Hãy mở lại liên kết trong email gần nhất, hoặc email hi@zuey.me.</p>
+        )}
+        {state && done === 'unsubscribed' && <p class={alertOk}>Đã huỷ. {maskedEmail} sẽ không nhận email bài viết mới nữa. Email đăng nhập và thanh toán vẫn được gửi bình thường.</p>}
+        {state && done === 'resubscribed' && <p class={alertOk}>Đã đăng ký lại. Bạn sẽ nhận email khi có bài viết mới.</p>}
+        {state && !done && state.subscribed && (
+          <p class="text-sm text-stone-700">{maskedEmail} đang nhận email mỗi khi Zuey đăng bài viết mới.</p>
+        )}
+        {state && !done && !state.subscribed && (
+          <p class={alertInfo}>
+            {state.reason === 'unsubscribe' ? `${maskedEmail} đã huỷ nhận email bài viết mới.` : `Email bài viết mới tới ${maskedEmail} đang tạm dừng vì lần gửi trước bị trả về hoặc bị đánh dấu spam.`}
+          </p>
+        )}
+        {state && (
+          <form method="post" action="/api/email/unsubscribe" class="flex flex-wrap gap-2">
+            <input type="hidden" name="token" value={token} />
+            {state.subscribed && done !== 'unsubscribed'
+              ? <button type="submit" name="action" value="unsubscribe" class={btnPrimary}>Huỷ nhận email bài viết mới</button>
+              : <button type="submit" name="action" value="resubscribe" class={btnPrimary}>Nhận lại email bài viết mới</button>}
+            <a href="/articles" class={btnGhost}>Xem bài viết</a>
+          </form>
+        )}
+        <p class="text-xs text-stone-500">English: manage new-article emails from Zuey. Sign-in and billing emails are not affected.</p>
+      </div>
+    </section>
+  </main>
+</Layout>

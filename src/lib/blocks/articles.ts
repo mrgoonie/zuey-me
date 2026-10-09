@@ -19,6 +19,8 @@ import { listCategories, resolveCategoryRef, toPublicCategory } from '../taxonom
 import type { PublicCategory } from '../taxonomy/categories';
 import { labelKey, listLabels, publicLabelsFor } from '../taxonomy/labels';
 import type { PublicLabel } from '../taxonomy/labels';
+import { applyPublishNotification, cancelArticleNotification, getArticleNotification, parseNotifyFlag } from '../notifications/article-notification-schedule';
+import type { ArticleNotification } from '../notifications/article-notification-schedule';
 
 export interface EditionSummary {
   locale: Locale;
@@ -65,6 +67,8 @@ export interface ArticleSummary {
   cover_url: string | null;
   /** Admin listings only: every edition including drafts. */
   editions?: EditionSummary[];
+  /** Admin draft views and publish responses only: the new-article email to members. */
+  email_notification?: ArticleNotification | null;
 }
 
 export interface ArticleRecord extends ArticleSummary {
@@ -517,7 +521,10 @@ export async function getArticleView(
   const { locale_fallback, ...withFallback } = rec;
   const summary = toSummary(withFallback);
   const publicSummary: ArticleSummary = viewer.isAdmin ? summary : { ...summary, editions: undefined };
-  if (draft) return { ...publicSummary, document: rec.draft, truncated: false, preview: true, locale_fallback };
+  if (draft) {
+    const emailNotification = d1 ? await getArticleNotification(d1, rec.id) : null;
+    return { ...publicSummary, email_notification: emailNotification, document: rec.draft, truncated: false, preview: true, locale_fallback };
+  }
   if (!rec.published) return null;
   const { doc, truncated, outline } = applyPaywall(rec.published, rec.access, viewer);
   return { ...publicSummary, document: doc, truncated, ...(outline ? { locked_outline: outline } : {}), preview: false, locale_fallback };
@@ -693,15 +700,23 @@ export function parsePublishedAt(raw: unknown): string | null {
   return new Date(ms).toISOString();
 }
 
-/** Publishes one edition's current draft (locale defaults to primary). Requires confirm === true. */
+/** A publish time more than this far in the past is an archive import: no member email unless asked for. */
+const BACKDATE_THRESHOLD_MS = 60 * 60 * 1000;
+
+/**
+ * Publishes one edition's current draft (locale defaults to primary). Requires confirm === true.
+ * The first publish of an article schedules its member email 30 minutes later; `notify: false` (or a backdated
+ * `published_at`) skips it, and `notify: true` schedules an article that was skipped before.
+ */
 export async function publishArticle(
   d1: D1DatabaseLike | undefined, slug: string, expectedRevision: unknown, confirm: unknown,
-  ctx: WriteContext & { locale?: Locale; publishedAt?: unknown } = {},
+  ctx: WriteContext & { locale?: Locale; publishedAt?: unknown; notify?: unknown } = {},
 ): Promise<ArticleRecord> {
   const db = requireDb(d1);
   if (confirm !== true) throw new AppError(400, 'confirmation_required', 'Publishing requires confirm: true');
   const expected = requireRevision(expectedRevision);
   const publishedAt = parsePublishedAt(ctx.publishedAt);
+  const notify = parseNotifyFlag(ctx.notify);
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
   const locale = ctx.locale ?? art.primary;
@@ -724,9 +739,12 @@ export async function publishArticle(
   await mirrorPrimary(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
+  const nowMs = Date.now();
+  const backdated = publishedAt !== null && Date.parse(publishedAt) < nowMs - BACKDATE_THRESHOLD_MS;
+  const emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, actor: ctx.actor ?? 'admin', nowMs });
   const rec = await getArticle(db, slug, { locale });
   if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after publish');
-  return rec;
+  return { ...rec, email_notification: emailNotification };
 }
 
 /** Soft-deletes one non-primary edition. */
@@ -764,6 +782,7 @@ export async function deleteArticle(d1: D1DatabaseLike | undefined, slug: string
   const res = await db.prepare('UPDATE articles SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL')
     .bind(now, now, art.id).run();
   if (!res.meta?.changes) throw new AppError(404, 'not_found', 'Article not found');
+  await cancelArticleNotification(db, art.id, 'article_deleted');
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
 }

@@ -1,0 +1,17 @@
+# Cron Trigger worker for zuey.me (Cloudflare Pages has no cron). Deploy from this directory:
+#   wrangler deploy
+#   wrangler secret put CRON_SECRET   # same value as the Pages secret CRON_SECRET
+name = "zuey-me-scheduler"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+[triggers]
+# Every 5 minutes: due new-article emails go out within ~5 minutes of their 30-minute delay.
+crons = ["*/5 * * * *"]
+
+[vars]
+SITE_URL = "https://zuey.me"
+
+[observability]
+enabled = true
