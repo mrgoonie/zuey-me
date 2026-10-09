@@ -4,7 +4,7 @@ import { AppError } from '../http';
 import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';
 import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
 import type { SepayTransferInfo } from '../payments/sepay';
-import { SEPAY_BILLING_PREFIX, extractBillingCode, missingSepayBankConfig, vietQrTransfer } from '../payments/sepay';
+import { SEPAY_BILLING_PREFIX, extractBillingCode, missingSepayBankConfig, parseSepayTime, vietQrTransfer } from '../payments/sepay';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
 import type { BillingMonths, Entitlement, PlanId } from './plans';
 import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, parseUsdVndRate, prepayUsdCents, prepayVnd } from './plans';
@@ -233,6 +233,22 @@ export interface BillingPaymentNotice {
   orderCode: string;
   paymentRef: string | null;
   rawType: string;
+  /** Bank booking time from SePay (epoch ms); decides on-time payment when the notice arrives late. */
+  transactedAt?: number | null;
+}
+
+/**
+ * When the transfer counts as paid: the bank booking time, clamped to [order creation, now] so a
+ * wrong or future bank clock can neither predate the order nor extend it. Falls back to now.
+ */
+function paymentTimeMs(order: BillingOrder, transactedAt: number | null | undefined, nowMs: number): number {
+  if (typeof transactedAt !== 'number' || !Number.isFinite(transactedAt)) return nowMs;
+  return Math.min(nowMs, Math.max(Date.parse(order.created_at), transactedAt));
+}
+
+/** Pending, or expired only by the clock (never flagged or dismissed by an admin). */
+function isPayable(order: BillingOrder): boolean {
+  return order.status === 'pending' || (order.status === 'expired' && order.attention_reason === null);
 }
 
 export type BillingOutcome = 'duplicate_event' | 'unmatched' | 'paid' | 'already_paid' | 'needs_attention';
@@ -300,7 +316,9 @@ export async function applyBillingPayment(d1: D1DatabaseLike, env: RuntimeEnv, n
       await logActivity(d1, order.user_id, 'billing.extra_payment', { code: order.code, amount: n.amount });
       return { outcome: 'already_paid', order_code: order.code };
     }
-    if (order.status !== 'pending' || Date.parse(order.expires_at) < nowMs) {
+    // A webhook delayed or retried past the deadline still pays an order the bank booked in time.
+    const paidIso = iso(paymentTimeMs(order, n.transactedAt, nowMs));
+    if (!isPayable(order) || order.expires_at < paidIso) {
       await markAttention(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', n);
       return { outcome: 'needs_attention', order_code: order.code };
     }
@@ -310,8 +328,8 @@ export async function applyBillingPayment(d1: D1DatabaseLike, env: RuntimeEnv, n
     }
     const res = await d1.prepare(
       `UPDATE billing_orders SET status = 'paid', paid_at = ?, amount_paid = ?, payment_ref = ?, provider_event_id = ?, updated_at = ?
-       WHERE id = ? AND status = 'pending' AND expires_at >= ?`
-    ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id, nowIso).run();
+       WHERE id = ? AND (status = 'pending' OR (status = 'expired' AND attention_reason IS NULL)) AND expires_at >= ?`
+    ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id, paidIso).run();
     if (res.meta?.changes === 1) {
       await fulfilOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount });
       return { outcome: 'paid', order_code: order.code };
@@ -382,6 +400,7 @@ export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv): Promi
       orderCode: code,
       paymentRef: typeof tx.reference_number === 'string' && tx.reference_number ? tx.reference_number : id,
       rawType: 'reconcile',
+      transactedAt: parseSepayTime(tx.transaction_date),
     });
     out.matched += 1;
     out.results.push({ transaction_id: id, order_code: code, outcome: result.outcome });
