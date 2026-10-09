@@ -1,4 +1,4 @@
-import { courseLink, LAB200_ORIGIN, LAB200_REF, splitFeatured, type Lab200Course } from './courses';
+import { courseLink, coursePrice, formatVnd, LAB200_ORIGIN, LAB200_REF, splitFeatured, type Lab200Course } from './courses';
 import { LAB200_AUTHOR, lab200Copy } from './copy';
 import type { Lab200Snapshot } from './store';
 
@@ -11,7 +11,11 @@ function escapeLinkText(s: string): string {
 }
 
 function courseLine(c: Lab200Course): string {
-  const meta = [c.lessons !== null ? `${c.lessons} bài học` : '', c.status].filter(Boolean).join(' · ');
+  const price = c.free ? null : coursePrice(c.status);
+  const priceText = price
+    ? `giá gốc ${price.from ? 'từ ' : ''}${formatVnd(price.base)}, qua link này ${formatVnd(price.discounted)} (−20%)`
+    : c.status;
+  const meta = [c.lessons !== null ? `${c.lessons} bài học` : '', priceText].filter(Boolean).join(' · ');
   return `- [${escapeLinkText(c.title)}](${courseLink(c.slug)}): ${oneLine(c.summary)}${meta ? ` · ${oneLine(meta)}` : ''}`;
 }
 

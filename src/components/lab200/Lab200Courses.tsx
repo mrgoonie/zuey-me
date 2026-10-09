@@ -1,6 +1,8 @@
 import React from 'react';
 import type { Locale } from '../../lib/i18n/locales';
-import { courseLink, LAB200_ORIGIN, LAB200_REF, splitFeatured, type Lab200Course } from '../../lib/lab200/courses';
+import {
+  courseLink, coursePrice, formatVnd, LAB200_ORIGIN, LAB200_REF, LAB200_REF_DISCOUNT, splitFeatured, type Lab200Course,
+} from '../../lib/lab200/courses';
 import { LAB200_AUTHOR, lab200Copy } from '../../lib/lab200/copy';
 import type { Lab200Snapshot } from '../../lib/lab200/store';
 import { trackEvent } from '../../lib/posthog';
@@ -38,6 +40,7 @@ const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: 
   course, source, locale, highlight = false,
 }) => {
   const t = lab200Copy(locale);
+  const price = course.free ? null : coursePrice(course.status);
   const link = {
     href: courseLink(course.slug),
     target: '_blank',
@@ -51,7 +54,7 @@ const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-stone-500 mb-1.5">
           {course.lessons !== null && <span>{t.lessons(course.lessons)}</span>}
-          {course.status && (
+          {course.status && !price && (
             <span className={`px-2 py-0.5 rounded-full font-semibold ${course.free ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-900 text-[#F5EFEB]'}`}>
               {course.free ? t.free : course.status.replace(/^Đang mở bán,\s*/i, '')}
             </span>
@@ -63,6 +66,19 @@ const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: 
         >
           {course.title}
         </a>
+        {price && (
+          <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-sm">
+            <span className="text-stone-500">
+              {t.basePrice}{price.from ? ` ${t.priceFrom}` : ''} <s>{formatVnd(price.base)}</s>
+            </span>
+            <span className="font-bold text-emerald-800">
+              {t.refPrice}: {formatVnd(price.discounted)}
+            </span>
+            <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
+              −{Math.round(LAB200_REF_DISCOUNT * 100)}%
+            </span>
+          </p>
+        )}
         {course.summary && <p className="text-sm text-stone-700 mt-1.5 leading-relaxed break-words">{course.summary}</p>}
         <a
           {...link}
@@ -138,6 +154,7 @@ export const Lab200Courses: React.FC<Lab200CoursesProps> = ({ snapshot, locale, 
           <span>
             {snapshot.syncedAt ? `${t.updated(formatTime(snapshot.syncedAt, locale))} · ` : ''}
             {t.disclosure}
+            {snapshot.courses.some(c => !c.free && coursePrice(c.status)) && <span className="block mt-1">{t.priceNote}</span>}
           </span>
           <a href="/200lab.md" className="font-semibold hover:text-stone-900">200lab.md</a>
         </footer>
