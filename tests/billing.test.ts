@@ -122,9 +122,14 @@ async function order(m: Member, plan: string, months = 1, e: RuntimeEnv = env())
   return { code: String(field(body.data, 'code') ?? ''), amount: Number(field(body.data, 'amount_vnd') ?? 0), status: res.status, error: body.code };
 }
 
+/** SePay bank time (`YYYY-MM-DD HH:mm:ss`, Vietnam time) for an epoch-ms instant. */
+function sepayTime(ms: number): string {
+  return new Date(ms + 7 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 let txId = 5000;
 function transfer(content: string, amount: number, id = ++txId) {
-  return { id, gateway: 'MBBank', transactionDate: '2026-10-05 07:05:00', accountNumber: '0123456789', content, transferType: 'in', transferAmount: amount, referenceCode: `FT${id}` };
+  return { id, gateway: 'MBBank', transactionDate: sepayTime(now), accountNumber: '0123456789', content, transferType: 'in', transferAmount: amount, referenceCode: `FT${id}` };
 }
 
 async function webhook(payload: Record<string, unknown>, e: RuntimeEnv = env()): Promise<{ status: number; outcome: unknown }> {
@@ -265,6 +270,25 @@ describe('order → SePay webhook → entitlement', () => {
     expect((await subscription(m)).entitlements).toEqual([]);
 
     expect((await webhook(transfer('ZSBNOTEXIST', 100000))).outcome).toBe('unmatched');
+  });
+
+  it('pays an order the bank booked in time even when the webhook arrives after the deadline', async () => {
+    const m = await member('truong@example.com');
+    const placed = await order(m, 'knowledges');
+    const bookedAt = now + 60 * 1000;
+    now += 2 * 60 * 60 * 1000; // SePay retried for two hours; the order has expired by the clock
+    const view = (await read(await orderApi(ctx({ params: { code: placed.code }, headers: { cookie: m.cookie } })))).data;
+    expect(field(view, 'status')).toBe('expired');
+    const late = { ...transfer(placed.code, placed.amount), transactionDate: sepayTime(bookedAt) };
+    expect((await webhook(late)).outcome).toBe('paid');
+    expect((await subscription(m)).entitlements).toContain('read_full');
+
+    // A bank time after the deadline is still late.
+    const third = await order(m, 'combo');
+    const deadline = now + 60 * 60 * 1000;
+    now += 3 * 60 * 60 * 1000;
+    const tooLate = { ...transfer(third.code, third.amount), transactionDate: sepayTime(deadline + 60 * 1000) };
+    expect((await webhook(tooLate)).outcome).toBe('needs_attention');
   });
 
   it('still confirms consultation bookings (ZBK) through the same webhook', async () => {

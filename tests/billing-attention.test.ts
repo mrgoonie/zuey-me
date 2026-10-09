@@ -77,6 +77,11 @@ async function member(email: string): Promise<Member> {
   return { userId: user.id, cookie, browser: { cookie, Origin: ORIGIN } };
 }
 
+/** SePay bank time (`YYYY-MM-DD HH:mm:ss`, Vietnam time) for an epoch-ms instant. */
+function sepayTime(ms: number): string {
+  return new Date(ms + 7 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 /** A real order flagged by the real webhook path (underpaid or late). */
 async function flaggedOrder(m: Member, kind: 'underpaid' | 'late', plan = 'knowledges', months = 3): Promise<string> {
   const created = await read(await ordersApi(ctx({ method: 'POST', body: { plan, months }, headers: m.browser })));
@@ -88,7 +93,7 @@ async function flaggedOrder(m: Member, kind: 'underpaid' | 'late', plan = 'knowl
   const res = await sepayWebhook(ctx({
     method: 'POST',
     headers: { Authorization: 'Apikey sepay-key' },
-    body: { id, gateway: 'MBBank', transactionDate: '2026-10-05 07:05:00', accountNumber: '0123456789', content: code, transferType: 'in', transferAmount: kind === 'underpaid' ? amount - 1000 : amount, referenceCode: `FT${id}` },
+    body: { id, gateway: 'MBBank', transactionDate: sepayTime(now), accountNumber: '0123456789', content: code, transferType: 'in', transferAmount: kind === 'underpaid' ? amount - 1000 : amount, referenceCode: `FT${id}` },
   }));
   expect(field(await read(res), 'data')).toMatchObject({ outcome: 'needs_attention' });
   return code;
