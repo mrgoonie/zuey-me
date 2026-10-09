@@ -179,7 +179,14 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .osw[data-app='ai'] { --os-glass: rgba(245, 239, 235, .96); color: #1c1917; }
 :root[data-zt='light'] .osw[data-app='ai'] { --os-glass: rgba(255, 252, 249, .97); }
 .osw[data-app='ai'] .osw-bar { border-bottom-color: rgba(0, 0, 0, .08); }
-.osw[data-app='ai'] .zai-log { max-height: none; }
+/* The chat fills the window: the log takes the leftover height and scrolls on its own,
+   so the composer stays in view however long the conversation gets. */
+.osw[data-app='ai'] .zai { height: 100%; display: flex; flex-direction: column; }
+.osw[data-app='ai'] .zai-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+@container zai (min-width: 720px) { .osw[data-app='ai'] .zai-body { display: grid; grid-template-rows: minmax(0, 1fr); } }
+.osw[data-app='ai'] .zai-sessions { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.osw[data-app='ai'] .zai-main { flex: 1 1 auto; min-height: 0; }
+.osw[data-app='ai'] .zai-log { flex: 1 1 auto; max-height: none; }
 .osw--paper { --gh-0: #ebedf0; --gh-1: #9be9a8; --gh-2: #40c463; --gh-3: #30a14e; --gh-4: #216e39; --gh-ring: rgba(27, 31, 35, .06); }
 
 /* ---------- Appearance window ---------- */
