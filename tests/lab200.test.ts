@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
-import { courseLink, parseCoursesMarkdown, slugFromCourseUrl, splitFeatured } from '../src/lib/lab200/courses';
+import { courseImageFromHtml, courseLink, parseCoursesMarkdown, slugFromCourseUrl, splitFeatured } from '../src/lib/lab200/courses';
 import { renderLab200Markdown } from '../src/lib/lab200/markdown';
 import { getLab200Snapshot, LAB200_STALE_MS, refreshLab200Snapshot } from '../src/lib/lab200/store';
 import { GET as getLab200Md } from '../src/pages/200lab.md';
@@ -19,14 +19,28 @@ const COURSES_MD = `# Khóa học 200Lab
 Sitemap: https://200lab.io/sitemaps/courses.xml
 `;
 
-function fakeFetch(responses: Array<{ status: number; body: string }>) {
+const imageFor = (slug: string) => `https://assets.200lab.io/sha256/aa/${slug}/generations/1`;
+const coursePage = (slug: string) =>
+  `<!doctype html><html><head><meta property="og:title" content="x"/><meta property="og:image" content="${imageFor(slug)}"/></head><body>${'x'.repeat(2000)}</body></html>`;
+
+/**
+ * courses.md answers come from `responses` in order; course pages answer with an og:image unless
+ * `pageStatus` says otherwise. `calls` records courses.md fetches, `pageCalls` course page fetches.
+ */
+function fakeFetch(responses: Array<{ status: number; body: string }>, pageStatus = 200) {
   const calls: string[] = [];
+  const pageCalls: string[] = [];
   const fetchImpl = async (input: string): Promise<Response> => {
-    calls.push(input);
-    const next = responses.shift() ?? { status: 500, body: '' };
-    return new Response(next.body, { status: next.status });
+    if (input.endsWith('/courses.md')) {
+      calls.push(input);
+      const next = responses.shift() ?? { status: 500, body: '' };
+      return new Response(next.body, { status: next.status });
+    }
+    pageCalls.push(input);
+    const slug = input.split('/courses/')[1];
+    return new Response(pageStatus === 200 ? coursePage(slug) : 'nope', { status: pageStatus });
   };
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, pageCalls };
 }
 
 describe('200lab courses parser and links', () => {
@@ -62,10 +76,20 @@ describe('200lab courses parser and links', () => {
     expect(others).toHaveLength(2);
   });
 
+  it('reads only https og:image URLs on assets.200lab.io', () => {
+    expect(courseImageFromHtml(coursePage('a'))).toBe(imageFor('a'));
+    expect(courseImageFromHtml('<meta content="https://assets.200lab.io/x.webp" property="og:image">')).toBe('https://assets.200lab.io/x.webp');
+    expect(courseImageFromHtml('<meta property="og:image" content="https://evil.example/x.png">')).toBeNull();
+    expect(courseImageFromHtml('<meta property="og:image" content="http://assets.200lab.io/x.png">')).toBeNull();
+    expect(courseImageFromHtml('<meta property="og:image:alt" content="https://assets.200lab.io/x.png">')).toBeNull();
+  });
+
   it('renders markdown whose course links all carry the referral code', () => {
     const md = renderLab200Markdown({ courses: parseCoursesMarkdown(COURSES_MD), syncedAt: '2026-10-09T06:00:00.000Z' });
     expect(md.match(/\?ref=T2CWW3D7\)/g)).toHaveLength(4);
     expect(md).not.toMatch(/200lab\.io\/courses\/[^)\s]*\.md/);
+    expect(md).toContain('Việt Trần');
+    expect(md).toContain('(https://nextlevelbuilder.io)');
   });
 });
 
@@ -111,6 +135,44 @@ describe('200lab snapshot', () => {
     const snap = await getLab200Snapshot(d1, { fetchImpl: empty.fetchImpl, now: () => t2 });
     expect(snap.courses).toHaveLength(4);
     expect(snap.syncedAt).toBe(t0.toISOString());
+  });
+
+  it('saves thumbnails without a referral code, defers them on the first request, and reuses them', async () => {
+    const d1 = createTestD1();
+    const { fetchImpl, calls, pageCalls } = fakeFetch([{ status: 200, body: COURSES_MD }, { status: 200, body: COURSES_MD }]);
+    const jobs: Promise<unknown>[] = [];
+
+    // First request: the list is saved and returned before the course pages are read.
+    const first = await getLab200Snapshot(d1, { fetchImpl, now: () => t0, waitUntil: p => jobs.push(p) });
+    expect(first.courses.every(c => c.image === null)).toBe(true);
+    expect(jobs).toHaveLength(1);
+    await Promise.all(jobs);
+    expect(pageCalls).toHaveLength(4);
+    expect(pageCalls.every(u => !u.includes('ref='))).toBe(true);
+
+    const fresh = await getLab200Snapshot(d1, { fetchImpl, now: () => new Date(t0.getTime() + 1000) });
+    expect(fresh.courses.map(c => c.image)).toEqual(fresh.courses.map(c => imageFor(c.slug)));
+
+    // Same courses.md later: images are kept and no course page is fetched again.
+    const t1 = new Date(t0.getTime() + LAB200_STALE_MS + 1);
+    expect(await refreshLab200Snapshot(d1, { fetchImpl, now: () => t1 })).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(pageCalls).toHaveLength(4);
+    const kept = await getLab200Snapshot(d1, { fetchImpl, now: () => t1 });
+    expect(kept.courses.every(c => c.image === imageFor(c.slug))).toBe(true);
+  });
+
+  it('keeps previous thumbnails when course pages fail after courses.md changed', async () => {
+    const d1 = createTestD1();
+    await refreshLab200Snapshot(d1, { fetchImpl: fakeFetch([{ status: 200, body: COURSES_MD }]).fetchImpl, now: () => t0 });
+    const changed = COURSES_MD.replace('25 bài học · Đang mở bán, giá từ 199.000 ₫', '26 bài học · Đang mở bán, giá từ 199.000 ₫');
+    const down = fakeFetch([{ status: 200, body: changed }], 503);
+    const t1 = new Date(t0.getTime() + LAB200_STALE_MS + 1);
+    expect(await refreshLab200Snapshot(d1, { fetchImpl: down.fetchImpl, now: () => t1 })).toBe(true);
+    expect(down.pageCalls).toHaveLength(4);
+    const snap = await getLab200Snapshot(d1, { fetchImpl: down.fetchImpl, now: () => t1 });
+    expect(snap.courses.find(c => c.slug === 'agent-harness-foundations')?.lessons).toBe(26);
+    expect(snap.courses.every(c => c.image === imageFor(c.slug))).toBe(true);
   });
 
   it('lets only one request refresh within the stale window', async () => {

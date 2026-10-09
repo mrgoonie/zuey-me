@@ -23,6 +23,8 @@ export interface Lab200Course {
   /** Sale status as published by 200lab, e.g. "Đang mở bán, giá từ 199.000 ₫" or "Miễn phí". */
   status: string;
   free: boolean;
+  /** Thumbnail (the course page's og:image on assets.200lab.io); null or missing when unknown. */
+  image?: string | null;
 }
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -33,6 +35,29 @@ const LESSONS_RE = /^(\d+)\s+bài học$/i;
 /** Course page (never the `.md` variant) with the referral code. */
 export function courseLink(slug: string): string {
   return `${LAB200_ORIGIN}/courses/${encodeURIComponent(slug)}?ref=${LAB200_REF}`;
+}
+
+/** Plain course page, used only to read its thumbnail (no referral code: it is not a visitor click). */
+export function coursePageUrl(slug: string): string {
+  return `${LAB200_ORIGIN}/courses/${encodeURIComponent(slug)}`;
+}
+
+const META_TAG_RE = /<meta\b[^>]*>/gi;
+
+/** The og:image URL in a course page's HTML, accepted only when it is served by https://assets.200lab.io. */
+export function courseImageFromHtml(html: string): string | null {
+  for (const tag of html.match(META_TAG_RE) ?? []) {
+    if (!/\bproperty\s*=\s*["']og:image["']/i.test(tag)) continue;
+    const content = /\bcontent\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (!content) continue;
+    try {
+      const url = new URL(content.replace(/&amp;/g, '&'));
+      if (url.protocol === 'https:' && url.hostname === 'assets.200lab.io') return url.toString();
+    } catch {
+      // Not a URL; keep looking.
+    }
+  }
+  return null;
 }
 
 /** Course slug from a 200lab course URL, with or without `.md`; null for anything else. */

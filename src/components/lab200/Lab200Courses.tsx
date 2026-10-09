@@ -1,7 +1,7 @@
 import React from 'react';
 import type { Locale } from '../../lib/i18n/locales';
 import { courseLink, LAB200_ORIGIN, LAB200_REF, splitFeatured, type Lab200Course } from '../../lib/lab200/courses';
-import { lab200Copy } from '../../lib/lab200/copy';
+import { LAB200_AUTHOR, lab200Copy } from '../../lib/lab200/copy';
 import type { Lab200Snapshot } from '../../lib/lab200/store';
 import { trackEvent } from '../../lib/posthog';
 
@@ -22,6 +22,18 @@ function formatTime(iso: string, locale: Locale): string {
   });
 }
 
+/** 16:9 thumbnail (200lab's og:image is 1280×720); a soft placeholder keeps the layout when it is missing. */
+const CourseThumb: React.FC<{ image?: string | null; link: React.AnchorHTMLAttributes<HTMLAnchorElement>; className: string }> = ({
+  image, link, className,
+}) => (
+  // Duplicate of the title link, so it is hidden from keyboard and screen readers.
+  <a {...link} tabIndex={-1} aria-hidden="true" className={`block overflow-hidden rounded-xl bg-stone-200/70 aspect-video shrink-0 ${className}`}>
+    {image && (
+      <img src={image} alt="" loading="lazy" decoding="async" width={1280} height={720} className="w-full h-full object-cover" />
+    )}
+  </a>
+);
+
 const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: Locale; highlight?: boolean }> = ({
   course, source, locale, highlight = false,
 }) => {
@@ -32,29 +44,33 @@ const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: 
     rel: 'sponsored noopener',
     onClick: () => trackEvent('200lab_course_click', { slug: course.slug, source }),
   };
+  // Picks stack the image above the text; the full list puts a smaller image beside it when wide (`.lab200-row`).
   return (
-    <li className={`rounded-2xl border p-4 min-w-0 ${highlight ? 'bg-amber-50/90 border-amber-200' : 'bg-white/80 border-stone-200/90'}`}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-stone-500 mb-1.5">
-        {course.lessons !== null && <span>{t.lessons(course.lessons)}</span>}
-        {course.status && (
-          <span className={`px-2 py-0.5 rounded-full font-semibold ${course.free ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-900 text-[#F5EFEB]'}`}>
-            {course.free ? t.free : course.status.replace(/^Đang mở bán,\s*/i, '')}
-          </span>
-        )}
+    <li className={`rounded-2xl border p-4 min-w-0 ${highlight ? 'bg-amber-50/90 border-amber-200' : 'lab200-row bg-white/80 border-stone-200/90'}`}>
+      <CourseThumb image={course.image} link={link} className="lab200-thumb mb-3" />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-stone-500 mb-1.5">
+          {course.lessons !== null && <span>{t.lessons(course.lessons)}</span>}
+          {course.status && (
+            <span className={`px-2 py-0.5 rounded-full font-semibold ${course.free ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-900 text-[#F5EFEB]'}`}>
+              {course.free ? t.free : course.status.replace(/^Đang mở bán,\s*/i, '')}
+            </span>
+          )}
+        </div>
+        <a
+          {...link}
+          className="block font-serif text-lg font-bold leading-snug text-stone-900 hover:text-amber-700 break-words"
+        >
+          {course.title}
+        </a>
+        {course.summary && <p className="text-sm text-stone-700 mt-1.5 leading-relaxed break-words">{course.summary}</p>}
+        <a
+          {...link}
+          className="inline-flex mt-3 text-xs font-semibold text-amber-800 hover:text-amber-950"
+        >
+          {t.view} →
+        </a>
       </div>
-      <a
-        {...link}
-        className="block font-serif text-lg font-bold leading-snug text-stone-900 hover:text-amber-700 break-words"
-      >
-        {course.title}
-      </a>
-      {course.summary && <p className="text-sm text-stone-700 mt-1.5 leading-relaxed break-words">{course.summary}</p>}
-      <a
-        {...link}
-        className="inline-flex mt-3 text-xs font-semibold text-amber-800 hover:text-amber-950"
-      >
-        {t.view} →
-      </a>
     </li>
   );
 };
@@ -72,6 +88,12 @@ export const Lab200Courses: React.FC<Lab200CoursesProps> = ({ snapshot, locale, 
           {variant === 'page' && <a href="/" className="text-xs font-semibold text-stone-500 hover:text-stone-900">{t.back}</a>}
           <h1 className="font-serif text-3xl sm:text-4xl font-black tracking-tight text-stone-900 mt-2">{t.title}</h1>
           <p className="text-sm text-stone-700 mt-2 leading-relaxed">{t.intro}</p>
+          <p className="text-sm text-stone-700 mt-2 leading-relaxed">
+            {t.author.before}<strong className="font-semibold text-stone-900">{LAB200_AUTHOR.name}</strong>{t.author.after}
+            <a href={LAB200_AUTHOR.companyUrl} target="_blank" rel="noopener" className="font-semibold text-amber-800 hover:text-amber-950 underline underline-offset-2">
+              {LAB200_AUTHOR.company}
+            </a>.
+          </p>
           <p className="inline-flex mt-3 text-xs font-bold text-amber-900 bg-amber-100/80 border border-amber-200 rounded-full px-3 py-1.5">
             🏷 {t.discount}
           </p>
@@ -104,7 +126,7 @@ export const Lab200Courses: React.FC<Lab200CoursesProps> = ({ snapshot, locale, 
                 <h2 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 mb-2.5">
                   {t.all} ({snapshot.courses.length})
                 </h2>
-                <ul className="flex flex-col gap-3">
+                <ul className="lab200-list flex flex-col gap-3">
                   {others.map(c => <CourseCard key={c.slug} course={c} source={source} locale={locale} />)}
                 </ul>
               </section>

@@ -1,10 +1,21 @@
 import type { Locale } from '../i18n/locales';
 
+/** Who writes the 200lab courses; shown under the intro with a link to NextLevelBuilder. */
+export const LAB200_AUTHOR = {
+  name: 'Việt Trần',
+  company: 'NextLevelBuilder.io',
+  companyUrl: 'https://nextlevelbuilder.io',
+};
+
 /** Interface copy for the 200lab app and /200lab.md. Course titles and summaries stay in Vietnamese. */
 const vi = {
   title: '200lab',
   intro:
     'Mình hay giới thiệu các khoá học của 200lab cho anh em muốn làm chủ AI và thiết kế hệ thống: học qua bài toán thật, có checkpoint rõ ràng và dạy cách giao việc cho AI có kiểm soát.',
+  author: {
+    before: 'Các khoá học do ',
+    after: ' soạn — Solution Architect, đồng sáng lập cùng mình tại ',
+  },
   discount: 'Giảm 20% khi mua qua các link dưới đây',
   featured: 'Duy gợi ý',
   all: 'Tất cả khoá học',
@@ -24,6 +35,10 @@ const en: Lab200Copy = {
   title: '200lab',
   intro:
     'I often recommend 200lab courses to people who want to master AI and system design: they teach through real problems, with clear checkpoints and a controlled way to hand work to AI.',
+  author: {
+    before: 'The courses are written by ',
+    after: ', Solution Architect and my co-founder at ',
+  },
   discount: '20% off when you buy through the links below',
   featured: "Duy's picks",
   all: 'All courses',
