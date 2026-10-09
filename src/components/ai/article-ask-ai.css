@@ -32,14 +32,22 @@
   top: 12px;
   bottom: 12px;
   width: min(460px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
   border-radius: 28px;
   animation: zaa-slide-in 200ms ease-out;
 }
 .zaa-drawer[hidden] { display: none; }
-.zaa-drawer > .zai { min-height: 100%; }
-.zaa-drawer .zai-log { max-height: none; min-height: 12rem; flex: 1; }
+/* The panel fills the drawer. Once the chat is ready, the conversation log is the element that
+   scrolls (header and composer stay put), so the wheel works wherever the pointer is. Status
+   screens without a log keep their natural height and scroll with the drawer. */
+.zaa-drawer > .zai { flex: 1 0 auto; }
+.zaa-drawer > .zai:has(.zai-body) { flex-shrink: 1; min-height: 0; display: flex; flex-direction: column; }
+.zaa-drawer .zai-body { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+.zaa-drawer .zai-main { min-height: 0; }
+.zaa-drawer .zai-log { flex: 1 1 auto; max-height: none; min-height: 8rem; }
 .zaa-loading {
   margin: 0;
   padding: 1rem;
