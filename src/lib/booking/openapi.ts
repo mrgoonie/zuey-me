@@ -153,6 +153,8 @@ export const bookingOpenApi: OpenApiFragment = {
         notes: { type: 'string', maxLength: 2000 },
         timezone: { type: 'string', description: 'Guest IANA time zone' },
         payment_method: { type: 'string', enum: ['sepay', 'paypal'] },
+        discount_code: { type: 'string', description: 'Promo or referral code ("Mã ưu đãi"). The larger discount applies, never both. 400 `promo_code_invalid` (error.reason) or `discount_code_invalid`.' },
+        invoice: { type: 'object', properties: { tax_id: { type: 'string', pattern: '^\\d{10}(-\\d{3})?$' }, email: { type: 'string', format: 'email' } }, required: ['tax_id', 'email'], description: 'Business (VAT) invoice request; SePay only (400 `invoice_requires_sepay` otherwise)' },
         referral_code: { type: 'string', pattern: '^[A-Za-z0-9]{6,16}$', description: 'Optional referral code (or the `zr_ref` cookie). The booking referral total is 10%, split by the referrer; applies only to a guest email with no prior paid order.' },
       },
     },

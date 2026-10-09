@@ -134,6 +134,12 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   referral_payouts_list: ADMIN,
   referral_payout_mark_paid: ADMIN,
   referral_leaderboard: ADMIN,
+  promo_code_list: ADMIN,
+  promo_code_create: ADMIN,
+  promo_code_update: ADMIN,
+  promo_code_redemptions: ADMIN,
+  invoice_request_list: ADMIN,
+  invoice_request_mark_issued: ADMIN,
 };
 
 export function toolAccess(name: string): ToolAccess {

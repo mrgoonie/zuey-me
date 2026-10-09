@@ -76,8 +76,13 @@ export async function ensureReferralProfile(d1: D1DatabaseLike, userId: string):
   for (let attempt = 0; attempt < CODE_ATTEMPTS; attempt++) {
     const now = nowIso();
     try {
-      await d1.prepare('INSERT INTO referral_profiles (user_id, code, created_at, updated_at) VALUES (?, ?, ?, ?)')
-        .bind(userId, generateReferralCode(), now, now).run();
+      // A promo code may already own this name (promo and referral codes share the checkout field).
+      const code = generateReferralCode();
+      const res = await d1.prepare(
+        `INSERT INTO referral_profiles (user_id, code, created_at, updated_at)
+         SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM promo_codes WHERE code = upper(?))`
+      ).bind(userId, code, now, now, code).run();
+      if (res.meta?.changes === 0) continue;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
       // Either a concurrent request created this member's profile, or the random code collided: retry.

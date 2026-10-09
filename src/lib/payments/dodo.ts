@@ -138,11 +138,15 @@ export interface DodoDiscountInput {
   percent: number;
   expiresAt: string;
   metadata: Record<string, string>;
+  /** Monthly charges the discount covers (default 1: first charge only). */
+  cycles?: number;
+  /** Discount name shown in the Dodo dashboard (default `Referral N%`). */
+  name?: string;
 }
 
 /**
- * Discount request for one referred checkout: single use, first billing cycle only, this product only,
- * short expiry. Dodo generates the code.
+ * Discount request for one discounted checkout: single use, the first `cycles` billing cycles (default 1),
+ * this product only, short expiry. Dodo generates the code.
  */
 export function dodoDiscountPayload(input: DodoDiscountInput): Record<string, unknown> {
   const percent = Math.trunc(input.percent);
@@ -153,10 +157,10 @@ export function dodoDiscountPayload(input: DodoDiscountInput): Record<string, un
     type: 'percentage',
     amount: percent * 100,
     usage_limit: 1,
-    subscription_cycles: 1,
+    subscription_cycles: Math.max(1, Math.trunc(input.cycles ?? 1)),
     restricted_to: [input.productId],
     expires_at: input.expiresAt,
-    name: `Referral ${percent}%`,
+    name: input.name ?? `Referral ${percent}%`,
     metadata: input.metadata,
   };
 }

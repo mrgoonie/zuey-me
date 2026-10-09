@@ -4,7 +4,7 @@ import { sendEmail } from '../integrations/resend';
 import type { Row } from './runtime';
 import { escapeHtml, isUniqueViolation, membersRuntime, nowIso, str } from './runtime';
 
-export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'referral_payout' | 'course_receipt';
+export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'referral_payout' | 'course_receipt' | 'invoice_request';
 export type LoggedEmailStatus = 'sent' | 'skipped' | 'failed' | 'duplicate';
 
 export interface LoggedEmail {
@@ -170,5 +170,31 @@ export function courseReceiptEmail(input: { code: string; courseTitle: string; a
     p(`English: payment ${input.code} received; ${input.courseTitle} is unlocked for life.`),
   ].join(''));
   const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n') + `\n\nVào học: ${input.courseUrl}\nChính sách: ${input.policyUrl}`;
+  return { subject, html, text };
+}
+
+/** To the admins: a SePay order with a business tax ID was paid, so a VAT invoice must be issued by hand. */
+export function invoiceRequestEmail(input: {
+  sourceCode: string; description: string; taxId: string; email: string; amountVnd: number; paidAt: string; studioUrl: string;
+}): EmailContent {
+  const amount = `${new Intl.NumberFormat('vi-VN').format(input.amountVnd)} ₫`;
+  const subject = `Yêu cầu xuất hoá đơn — MST ${input.taxId} — ${input.sourceCode}`;
+  const rows = [
+    ['Mã đơn', input.sourceCode],
+    ['Nội dung', input.description],
+    ['Mã số thuế', input.taxId],
+    ['Email nhận hoá đơn', input.email],
+    ['Số tiền đã thanh toán', amount],
+    ['Thanh toán lúc', viDate(input.paidAt)],
+  ];
+  const table = `<table style="width:100%;border-collapse:collapse;font-size:14px;margin:8px 0 16px">${rows
+    .map(([k, v]) => `<tr><td style="padding:6px 0;color:#57534e">${escapeHtml(k)}</td><td style="padding:6px 0;text-align:right;font-weight:bold">${escapeHtml(v)}</td></tr>`)
+    .join('')}</table>`;
+  const html = layout('Cần xuất hoá đơn doanh nghiệp', [
+    p('Một đơn SePay có yêu cầu xuất hoá đơn (VAT) đã được thanh toán. Xuất hoá đơn rồi đánh dấu "đã xuất" trong Studio.'),
+    table,
+    button(input.studioUrl, 'Mở danh sách hoá đơn'),
+  ].join(''));
+  const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n') + `\n\nStudio: ${input.studioUrl}`;
   return { subject, html, text };
 }

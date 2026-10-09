@@ -47,7 +47,7 @@ const tools: McpTool[] = [
   {
     name: 'course_checkout_create',
     description: 'Start buying a course. Requires accept_terms: true (Terms of Use and no-refund policy at /terms and /policy). provider sepay (VietQR, VND) or dodo (card, USD).',
-    inputSchema: { type: 'object', properties: { course: ref, provider: { type: 'string', enum: ['sepay', 'dodo'] }, accept_terms: { type: 'boolean', const: true }, referral_code: { type: 'string' } }, required: ['course', 'accept_terms'] },
+    inputSchema: { type: 'object', properties: { course: ref, provider: { type: 'string', enum: ['sepay', 'dodo'] }, accept_terms: { type: 'boolean', const: true }, discount_code: { type: 'string', description: 'Promo or referral code; the largest discount applies, never stacked' }, referral_code: { type: 'string' }, invoice: { type: 'object', properties: { tax_id: { type: 'string', pattern: '^\\d{10}(-\\d{3})?$' }, email: { type: 'string', format: 'email' } }, required: ['tax_id', 'email'], description: 'Business (VAT) invoice request; SePay only' } }, required: ['course', 'accept_terms'] },
   },
   { name: 'course_order_get', description: 'Status of one of your course orders (code ZSC…).', inputSchema: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] } },
   { name: 'my_learning_get', description: 'Your courses with progress, XP, streak, badges and certificates.', inputSchema: { type: 'object', properties: {} } },

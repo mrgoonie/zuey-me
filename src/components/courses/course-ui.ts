@@ -10,6 +10,7 @@ const COURSE_ERROR_COPY: Record<string, string> = {
   account_locked: 'Quyền truy cập khoá học trên tài khoản này đang tạm dừng để kiểm tra. Vui lòng email hi@zuey.me.',
   amount_too_small: 'Giá này quá nhỏ để thanh toán bằng thẻ; vui lòng chọn chuyển khoản VietQR.',
   referral_code_invalid: 'Mã giới thiệu này không áp dụng được cho đơn hàng của bạn.',
+  discount_code_invalid: 'Không tìm thấy mã ưu đãi hoặc mã giới thiệu này.',
   course_not_found: 'Không tìm thấy khoá học.',
   lesson_not_found: 'Không tìm thấy bài học.',
   lesson_sign_in: 'Vui lòng đăng nhập và mua khoá học để mở bài này.',

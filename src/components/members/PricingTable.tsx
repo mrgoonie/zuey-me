@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { PlansCatalog } from '../../lib/members/account';
 import { ReferralCodeField } from '../referral/ReferralCodeField';
-import { useReferralQuote } from '../referral/referral-quote';
+import { discounted, promoPercentFor, useReferralQuote } from '../referral/referral-quote';
+import { InvoiceRequestFields, useInvoiceRequest } from './InvoiceRequestFields';
 import { alertError, alertInfo, btnGhost, btnPrimary, callApi, fmtUsd, fmtVnd, isRecord, jsonBody, loginUrl, str } from './member-ui';
 
 interface Props {
@@ -28,6 +29,13 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
   const referralPercent = referral.quote?.referral?.discount_percent ?? 0;
   const quoteFor = (plan: string) => (referralPercent > 0 ? referral.quote?.plans.find(p => p.plan === plan && p.months === months) ?? null : null);
   const cardFirst = (plan: string) => (referralPercent > 0 ? referral.quote?.card_first_month.find(c => c.plan === plan) ?? null : null);
+  const invoice = useInvoiceRequest();
+  // A promo beats the referral only when strictly larger (the server applies the same rule).
+  const promoFor = (plan: string, m: number) => {
+    const pct = promoPercentFor(referral.promo, { product: 'membership', plan, months: m });
+    return pct > referralPercent ? pct : 0;
+  };
+  const anyPromo = catalog.plans.reduce((best, p) => Math.max(best, promoFor(p.id, months)), 0);
   // The prepay discount depends only on the term, so any plan's price list carries it.
   const discountFor = (m: number) => catalog.plans[0]?.prices.find(p => p.months === m)?.discount_percent ?? 0;
   const discountNote = catalog.months.filter(m => discountFor(m) > 0).map(m => `${m} tháng −${discountFor(m)}%`).join(', ');
@@ -36,15 +44,19 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
     if (busy) return;
     setBusy(`${planId}:${provider}`);
     setError(null);
-    const code = referral.enteredCode ? { referral_code: referral.enteredCode } : {};
-    const payload = provider === 'dodo' ? { plan: planId, provider, ...code } : { plan: planId, months, provider, ...code };
+    const code = referral.enteredCode ? { discount_code: referral.enteredCode } : {};
+    const inv = provider === 'sepay' ? invoice.payload() : { invoice: null, error: null };
+    if (inv.error) { setBusy(null); setError(inv.error); return; }
+    const extra = { ...code, ...(inv.invoice ? { invoice: inv.invoice } : {}) };
+    const payload = provider === 'dodo' ? { plan: planId, provider, ...extra } : { plan: planId, months, provider, ...extra };
     const res = await callApi('/api/v1/billing/orders', { method: 'POST', body: jsonBody(payload) });
     if (res.ok && isRecord(res.data)) {
       if (provider === 'dodo' && str(res.data, 'checkout_url')) {
         window.location.assign(str(res.data, 'checkout_url'));
         return;
       }
-      if (provider === 'sepay' && str(res.data, 'code')) {
+      // SePay order, or a free (100% promo) order that is already paid.
+      if (str(res.data, 'code')) {
         window.location.assign(`/billing/${encodeURIComponent(str(res.data, 'code'))}`);
         return;
       }
@@ -74,9 +86,12 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
       </fieldset>
 
       <ReferralCodeField
-        state={referral} percent={referralPercent} className="mx-auto w-full max-w-[520px]"
+        state={referral} percent={referralPercent} promoPercent={anyPromo || promoPercentFor(referral.promo, { product: 'membership', months })}
+        className="mx-auto w-full max-w-[520px]"
         note="Giảm cho đơn đầu tiên, sau giảm giá trả trước (thẻ quốc tế: tháng đầu)."
       />
+
+      {catalog.billing_configured && <InvoiceRequestFields state={invoice} className="mx-auto w-full max-w-[520px]" />}
 
       <div aria-live="polite" role="status" className="empty:hidden mx-auto w-full max-w-[720px]">
         {error && <p className={alertError}>{error}</p>}
@@ -86,8 +101,10 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 min-w-0">
         {catalog.plans.map(plan => {
           const price = plan.prices.find(p => p.months === months);
-          const ref = quoteFor(plan.id);
-          const card = cardFirst(plan.id);
+          const promoPct = promoFor(plan.id, months);
+          const ref = promoPct > 0 ? null : quoteFor(plan.id);
+          const card = promoFor(plan.id, 1) > 0 ? null : cardFirst(plan.id);
+          const promoCardPct = promoFor(plan.id, 1);
           const highlighted = plan.id === initialPlan;
           const titleId = `plan-${plan.id}`;
           return (
@@ -105,6 +122,13 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
                   <span className="text-stone-500 line-through">{fmtVnd(ref.amount_vnd)}</span>{' '}
                   <strong className="text-emerald-800">{fmtVnd(ref.discounted_vnd)}</strong>{' '}
                   <span className="text-xs font-semibold text-emerald-800">giới thiệu −{referralPercent}%</span>
+                </p>
+              )}
+              {promoPct > 0 && price && price.amount_vnd !== null && (
+                <p className="mt-1 text-sm tabular-nums">
+                  <span className="text-stone-500 line-through">{fmtVnd(price.amount_vnd)}</span>{' '}
+                  <strong className="text-emerald-800">{fmtVnd(discounted(price.amount_vnd, promoPct, 'VND'))}</strong>{' '}
+                  <span className="text-xs font-semibold text-emerald-800">mã ưu đãi −{promoPct}%</span>
                 </p>
               )}
               <ul className="mt-4 grid gap-1.5 text-sm text-stone-800 flex-1">
@@ -129,7 +153,10 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
                   disabled={busy !== null}
                   aria-describedby={titleId}
                 >
-                  {busy === `${plan.id}:dodo` ? 'Đang mở trang thanh toán…' : card ? `Thẻ quốc tế · tháng đầu ${fmtUsd(card.discounted_usd_cents)}` : 'Thẻ quốc tế (USD, Dodo)'}
+                  {busy === `${plan.id}:dodo` ? 'Đang mở trang thanh toán…'
+                    : promoCardPct >= 100 ? 'Kích hoạt miễn phí (mã ưu đãi)'
+                    : promoCardPct > 0 ? `Thẻ quốc tế · ${(referral.promo?.card_cycles ?? 1) > 1 ? `${referral.promo?.card_cycles} tháng đầu` : 'tháng đầu'} ${fmtUsd(discounted(plan.price_usd_cents, promoCardPct, 'USD'))}`
+                    : card ? `Thẻ quốc tế · tháng đầu ${fmtUsd(card.discounted_usd_cents)}` : 'Thẻ quốc tế (USD, Dodo)'}
                 </button>
               )}
               {!catalog.billing_configured && !cardPlans.has(plan.id) && (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { applyPercent } from '../../lib/referrals/rates';
 import { callApi, isRecord, numOr, records, str } from '../members/member-ui';
 
 /** Client view of `GET /api/v1/referrals/quote`: display only, every checkout recomputes server-side. */
@@ -34,6 +35,48 @@ export function parseReferralQuote(v: unknown): ReferralQuoteView | null {
   };
 }
 
+/** Client view of `GET /api/v1/promos/quote`: a live promo code's terms (display only). */
+export interface PromoQuoteView {
+  code: string;
+  percent: number;
+  products: string[] | null;
+  plans: string[] | null;
+  course_ids: string[] | null;
+  min_months: number | null;
+  card_cycles: number;
+}
+
+const strList = (v: unknown): string[] | null => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null);
+
+export function parsePromoQuote(v: unknown): PromoQuoteView | null {
+  if (!isRecord(v) || !str(v, 'code')) return null;
+  return {
+    code: str(v, 'code'), percent: numOr(v, 'percent'), products: strList(v.products), plans: strList(v.plans), course_ids: strList(v.course_ids),
+    min_months: numOrNull(v, 'min_months'), card_cycles: numOr(v, 'card_cycles', 1),
+  };
+}
+
+export interface PromoTargetView { product: 'membership' | 'booking' | 'course'; plan?: string; months?: number; courseId?: string }
+
+/** Percent the typed promo gives this purchase (0 when it does not apply). Per-customer limits are checked at checkout. */
+export function promoPercentFor(promo: PromoQuoteView | null, t: PromoTargetView): number {
+  if (!promo) return 0;
+  if (promo.products && !promo.products.includes(t.product)) return 0;
+  if (t.product === 'membership') {
+    if (promo.plans && (!t.plan || !promo.plans.includes(t.plan))) return 0;
+    if (promo.min_months && (t.months ?? 1) < promo.min_months) return 0;
+  }
+  if (t.product === 'course' && promo.course_ids && (!t.courseId || !promo.course_ids.includes(t.courseId))) return 0;
+  return promo.percent;
+}
+
+/** Same rounding as the server: VND discounts round down to 1,000 ₫, USD to the cent. */
+export function discounted(amount: number, percent: number, currency: 'VND' | 'USD'): number {
+  return applyPercent(amount, percent, currency);
+}
+
+const PROMO_CODE_RE = /^[A-Z0-9][A-Z0-9_-]{2,31}$/;
+
 /** Same shape as the server's `normalizeReferralCode`: 6–16 letters or digits, case-insensitive. */
 export function normalizeCodeInput(raw: string): string | null {
   const code = raw.trim().toLowerCase();
@@ -55,7 +98,9 @@ export function applyOutcome(typed: string, quote: ReferralQuoteView): ApplyOutc
 
 export interface ReferralQuoteState {
   quote: ReferralQuoteView | null;
-  /** Typed code that applied and must be sent as `referral_code` at checkout (null: cookie/binding or none). */
+  /** Typed promo code that is live (null when none or the typed code is a referral code). */
+  promo: PromoQuoteView | null;
+  /** Typed code that applied and must be sent as `discount_code` at checkout (null: cookie/binding or none). */
   enteredCode: string | null;
   busy: boolean;
   message: { kind: 'ok' | 'error'; text: string } | null;
@@ -64,7 +109,8 @@ export interface ReferralQuoteState {
 }
 
 const COPY = {
-  invalid: 'Mã giới thiệu gồm 6–16 chữ cái hoặc chữ số.',
+  invalid: 'Mã không hợp lệ. Mã ưu đãi gồm chữ cái, chữ số, - hoặc _.',
+  promoApplied: (pct: number) => `Đã áp dụng mã ưu đãi: giảm ${pct}%. Ưu đãi không cộng dồn với mã giới thiệu — hệ thống chọn mức giảm lớn hơn.`,
   applied: (pct: number) => `Đã áp dụng mã: giảm ${pct}%.`,
   bound: (code: string) => `Tài khoản của bạn đã gắn mã giới thiệu ${code}; ưu đãi theo mã này.`,
   notApplicable: 'Mã này không áp dụng được (mã không hoạt động, là mã của bạn, hoặc tài khoản đã từng thanh toán).',
@@ -77,6 +123,7 @@ const COPY = {
  */
 export function useReferralQuote(): ReferralQuoteState {
   const [quote, setQuote] = useState<ReferralQuoteView | null>(null);
+  const [promo, setPromo] = useState<PromoQuoteView | null>(null);
   const [enteredCode, setEnteredCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<ReferralQuoteState['message']>(null);
@@ -93,8 +140,23 @@ export function useReferralQuote(): ReferralQuoteState {
   }, [fetchQuote]);
 
   const apply = useCallback(async (raw: string) => {
+    const upper = raw.trim().toUpperCase();
+    if (PROMO_CODE_RE.test(upper)) {
+      setBusy(true);
+      const res = await callApi(`/api/v1/promos/quote?code=${encodeURIComponent(upper)}`, { cache: 'no-store' });
+      setBusy(false);
+      const found = res.ok ? parsePromoQuote(res.data) : null;
+      if (found) {
+        setPromo(found);
+        setEnteredCode(found.code);
+        setMessage({ kind: 'ok', text: COPY.promoApplied(found.percent) });
+        return;
+      }
+      if (!res.ok && res.code !== 'promo_code_not_found') { setMessage({ kind: 'error', text: res.message }); return; }
+    }
     const code = normalizeCodeInput(raw);
     if (!code) { setMessage({ kind: 'error', text: COPY.invalid }); return; }
+    setPromo(null);
     setBusy(true);
     const q = await fetchQuote(code);
     setBusy(false);
@@ -115,9 +177,10 @@ export function useReferralQuote(): ReferralQuoteState {
 
   const clear = useCallback(() => {
     setEnteredCode(null);
+    setPromo(null);
     setMessage(null);
     void fetchQuote(null).then(q => { if (q) setQuote(q); });
   }, [fetchQuote]);
 
-  return { quote, enteredCode, busy, message, apply, clear };
+  return { quote, promo, enteredCode, busy, message, apply, clear };
 }

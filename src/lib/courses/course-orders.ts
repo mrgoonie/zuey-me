@@ -7,6 +7,10 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import { requireBillingConfigured } from '../members/billing';
+import { readDiscountCode } from '../promos/checkout-discount-code';
+import { createInvoiceRequest, getInvoiceForSource, parseInvoiceField, toInvoiceSummary } from '../promos/invoice-requests';
+import type { InvoiceSummary } from '../promos/invoice-requests';
+import { releasePromo, requirePromoApplicable, reservePromo } from '../promos/promo-redemptions';
 import { monthlyVnd, parseUsdVndRate } from '../members/plans';
 import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, num, numOrNull, randomCode, randomId, siteUrl, str, strOrNull } from '../members/runtime';
@@ -22,7 +26,8 @@ import { getPlanDiscountTable, quoteCoursePrice } from './course-pricing';
 import { getCourseById, requireVisibleCourse } from './course-store';
 import { COURSE_TERMS_VERSION } from './course-terms';
 import type { CourseRecord } from './course-types';
-import { bindCourseReferral, resolveCourseReferral } from './referral-bridge';
+import { fulfilCourseOrder } from './course-order-payments';
+import { NO_REFERRAL, bindCourseReferral, resolveCourseReferral } from './referral-bridge';
 
 export const COURSE_SEPAY_ORDER_TTL_MS = 60 * 60 * 1000;
 export const COURSE_CARD_ORDER_TTL_MS = 24 * 60 * 60 * 1000;
@@ -43,11 +48,15 @@ export interface CourseOrder {
   subscriber_pct: number;
   referral_pct: number;
   applied_pct: number;
-  discount_source: 'none' | 'subscriber' | 'referral';
+  discount_source: 'none' | 'subscriber' | 'referral' | 'promo';
   amount_usd_cents: number;
   usd_vnd_rate: number | null;
   amount_vnd: number | null;
   status: CourseOrderStatus;
+  /** Promo snapshot (null without a promo; set only when the promo won the discount). */
+  promo_code_id: string | null;
+  promo_code: string | null;
+  promo_pct: number;
   referrer_user_id: string | null;
   referral_code: string | null;
   terms_version: string;
@@ -77,11 +86,14 @@ export function rowToCourseOrder(r: Row): CourseOrder {
     subscriber_pct: num(r, 'subscriber_pct'),
     referral_pct: num(r, 'referral_pct'),
     applied_pct: num(r, 'applied_pct'),
-    discount_source: discount === 'subscriber' || discount === 'referral' ? discount : 'none',
+    discount_source: discount === 'subscriber' || discount === 'referral' || discount === 'promo' ? discount : 'none',
     amount_usd_cents: num(r, 'amount_usd_cents'),
     usd_vnd_rate: numOrNull(r, 'usd_vnd_rate'),
     amount_vnd: numOrNull(r, 'amount_vnd'),
     status: STATUSES.find(s => s === r.status) ?? 'pending',
+    promo_code_id: strOrNull(r, 'promo_code_id'),
+    promo_code: strOrNull(r, 'promo_code'),
+    promo_pct: numOrNull(r, 'promo_pct') ?? 0,
     referrer_user_id: strOrNull(r, 'referrer_user_id'),
     referral_code: strOrNull(r, 'referral_code'),
     terms_version: str(r, 'terms_version'),
@@ -136,6 +148,8 @@ export interface CourseOrderView {
   list_usd_cents: number;
   applied_pct: number;
   discount_source: CourseOrder['discount_source'];
+  /** Promo code that set the price (null when another discount or none applied). */
+  promo_code: string | null;
   amount_usd_cents: number;
   amount_vnd: number | null;
   amount_paid: number | null;
@@ -147,9 +161,11 @@ export interface CourseOrderView {
   status_url: string;
   /** VietQR transfer for a payable SePay order. */
   transfer: SepayTransferInfo | null;
+  /** Business invoice requested at checkout (SePay only). */
+  invoice: InvoiceSummary | null;
 }
 
-export function toCourseOrderView(order: CourseOrder, course: CourseRecord | null, env: RuntimeEnv): CourseOrderView {
+export function toCourseOrderView(order: CourseOrder, course: CourseRecord | null, env: RuntimeEnv, invoice: InvoiceSummary | null = null): CourseOrderView {
   const expired = order.status === 'pending' && Date.parse(order.expires_at) <= membersRuntime.now();
   const payable = order.provider === 'sepay' && order.status === 'pending' && !expired && order.amount_vnd !== null && missingSepayBankConfig(env).length === 0;
   return {
@@ -160,6 +176,7 @@ export function toCourseOrderView(order: CourseOrder, course: CourseRecord | nul
     list_usd_cents: order.list_usd_cents,
     applied_pct: order.applied_pct,
     discount_source: order.discount_source,
+    promo_code: order.discount_source === 'promo' ? order.promo_code : null,
     amount_usd_cents: order.amount_usd_cents,
     amount_vnd: order.amount_vnd,
     amount_paid: order.amount_paid,
@@ -169,24 +186,27 @@ export function toCourseOrderView(order: CourseOrder, course: CourseRecord | nul
     paid_at: order.paid_at,
     created_at: order.created_at,
     status_url: `${siteUrl(env)}/courses/orders/${order.code}`,
-    transfer: payable && order.amount_vnd !== null ? vietQrTransfer(env, order.amount_vnd, order.code) : null,
+    transfer: payable && order.amount_vnd !== null && order.amount_vnd > 0 ? vietQrTransfer(env, order.amount_vnd, order.code) : null,
+    invoice,
   };
 }
 
 export async function courseOrderView(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder): Promise<CourseOrderView> {
-  return toCourseOrderView(order, await getCourseById(d1, order.course_id), env);
+  const [course, invoice] = await Promise.all([getCourseById(d1, order.course_id), getInvoiceForSource(d1, 'course_order', order.id)]);
+  return toCourseOrderView(order, course, env, toInvoiceSummary(invoice));
 }
 
-/** Price the caller would pay right now (no referral code applied: that happens at checkout). */
-export async function quoteForUser(d1: D1DatabaseLike, env: RuntimeEnv, course: CourseRecord, userId: string | null, referralPct = 0): Promise<CourseQuote> {
+/** Price the caller would pay right now (no referral or promo code applied: that happens at checkout). */
+export async function quoteForUser(d1: D1DatabaseLike, env: RuntimeEnv, course: CourseRecord, userId: string | null, referralPct = 0, promoPct = 0): Promise<CourseQuote> {
   const [table, plans] = await Promise.all([getPlanDiscountTable(d1), userId ? getEntitlements(d1, userId).then(e => e.plans) : Promise.resolve([])]);
-  return quoteCoursePrice({ course, table, activePlans: plans, referralPct, usdVndRate: parseUsdVndRate(env) });
+  return quoteCoursePrice({ course, table, activePlans: plans, referralPct, promoPct, usdVndRate: parseUsdVndRate(env) });
 }
 
 export type CourseCheckout = CourseOrderView & { checkout_url: string | null };
 
 /**
- * Starts a course purchase. Body: `{ course, provider?: 'sepay'|'dodo', accept_terms: true, referral_code? }`.
+ * Starts a course purchase. Body: `{ course, provider?: 'sepay'|'dodo', accept_terms: true, discount_code?, referral_code?,
+ * invoice?: { tax_id, email } }` (invoice: SePay only). A 100% promo makes the order free: it is paid and fulfilled at once.
  * Refuses when the course is not for sale, already owned, the account is locked, or terms are not accepted.
  */
 export async function createCourseCheckout(
@@ -216,10 +236,17 @@ export async function createCourseCheckout(
     if (!env.DODO_PRODUCT_COURSE) missing.push('DODO_PRODUCT_COURSE');
     if (missing.length) throw new AppError(503, 'payment_unconfigured', `Card payments for courses are not configured: missing ${missing.join(', ')}`, { missing });
   }
-  const referral = await resolveCourseReferral(d1, env, userId, body, request);
-  const quote = await quoteForUser(d1, env, course, userId, referral.pct);
-  const amountVnd = provider === 'sepay' && rate ? monthlyVnd(quote.amount_usd_cents, rate) : null;
-  if (provider === 'dodo' && quote.amount_usd_cents < MIN_CARD_AMOUNT_CENTS) throw new AppError(400, 'amount_too_small', 'This price is too small for a card payment; use bank transfer');
+  const invoice = parseInvoiceField(body, provider);
+  const entry = await readDiscountCode(d1, body);
+  const resolved = await resolveCourseReferral(d1, env, userId, { referral_code: entry.referralCode ?? undefined }, request);
+  const quote = await quoteForUser(d1, env, course, userId, resolved.pct, entry.promo?.percent ?? 0);
+  // The promo is used only when it set the price; then the order carries no referrer (no stacking, no commission).
+  const promo = quote.discount_source === 'promo' ? entry.promo : null;
+  if (promo) await requirePromoApplicable(d1, promo, { product: 'course', courseId: course.id, userId });
+  const referral = promo ? NO_REFERRAL : resolved;
+  const free = quote.amount_usd_cents === 0;
+  const amountVnd = provider === 'sepay' && rate ? (free ? 0 : monthlyVnd(quote.amount_usd_cents, rate)) : null;
+  if (provider === 'dodo' && !free && quote.amount_usd_cents < MIN_CARD_AMOUNT_CENTS) throw new AppError(400, 'amount_too_small', 'This price is too small for a card payment; use bank transfer');
 
   const nowMs = membersRuntime.now();
   const id = randomId('cor');
@@ -232,19 +259,47 @@ export async function createCourseCheckout(
       await d1.prepare(
         `INSERT INTO course_orders (id, code, provider, user_id, course_id, list_usd_cents, subscriber_pct, referral_pct, applied_pct, discount_source,
            amount_usd_cents, usd_vnd_rate, amount_vnd, status, referrer_user_id, referral_code, referral_commission_percent, terms_version, terms_accepted_at,
-           ip_hash, country, expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, candidate, provider, userId, course.id, quote.list_usd_cents, quote.subscriber_pct, quote.referral_pct, quote.applied_pct,
+           ip_hash, country, expires_at, created_at, updated_at, promo_code_id, promo_code, promo_pct)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, candidate, provider, userId, course.id, quote.list_usd_cents, quote.subscriber_pct, promo ? 0 : quote.referral_pct, quote.applied_pct,
         quote.discount_source, quote.amount_usd_cents, rate, amountVnd, referral.referrerUserId, referral.code, referral.commissionPercent, COURSE_TERMS_VERSION, iso(nowMs),
-        ip, country, iso(nowMs + ttl), iso(nowMs), iso(nowMs)).run();
+        ip, country, iso(nowMs + ttl), iso(nowMs), iso(nowMs), promo?.id ?? null, promo?.code ?? null, promo ? quote.promo_pct : 0).run();
       code = candidate;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
     }
   }
   if (!code) throw new AppError(500, 'internal_error', 'Could not allocate an order code');
+  if (promo) {
+    try {
+      await reservePromo(d1, {
+        promo, kind: 'course_order', sourceId: id, sourceCode: code, target: { product: 'course', courseId: course.id, userId },
+        currency: provider === 'sepay' ? 'VND' : 'USD',
+        amountBefore: provider === 'sepay' && rate ? monthlyVnd(quote.list_usd_cents, rate) : quote.list_usd_cents,
+        amountDue: provider === 'sepay' ? amountVnd ?? 0 : quote.amount_usd_cents, expiresAt: iso(nowMs + ttl),
+      });
+    } catch (err) {
+      await d1.prepare("DELETE FROM course_orders WHERE id = ? AND status = 'pending'").bind(id).run().catch(() => undefined);
+      throw err;
+    }
+  }
   await bindCourseReferral(d1, env, userId, referral, request);
-  await logActivity(d1, userId, 'courses.order_created', { code, course_id: course.id, provider, amount_usd_cents: quote.amount_usd_cents, amount_vnd: amountVnd }, request);
+  if (invoice && amountVnd) {
+    await createInvoiceRequest(d1, { kind: 'course_order', sourceId: id, sourceCode: code, userId, invoice, description: `Khoá học: ${course.title}`, amountVnd });
+  }
+  await logActivity(d1, userId, 'courses.order_created', {
+    code, course_id: course.id, provider, amount_usd_cents: quote.amount_usd_cents, amount_vnd: amountVnd, promo_code: promo?.code ?? null,
+  }, request);
+
+  if (free) {
+    // A 100% promo: nothing to collect, so the order is paid and the course granted right away.
+    await d1.prepare("UPDATE course_orders SET status = 'paid', amount_paid = 0, currency_paid = ?, paid_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'")
+      .bind(provider === 'sepay' ? 'VND' : 'USD', iso(nowMs), iso(nowMs), id).run();
+    const paid = await getCourseOrderByCode(d1, code);
+    if (!paid) throw new AppError(500, 'internal_error', 'Order was not persisted');
+    await fulfilCourseOrder(d1, env, paid);
+    return { ...(await courseOrderView(d1, env, (await getCourseOrderByCode(d1, code)) ?? paid)), checkout_url: null };
+  }
 
   let checkoutUrl: string | null = null;
   if (provider === 'dodo') {
@@ -263,10 +318,11 @@ export async function createCourseCheckout(
       await d1.prepare('UPDATE course_orders SET provider_session_id = ?, updated_at = ? WHERE code = ?').bind(session.sessionId, iso(membersRuntime.now()), code).run();
     } catch (err) {
       await d1.prepare("UPDATE course_orders SET status = 'cancelled', attention_reason = 'checkout_failed', updated_at = ? WHERE code = ?").bind(iso(membersRuntime.now()), code).run();
+      if (promo) await releasePromo(d1, 'course_order', id).catch(() => undefined);
       throw err;
     }
   }
   const order = await getCourseOrderByCode(d1, code);
   if (!order) throw new AppError(500, 'internal_error', 'Order was not persisted');
-  return { ...toCourseOrderView(order, course, env), checkout_url: checkoutUrl };
+  return { ...(await courseOrderView(d1, env, order)), checkout_url: checkoutUrl };
 }

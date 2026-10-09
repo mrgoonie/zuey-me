@@ -18,6 +18,8 @@ export const RATE_LIMITS = {
   quiz: { limit: 60, windowSeconds: 600 },
   /** Checkout attempts per user per hour. */
   checkout: { limit: 10, windowSeconds: 3_600 },
+  /** Public promo code lookups per network per 10 minutes (slows code guessing). */
+  promoQuote: { limit: 30, windowSeconds: 600 },
 } as const;
 export type RateLimitName = keyof typeof RATE_LIMITS;
 

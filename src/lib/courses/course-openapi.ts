@@ -19,7 +19,7 @@ export const coursesOpenApi: OpenApiFragment = {
       post: op(TAG, {
         summary: 'Buy a course (one-time, no refunds)', member: true, params: [courseParam], status: '201',
         description: 'SePay returns a VietQR transfer; Dodo returns a card `checkout_url`. `accept_terms: true` is required.',
-        body: { provider: { type: 'string', enum: ['sepay', 'dodo'] }, accept_terms: { type: 'boolean' }, referral_code: { type: 'string' } },
+        body: { provider: { type: 'string', enum: ['sepay', 'dodo'] }, accept_terms: { type: 'boolean' }, discount_code: { type: 'string', description: 'Promo or referral code ("Mã ưu đãi"). The larger discount applies, never both. 400 `promo_code_invalid` (error.reason) or `discount_code_invalid`.' }, referral_code: { type: 'string' }, invoice: { type: 'object', properties: { tax_id: { type: 'string', pattern: '^\\d{10}(-\\d{3})?$' }, email: { type: 'string', format: 'email' } }, required: ['tax_id', 'email'], description: 'Business (VAT) invoice request; SePay only (400 `invoice_requires_sepay` otherwise)' } },
         required: ['accept_terms'], extra: { '409': 'Already owned', '429': 'Too many checkouts' },
       }),
     },

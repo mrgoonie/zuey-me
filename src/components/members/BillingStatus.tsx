@@ -26,6 +26,10 @@ interface Order {
   /** Referral discount snapshotted on the order, and the total before it (null without a referral). */
   referral_discount_percent: number | null;
   amount_before_referral_vnd: number | null;
+  /** Promo code applied instead (null without a promo). */
+  promo_code: string | null;
+  promo_discount_percent: number | null;
+  amount_before_promo_vnd: number | null;
 }
 
 function parseOrder(v: unknown): Order | null {
@@ -44,6 +48,9 @@ function parseOrder(v: unknown): Order | null {
     attention_reason: strOrNull(v, 'attention_reason'),
     referral_discount_percent: typeof v.referral_discount_percent === 'number' ? v.referral_discount_percent : null,
     amount_before_referral_vnd: typeof v.amount_before_referral_vnd === 'number' ? v.amount_before_referral_vnd : null,
+    promo_code: strOrNull(v, 'promo_code'),
+    promo_discount_percent: typeof v.promo_discount_percent === 'number' ? v.promo_discount_percent : null,
+    amount_before_promo_vnd: typeof v.amount_before_promo_vnd === 'number' ? v.amount_before_promo_vnd : null,
     transfer: t && str(t, 'qr_url')
       ? { bank_account: str(t, 'bank_account'), bank_code: str(t, 'bank_code'), amount: numOr(t, 'amount'), transfer_content: str(t, 'transfer_content'), qr_url: str(t, 'qr_url') }
       : null,
@@ -142,6 +149,12 @@ export function BillingStatus({ code }: { code: string }) {
           <span className="font-semibold text-emerald-800">Giảm giới thiệu −{order.referral_discount_percent}% (−{fmtVnd(order.amount_before_referral_vnd - order.amount_vnd)})</span>
         </p>
       )}
+      {order.promo_code && order.promo_discount_percent !== null && order.amount_before_promo_vnd !== null && (
+        <p className="mt-0.5 text-xs text-stone-600 tabular-nums">
+          Giá trước ưu đãi <span className="line-through">{fmtVnd(order.amount_before_promo_vnd)}</span> ·{' '}
+          <span className="font-semibold text-emerald-800">Mã <span className="font-mono">{order.promo_code}</span> −{order.promo_discount_percent}% (−{fmtVnd(order.amount_before_promo_vnd - order.amount_vnd)})</span>
+        </p>
+      )}
 
       <div className="mt-5 grid gap-4" role="status" aria-live="polite" aria-atomic="true">
         {order.status === 'paid' && (
@@ -211,6 +224,9 @@ interface CardSub {
   attention_reason: string | null;
   /** Referral discount on the first monthly charge only (null without a referral). */
   referral_discount_percent: number | null;
+  promo_code: string | null;
+  promo_discount_percent: number | null;
+  promo_cycles: number | null;
 }
 
 function parseCard(v: unknown): CardSub | null {
@@ -226,6 +242,9 @@ function parseCard(v: unknown): CardSub | null {
     amount_cents: typeof v.amount_cents === 'number' ? v.amount_cents : null,
     attention_reason: strOrNull(v, 'attention_reason'),
     referral_discount_percent: typeof v.referral_discount_percent === 'number' ? v.referral_discount_percent : null,
+    promo_code: strOrNull(v, 'promo_code'),
+    promo_discount_percent: typeof v.promo_discount_percent === 'number' ? v.promo_discount_percent : null,
+    promo_cycles: typeof v.promo_cycles === 'number' ? v.promo_cycles : null,
   };
 }
 
@@ -284,6 +303,11 @@ export function CardBillingStatus({ id }: { id: string }) {
       {sub && sub.amount_cents !== null && <p className="mt-1 text-sm text-stone-700 tabular-nums">{fmtUsd(sub.amount_cents)}/tháng</p>}
       {sub && sub.referral_discount_percent !== null && sub.referral_discount_percent > 0 && (
         <p className="mt-0.5 text-xs font-semibold text-emerald-800">Giảm giới thiệu −{sub.referral_discount_percent}% cho tháng đầu; các tháng sau theo giá gói.</p>
+      )}
+      {sub && sub.promo_code && sub.promo_discount_percent !== null && (
+        <p className="mt-0.5 text-xs font-semibold text-emerald-800">
+          Mã <span className="font-mono">{sub.promo_code}</span> −{sub.promo_discount_percent}% cho {(sub.promo_cycles ?? 1) > 1 ? `${sub.promo_cycles} tháng đầu` : 'tháng đầu'}; các tháng sau theo giá gói.
+        </p>
       )}
       <div className="mt-5 grid gap-4" role="status" aria-live="polite" aria-atomic="true">
         {!sub && !error && <p className="text-sm text-stone-600">Đang kiểm tra trạng thái thanh toán…</p>}

@@ -35,6 +35,8 @@ export const membersMcpModule: McpToolModule = {
           plan: { type: 'string', enum: PLAN_IDS },
           months: { type: 'integer', enum: [...BILLING_MONTHS], description: 'SePay prepay length; card subscriptions are monthly (1)' },
           provider: { type: 'string', enum: CHECKOUT_PROVIDERS, default: 'sepay' },
+          discount_code: { type: 'string', description: 'Promo or referral code ("Mã ưu đãi"); the larger discount applies, never both' },
+          invoice: { type: 'object', properties: { tax_id: { type: 'string', pattern: '^\\d{10}(-\\d{3})?$' }, email: { type: 'string', format: 'email' } }, required: ['tax_id', 'email'], description: 'Business (VAT) invoice request; SePay only' },
         },
         required: ['plan'],
       },
@@ -81,6 +83,8 @@ export const membersMcpModule: McpToolModule = {
         const p = await principalOf(ctx);
         const userId = requireUserId(p, 'checkout:write');
         const body: Record<string, unknown> = { plan: args.plan, provider: args.provider ?? 'sepay' };
+        if (args.discount_code !== undefined) body.discount_code = args.discount_code;
+        if (args.invoice !== undefined) body.invoice = args.invoice;
         if (args.months !== undefined) body.months = args.months;
         else if (body.provider !== 'dodo') body.months = 1;
         return createMemberCheckout(requireDb(ctx), ctx.env, userId, body, ctx.request);
