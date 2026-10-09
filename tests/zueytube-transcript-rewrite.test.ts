@@ -179,8 +179,8 @@ describe('AI rewrite', () => {
 
 describe('proper-noun glossary', () => {
   it('parses extra names with mis-hearings and lets them override defaults', () => {
-    const extra = parseGlossary('Hermes = Han Harris | Hermit,\n Kongming ,, codex = Codecs');
-    expect(extra).toEqual([{ term: 'Hermes', heardAs: ['Han Harris', 'Hermit'] }, { term: 'Kongming' }, { term: 'codex', heardAs: ['Codecs'] }]);
+    const extra = parseGlossary('Hermes = Han Harris | Hermit,\n Zhuge Liang ,, codex = Codecs');
+    expect(extra).toEqual([{ term: 'Hermes', heardAs: ['Han Harris', 'Hermit'] }, { term: 'Zhuge Liang' }, { term: 'codex', heardAs: ['Codecs'] }]);
     const merged = mergeGlossary(DEFAULT_REWRITE_GLOSSARY, extra);
     expect(merged.length).toBe(DEFAULT_REWRITE_GLOSSARY.length + 2);
     expect(merged.find(t => t.term.toLowerCase() === 'codex')).toEqual({ term: 'codex', heardAs: ['Codecs'] });
@@ -191,6 +191,7 @@ describe('proper-noun glossary', () => {
     expect(buildSystemPrompt()).not.toContain('proper nouns');
     const prompt = buildSystemPrompt({ title: 'Giới thiệu AgentKit', glossary: DEFAULT_REWRITE_GLOSSARY });
     expect(prompt).toContain('"Giới thiệu AgentKit"');
+    expect(prompt).toContain('- Kongming (may be mis-heard as "Coming"; replace only when it names the advisor sub-agent, never the verb "coming")');
     expect(prompt).toContain('- ClaudeKit (may be mis-heard as "ClockKit", "Clock Kit", "Clock Kid", "Cloud Kit", "Clockwork")');
 
     const systems: string[] = [];
