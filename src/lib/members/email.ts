@@ -4,7 +4,7 @@ import { sendEmail } from '../integrations/resend';
 import type { Row } from './runtime';
 import { escapeHtml, isUniqueViolation, membersRuntime, nowIso, str } from './runtime';
 
-export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification';
+export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'course_receipt';
 export type LoggedEmailStatus = 'sent' | 'skipped' | 'failed' | 'duplicate';
 
 export interface LoggedEmail {
@@ -147,5 +147,28 @@ export function renewalReminderEmail(input: { planName: string; periodEnd: strin
     p(`English: your ${input.planName} plan ends on ${input.periodEnd.slice(0, 10)}. Prepaid plans do not renew automatically.`),
   ].join(''));
   const text = `Gói ${input.planName} của bạn có hiệu lực đến ${viDate(input.periodEnd)}.\nGia hạn: ${input.pricingUrl}`;
+  return { subject, html, text };
+}
+
+export function courseReceiptEmail(input: { code: string; courseTitle: string; amount: string; paidAt: string; courseUrl: string; policyUrl: string }): EmailContent {
+  const subject = `Biên nhận ${input.code} — khoá học ${input.courseTitle}`;
+  const rows = [
+    ['Mã đơn', input.code],
+    ['Khoá học', input.courseTitle],
+    ['Số tiền', input.amount],
+    ['Thanh toán lúc', viDate(input.paidAt)],
+    ['Quyền truy cập', 'Trọn đời'],
+  ];
+  const table = `<table style="width:100%;border-collapse:collapse;font-size:14px;margin:8px 0 16px">${rows
+    .map(([k, v]) => `<tr><td style="padding:6px 0;color:#57534e">${escapeHtml(k)}</td><td style="padding:6px 0;text-align:right;font-weight:bold">${escapeHtml(v)}</td></tr>`)
+    .join('')}</table>`;
+  const html = layout('Khoá học đã được mở khoá', [
+    p('Cảm ơn bạn! Thanh toán đã được xác nhận và khoá học đã sẵn sàng trong tài khoản của bạn.'),
+    table,
+    button(input.courseUrl, 'Bắt đầu học'),
+    p(`Khoá học là sản phẩm số và không hoàn tiền sau khi mở khoá (${input.policyUrl}).`),
+    p(`English: payment ${input.code} received; ${input.courseTitle} is unlocked for life.`),
+  ].join(''));
+  const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n') + `\n\nVào học: ${input.courseUrl}\nChính sách: ${input.policyUrl}`;
   return { subject, html, text };
 }

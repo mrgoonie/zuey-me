@@ -18,3 +18,9 @@ PUBLIC_POSTHOG_HOST = "https://us.i.posthog.com"
 # Workers AI binding (Zuey Reads summaries)
 [ai]
 binding = "AI"
+
+# Private course audio and downloads. Uncomment after creating the bucket
+# (`wrangler r2 bucket create zuey-course-files`); deploys fail while the bucket is missing.
+# [[r2_buckets]]
+# binding = "COURSE_FILES"
+# bucket_name = "zuey-course-files"

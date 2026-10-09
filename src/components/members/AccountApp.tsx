@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ApiKeysPanel } from './ApiKeysPanel';
+import { MyLearningSection } from '../courses/MyLearningSection';
 import { MemberDialog } from './MemberDialog';
 import type { SubmitLike } from './member-ui';
 import {
@@ -447,7 +448,7 @@ function PrivacySection({ me }: { me: Me }) {
 
 // ---------------------------------------------------------------------------
 
-/** /account: profile, email, plan & billing, API keys, sessions, activity, privacy. */
+/** /account: profile, email, plan & billing, courses, API keys, sessions, activity, privacy. */
 export function AccountApp({ keyScopes }: { keyScopes: readonly string[] }) {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -478,7 +479,7 @@ export function AccountApp({ keyScopes }: { keyScopes: readonly string[] }) {
     );
   }
 
-  const nav = [['profile', 'Hồ sơ'], ['email', 'Email'], ['billing', 'Gói'], ['keys', 'Khoá API'], ['sessions', 'Thiết bị'], ['activity', 'Hoạt động'], ['privacy', 'Dữ liệu']] as const;
+  const nav = [['profile', 'Hồ sơ'], ['email', 'Email'], ['billing', 'Gói'], ['learning', 'Khoá học'], ['keys', 'Khoá API'], ['sessions', 'Thiết bị'], ['activity', 'Hoạt động'], ['privacy', 'Dữ liệu']] as const;
 
   return (
     <div className="w-full grid gap-5 min-w-0">
@@ -508,6 +509,9 @@ export function AccountApp({ keyScopes }: { keyScopes: readonly string[] }) {
       <ProfileSection me={me} onSaved={setMe} />
       <EmailSection me={me} />
       <BillingSection />
+      <Section id="learning" title="Khoá học của tôi">
+        <MyLearningSection />
+      </Section>
       <Section id="keys" title="Khoá API">
         <ApiKeysPanel scopes={keyScopes} />
       </Section>

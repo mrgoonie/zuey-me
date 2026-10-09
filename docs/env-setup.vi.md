@@ -108,6 +108,31 @@ Lưu ý vận hành:
 - Thanh toán thiếu `user_id` trong metadata (ví dụ tạo link thanh toán thủ công trong dashboard Dodo) được lưu thành bản ghi `needs_attention` không gắn thành viên. Mọi bản ghi `needs_attention` (SePay, Dodo, PayPal) hiện trong Studio → tab **Payments**; admin đánh dấu đã xử lý tại đó (`POST /api/v1/admin/billing/orders/{code}/resolve`), còn hoàn tiền vẫn làm trên dashboard của cổng thanh toán.
 - Gói thẻ tự gia hạn được giữ quyền thêm 24 giờ sau ngày gia hạn để chờ webhook `subscription.renewed`; nhắc gia hạn qua email không gửi cho gói đang tự gia hạn.
 
+## 4b. Khoá học
+
+Khoá học thay cho AI Workflows. Mã nguồn ở `src/lib/courses/`; quyết định thiết kế ở `plans/261009-1605-courses/plan.md`. Thiếu biến nào thì API trả `503` kèm tên biến (`payment_unconfigured`, `media_unconfigured`), phần còn lại vẫn chạy.
+
+1. **Migration** `migrations/0016_courses.sql`: tạo bookmark Time Travel cho D1 trước (`wrangler d1 time-travel info zuey_me_db`), rồi `wrangler d1 migrations apply zuey_me_db --remote`. Migration này **xoá bảng workflows**.
+2. **Thanh toán**:
+   - SePay dùng lại cấu hình mục 5 và `USD_VND_RATE`. Mã chuyển khoản khoá học có dạng `ZSC…`; webhook và job đối soát đã nhận dạng mã này.
+   - Dodo: tạo **một** product *One-time*, bật *Pay What You Want* (giá tối thiểu $1), tiền USD. Lưu ID vào `DODO_PRODUCT_COURSE`. Checkout tự đặt số tiền theo giá đã giảm.
+   - Trong webhook Dodo (mục 4a), bật thêm `refund.succeeded` và mọi sự kiện `dispute.*`. Hoàn tiền hoặc dispute `opened` / `accepted` / `lost` / `expired` sẽ thu hồi khoá học, quyền repo GitHub và chứng chỉ. Dispute `won` / `cancelled` khôi phục lại.
+3. **Media**:
+   - `COURSE_MEDIA_SECRET`: chuỗi ngẫu nhiên dài (`openssl rand -base64 48`), dùng ký link tải file và audio (hết hạn sau khoảng 10 phút, gắn với tài khoản người xem).
+   - R2: `wrangler r2 bucket create zuey-course-files`, rồi bỏ comment khối `[[r2_buckets]]` (binding `COURSE_FILES`) trong `wrangler.toml`. Bucket để private, không bật public access.
+   - Cloudflare Stream: tạo signing key bằng `POST /accounts/{account_id}/stream/keys`. Lưu `id` vào `CF_STREAM_SIGNING_KEY_ID` và `jwk` (đã giải base64) vào `CF_STREAM_SIGNING_JWK`. Mã `customer-<code>` lấy từ trang Stream, lưu vào `CF_STREAM_CUSTOMER_CODE`. Với từng video, bật *Require signed URLs*.
+4. **GitHub**: `GITHUB_COURSES_TOKEN` là fine-grained token có quyền *Administration: write* trên các repo private của khoá học. Học viên liên kết GitHub ở `/account`; worker scheduler (`/api/v1/courses/jobs/github-invites`, mỗi 5 phút) mời họ làm collaborator chỉ đọc và tự thử lại khi GitHub lỗi.
+5. **Soạn khoá học**: dùng tab **Courses** trong Studio, hoặc MCP `course_upsert` / `course_lesson_upsert`. Mặc định giảm giá cho thành viên là 10/10/25/40% (Knowledges / Zuey AI / Kết hợp / Cộng đồng); sửa được ở tab Courses → Settings, và mỗi khoá có thể ghi đè riêng.
+6. **Chống lạm dụng**:
+   - Mỗi tài khoản đăng nhập tối đa 2 thiết bị; thiết bị thứ 3 sẽ đẩy thiết bị dùng lâu nhất ra.
+   - Đổi thiết bị liên tục, hoặc đọc bài từ nhiều IP / quốc gia trong 24 giờ, sẽ tạo cờ để admin xem xét trong Studio → Courses → Abuse. Từ đó admin bỏ qua cờ hoặc khoá quyền học.
+7. **Kiểm tra**:
+   - Mở `/courses` và một bài học thử khi chưa đăng nhập: đọc được.
+   - Mở bài trả phí: hiện yêu cầu đăng nhập hoặc mua khoá học.
+   - Mua bằng chuyển khoản nhỏ; trang `/courses/orders/ZSC…` phải chuyển sang "đã thanh toán", và email biên nhận được gửi tới.
+
+Chương trình giới thiệu: hoa hồng cho mọi khoá học người được giới thiệu mua, và giảm giá referral, được nối qua `src/lib/courses/referral-bridge.ts`. Việc nối này chỉ làm sau khi PR chương trình giới thiệu được merge. Trước đó `referral_code` được nhận nhưng chưa tạo giảm giá hay hoa hồng.
+
 ## 5. SePay (chuyển khoản, VND)
 
 1. Trong SePay, liên kết tài khoản ngân hàng nhận tiền.
@@ -192,7 +217,7 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
 
 ## 11. Kiểm tra
 
-1. Mở `/docs`. Kiểm tra có các nhóm Reads, Workflows, Booking, Articles, Members & account và Membership billing.
+1. Mở `/docs`. Kiểm tra có các nhóm Reads, Courses, Courses admin, Booking, Articles, Members & account và Membership billing.
 2. Gọi `POST /api/v1/reads/sync` bằng admin key. Kết quả mong đợi là `200`, không phải `503`.
 3. Đặt thử một slot trên `/business` bằng PayPal sandbox hoặc chuyển khoản nhỏ. Sau khi thanh toán, kiểm tra 3 việc:
    - Booking chuyển sang `confirmed`.

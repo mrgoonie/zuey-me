@@ -48,7 +48,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const exploreLinks = [
     { href: '/articles', en: 'Articles', vi: 'Bài viết', descEn: 'Notes, charts and surveys', descVi: 'Ghi chép, biểu đồ, khảo sát' },
     { href: '/reads', en: 'Zuey Reads', vi: 'Zuey đang đọc', descEn: 'What I am reading, summarized', descVi: 'Tóm tắt những gì mình đọc' },
-    { href: '/workflows', en: 'AI Workflows', vi: 'Workflow AI', descEn: 'How I work with AI', descVi: 'Cách mình làm việc với AI' },
+    { href: '/courses', en: 'Courses', vi: 'Khoá học', descEn: 'Build products with AI, step by step', descVi: 'Xây sản phẩm với AI, từng bước một' },
     { href: '/business', en: 'For Business', vi: 'Cho doanh nghiệp', descEn: '1:1 consultation · $1,999', descVi: 'Tư vấn 1:1 · $1,999' },
   ];
 
@@ -149,7 +149,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
         {/* Sections & Link Cards */}
         <div className="w-full mt-8 space-y-8">
-          {/* 0. Explore: articles, reads, workflows, business booking */}
+          {/* 0. Explore: articles, reads, courses, business booking */}
           <nav aria-label={lang === 'vi' ? 'Khám phá' : 'Explore'} className="w-full">
             <ul className="grid grid-cols-2 gap-2">
               {exploreLinks.map((item) => (

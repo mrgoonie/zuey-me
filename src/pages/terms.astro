@@ -1,0 +1,101 @@
+---
+import CourseLegalPage from '../components/courses/CourseLegalPage.astro';
+import type { LegalSection } from '../components/courses/CourseLegalPage.astro';
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+
+const highlights = [
+  'Mỗi khoá học là giấy phép cá nhân, không chuyển nhượng: chỉ bạn được học bằng tài khoản của mình.',
+  'Một tài khoản đăng nhập đồng thời tối đa 2 thiết bị; đăng nhập thiết bị thứ ba sẽ tự đăng xuất thiết bị cũ nhất.',
+  'Cấm chia sẻ tài khoản, phát tán lại, quay/chụp màn hình để phát tán, hoặc dùng công cụ tự động thu thập nội dung. Vi phạm dẫn đến khoá quyền truy cập và không hoàn tiền.',
+  'Bài trả phí chỉ đọc được trên trình duyệt đã đăng nhập tại zuey.me, không qua API, MCP hay xuất cho công cụ AI.',
+];
+
+const sections: LegalSection[] = [
+  {
+    id: 'scope',
+    title: 'Phạm vi',
+    paras: [
+      'Điều khoản này áp dụng khi bạn mua và học các khoá học trên zuey.me do Duy Nguyen (Zuey) cung cấp, gồm bài học, video, âm thanh, tệp tải về, bài kiểm tra, kho mã nguồn GitHub đi kèm, chứng chỉ và trợ giảng Zuey AI trong bài học.',
+      'Việc mua khoá học (đánh dấu ô đồng ý khi thanh toán) đồng nghĩa với việc bạn chấp nhận Điều khoản này và Chính sách khoá học. Mỗi đơn hàng lưu lại phiên bản điều khoản bạn đã đồng ý.',
+    ],
+  },
+  {
+    id: 'license',
+    title: 'Giấy phép sử dụng nội dung',
+    items: [
+      'Khi thanh toán thành công, bạn nhận giấy phép cá nhân, không độc quyền, không chuyển nhượng để học khoá học đó.',
+      'Quyền truy cập là trọn đời trong suốt thời gian dịch vụ zuey.me còn hoạt động.',
+      'Bạn không được bán lại, cho thuê, tặng, chia sẻ hay chuyển giấy phép cho người khác. Nội dung khoá học vẫn thuộc quyền sở hữu trí tuệ của tác giả.',
+      'Bạn được dùng kiến thức và mã nguồn mẫu trong dự án của chính mình, nhưng không được đóng gói lại nội dung bài học thành khoá học, tài liệu hay sản phẩm để phân phối.',
+    ],
+  },
+  {
+    id: 'account',
+    title: 'Tài khoản và thiết bị',
+    items: [
+      'Mỗi tài khoản tương ứng với một người học. Bạn chịu trách nhiệm bảo mật phương thức đăng nhập (email, Google, GitHub).',
+      'Tối đa 2 thiết bị đăng nhập cùng lúc; khi đăng nhập thiết bị thứ ba, phiên cũ nhất sẽ bị đăng xuất.',
+      'Hệ thống ghi nhận tín hiệu bất thường (ví dụ đăng nhập từ nhiều quốc gia trong thời gian ngắn) để phát hiện chia sẻ tài khoản; trường hợp nghi vấn được kiểm tra thủ công.',
+      'Bài trả phí hiển thị hình mờ (watermark) email của bạn để hạn chế phát tán.',
+    ],
+  },
+  {
+    id: 'prohibited',
+    title: 'Hành vi bị cấm',
+    items: [
+      'Chia sẻ tài khoản hoặc thông tin đăng nhập cho người khác, kể cả trong nhóm, công ty hay lớp học.',
+      'Sao chép, phát tán lại, đăng tải công khai hoặc bán lại nội dung bài học, video, âm thanh, tệp và mã nguồn riêng tư.',
+      'Quay màn hình, ghi âm, tải video bằng công cụ bên ngoài để phát tán.',
+      'Dùng bot, script, trình thu thập (scraper) hay công cụ tự động để tải hàng loạt nội dung.',
+      'Vượt qua hoặc cố vượt qua các biện pháp bảo vệ nội dung (giới hạn truy cập, liên kết media có thời hạn, watermark).',
+    ],
+    paras: [
+      'Vi phạm có thể dẫn đến khoá quyền truy cập khoá học (và các khoá khác trên cùng tài khoản), gỡ quyền vào kho GitHub, thu hồi chứng chỉ, mà không hoàn tiền. Bạn có quyền phản hồi hoặc giải trình qua hi@zuey.me.',
+    ],
+  },
+  {
+    id: 'browser-only',
+    title: 'Bài trả phí chỉ đọc trên trình duyệt',
+    paras: [
+      'Nội dung bài trả phí chỉ được phục vụ cho phiên đăng nhập trên trình duyệt tại zuey.me. Khoá API cá nhân, kết nối MCP và các công cụ AI bên ngoài chỉ thấy mục lục khoá học và các bài học thử miễn phí; nội dung bài trả phí không được xuất ra dưới dạng API, Markdown hay cho trợ lý AI bên ngoài.',
+      'Trợ giảng Zuey AI trong bài học dùng nội dung bài để trả lời câu hỏi của bạn ngay trên zuey.me, tính vào lượt Zuey AI của gói thành viên của bạn.',
+    ],
+  },
+  {
+    id: 'github',
+    title: 'Kho mã nguồn GitHub',
+    items: [
+      'Một số khoá học kèm kho GitHub riêng tư. Tài khoản GitHub bạn liên kết trong Tài khoản sẽ được mời với quyền đọc.',
+      'Quyền vào kho gắn với giao dịch mua: khi đơn hàng bị hoàn tiền, bị khiếu nại thanh toán (chargeback) hoặc quyền truy cập bị thu hồi, quyền vào kho sẽ bị gỡ.',
+      'Không được sao chép kho riêng tư sang kho công khai hoặc chia sẻ cho người khác.',
+    ],
+  },
+  {
+    id: 'certificates',
+    title: 'Chứng chỉ và điểm kinh nghiệm',
+    items: [
+      'Chứng chỉ hoàn thành được cấp khi bạn học xong mọi bài đã xuất bản của khoá học, và có thể được xác minh công khai tại đường dẫn trên chứng chỉ.',
+      'Chứng chỉ có thể bị thu hồi nếu giao dịch mua bị đảo ngược (hoàn tiền, chargeback) hoặc khi vi phạm Điều khoản.',
+      'XP, huy hiệu và bảng xếp hạng chỉ mang tính khích lệ, không có giá trị quy đổi thành tiền. Tên trên bảng xếp hạng được rút gọn và bạn có thể ẩn mình trong Tài khoản.',
+    ],
+  },
+  {
+    id: 'changes',
+    title: 'Thay đổi nội dung và điều khoản',
+    paras: [
+      'Khoá học có thể được cập nhật, bổ sung hoặc sắp xếp lại bài học để giữ nội dung chính xác. Khoá học đang phát hành dần sẽ ghi rõ lộ trình trên trang khoá học.',
+      'Khi điều khoản thay đổi đáng kể, phiên bản mới được công bố tại trang này. Đơn hàng đã mua tiếp tục theo phiên bản bạn đã đồng ý, trừ khi pháp luật yêu cầu khác.',
+    ],
+  },
+];
+---
+
+<CourseLegalPage
+  path="/terms"
+  title="Điều khoản sử dụng khoá học"
+  intro="Điều khoản dưới đây giải thích bạn nhận được gì khi mua khoá học trên zuey.me, những gì không được phép làm và điều gì xảy ra khi vi phạm. Chúng tôi cố gắng viết rõ ràng và thẳng thắn."
+  highlightsTitle="Điểm chính"
+  highlights={highlights}
+  sections={sections}
+/>

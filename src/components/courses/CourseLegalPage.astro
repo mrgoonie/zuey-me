@@ -1,0 +1,71 @@
+---
+/**
+ * Shared layout of the course legal pages (/terms, /policy): title, version, highlights box, numbered
+ * sections with a table of contents. Vietnamese only; mirrors the /privacy visual style.
+ */
+import Layout from '../../layouts/Layout.astro';
+import { COURSE_TERMS_VERSION } from '../../lib/courses/course-terms';
+
+export interface LegalSection {
+  id: string;
+  title: string;
+  paras?: string[];
+  items?: string[];
+}
+
+interface Props {
+  path: '/terms' | '/policy';
+  title: string;
+  intro: string;
+  highlightsTitle: string;
+  highlights: string[];
+  sections: LegalSection[];
+}
+
+const { path, title, intro, highlightsTitle, highlights, sections } = Astro.props;
+const other = path === '/terms' ? { href: '/policy', label: 'Chính sách khoá học' } : { href: '/terms', label: 'Điều khoản sử dụng' };
+---
+
+<Layout title={`${title} — zuey.me`} description={intro} url={`https://zuey.me${path}`} lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <article class="w-full max-w-[760px] bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 shadow-floating-card px-4 py-7 sm:p-10 text-stone-900" aria-labelledby="legal-title">
+      <a href="/courses" class="text-xs font-semibold text-stone-600 hover:text-stone-900 underline-offset-2 hover:underline">← Khoá học</a>
+      <h1 id="legal-title" class="mt-4 text-3xl sm:text-4xl font-bold font-serif tracking-tight">{title}</h1>
+      <p class="mt-2 text-xs text-stone-600">
+        Phiên bản <time datetime={COURSE_TERMS_VERSION}>{COURSE_TERMS_VERSION}</time> · Áp dụng cho mọi đơn mua khoá học từ ngày này ·
+        Xem thêm <a class="underline underline-offset-2" href={other.href}>{other.label}</a> và <a class="underline underline-offset-2" href="/privacy">Chính sách quyền riêng tư</a>
+      </p>
+      <p class="mt-4 text-[15px] leading-relaxed text-stone-800">{intro}</p>
+
+      <nav class="mt-6 rounded-2xl bg-white/70 border border-stone-200 p-4" aria-label={`Mục lục ${title}`}>
+        <ol class="grid gap-1 text-sm list-decimal pl-5">
+          <li><a class="underline underline-offset-2 hover:text-black" href="#highlights">{highlightsTitle}</a></li>
+          {sections.map(sec => <li><a class="underline underline-offset-2 hover:text-black" href={`#${sec.id}`}>{sec.title}</a></li>)}
+        </ol>
+      </nav>
+
+      <section id="highlights" class="mt-8 rounded-2xl bg-[#1c1917] text-[#f5efeb] p-5 sm:p-6">
+        <h2 class="text-xl font-bold font-serif">{highlightsTitle}</h2>
+        <ul class="mt-3 grid gap-2 text-[15px] leading-relaxed list-disc pl-5">
+          {highlights.map(h => <li>{h}</li>)}
+        </ul>
+      </section>
+
+      {sections.map(sec => (
+        <section id={sec.id} class="mt-8 scroll-mt-6">
+          <h2 class="text-xl font-bold font-serif">{sec.title}</h2>
+          {sec.paras?.map(p => <p class="mt-3 text-[15px] leading-relaxed text-stone-800">{p}</p>)}
+          {sec.items && (
+            <ul class="mt-3 grid gap-2 text-[15px] leading-relaxed text-stone-800 list-disc pl-5">
+              {sec.items.map(i => <li>{i}</li>)}
+            </ul>
+          )}
+        </section>
+      ))}
+
+      <section id="contact" class="mt-8 rounded-2xl bg-white/70 border border-stone-200 p-4 text-[15px]">
+        Câu hỏi về khoá học, đơn hàng hoặc tài khoản: email <a class="font-semibold underline" href="mailto:hi@zuey.me">hi@zuey.me</a>. Khi liên hệ về đơn hàng, vui lòng gửi kèm mã đơn (bắt đầu bằng ZSC).
+      </section>
+    </article>
+  </main>
+</Layout>

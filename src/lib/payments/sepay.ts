@@ -4,6 +4,8 @@ import { AppError } from '../http';
 export const SEPAY_CODE_PREFIX = 'ZBK';
 /** Membership billing orders: the full order code (e.g. ZSB7K2M9QXA) is the transfer content. */
 export const SEPAY_BILLING_PREFIX = 'ZSB';
+/** Course orders: the full order code (e.g. ZSC7K2M9QXA) is the transfer content. */
+export const SEPAY_COURSE_PREFIX = 'ZSC';
 const CODE_BODY = '[A-Z0-9]{8}';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -104,6 +106,8 @@ export interface SepayTransfer {
   bookingCode: string | null;
   /** Full membership order code (ZSB + 8 characters) when the content carries one. */
   billingCode: string | null;
+  /** Full course order code (ZSC + 8 characters) when the content carries one. */
+  courseCode: string | null;
   /** When the bank booked the transfer (epoch ms), or null when SePay sent no readable time. */
   transactedAt: number | null;
 }
@@ -123,6 +127,12 @@ export function extractBillingCode(content: string): string | null {
   return match ? `${SEPAY_BILLING_PREFIX}${match[1].toUpperCase()}` : null;
 }
 
+/** Extracts a ZSC course order code from free-form transfer content. */
+export function extractCourseOrderCode(content: string): string | null {
+  const match = new RegExp(`${SEPAY_COURSE_PREFIX}(${CODE_BODY})`, 'i').exec(content);
+  return match ? `${SEPAY_COURSE_PREFIX}${match[1].toUpperCase()}` : null;
+}
+
 /** Validates the SePay webhook payload shape and extracts the ZBK booking / ZSB order codes. */
 export function parseSepayPayload(payload: unknown): SepayTransfer | null {
   if (!isRecord(payload)) return null;
@@ -140,6 +150,7 @@ export function parseSepayPayload(payload: unknown): SepayTransfer | null {
     referenceCode: typeof payload.referenceCode === 'string' ? payload.referenceCode : null,
     bookingCode: match ? match[1].toUpperCase() : null,
     billingCode: extractBillingCode(content),
+    courseCode: extractCourseOrderCode(content),
     transactedAt: parseSepayTime(payload.transactionDate),
   };
 }

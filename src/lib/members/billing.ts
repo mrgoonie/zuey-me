@@ -4,7 +4,7 @@ import { AppError } from '../http';
 import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';
 import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
 import type { SepayTransferInfo } from '../payments/sepay';
-import { SEPAY_BILLING_PREFIX, extractBillingCode, missingSepayBankConfig, parseSepayTime, vietQrTransfer } from '../payments/sepay';
+import { SEPAY_BILLING_PREFIX, extractBillingCode, extractCourseOrderCode, missingSepayBankConfig, parseSepayTime, vietQrTransfer } from '../payments/sepay';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
 import type { BillingMonths, Entitlement, PlanId } from './plans';
 import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, parseUsdVndRate, prepayUsdCents, prepayVnd } from './plans';
@@ -361,14 +361,18 @@ function saigonDate(ms: number): string {
 export interface ReconcileResult {
   checked: number;
   matched: number;
-  results: { transaction_id: string; order_code: string; outcome: BillingOutcome }[];
+  results: { transaction_id: string; order_code: string; outcome: string }[];
 }
 
+/** Applies a transfer carrying a course order code (ZSC); injected so billing stays independent of courses. */
+export type CourseTransferApplier = (notice: BillingPaymentNotice) => Promise<{ outcome: string }>;
+
 /**
- * Lists recent incoming SePay transactions and applies any carrying a ZSB code. Uses the same
- * transaction id as the webhook, so payments already delivered by webhook are skipped as duplicates.
+ * Lists recent incoming SePay transactions and applies any carrying a ZSB (or, with `applyCourse`, ZSC)
+ * code. Uses the same transaction id as the webhook, so payments already delivered by webhook are
+ * skipped as duplicates.
  */
-export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv): Promise<ReconcileResult> {
+export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv, applyCourse?: CourseTransferApplier): Promise<ReconcileResult> {
   if (!env.SEPAY_API_TOKEN) {
     throw new AppError(503, 'reconcile_unconfigured', 'SePay reconciliation is not configured: missing SEPAY_API_TOKEN', { missing: ['SEPAY_API_TOKEN'] });
   }
@@ -392,16 +396,20 @@ export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv): Promi
     out.checked += 1;
     const id = typeof tx.id === 'string' || typeof tx.id === 'number' ? String(tx.id) : null;
     const amountIn = Number(tx.amount_in);
-    const code = typeof tx.transaction_content === 'string' ? extractBillingCode(tx.transaction_content) : null;
+    const content = typeof tx.transaction_content === 'string' ? tx.transaction_content : '';
+    const billingCode = extractBillingCode(content);
+    const courseCode = applyCourse ? extractCourseOrderCode(content) : null;
+    const code = billingCode ?? courseCode;
     if (!id || !code || !Number.isFinite(amountIn) || amountIn <= 0) continue;
-    const result = await applyBillingPayment(d1, env, {
+    const notice: BillingPaymentNotice = {
       eventId: id,
       amount: Math.round(amountIn),
       orderCode: code,
       paymentRef: typeof tx.reference_number === 'string' && tx.reference_number ? tx.reference_number : id,
       rawType: 'reconcile',
       transactedAt: parseSepayTime(tx.transaction_date),
-    });
+    };
+    const result = billingCode || !applyCourse ? await applyBillingPayment(d1, env, notice) : await applyCourse(notice);
     out.matched += 1;
     out.results.push({ transaction_id: id, order_code: code, outcome: result.outcome });
   }

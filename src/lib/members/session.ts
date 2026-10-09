@@ -1,7 +1,8 @@
 import type { D1DatabaseLike } from '../../db/store';
 import { AppError } from '../http';
+import { raiseAccountFlag } from './account-flags';
 import type { UserRecord } from './users';
-import { rowToUser } from './users';
+import { logActivity, rowToUser } from './users';
 import type { Row } from './runtime';
 import { DAY_MS, iso, membersRuntime, randomId, randomSecret, sha256Hex, str, strOrNull, userAgent } from './runtime';
 
@@ -88,7 +89,29 @@ export async function createMemberSession(d1: D1DatabaseLike, userId: string, re
   await d1.prepare(
     'INSERT INTO member_sessions (id, token_hash, user_id, created_at, expires_at, last_seen_at, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).bind(session.id, await sha256Hex(token), userId, session.created_at, session.expires_at, session.last_seen_at, session.user_agent).run();
+  await enforceSessionCap(d1, userId, session.id);
   return { token, session };
+}
+
+/** Signed-in devices per account; a new sign-in beyond this signs out the least recently used one. */
+export const MAX_MEMBER_SESSIONS = 2;
+/** Evictions within a week that suggest a shared account and raise a review flag. */
+const EVICTION_FLAG_THRESHOLD = 6;
+
+async function enforceSessionCap(d1: D1DatabaseLike, userId: string, keepId: string): Promise<void> {
+  const now = membersRuntime.now();
+  const { results } = await d1.prepare(
+    'SELECT id FROM member_sessions WHERE user_id = ? AND expires_at > ? AND id <> ? ORDER BY last_seen_at DESC, created_at DESC'
+  ).bind(userId, iso(now), keepId).all<Row>();
+  const evict = (results ?? []).slice(MAX_MEMBER_SESSIONS - 1).map(r => str(r, 'id'));
+  if (evict.length === 0) return;
+  for (const id of evict) await d1.prepare('DELETE FROM member_sessions WHERE id = ?').bind(id).run();
+  await logActivity(d1, userId, 'session.evicted', { count: evict.length });
+  const recent = await d1.prepare("SELECT COUNT(*) AS n FROM user_activity WHERE user_id = ? AND action = 'session.evicted' AND created_at > ?")
+    .bind(userId, iso(now - 7 * DAY_MS)).first<Row>();
+  if (Number(recent?.n ?? 0) >= EVICTION_FLAG_THRESHOLD) {
+    await raiseAccountFlag(d1, userId, 'session_churn', { evictions_7d: Number(recent?.n ?? 0) });
+  }
 }
 
 export interface ResolvedMemberSession {

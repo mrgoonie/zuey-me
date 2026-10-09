@@ -1,6 +1,7 @@
 import type { OpenApiFragment } from './types';
 import { readsOpenApi } from '../reads/openapi';
-import { workflowsOpenApi } from '../workflows/openapi';
+import { coursesOpenApi } from '../courses/course-openapi';
+import { coursesAdminOpenApi } from '../courses/course-admin-openapi';
 import { bookingOpenApi } from '../booking/openapi';
 import { articlesOpenApi } from '../blocks/openapi';
 import { billingOpenApi, membersOpenApi } from '../members/openapi';
@@ -12,6 +13,6 @@ import { videosOpenApi } from '../videos/openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
 export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [
-  readsOpenApi, workflowsOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
+  readsOpenApi, coursesOpenApi, coursesAdminOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
   chatOpenApi, oauthOpenApi, experienceOpenApi, videosOpenApi,
 ];

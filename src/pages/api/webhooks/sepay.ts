@@ -2,11 +2,12 @@ import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../lib/http';
 import { applyPayment, requireDb } from '../../../lib/booking/store';
 import { applyBillingPayment } from '../../../lib/members/billing';
+import { applyCourseSepayPayment } from '../../../lib/courses/course-payment-webhooks';
 import { parseSepayPayload, verifySepayAuthorization } from '../../../lib/payments/sepay';
 
 /**
  * SePay bank-transfer webhook (`Authorization: Apikey <key>`). Routes by transfer content:
- * `ZSB<code>` → membership order, `ZBK<code>` → consultation booking. Idempotent per SePay transaction id.
+ * `ZSB<code>` → membership order, `ZSC<code>` → course order, `ZBK<code>` → consultation booking. Idempotent per SePay transaction id.
  */
 export const POST: APIRoute = async ({ request, locals }) => {
   try {
@@ -30,6 +31,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
         transactedAt: transfer.transactedAt,
       });
       return jsonOk(result);
+    }
+    if (transfer.courseCode) {
+      return jsonOk(await applyCourseSepayPayment(d1, env, {
+        eventId: transfer.eventId,
+        amount: transfer.amount,
+        orderCode: transfer.courseCode,
+        paymentRef: transfer.referenceCode ?? transfer.eventId,
+        rawType: 'transfer_in',
+        transactedAt: transfer.transactedAt,
+      }));
     }
     if (!transfer.bookingCode) return jsonOk({ outcome: 'ignored' });
     const result = await applyPayment(d1, env, {

@@ -17,7 +17,7 @@ import {
   Sparkles,
   FileText,
   BookOpen,
-  Workflow,
+  GraduationCap,
   CalendarDays,
   Receipt,
   SquarePlay,
@@ -25,7 +25,7 @@ import {
 import { ArticlesPanel } from './ArticleEditor';
 import { ReadsPanel } from './ReadsPanel';
 import { VideosPanel } from './VideosPanel';
-import { WorkflowsPanel } from './WorkflowsPanel';
+import { CoursesPanel } from './courses/CoursesPanel';
 import { BookingPanel } from './BookingPanel';
 import { BillingAttentionPanel } from './BillingAttentionPanel';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
@@ -42,7 +42,7 @@ interface StudioAppProps {
   deniedEmail?: string | null;
 }
 
-type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'videos' | 'workflows' | 'booking' | 'billing';
+type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'videos' | 'courses' | 'booking' | 'billing';
 
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
@@ -340,7 +340,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     );
   }
 
-  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'videos' || activeTab === 'workflows' || activeTab === 'booking' || activeTab === 'billing';
+  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'videos' || activeTab === 'courses' || activeTab === 'booking' || activeTab === 'billing';
 
   // Filtered links for Links tab
   const filteredLinks = filterSection === 'all'
@@ -374,7 +374,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             { id: 'articles', label: 'Articles', icon: FileText },
             { id: 'reads', label: 'Reads', icon: BookOpen },
             { id: 'videos', label: 'Zueytube', icon: SquarePlay },
-            { id: 'workflows', label: 'Workflows', icon: Workflow },
+            { id: 'courses', label: 'Courses', icon: GraduationCap },
             { id: 'booking', label: 'Booking', icon: CalendarDays },
             { id: 'billing', label: 'Payments', icon: Receipt },
             { id: 'keys', label: 'API & Agents', icon: Key },
@@ -429,7 +429,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           {activeTab === 'articles' && <ArticlesPanel />}
           {activeTab === 'reads' && <ReadsPanel />}
           {activeTab === 'videos' && <VideosPanel />}
-          {activeTab === 'workflows' && <WorkflowsPanel />}
+          {activeTab === 'courses' && <CoursesPanel />}
           {activeTab === 'booking' && <BookingPanel />}
           {activeTab === 'billing' && <BillingAttentionPanel />}
 

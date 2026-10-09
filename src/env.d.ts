@@ -6,9 +6,26 @@ export interface WorkersAiLike {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
+/** Minimal shape of an R2 object body returned by `get`. */
+export interface R2ObjectBodyLike {
+  body: ReadableStream;
+  size: number;
+  httpEtag?: string;
+  httpMetadata?: { contentType?: string };
+}
+
+/** Minimal shape of the Cloudflare R2 bucket binding used for private course files. */
+export interface R2BucketLike {
+  get(key: string, options?: { range?: { offset: number; length?: number } }): Promise<R2ObjectBodyLike | null>;
+  put(key: string, value: ReadableStream | ArrayBuffer | Uint8Array | string, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
+  delete(key: string): Promise<void>;
+}
+
 export interface RuntimeEnv {
   DB?: D1DatabaseLike;
   AI?: WorkersAiLike;
+  /** Private R2 bucket with course audio and downloadable files (never public). */
+  COURSE_FILES?: R2BucketLike;
   PUBLIC_SITE_URL?: string;
   PUBLIC_POSTHOG_KEY?: string;
   PUBLIC_POSTHOG_HOST?: string;
@@ -62,6 +79,19 @@ export interface RuntimeEnv {
   DODO_PRODUCT_COMMUNITY?: string;
   /** https://test.dodopayments.com (test mode) or https://live.dodopayments.com (default). */
   DODO_API_BASE?: string;
+  /** One-time pay-what-you-want Dodo product used for every course; the checkout sets the final amount. */
+  DODO_PRODUCT_COURSE?: string;
+  // Courses
+  /** HMAC secret for short-lived course media URLs (R2 files) and quiz/lesson tokens. */
+  COURSE_MEDIA_SECRET?: string;
+  /** Cloudflare Stream customer subdomain code (customer-<code>.cloudflarestream.com). */
+  CF_STREAM_CUSTOMER_CODE?: string;
+  /** Stream signing key id (`kid`) created with POST /stream/keys. */
+  CF_STREAM_SIGNING_KEY_ID?: string;
+  /** Stream signing key as a JWK JSON string (the `jwk` field of the key response, base64-decoded). */
+  CF_STREAM_SIGNING_JWK?: string;
+  /** GitHub token with admin access to the private course repositories (invites collaborators). */
+  GITHUB_COURSES_TOKEN?: string;
   // Card payments: PayPal Business (consultation booking, USD)
   PAYPAL_CLIENT_ID?: string;
   PAYPAL_CLIENT_SECRET?: string;

@@ -78,6 +78,11 @@ function anonymous(credentialError: CredentialError | null = null, via: Credenti
   };
 }
 
+/** A signed-out caller, for public renderings (Markdown, feeds) that must never include paid content. */
+export function anonymousPrincipal(): Principal {
+  return anonymous();
+}
+
 function studioAdmin(via: 'studio_session' | 'admin_api_key'): Principal {
   return { ...anonymous(null, via), kind: 'admin', entitlements: [...ENTITLEMENTS] };
 }

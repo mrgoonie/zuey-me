@@ -1,0 +1,20 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import { CourseOrderStatus } from '../../../components/courses/CourseOrderStatus';
+
+// Ownership is enforced by GET /api/v1/courses/orders/{code}; the page itself holds no order data.
+const raw = Astro.params.code ?? '';
+const code = /^[A-Za-z0-9]{4,32}$/.test(raw) ? raw.toUpperCase() : '';
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+if (!code) return Astro.redirect('/courses', 302);
+---
+
+<Layout title={`Đơn khoá học ${code} — Zuey`} description="Trạng thái thanh toán khoá học Zuey." url={`https://zuey.me/courses/orders/${code}`} lang="vi">
+  <meta slot="head" name="robots" content="noindex, nofollow" />
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-4 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <CourseOrderStatus client:load code={code} />
+    <p class="text-xs font-semibold text-stone-200"><a href="/account#learning" class="underline hover:text-white">Khoá học của tôi</a> · <a href="/courses" class="underline hover:text-white">Tất cả khoá học</a></p>
+  </main>
+</Layout>
