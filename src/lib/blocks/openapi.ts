@@ -139,6 +139,14 @@ const articleSummary = {
     reading_minutes: { type: 'integer' }, cover_url: { type: ['string', 'null'] },
     snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
     editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
+    email_notification: {
+      description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish)',
+      oneOf: [{ type: 'null' }, { type: 'object', properties: {
+        status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled'] },
+        send_after: { type: 'string', format: 'date-time' }, sent_count: { type: 'integer' },
+        reason: { type: ['string', 'null'] }, updated_at: { type: 'string' },
+      } }],
+    },
   },
 };
 const localeQuery = { name: 'lang', in: 'query', schema: localeEnum, description: 'Edition locale; falls back to the primary edition (locale_fallback: true)' };
@@ -276,8 +284,30 @@ export const articlesOpenApi: OpenApiFragment = {
     '/api/v1/articles/{slug}/publish': {
       post: {
         tags, summary: 'Publish one edition draft (locale, default primary)', security: adminSecurity, parameters: [slugParam],
-        requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: { expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum } }) },
+        requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: {
+          expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum,
+          published_at: { type: 'string', format: 'date-time', description: 'Backdate the publish time (not in the future), e.g. archive imports' },
+          notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
+        } }) },
         responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/notifications/dispatch': {
+      post: {
+        tags, summary: 'Cron/admin: send due new-article emails to verified members (warm-up limited, quiet hours 23:00–07:00 Asia/Ho_Chi_Minh)',
+        description: 'Called every 5 minutes by the Cloudflare cron worker with `Authorization: Bearer <CRON_SECRET>`; admins may call it too. Idempotent per article and member.',
+        security: adminSecurity,
+        responses: {
+          '200': ok('Dispatch summary', { type: 'object', properties: {
+            quiet_hours: { type: 'boolean' }, daily_limit: { type: 'integer' }, sent_last_24h: { type: 'integer' },
+            articles: { type: 'array', items: { type: 'object', properties: {
+              article_id: { type: 'string' }, slug: { type: ['string', 'null'] }, status: { type: 'string', enum: ['sent', 'sending', 'cancelled', 'error'] },
+              sent: { type: 'integer' }, failed: { type: 'integer' }, error: { type: 'string' },
+            } } },
+          } }),
+          '503': { description: '`email_unconfigured` (RESEND_API_KEY or MEMBER_HASH_SALT missing)', content: json(ref('Error')) },
+          ...errorResponses,
+        },
       },
     },
     '/api/v1/articles/{slug}/editions': {

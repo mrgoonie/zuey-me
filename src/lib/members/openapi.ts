@@ -40,6 +40,36 @@ export const membersOpenApi: OpenApiFragment = {
     ].join(' '),
   },
   paths: {
+    '/api/email/unsubscribe': {
+      post: {
+        tags: [ACCOUNT_TAG],
+        summary: 'Stop or resume new-article emails with the signed token from the email (no sign-in)',
+        description: 'RFC 8058 one-click target of the `List-Unsubscribe` header (form body `List-Unsubscribe=One-Click`, token in the query). The /unsubscribe page posts a form with `action` and gets a 303 back to the page. JSON callers send `{ token, action? }`. Sign-in and billing emails are not affected.',
+        parameters: [{ name: 'token', in: 'query', required: false, schema: { type: 'string' } }],
+        requestBody: body({ type: 'object', properties: { token: { type: 'string' }, action: { type: 'string', enum: ['unsubscribe', 'resubscribe'], default: 'unsubscribe' } } }, false),
+        responses: {
+          '200': ok('Preference saved', { type: 'object', properties: { subscribed: { type: 'boolean' } } }),
+          '303': { description: 'Form from the /unsubscribe page: back to the page with the result' },
+          '400': { description: '`invalid_token`', ...errorRef }, '404': notFound,
+        },
+      },
+    },
+    '/api/webhooks/resend': {
+      post: {
+        tags: [ACCOUNT_TAG],
+        summary: 'Resend webhook (Svix signature): hard bounces and spam complaints stop new-article emails to that address',
+        parameters: [
+          { name: 'svix-id', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'svix-timestamp', in: 'header', required: true, schema: { type: 'string' } },
+          { name: 'svix-signature', in: 'header', required: true, schema: { type: 'string', example: 'v1,<base64>' } },
+        ],
+        requestBody: body({ type: 'object' }),
+        responses: {
+          '200': ok('Event processed or ignored', { type: 'object', properties: { outcome: { type: 'string', enum: ['ignored', 'suppressed'] }, reason: { type: 'string', enum: ['bounce', 'complaint'] }, suppressed: { type: 'integer' } } }),
+          '400': errorResponses['400'], '401': { description: '`invalid_signature`', ...errorRef }, '503': { description: '`webhook_unconfigured` (RESEND_WEBHOOK_SECRET missing)', ...errorRef },
+        },
+      },
+    },
     '/api/members/auth/magic-link': {
       post: {
         tags: [ACCOUNT_TAG], summary: 'Email a 15-minute single-use sign-in link',

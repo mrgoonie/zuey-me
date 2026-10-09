@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0011_card_payments.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0013_article_email_notifications.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -121,6 +121,31 @@ Lưu ý vận hành:
 1. Verify domain `zuey.me` trong Resend: thêm các bản ghi DKIM/SPF/MX mà Resend đưa ra vào DNS zone `zuey.me`, rồi bấm *Verify*.
 2. Tạo API key và lưu vào `RESEND_API_KEY`.
 3. Đặt `RESEND_FROM`, ví dụ `hi@zuey.me` hoặc `Zuey <hi@zuey.me>`.
+
+### 6a. Email bài viết mới cho thành viên
+
+Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thành viên đã xác minh email, **30 phút sau** khi xuất bản. Nội dung lấy theo bản đã xuất bản ở thời điểm gửi, nên các chỉnh sửa trong 30 phút đó đều có trong email. Bài trả phí gửi bản đầy đủ cho người có quyền `read_full`, còn người khác nhận phần xem trước kèm nút đăng ký (`/pricing`). Ngôn ngữ theo `users.locale` nếu bài có bản đó, nếu không thì dùng bản chính.
+
+- **Không gửi email:** bỏ chọn “Gửi email cho thành viên” trong hộp xác nhận xuất bản ở Studio, hoặc gửi `notify: false` (REST/MCP). Xuất bản với `published_at` lùi ngày mặc định không gửi. Migration `0013` đánh dấu mọi bài đã đăng trước đó là “không gửi”.
+- **Lịch chạy:** Worker `zuey-me-scheduler` (`workers/scheduler/`) có Cron Trigger 5 phút một lần, gọi `POST /api/v1/articles/notifications/dispatch` bằng `CRON_SECRET`. Không dùng GitHub Actions vì repo công khai.
+  ```bash
+  openssl rand -hex 32                       # tạo giá trị CRON_SECRET
+  wrangler pages secret put CRON_SECRET --project-name=zuey-me
+  cd workers/scheduler && wrangler deploy && wrangler secret put CRON_SECRET
+  ```
+- **Biến môi trường:** `MEMBER_HASH_SALT` (ký link huỷ nhận email, bắt buộc), `ARTICLE_EMAIL_FROM` / `ARTICLE_EMAIL_REPLY_TO` (tuỳ chọn), `ARTICLE_EMAIL_DAILY_CAP` (mặc định 2000), `ARTICLE_EMAIL_QUIET_HOURS` (mặc định `23-7` giờ Việt Nam, `off` để tắt).
+- **Mỗi người nhận tối đa một lần:** mỗi lượt gửi giữ chỗ người nhận trong `email_log` trước khi gọi Resend. Lỗi chắc chắn chưa gửi (4xx, ví dụ 429 hay sai domain) thì trả lại để lượt sau gửi. Lỗi không rõ đã gửi hay chưa (mạng, 5xx sau một lần thử lại) thì ghi `failed` với `error` bắt đầu bằng `unconfirmed:` và không gửi lại.
+- **Đổi `MEMBER_HASH_SALT`** sẽ làm hỏng mọi link huỷ nhận trong các email đã gửi (kể cả huỷ một chạm). Chỉ đổi khi thật cần.
+- **Bounce/spam:** tạo webhook trong Resend (Dashboard → Webhooks) trỏ tới `https://zuey.me/api/webhooks/resend` với các sự kiện `email.bounced` và `email.complained`, rồi lưu signing secret vào `RESEND_WEBHOOK_SECRET`. Địa chỉ hard bounce hoặc bị đánh dấu spam sẽ tự ngừng nhận email bài viết.
+
+**Giữ email ngoài hộp spam (warm-up):**
+
+1. Giới hạn gửi trong 24 giờ tăng dần: 50 → 100 → 200 → … mỗi ngày kể từ email bài viết đầu tiên, tối đa `ARTICLE_EMAIL_DAILY_CAP`. Thành viên hoạt động gần nhất được gửi trước. Phần còn lại tự gửi ở các lượt cron sau.
+2. Mỗi email có `List-Unsubscribe` và `List-Unsubscribe-Post` (huỷ một chạm theo RFC 8058, Gmail/Yahoo bắt buộc với người gửi số lượng lớn), có phần text thuần, và HTML dưới ngưỡng 102 KB để Gmail không cắt.
+3. Không gửi trong giờ yên lặng (23:00–07:00 giờ Việt Nam): email chờ tới sáng để được mở nhiều hơn.
+4. DNS: SPF/DKIM của Resend cho `send.zuey.me` đã có. Cần thêm **DMARC** (`_dmarc.zuey.me` TXT `v=DMARC1; p=none; …`), sau vài tuần ổn định thì nâng dần lên `p=quarantine`.
+5. Bản tin gửi từ subdomain riêng `news.zuey.me` (`ARTICLE_EMAIL_FROM=Zuey <hi@news.zuey.me>`, domain đã verify trong Resend, vùng `ap-northeast-1`; DKIM/SPF/return-path nằm ở `resend._domainkey.news`, `send.news`, `rsend.news`), nên uy tín email đăng nhập/thanh toán (`zuey.me`) không bị ảnh hưởng nếu bản tin bị đánh dấu spam. Hộp thư nhận phản hồi (`ARTICLE_EMAIL_REPLY_TO`) phải nhận được thư thật.
+6. Theo dõi tỷ lệ bounce (< 2%) và spam (< 0,1%) trong Resend và Google Postmaster Tools.
 
 ## 7. Thành viên & gói
 

@@ -29,6 +29,18 @@ export interface RuntimeEnv {
   CONSULTATION_PRICE_VND?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  /** Svix signing secret (`whsec_…`) of the /api/webhooks/resend endpoint (bounce and complaint suppression). */
+  RESEND_WEBHOOK_SECRET?: string;
+  // New-article emails to members
+  /** Sender for article emails (default RESEND_FROM), e.g. a dedicated `news.` subdomain verified in Resend. */
+  ARTICLE_EMAIL_FROM?: string;
+  ARTICLE_EMAIL_REPLY_TO?: string;
+  /** Ceiling of the warm-up rolling 24-hour limit (default 2000). */
+  ARTICLE_EMAIL_DAILY_CAP?: string;
+  /** Asia/Ho_Chi_Minh hours without sending, "23-7" (default) or "off". */
+  ARTICLE_EMAIL_QUIET_HOURS?: string;
+  /** Shared secret the Cloudflare cron worker sends to the article-email dispatch endpoint. */
+  CRON_SECRET?: string;
   // Rich blocks
   SURVEY_HASH_SALT?: string;
   // Membership & billing

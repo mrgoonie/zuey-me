@@ -721,7 +721,21 @@ interface Editing {
   draft: Draft;
   /** Snapshot of the last loaded/saved draft, to detect unsaved changes. */
   saved: string;
+  /** New-article email to members; null before the article's first publish. */
+  emailNotification: EmailNotification | null;
 }
+
+interface EmailNotification { status: string; sendAfter: string; sentCount: number }
+
+function parseEmailNotification(v: unknown): EmailNotification | null {
+  if (!isObj(v) || typeof v.status !== 'string') return null;
+  return { status: v.status, sendAfter: str(v, 'send_after'), sentCount: typeof v.sent_count === 'number' ? v.sent_count : 0 };
+}
+
+const fmtSaigon = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+};
 
 const snapshot = (d: Draft): string => JSON.stringify(d);
 
@@ -747,7 +761,7 @@ function editingFrom(data: unknown, requested: Locale | undefined): Editing | nu
   return {
     originalSlug: data.slug, revision: data.revision, status: fallback ? 'draft' : data.status === 'published' ? 'published' : 'draft',
     hasUnpublished: fallback || data.has_unpublished_changes === true, editions: parseEditions(data.editions), newEdition: fallback,
-    draft, saved: snapshot(draft),
+    draft, saved: snapshot(draft), emailNotification: parseEmailNotification(data.email_notification),
   };
 }
 
@@ -860,6 +874,35 @@ function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale
 
 type EditorTab = 'blocks' | 'preview' | 'json' | 'history' | 'labels';
 
+/** Whether the publish dialog offers the member-email switch (not once the email is going out or went out). */
+function emailChoice(n: EmailNotification | null): boolean {
+  return n === null || n.status === 'scheduled' || n.status === 'skipped' || n.status === 'cancelled';
+}
+
+/** Default of the switch: on for a first publish or a scheduled email, off for articles that were skipped before. */
+function defaultNotify(n: EmailNotification | null): boolean {
+  return n === null || n.status === 'scheduled';
+}
+
+function EmailNotificationChoice({ notification: n, checked, onChange }: {
+  notification: EmailNotification | null; checked: boolean; onChange: (v: boolean) => void;
+}) {
+  if (n && (n.status === 'sent' || n.status === 'sending')) {
+    return <p className="text-xs text-stone-400">Email bài viết mới {n.status === 'sent' ? 'đã gửi' : 'đang gửi'} tới {n.sentCount} thành viên; xuất bản lại không gửi thêm.</p>;
+  }
+  const hint = n === null
+    ? 'Gửi tới mọi thành viên đã xác minh email, 30 phút sau khi xuất bản (bản sửa trong lúc chờ sẽ được dùng). Bỏ chọn khi đăng lại bài cũ.'
+    : n.status === 'scheduled'
+      ? `Đã lên lịch gửi lúc ${fmtSaigon(n.sendAfter)}. Bỏ chọn để huỷ.`
+      : 'Bài này chưa từng gửi email. Chọn để gửi sau 30 phút.';
+  return (
+    <label className="flex items-start gap-2 rounded-xl border border-stone-700 p-3 text-xs text-stone-300">
+      <input type="checkbox" className="mt-0.5" checked={checked} onChange={e => onChange(e.target.checked)} />
+      <span><span className="font-semibold text-white">Gửi email cho thành viên</span><br />{hint}</span>
+    </label>
+  );
+}
+
 function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, initialSlug }: {
   categories: CategoryOption[]; tagOptions: TagOption[]; onListChanged: () => void; onClosed: () => void; initialSlug: string | null;
 }) {
@@ -870,6 +913,8 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
   const [serverErrors, setServerErrors] = useState<ValidationError[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
+  /** "Email members" switch of the publish dialog; reset whenever the dialog opens. */
+  const [notifyMembers, setNotifyMembers] = useState(true);
   const [conflict, setConflict] = useState<{ current: number | null } | null>(null);
 
   const dirty = editing !== null && snapshot(editing.draft) !== editing.saved;
@@ -891,7 +936,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     setTab('blocks');
     if (initialSlug) { void load(initialSlug); return; }
     const draft = blankDraft('vi');
-    setEditing({ originalSlug: null, revision: 0, status: 'draft', hasUnpublished: true, editions: [], newEdition: true, draft, saved: snapshot(draft) });
+    setEditing({ originalSlug: null, revision: 0, status: 'draft', hasUnpublished: true, editions: [], newEdition: true, draft, saved: snapshot(draft), emailNotification: null });
     setJsonText(JSON.stringify(draft.doc, null, 2));
     setServerErrors([]);
     setConflict(null);
@@ -978,12 +1023,18 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     setConfirmPublish(false);
     setBusy(true);
     const res = await api(`/api/v1/articles/${encodeURIComponent(editing.originalSlug)}/publish`, {
-      method: 'POST', body: { expected_revision: editing.revision, confirm: true, locale: editing.draft.locale },
+      method: 'POST', body: {
+        expected_revision: editing.revision, confirm: true, locale: editing.draft.locale,
+        // Only sent when the dialog offers the choice, so republishing never re-schedules by accident.
+        ...(emailChoice(editing.emailNotification) ? { notify: notifyMembers } : {}),
+      },
     });
     setBusy(false);
     if (res.ok) {
       await load(editing.originalSlug, editing.draft.locale);
-      setStatus({ text: `Đã xuất bản bản ${editing.draft.locale}.`, error: false });
+      const scheduled = isObj(res.data) ? parseEmailNotification(res.data.email_notification) : null;
+      const emailNote = scheduled?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(scheduled.sendAfter)}.` : '';
+      setStatus({ text: `Đã xuất bản bản ${editing.draft.locale}.${emailNote}`, error: false });
       onListChanged();
     } else if (res.code === 'revision_conflict') {
       setConflict({ current: typeof res.error.current_revision === 'number' ? res.error.current_revision : null });
@@ -1150,7 +1201,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
           {busy ? 'Đang lưu…' : 'Lưu nháp (Ctrl+S)'}
         </button>
         <button type="button" className={btnCls} disabled={busy || !editing.originalSlug || editing.newEdition || dirty}
-          title={dirty ? 'Lưu trước khi xuất bản' : undefined} onClick={() => setConfirmPublish(true)}>Xuất bản bản {d.locale}…</button>
+          title={dirty ? 'Lưu trước khi xuất bản' : undefined} onClick={() => { setNotifyMembers(defaultNotify(editing.emailNotification)); setConfirmPublish(true); }}>Xuất bản bản {d.locale}…</button>
         {editing.originalSlug && !editing.newEdition && (
           <a className={btnCls} href={`/articles/${encodeURIComponent(editing.originalSlug)}?lang=${d.locale}&preview=1`} target="_blank" rel="noreferrer">Xem trên trang</a>
         )}
@@ -1168,6 +1219,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
               Bản nháp đã lưu (revision {editing.revision}) của ngôn ngữ này sẽ thay thế bản công khai. Các ngôn ngữ khác không đổi.
               {d.access === 'knowledges' ? ' Người chưa có quyền đọc đầy đủ chỉ thấy phần xem trước và lời mời nâng cấp.' : ''}
             </p>
+            <EmailNotificationChoice notification={editing.emailNotification} checked={notifyMembers} onChange={setNotifyMembers} />
             <div className="flex justify-end gap-2">
               <button type="button" className={btnCls} onClick={() => setConfirmPublish(false)}>Huỷ</button>
               <button type="button" className={primaryCls} onClick={() => void publish()} autoFocus>Xuất bản</button>

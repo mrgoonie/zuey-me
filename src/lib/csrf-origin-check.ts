@@ -7,9 +7,14 @@
 const FORM_CONTENT_TYPES = ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain'];
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
-/** Bearer-only machine endpoints (MCP + OAuth back-channel + discovery) that browser-based MCP clients call cross-origin. */
+/**
+ * Machine endpoints that never honour cookies: MCP + OAuth back-channel + discovery (called cross-origin by
+ * browser-based MCP clients) and the token-authorized RFC 8058 one-click unsubscribe that mailbox providers POST
+ * as a form without an Origin header.
+ */
 export function isMachineEndpoint(pathname: string): boolean {
   return pathname === '/mcp'
+    || pathname === '/api/email/unsubscribe'
     || pathname === '/oauth/token'
     || pathname === '/oauth/register'
     || pathname === '/oauth/revoke'
