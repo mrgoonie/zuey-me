@@ -117,14 +117,14 @@ Lưu ý vận hành:
 
 Khoá học thay cho AI Workflows. Mã nguồn ở `src/lib/courses/`; quyết định thiết kế ở `plans/261009-1605-courses/plan.md`. Thiếu biến nào thì API trả `503` kèm tên biến (`payment_unconfigured`, `media_unconfigured`), phần còn lại vẫn chạy.
 
-1. **Migration** `migrations/0018_courses.sql`: tạo bookmark Time Travel cho D1 trước (`wrangler d1 time-travel info zuey_me_db`), rồi `wrangler d1 migrations apply zuey_me_db --remote`. Migration này **xoá bảng workflows** và dựng lại hai bảng `referral_commissions`, `referral_source_reversals` (giữ nguyên dữ liệu) để thêm nguồn `course_order`; vì vậy phải chạy sau `0016_referrals.sql` và `0017_zueytube_transcript_rewrite.sql`.
+1. **Migration** `migrations/0018_courses.sql`: tạo bookmark Time Travel cho D1 trước (`wrangler d1 time-travel info zuey_me_db`), rồi chạy riêng file: `wrangler d1 execute zuey_me_db --remote --file migrations/0018_courses.sql`. **Không** dùng `wrangler d1 migrations apply` trên production: bảng `d1_migrations` của `zuey_me_db` đang trống vì các migration trước được chạy bằng `--file`, nên lệnh đó sẽ chạy lại từ `0001`. Migration này **xoá bảng workflows** và dựng lại hai bảng `referral_commissions`, `referral_source_reversals` (giữ nguyên dữ liệu) để thêm nguồn `course_order`; vì vậy phải chạy sau `0016_referrals.sql` và `0017_zueytube_transcript_rewrite.sql`.
 2. **Thanh toán**:
    - SePay dùng lại cấu hình mục 5 và `USD_VND_RATE`. Mã chuyển khoản khoá học có dạng `ZSC…`; webhook và job đối soát đã nhận dạng mã này.
    - Dodo: tạo **một** product *One-time*, bật *Pay What You Want* (giá tối thiểu $1), tiền USD. Lưu ID vào `DODO_PRODUCT_COURSE`. Checkout tự đặt số tiền theo giá đã giảm.
    - Trong webhook Dodo (mục 4a), bật thêm `refund.succeeded` và mọi sự kiện `dispute.*`. Hoàn tiền hoặc dispute `opened` / `accepted` / `lost` / `expired` sẽ thu hồi khoá học, quyền repo GitHub và chứng chỉ. Dispute `won` / `cancelled` khôi phục lại.
 3. **Media**:
    - `COURSE_MEDIA_SECRET`: chuỗi ngẫu nhiên dài (`openssl rand -base64 48`), dùng ký link tải file và audio (hết hạn sau khoảng 10 phút, gắn với tài khoản người xem).
-   - R2: `wrangler r2 bucket create zuey-course-files`, rồi bỏ comment khối `[[r2_buckets]]` (binding `COURSE_FILES`) trong `wrangler.toml`. Bucket để private, không bật public access.
+   - R2: bucket `zuey-course-files` (binding `COURSE_FILES` trong `wrangler.toml`), để private, không bật public access. Bucket phải tồn tại trước khi deploy.
    - Cloudflare Stream: tạo signing key bằng `POST /accounts/{account_id}/stream/keys`. Lưu `id` vào `CF_STREAM_SIGNING_KEY_ID` và `jwk` (đã giải base64) vào `CF_STREAM_SIGNING_JWK`. Mã `customer-<code>` lấy từ trang Stream, lưu vào `CF_STREAM_CUSTOMER_CODE`. Với từng video, bật *Require signed URLs*.
 4. **GitHub**: `GITHUB_COURSES_TOKEN` là fine-grained token có quyền *Administration: write* trên các repo private của khoá học. Học viên liên kết GitHub ở `/account`; worker scheduler (`/api/v1/courses/jobs/github-invites`, mỗi 5 phút) mời họ làm collaborator chỉ đọc và tự thử lại khi GitHub lỗi.
 5. **Soạn khoá học**: dùng tab **Courses** trong Studio, hoặc MCP `course_upsert` / `course_lesson_upsert`. Mặc định giảm giá cho thành viên là 10/10/25/40% (Knowledges / Zuey AI / Kết hợp / Cộng đồng); sửa được ở tab Courses → Settings, và mỗi khoá có thể ghi đè riêng.

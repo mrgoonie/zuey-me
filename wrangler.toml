@@ -25,8 +25,7 @@ binding = "AI"
 binding = "REFERRAL_KYC"
 bucket_name = "zuey-referral-kyc"
 
-# Private course audio and downloads. Uncomment after creating the bucket
-# (`wrangler r2 bucket create zuey-course-files`); deploys fail while the bucket is missing.
-# [[r2_buckets]]
-# binding = "COURSE_FILES"
-# bucket_name = "zuey-course-files"
+# Private course audio and downloads; the bucket stays private (no public access).
+[[r2_buckets]]
+binding = "COURSE_FILES"
+bucket_name = "zuey-course-files"
