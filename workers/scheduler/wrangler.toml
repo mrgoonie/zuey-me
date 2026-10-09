@@ -1,6 +1,6 @@
-# Cron Trigger worker for zuey.me (Cloudflare Pages has no cron). Deploy from this directory:
-#   wrangler deploy
-#   wrangler secret put CRON_SECRET   # same value as the Pages secret CRON_SECRET
+# Cron Trigger worker for zuey.me (Cloudflare Pages has no cron). CI deploys it on push to main
+# (.github/workflows/deploy.yml); do not deploy it by hand. One-time secret, kept across deploys:
+#   wrangler secret put CRON_SECRET --config workers/scheduler/wrangler.toml   # same value as the Pages secret
 name = "zuey-me-scheduler"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
