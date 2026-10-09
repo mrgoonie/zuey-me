@@ -10,11 +10,12 @@ import { transcriptSegments } from '../src/lib/videos/anymd-transcript-parser';
 import { getEdition, getTranscriptSource } from '../src/lib/videos/store';
 import { addVideo, refetchTranscript, rewriteEditionTranscript } from '../src/lib/videos/video-ingest-service';
 import {
-  chunkTranscript, formatTimestamp, parseParagraphs, placeParagraphs, rewriteTranscript, timedWords,
+  buildSystemPrompt, chunkTranscript, formatTimestamp, parseParagraphs, placeParagraphs, rewriteTranscript, timedWords,
 } from '../src/lib/videos/video-transcript-rewrite';
 import {
   DEFAULT_OPENROUTER_REWRITE_MODEL, DEFAULT_WORKERS_AI_REWRITE_MODEL, workersAiRewriter,
 } from '../src/lib/videos/video-transcript-rewrite-providers';
+import { DEFAULT_REWRITE_GLOSSARY, mergeGlossary, parseGlossary } from '../src/lib/videos/video-transcript-glossary';
 import { searchVideos } from '../src/lib/videos/video-search';
 import { parseYoutubeId } from '../src/lib/videos/youtube-url';
 import { POST as rewriteApi } from '../src/pages/api/v1/videos/[id]/rewrite';
@@ -173,6 +174,39 @@ describe('AI rewrite', () => {
     const edition = await getEdition(d1, VID, { transcript: true });
     expect(edition?.transcript).toBe(RAW_LINES[0]);
     await expect(rewriteEditionTranscript({ db: d1 }, VID)).rejects.toMatchObject({ status: 503 });
+  });
+});
+
+describe('proper-noun glossary', () => {
+  it('parses extra names with mis-hearings and lets them override defaults', () => {
+    const extra = parseGlossary('Hermes = Han Harris | Hermit,\n Kongming ,, codex = Codecs');
+    expect(extra).toEqual([{ term: 'Hermes', heardAs: ['Han Harris', 'Hermit'] }, { term: 'Kongming' }, { term: 'codex', heardAs: ['Codecs'] }]);
+    const merged = mergeGlossary(DEFAULT_REWRITE_GLOSSARY, extra);
+    expect(merged.length).toBe(DEFAULT_REWRITE_GLOSSARY.length + 2);
+    expect(merged.find(t => t.term.toLowerCase() === 'codex')).toEqual({ term: 'codex', heardAs: ['Codecs'] });
+    expect(parseGlossary(undefined)).toEqual([]);
+  });
+
+  it('sends the title, defaults and env extras to the model as the system prompt', async () => {
+    expect(buildSystemPrompt()).not.toContain('proper nouns');
+    const prompt = buildSystemPrompt({ title: 'Giới thiệu AgentKit', glossary: DEFAULT_REWRITE_GLOSSARY });
+    expect(prompt).toContain('"Giới thiệu AgentKit"');
+    expect(prompt).toContain('- ClaudeKit (may be mis-heard as "ClockKit", "Clock Kit", "Clock Kid", "Cloud Kit", "Clockwork")');
+
+    const systems: string[] = [];
+    const ai = cleaningAi();
+    const spy: WorkersAiLike = {
+      run: (m, input) => {
+        const first: unknown = Array.isArray(input.messages) ? input.messages[0] : null;
+        if (typeof first === 'object' && first !== null && 'content' in first && typeof first.content === 'string') systems.push(first.content);
+        return ai.run(m, input);
+      },
+    };
+    await addVideo({ db: d1, fetchImpl: fakeFetch }, { url: VID, locale: 'vi' });
+    await rewriteEditionTranscript({ db: d1, ai: spy, rewriteGlossary: 'Hermes = Han Harris' }, VID);
+    expect(systems[0]).toContain('"Video dài"');
+    expect(systems[0]).toContain('- Hermes (may be mis-heard as "Han Harris")');
+    expect(systems[0]).toContain('- Codex (may be mis-heard as "Codax", "Cortex")');
   });
 });
 

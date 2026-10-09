@@ -65,7 +65,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 |---|---|
 | Surveys | `SURVEY_HASH_SALT` |
 | Reads | `ANYMD_API_KEY`, `READS_SUMMARY_MODEL` (optional), Workers AI binding `AI` |
-| Zueytube | `ANYMD_API_KEY` (optional; without it AnyMD's small anonymous quota applies), `OPENROUTER_API_KEY` + `VIDEOS_REWRITE_OPENROUTER_MODEL` (optional), `VIDEOS_REWRITE_MODEL` (optional), Workers AI binding `AI` |
+| Zueytube | `ANYMD_API_KEY` (optional; without it AnyMD's small anonymous quota applies), `OPENROUTER_API_KEY` + `VIDEOS_REWRITE_OPENROUTER_MODEL` (optional), `VIDEOS_REWRITE_MODEL` (optional), `VIDEOS_REWRITE_GLOSSARY` (optional extra proper nouns), Workers AI binding `AI` |
 | Booking calendar | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALENDAR_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID` |
 | PayPal (consultation, USD) | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_API_BASE` (optional, sandbox) |
 | Dodo Payments (membership cards, USD) | `DODO_API_KEY`, `DODO_WEBHOOK_SECRET`, `DODO_PRODUCT_KNOWLEDGES`, `DODO_PRODUCT_AI`, `DODO_PRODUCT_COMBO`, `DODO_PRODUCT_COMMUNITY`, `DODO_API_BASE` (optional, test mode) |

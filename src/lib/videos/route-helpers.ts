@@ -28,6 +28,6 @@ export function ingestDeps(env: RuntimeEnv): IngestDeps {
   return {
     db: videosDb(env), anymdApiKey: env.ANYMD_API_KEY,
     openRouterApiKey: env.OPENROUTER_API_KEY, openRouterModel: env.VIDEOS_REWRITE_OPENROUTER_MODEL,
-    ai: env.AI, rewriteModel: env.VIDEOS_REWRITE_MODEL,
+    ai: env.AI, rewriteModel: env.VIDEOS_REWRITE_MODEL, rewriteGlossary: env.VIDEOS_REWRITE_GLOSSARY,
   };
 }

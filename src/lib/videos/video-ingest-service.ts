@@ -17,6 +17,7 @@ import {
 } from './store';
 import type { TranscriptRewriteStatus, VideoItem, VideoLocale } from './types';
 import { rewriteTranscript } from './video-transcript-rewrite';
+import { DEFAULT_REWRITE_GLOSSARY, mergeGlossary, parseGlossary } from './video-transcript-glossary';
 import { openRouterRewriter, workersAiRewriter, type TranscriptRewriter } from './video-transcript-rewrite-providers';
 import { fetchWatchMetadata } from './youtube-watch-metadata';
 import { parseYoutubeId, thumbnailUrl } from './youtube-url';
@@ -31,6 +32,8 @@ export interface IngestDeps {
   /** Workers AI binding: fallback provider (or the only one without an OpenRouter key). */
   ai?: WorkersAiLike;
   rewriteModel?: string;
+  /** Extra proper nouns for the rewrite prompt (VIDEOS_REWRITE_GLOSSARY format). */
+  rewriteGlossary?: string;
 }
 
 /** Providers in the order they are tried; empty means transcripts stay as raw captions. */
@@ -76,14 +79,18 @@ interface RefreshOutcome {
   rewrite_error: string | null;
 }
 
-/** Cleans up the stored raw transcript with Workers AI and stores the outcome (the raw text stays on failure). */
+/** Cleans up the stored raw transcript with AI and stores the outcome (the raw text stays on failure). */
 async function applyRewrite(deps: IngestDeps, youtubeId: string, rewriters: TranscriptRewriter[]): Promise<{ status: TranscriptRewriteStatus; error: string | null }> {
   const source = await getTranscriptSource(deps.db, youtubeId);
   const edition = await getEdition(deps.db, youtubeId);
   if (!source || !edition) throw new AppError(409, 'transcript_not_ready', 'This edition has no transcript to rewrite yet');
   const model = rewriters.map(r => r.label).join(', ');
   try {
-    const out = await rewriteTranscript(rewriters, source, { durationSeconds: edition.duration_seconds });
+    const out = await rewriteTranscript(rewriters, source, {
+      durationSeconds: edition.duration_seconds,
+      title: edition.title,
+      glossary: mergeGlossary(DEFAULT_REWRITE_GLOSSARY, parseGlossary(deps.rewriteGlossary)),
+    });
     const wordCount = transcriptPlainText(out.transcript).split(/\s+/).filter(Boolean).length;
     await saveRewriteResult(deps.db, youtubeId, { status: 'ready', transcript: out.transcript, word_count: wordCount, model: out.model });
     await reindexEdition(deps.db, youtubeId);
