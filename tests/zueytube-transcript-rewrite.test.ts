@@ -191,6 +191,7 @@ describe('proper-noun glossary', () => {
     expect(buildSystemPrompt()).not.toContain('proper nouns');
     const prompt = buildSystemPrompt({ title: 'Giới thiệu AgentKit', glossary: DEFAULT_REWRITE_GLOSSARY });
     expect(prompt).toContain('"Giới thiệu AgentKit"');
+    expect(prompt).toContain('- Kongming (may be mis-heard as "Coming"; replace only when it names the advisor sub-agent, never the verb "coming")');
     expect(prompt).toContain('- ClaudeKit (may be mis-heard as "ClockKit", "Clock Kit", "Clock Kid", "Cloud Kit", "Clockwork")');
 
     const systems: string[] = [];

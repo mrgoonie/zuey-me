@@ -10,6 +10,8 @@ export interface GlossaryTerm {
   term: string;
   /** Mis-heard forms seen in auto-captions; only listed when the mapping is unambiguous. */
   heardAs?: string[];
+  /** When a mis-hearing is also an ordinary word ("coming"), the only context in which to replace it. */
+  onlyWhen?: string;
 }
 
 // Only names the captions actually get wrong. Well-known model names (Opus, GPT…) are left out on purpose:
@@ -27,7 +29,9 @@ export const DEFAULT_REWRITE_GLOSSARY: GlossaryTerm[] = [
   { term: 'Oh My Pi', heardAs: ['Oh my pie', 'O My Pi'] },
   { term: 'DeepSeek Harness', heardAs: ['gipsick han haris', 'Deep Seek Harness'] },
   { term: 'NotebookLM', heardAs: ['NotebookML'] },
-  { term: 'Claude Code', heardAs: ['close code'] },
+  { term: 'Claude Code', heardAs: ['close code', 'Floater'], onlyWhen: 'it names an agent runtime, e.g. "install it for Floater"' },
+  { term: 'Fable', heardAs: ['Factor'], onlyWhen: 'it names an AI model, e.g. "use the Factor for the advisor"' },
+  { term: 'Kongming', heardAs: ['Coming'], onlyWhen: 'it names the advisor sub-agent, never the verb "coming"' },
   { term: 'OpenRouter' },
 ]
 
@@ -52,5 +56,9 @@ export function mergeGlossary(base: GlossaryTerm[], extra: GlossaryTerm[]): Glos
 
 /** One prompt line per term, e.g. `ClaudeKit (may be mis-heard as "ClockKit", "Cloud Kit")`. */
 export function glossaryPromptLines(glossary: GlossaryTerm[]): string[] {
-  return glossary.map(t => (t.heardAs?.length ? `${t.term} (may be mis-heard as ${t.heardAs.map(h => `"${h}"`).join(', ')})` : t.term));
+  return glossary.map(t => {
+    if (!t.heardAs?.length) return t.term;
+    const heard = `may be mis-heard as ${t.heardAs.map(h => `"${h}"`).join(', ')}`;
+    return `${t.term} (${heard}${t.onlyWhen ? `; replace only when ${t.onlyWhen}` : ''})`;
+  });
 }
