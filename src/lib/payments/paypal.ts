@@ -298,10 +298,19 @@ export interface PaypalCaptureEvent {
   orderId: string | null;
 }
 
-/** Extracts the capture from a PAYMENT.CAPTURE.* event; null for other events or malformed payloads. */
+/** PAYMENT.CAPTURE.* events whose resource is a refund (or reversal), not a capture. */
+const CAPTURE_REVERSAL_EVENTS: Record<string, PaypalReversalKind> = {
+  'PAYMENT.CAPTURE.REFUNDED': 'refund',
+  'PAYMENT.CAPTURE.REVERSED': 'reversal',
+};
+
+/**
+ * Extracts the capture from a PAYMENT.CAPTURE.* event; null for other events, malformed payloads and the
+ * REFUNDED/REVERSED events (their resource is a refund object; see `parsePaypalReversalEvent`).
+ */
 export function parsePaypalCaptureEvent(payload: unknown): PaypalCaptureEvent | null {
   if (!isRecord(payload) || typeof payload.id !== 'string' || typeof payload.event_type !== 'string') return null;
-  if (!payload.event_type.startsWith('PAYMENT.CAPTURE.')) return null;
+  if (!payload.event_type.startsWith('PAYMENT.CAPTURE.') || payload.event_type in CAPTURE_REVERSAL_EVENTS) return null;
   const capture = parseCapture(payload.resource, null);
   if (!capture) return null;
   const resource = isRecord(payload.resource) ? payload.resource : {};
@@ -317,4 +326,49 @@ export function parsePaypalCaptureEvent(payload: unknown): PaypalCaptureEvent | 
     customId: capture.customId,
     orderId: typeof related.order_id === 'string' ? related.order_id : null,
   };
+}
+
+export type PaypalReversalKind = 'refund' | 'reversal' | 'dispute';
+
+export interface PaypalReversalEvent {
+  eventId: string;
+  eventType: string;
+  kind: PaypalReversalKind;
+  /** Capture the money came from (refund `up` link, or the disputed seller transaction). */
+  captureId: string | null;
+  /** Purchase-unit custom_id (the booking id) when PayPal propagates it. */
+  customId: string | null;
+}
+
+/** Capture id from a refund's `rel: "up"` link (`…/v2/payments/captures/{id}`). */
+function captureIdFromLinks(resource: Record<string, unknown>): string | null {
+  const links = Array.isArray(resource.links) ? resource.links.filter(isRecord) : [];
+  const up = links.find(l => l.rel === 'up' && typeof l.href === 'string');
+  const match = up && typeof up.href === 'string' ? /\/v2\/payments\/captures\/([^/?#]+)/.exec(up.href) : null;
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Parses PAYMENT.CAPTURE.REFUNDED / .REVERSED (refund resource) and CUSTOMER.DISPUTE.CREATED (dispute
+ * resource, capture id in `disputed_transactions[].seller_transaction_id`); null for anything else.
+ */
+export function parsePaypalReversalEvent(payload: unknown): PaypalReversalEvent | null {
+  if (!isRecord(payload) || typeof payload.id !== 'string' || typeof payload.event_type !== 'string' || !isRecord(payload.resource)) return null;
+  const resource = payload.resource;
+  const captureKind = CAPTURE_REVERSAL_EVENTS[payload.event_type];
+  if (captureKind) {
+    const customId = typeof resource.custom_id === 'string' && resource.custom_id ? resource.custom_id : null;
+    const captureId = captureIdFromLinks(resource);
+    if (!captureId && !customId) return null;
+    return { eventId: payload.id, eventType: payload.event_type, kind: captureKind, captureId, customId };
+  }
+  if (payload.event_type === 'CUSTOMER.DISPUTE.CREATED') {
+    const txs = Array.isArray(resource.disputed_transactions) ? resource.disputed_transactions.filter(isRecord) : [];
+    const tx = txs.find(t => typeof t.seller_transaction_id === 'string');
+    const captureId = tx && typeof tx.seller_transaction_id === 'string' ? tx.seller_transaction_id : null;
+    if (!captureId) return null;
+    const customId = tx && typeof tx.custom === 'string' && tx.custom ? tx.custom : null;
+    return { eventId: payload.id, eventType: payload.event_type, kind: 'dispute', captureId, customId };
+  }
+  return null;
 }

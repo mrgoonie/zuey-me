@@ -70,8 +70,13 @@ async function anyRow(d1: D1DatabaseLike, sql: string, params: unknown[]): Promi
 /**
  * True when nobody behind this account or mailbox has ever paid: no paid SePay order, no card subscription
  * that got past its first charge, no paid or confirmed booking. Commission is first-order only.
+ * `excludeSourceId` ignores one order/card/booking (ids are prefixed per table, so they never collide):
+ * at commission time the order being paid must not count as "paid before".
  */
-export async function isEligibleReferee(d1: D1DatabaseLike, input: { userId?: string; email?: string | null }): Promise<boolean> {
+export async function isEligibleReferee(
+  d1: D1DatabaseLike, input: { userId?: string; email?: string | null; excludeSourceId?: string | null },
+): Promise<boolean> {
+  const exclude = input.excludeSourceId ?? '';
   let canonical = normalizeEmailForSelfCheck(input.email);
   if (!canonical && input.userId) {
     const row = await d1.prepare('SELECT email FROM users WHERE id = ?').bind(input.userId).first<Row>();
@@ -82,18 +87,18 @@ export async function isEligibleReferee(d1: D1DatabaseLike, input: { userId?: st
 
   if (ids.length) {
     const inIds = placeholders(ids.length);
-    if (await anyRow(d1, `SELECT 1 FROM billing_orders WHERE user_id IN (${inIds}) AND (status = 'paid' OR paid_at IS NOT NULL) LIMIT 1`, ids)) return false;
-    if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`, ids)) return false;
+    if (await anyRow(d1, `SELECT 1 FROM billing_orders WHERE user_id IN (${inIds}) AND id <> ? AND (status = 'paid' OR paid_at IS NOT NULL) LIMIT 1`, [...ids, exclude])) return false;
+    if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`, [...ids, exclude])) return false;
   }
   if (!canonical) return true;
   const cardEmails = await rawEmailsMatching(d1, 'card_subscriptions', 'customer_email', canonical);
   if (cardEmails.length && await anyRow(d1,
-    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`,
-    cardEmails)) return false;
+    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL) LIMIT 1`,
+    [...cardEmails, exclude])) return false;
   const guestEmails = await rawEmailsMatching(d1, 'bookings', 'guest_email', canonical);
   if (guestEmails.length && await anyRow(d1,
-    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0) LIMIT 1`,
-    guestEmails)) return false;
+    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND id <> ? AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0) LIMIT 1`,
+    [...guestEmails, exclude])) return false;
   return true;
 }
 

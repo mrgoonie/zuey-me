@@ -36,8 +36,8 @@ Accepted outcome, constraints and non-goals come from the confirmed advise sessi
 |---|-------|--------|-----------|
 | 1 | [Schema, config, rates and ledger core](phase-01-schema-rates-ledger.md) | completed | — |
 | 2 | [Attribution and referee eligibility](phase-02-attribution-eligibility.md) | completed | 1 |
-| 3 | [Discounted checkout: SePay, Dodo, booking](phase-03-discounted-checkout.md) | pending | 2 |
-| 4 | [Commission capture, fraud checks, refunds and reversals](phase-04-commissions-fraud-refunds.md) | pending | 3 |
+| 3 | [Discounted checkout: SePay, Dodo, booking](phase-03-discounted-checkout.md) | completed | 2 |
+| 4 | [Commission capture, fraud checks, refunds and reversals](phase-04-commissions-fraud-refunds.md) | completed | 3 |
 | 5 | [Cron: maturity, tiers, monthly close; payout profiles and R2](phase-05-cron-payouts-profiles.md) | pending | 4 |
 | 6 | [REST, OpenAPI and MCP surfaces](phase-06-rest-openapi-mcp.md) | pending | 5 |
 | 7 | [UI: Zuey OS referral app, leaderboard, checkout and admin](phase-07-ui-os-app-admin.md) | pending | 6 |

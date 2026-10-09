@@ -1,13 +1,14 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk } from '../../../lib/http';
 import { requireMembersDb, membersRuntime } from '../../../lib/members/runtime';
-import { parseDodoEvent, verifyDodoSignature } from '../../../lib/payments/dodo';
-import { applyDodoEvent } from '../../../lib/payments/dodo-billing';
+import { parseDodoEvent, parseDodoReversalEvent, verifyDodoSignature } from '../../../lib/payments/dodo';
+import { applyDodoEvent, applyDodoReversal } from '../../../lib/payments/dodo-billing';
 import { standardWebhookHeaders } from '../../../lib/payments/standard-webhooks';
 
 /**
  * Dodo Payments webhook (Standard Webhooks signature, 5-minute replay window). Subscription and
  * payment events drive card memberships; the `webhook-id` makes every delivery idempotent.
+ * refund.succeeded / dispute.opened / dispute.lost reverse the referral commission of the refunded first payment.
  */
 export const POST: APIRoute = async ({ request, locals }) => {
   try {
@@ -24,6 +25,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     } catch {
       return jsonError(400, 'invalid_body', 'Webhook body is not JSON');
     }
+    const reversal = parseDodoReversalEvent(payload);
+    if (reversal) return jsonOk(await applyDodoReversal(requireMembersDb(env), reversal));
     const event = parseDodoEvent(payload);
     if (!event) return jsonOk({ outcome: 'ignored' });
     return jsonOk(await applyDodoEvent(requireMembersDb(env), env, headers.id, event));
