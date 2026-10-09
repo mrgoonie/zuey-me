@@ -5,9 +5,9 @@
 
 export type AppId =
   | 'about' | 'ai' | 'knowledges' | 'reads' | 'github'
-  | 'pricing' | 'business' | 'mcp' | 'account' | 'appearance';
+  | 'pricing' | 'business' | 'mcp' | 'account' | 'referral' | 'appearance';
 
-export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'pricing' | 'business' | 'account';
+export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'pricing' | 'business' | 'account' | 'referral';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -34,13 +34,14 @@ export const APPS: Record<AppId, AppDef> = {
   business: { id: 'business', surface: 'stage', href: '/business', size: (w, h) => ({ w: clampTo(720, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   mcp: { id: 'mcp', surface: 'paper', href: '/docs', size: (_, h) => ({ w: 560, h: clampTo(560, h - 16) }), min: { w: 340, h: 320 } },
   account: { id: 'account', surface: 'stage', href: '/account', size: (w, h) => ({ w: clampTo(760, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
+  referral: { id: 'referral', surface: 'stage', href: '/referral', size: (w, h) => ({ w: clampTo(760, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   appearance: { id: 'appearance', surface: 'glass', href: '/#appearance', size: (_, h) => ({ w: 560, h: clampTo(640, h - 16) }), min: { w: 340, h: 360 } },
 };
 
 export const APP_IDS = Object.keys(APPS) as AppId[];
-/** Dock order (Alt+1…9 follow it). Appearance lives in the menu and the dock's right side. */
-export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'github', 'pricing', 'business', 'mcp', 'account'];
-export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'pricing', 'business', 'account'];
+/** Dock order (Alt+1…9 follow the first nine). Appearance lives in the menu and the dock's right side. */
+export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'github', 'pricing', 'business', 'mcp', 'account', 'referral'];
+export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'pricing', 'business', 'account', 'referral'];
 
 export const isAppId = (v: unknown): v is AppId => typeof v === 'string' && (APP_IDS as string[]).includes(v);
 

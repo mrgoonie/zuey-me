@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  BookOpen, Briefcase, CreditCard, GitBranch, LayoutGrid, Newspaper, Palette, Plug, Sparkles, User,
+  BookOpen, Briefcase, CreditCard, Gift, GitBranch, LayoutGrid, Newspaper, Palette, Plug, Sparkles, User,
 } from 'lucide-react';
 import type { AppId } from './apps';
 
@@ -15,6 +15,7 @@ const ICONS: Record<Exclude<AppId, 'about'>, IconType> = {
   business: Briefcase,
   mcp: Plug,
   account: User,
+  referral: Gift,
   appearance: Palette,
 };
 

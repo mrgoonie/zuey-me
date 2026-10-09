@@ -235,9 +235,9 @@ export const bookingOpenApi: OpenApiFragment = {
     },
     BookingCheckout: {
       type: 'object',
-      description: 'PayPal: { provider, url (approval link), order_id, expires_at }. SePay: SepayTransfer fields plus expires_at.',
+      description: 'PayPal: { provider, url (approval link), order_id, amount_usd_cents (after any referral discount), expires_at }. SePay: SepayTransfer fields plus expires_at.',
       properties: {
-        provider: { type: 'string', enum: ['sepay', 'paypal'] }, url: { type: 'string' }, order_id: { type: 'string' },
+        provider: { type: 'string', enum: ['sepay', 'paypal'] }, url: { type: 'string' }, order_id: { type: 'string' }, amount_usd_cents: { type: 'integer' },
         qr_url: { type: 'string' }, transfer_content: { type: 'string' }, amount: { type: 'integer' }, expires_at: { type: 'string', format: 'date-time' },
       },
     },

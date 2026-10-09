@@ -1,0 +1,123 @@
+import { useCallback, useEffect, useState } from 'react';
+import { callApi, isRecord, numOr, records, str } from '../members/member-ui';
+
+/** Client view of `GET /api/v1/referrals/quote`: display only, every checkout recomputes server-side. */
+export interface ReferralQuoteView {
+  referral: { code: string; discount_percent: number; booking_discount_percent: number; source: string; provisional: boolean } | null;
+  plans: { plan: string; months: number; amount_usd_cents: number; amount_vnd: number | null; discounted_usd_cents: number; discounted_vnd: number | null }[];
+  card_first_month: { plan: string; amount_usd_cents: number; discounted_usd_cents: number }[];
+  booking: { amount_usd_cents: number; discounted_usd_cents: number; amount_vnd: number | null; discounted_vnd: number | null };
+}
+
+const numOrNull = (r: Record<string, unknown>, k: string): number | null => (typeof r[k] === 'number' && Number.isFinite(r[k]) ? Number(r[k]) : null);
+
+export function parseReferralQuote(v: unknown): ReferralQuoteView | null {
+  if (!isRecord(v) || !Array.isArray(v.plans) || !isRecord(v.booking)) return null;
+  const r = isRecord(v.referral) ? v.referral : null;
+  const b = v.booking;
+  return {
+    referral: r && str(r, 'code') ? {
+      code: str(r, 'code'), discount_percent: numOr(r, 'discount_percent'), booking_discount_percent: numOr(r, 'booking_discount_percent'),
+      source: str(r, 'source'), provisional: r.provisional === true,
+    } : null,
+    plans: records(v.plans).map(p => ({
+      plan: str(p, 'plan'), months: numOr(p, 'months', 1), amount_usd_cents: numOr(p, 'amount_usd_cents'), amount_vnd: numOrNull(p, 'amount_vnd'),
+      discounted_usd_cents: numOr(p, 'discounted_usd_cents'), discounted_vnd: numOrNull(p, 'discounted_vnd'),
+    })),
+    card_first_month: records(v.card_first_month).map(c => ({
+      plan: str(c, 'plan'), amount_usd_cents: numOr(c, 'amount_usd_cents'), discounted_usd_cents: numOr(c, 'discounted_usd_cents'),
+    })),
+    booking: {
+      amount_usd_cents: numOr(b, 'amount_usd_cents'), discounted_usd_cents: numOr(b, 'discounted_usd_cents'),
+      amount_vnd: numOrNull(b, 'amount_vnd'), discounted_vnd: numOrNull(b, 'discounted_vnd'),
+    },
+  };
+}
+
+/** Same shape as the server's `normalizeReferralCode`: 6–16 letters or digits, case-insensitive. */
+export function normalizeCodeInput(raw: string): string | null {
+  const code = raw.trim().toLowerCase();
+  return /^[a-z0-9]{6,16}$/.test(code) ? code : null;
+}
+
+export type ApplyOutcome = 'applied' | 'bound_elsewhere' | 'not_applicable';
+
+/**
+ * How a typed code relates to the quote it produced. A bound account keeps its referrer (typed codes are
+ * ignored); otherwise the typed code wins over the cookie, so any other code in the answer means it failed.
+ */
+export function applyOutcome(typed: string, quote: ReferralQuoteView): ApplyOutcome {
+  const r = quote.referral;
+  if (!r) return 'not_applicable';
+  if (r.code === typed) return 'applied';
+  return r.source === 'bound' ? 'bound_elsewhere' : 'not_applicable';
+}
+
+export interface ReferralQuoteState {
+  quote: ReferralQuoteView | null;
+  /** Typed code that applied and must be sent as `referral_code` at checkout (null: cookie/binding or none). */
+  enteredCode: string | null;
+  busy: boolean;
+  message: { kind: 'ok' | 'error'; text: string } | null;
+  apply: (raw: string) => Promise<void>;
+  clear: () => void;
+}
+
+const COPY = {
+  invalid: 'Mã giới thiệu gồm 6–16 chữ cái hoặc chữ số.',
+  applied: (pct: number) => `Đã áp dụng mã: giảm ${pct}%.`,
+  bound: (code: string) => `Tài khoản của bạn đã gắn mã giới thiệu ${code}; ưu đãi theo mã này.`,
+  notApplicable: 'Mã này không áp dụng được (mã không hoạt động, là mã của bạn, hoặc tài khoản đã từng thanh toán).',
+  failed: 'Không kiểm tra được mã lúc này. Vui lòng thử lại.',
+};
+
+/**
+ * Loads the visitor's referral quote (cookie or account binding) on mount, and lets them type a code.
+ * The page itself stays cacheable: nothing personal is rendered on the server.
+ */
+export function useReferralQuote(): ReferralQuoteState {
+  const [quote, setQuote] = useState<ReferralQuoteView | null>(null);
+  const [enteredCode, setEnteredCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<ReferralQuoteState['message']>(null);
+
+  const fetchQuote = useCallback(async (code: string | null) => {
+    const res = await callApi(`/api/v1/referrals/quote${code ? `?code=${encodeURIComponent(code)}` : ''}`, { cache: 'no-store' });
+    return res.ok ? parseReferralQuote(res.data) : null;
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    void fetchQuote(null).then(q => { if (live && q) setQuote(q); });
+    return () => { live = false; };
+  }, [fetchQuote]);
+
+  const apply = useCallback(async (raw: string) => {
+    const code = normalizeCodeInput(raw);
+    if (!code) { setMessage({ kind: 'error', text: COPY.invalid }); return; }
+    setBusy(true);
+    const q = await fetchQuote(code);
+    setBusy(false);
+    if (!q) { setMessage({ kind: 'error', text: COPY.failed }); return; }
+    const outcome = applyOutcome(code, q);
+    if (outcome === 'applied') {
+      setQuote(q);
+      setEnteredCode(q.referral?.source === 'entered' ? code : null);
+      setMessage({ kind: 'ok', text: COPY.applied(q.referral?.discount_percent ?? 0) });
+    } else if (outcome === 'bound_elsewhere') {
+      setQuote(q);
+      setEnteredCode(null);
+      setMessage({ kind: 'ok', text: COPY.bound(q.referral?.code ?? '') });
+    } else {
+      setMessage({ kind: 'error', text: COPY.notApplicable });
+    }
+  }, [fetchQuote]);
+
+  const clear = useCallback(() => {
+    setEnteredCode(null);
+    setMessage(null);
+    void fetchQuote(null).then(q => { if (q) setQuote(q); });
+  }, [fetchQuote]);
+
+  return { quote, enteredCode, busy, message, apply, clear };
+}

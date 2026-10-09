@@ -120,6 +120,7 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .os-g--business { background: linear-gradient(160deg, var(--accent), #7a2c10); }
 .os-g--mcp { background: linear-gradient(160deg, #2f6f8f, #163747); }
 .os-g--account { background: linear-gradient(160deg, #5c5550, #2b2623); }
+.os-g--referral { background: linear-gradient(160deg, #d0607a, #7a2238); }
 .os-g--appearance { background: conic-gradient(from 200deg, #c4532a, #c2416b, #6b4fd6, #2f7fa8, #3e8a5c, #b8862b, #c4532a); }
 .os-g--expose { background: linear-gradient(160deg, #4a4440, #1d1a18); }
 .os-g--flow { background: linear-gradient(160deg, #6b4fd6, #3a2a86); }

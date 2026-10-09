@@ -1,0 +1,28 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { ReferralApp } from '../components/referral/ReferralApp';
+import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
+import { resolveMemberSession } from '../lib/members/session';
+
+const runtimeEnv = Astro.locals.runtime?.env ?? {};
+const member = await resolveMemberSession(Astro.request, runtimeEnv.DB).catch(() => null);
+const locale = resolveLocale(Astro.request);
+// Signed-in state and locale come from cookies; the member's own data is fetched client-side (no-store API).
+Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
+if (member) Astro.response.headers.set('Cache-Control', 'private, no-store');
+const vi = locale === 'vi';
+---
+
+<Layout
+  title={vi ? 'Giới thiệu bạn bè — Zuey' : 'Refer friends — Zuey'}
+  description={vi ? 'Chia sẻ link giới thiệu Zuey: bạn bè được giảm giá đơn đầu tiên, bạn nhận hoa hồng. Bảng xếp hạng hằng tháng.' : 'Share your Zuey referral link: friends save on their first order, you earn a commission. Monthly leaderboard.'}
+  url="https://zuey.me/referral"
+  lang={LOCALE_LABELS[locale].htmlLang}
+>
+  <main class="relative min-h-screen w-full flex flex-col items-center py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <div class="w-full max-w-[720px] min-w-0">
+      <a href="/" class="mb-3 inline-block text-xs font-semibold text-stone-200 hover:text-white underline">← zuey.me</a>
+      <ReferralApp client:load locale={locale} signedIn={member !== null} />
+    </div>
+  </main>
+</Layout>

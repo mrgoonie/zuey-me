@@ -20,12 +20,14 @@ import {
   Workflow,
   CalendarDays,
   Receipt,
+  Gift,
 } from 'lucide-react';
 import { ArticlesPanel } from './ArticleEditor';
 import { ReadsPanel } from './ReadsPanel';
 import { WorkflowsPanel } from './WorkflowsPanel';
 import { BookingPanel } from './BookingPanel';
 import { BillingAttentionPanel } from './BillingAttentionPanel';
+import { ReferralsTab } from './ReferralsTab';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
 
 interface StudioAppProps {
@@ -40,7 +42,7 @@ interface StudioAppProps {
   deniedEmail?: string | null;
 }
 
-type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'workflows' | 'booking' | 'billing';
+type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'workflows' | 'booking' | 'billing' | 'referrals';
 
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
@@ -338,7 +340,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     );
   }
 
-  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'workflows' || activeTab === 'booking' || activeTab === 'billing';
+  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'workflows' || activeTab === 'booking' || activeTab === 'billing' || activeTab === 'referrals';
 
   // Filtered links for Links tab
   const filteredLinks = filterSection === 'all'
@@ -374,6 +376,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             { id: 'workflows', label: 'Workflows', icon: Workflow },
             { id: 'booking', label: 'Booking', icon: CalendarDays },
             { id: 'billing', label: 'Payments', icon: Receipt },
+            { id: 'referrals', label: 'Referrals', icon: Gift },
             { id: 'keys', label: 'API & Agents', icon: Key },
           ] satisfies { id: StudioTab; label: string; icon: typeof User }[]).map(({ id, label, icon: Icon }) => (
             <button
@@ -428,6 +431,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           {activeTab === 'workflows' && <WorkflowsPanel />}
           {activeTab === 'booking' && <BookingPanel />}
           {activeTab === 'billing' && <BillingAttentionPanel />}
+          {activeTab === 'referrals' && <ReferralsTab />}
 
           {saveStatus && (
             <div className="mb-6 p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">

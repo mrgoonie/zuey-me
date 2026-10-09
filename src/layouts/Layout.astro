@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import { REF_REDIRECT_SCRIPT } from '../components/referral/ref-redirect';
 
 interface Props {
   title?: string;
@@ -32,6 +33,8 @@ const posthogHost = Astro.locals.runtime?.env?.PUBLIC_POSTHOG_HOST || process.en
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- ?ref=CODE → /r/CODE (the only route that sets the referral cookie) -->
+    <script is:inline set:html={REF_REDIRECT_SCRIPT} />
     <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
     <link rel="canonical" href={url} />
 

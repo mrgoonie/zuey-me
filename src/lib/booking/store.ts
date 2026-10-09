@@ -497,7 +497,7 @@ export async function listBookings(d1: D1DatabaseLike, filter: BookingListFilter
 // ---------------------------------------------------------------------------
 
 export type CheckoutResult =
-  | { provider: 'paypal'; url: string; order_id: string; expires_at: string }
+  | { provider: 'paypal'; url: string; order_id: string; amount_usd_cents: number; expires_at: string }
   | (SepayTransferInfo & { expires_at: string });
 
 export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null): Promise<CheckoutResult> {
@@ -525,7 +525,7 @@ export async function startCheckout(d1: D1DatabaseLike, env: RuntimeEnv, id: str
     }, bookingRuntime.fetch, now);
     await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, payment_ref = ?, updated_at = ? WHERE id = ?')
       .bind(due, 'USD', order.id, iso(now), row.id).run();
-    return { provider: 'paypal', url: order.approveUrl, order_id: order.id, expires_at: row.hold_expires_at };
+    return { provider: 'paypal', url: order.approveUrl, order_id: order.id, amount_usd_cents: due, expires_at: row.hold_expires_at };
   }
   const transfer = vietQrTransfer(env, due, transferContent(row.code));
   await d1.prepare('UPDATE bookings SET amount_expected = ?, currency = ?, updated_at = ? WHERE id = ?')

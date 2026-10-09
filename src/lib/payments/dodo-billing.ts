@@ -67,6 +67,8 @@ export interface CardSubscriptionView {
   amount_cents: number | null;
   currency: string | null;
   attention_reason: string | null;
+  /** Referral discount on the first charge only (null without a referral). */
+  referral_discount_percent: number | null;
   can_manage: boolean;
   can_cancel: boolean;
   created_at: string;
@@ -117,6 +119,7 @@ export function toCardView(card: CardSubscription, env: RuntimeEnv): CardSubscri
     amount_cents: card.amount_cents,
     currency: card.currency,
     attention_reason: card.attention_reason,
+    referral_discount_percent: card.referrer_user_id ? card.referral_discount_percent : null,
     can_manage: card.provider_customer_id !== null && status !== 'pending',
     can_cancel: card.provider_subscription_id !== null && status === 'active' && !card.cancel_at_period_end,
     created_at: card.created_at,

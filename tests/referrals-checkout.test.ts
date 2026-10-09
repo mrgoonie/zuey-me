@@ -250,6 +250,8 @@ describe('Dodo card checkout with a referral', () => {
     expect(card.referral_commission_percent).toBe(5);
     expect(card.amount_before_referral).toBe(1900);
     expect(card.referral_ref).toBe('dsc_1');
+    // The member-facing card view carries the first-charge discount for the status page.
+    expect(field(res.data, 'referral_discount_percent')).toBe(15);
   });
 
   it('sends no discount request or discount_codes without a referral', async () => {
@@ -315,6 +317,8 @@ describe('Consultation booking with a referral', () => {
 
     const res = await bookingCheckoutApi(ctx({ method: 'POST', body: { token: field(h.data, 'manage_token') }, params: { id } }));
     expect(res.status).toBe(200);
+    // The widget shows the server's discounted PayPal amount on the pay button.
+    expect(field((await read(res)).data, 'amount_usd_cents')).toBe(189_905);
     const order: unknown = JSON.parse(calls.find(c => c.url === `${PAYPAL_BASE}/v2/checkout/orders`)?.body ?? '{}');
     const units = field(order, 'purchase_units');
     const unit = Array.isArray(units) ? units[0] : null;
