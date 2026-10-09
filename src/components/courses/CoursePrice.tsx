@@ -8,6 +8,7 @@ export function discountLabel(quote: CourseQuote): string | null {
     return `−${quote.applied_pct}% thành viên${quote.subscriber_plan ? ` ${planName(quote.subscriber_plan)}` : ''}`;
   }
   if (quote.discount_source === 'referral') return `−${quote.applied_pct}% mã giới thiệu`;
+  if (quote.discount_source === 'promo') return `−${quote.applied_pct}% mã ưu đãi`;
   return `−${quote.applied_pct}%`;
 }
 

@@ -100,19 +100,19 @@ export async function isEligibleReferee(
     // Other accounts on the same mailbox always count; with `ownPaymentsSince`, the buyer's own later payments do not.
     const own = since && input.userId ? ` AND (user_id <> ? OR COALESCE(%s, created_at) < ?)` : '';
     const ownArgs = since && input.userId ? [input.userId, since] : [];
-    if (await anyRow(d1, `SELECT 1 FROM billing_orders WHERE user_id IN (${inIds}) AND id <> ? AND (status = 'paid' OR paid_at IS NOT NULL)${own.replace('%s', 'paid_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
-    if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${own.replace('%s', 'first_payment_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
-    if (await anyRow(d1, `SELECT 1 FROM course_orders WHERE user_id IN (${inIds}) AND id <> ? AND paid_at IS NOT NULL${own.replace('%s', 'paid_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
+    if (await anyRow(d1, `SELECT 1 FROM billing_orders WHERE user_id IN (${inIds}) AND id <> ? AND promo_code_id IS NULL AND (status = 'paid' OR paid_at IS NOT NULL)${own.replace('%s', 'paid_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
+    if (await anyRow(d1, `SELECT 1 FROM card_subscriptions WHERE user_id IN (${inIds}) AND id <> ? AND promo_code_id IS NULL AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${own.replace('%s', 'first_payment_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
+    if (await anyRow(d1, `SELECT 1 FROM course_orders WHERE user_id IN (${inIds}) AND id <> ? AND promo_code_id IS NULL AND paid_at IS NOT NULL${own.replace('%s', 'paid_at')} LIMIT 1`, [...ids, exclude, ...ownArgs])) return false;
   }
   if (!canonical) return true;
   if (await isPaidEmailRecorded(d1, canonical)) return false;
   const cardEmails = await rawEmailsMatching(d1, 'card_subscriptions', 'customer_email', canonical);
   if (cardEmails.length && await anyRow(d1,
-    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${before('COALESCE(first_payment_at, created_at)')} LIMIT 1`,
+    `SELECT 1 FROM card_subscriptions WHERE customer_email IN (${placeholders(cardEmails.length)}) AND id <> ? AND promo_code_id IS NULL AND (status IN ${CARD_PAID_STATUSES} OR first_payment_id IS NOT NULL)${before('COALESCE(first_payment_at, created_at)')} LIMIT 1`,
     [...cardEmails, exclude, ...sinceArg])) return false;
   const guestEmails = await rawEmailsMatching(d1, 'bookings', 'guest_email', canonical);
   if (guestEmails.length && await anyRow(d1,
-    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND id <> ? AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0)${before('created_at')} LIMIT 1`,
+    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND id <> ? AND promo_code_id IS NULL AND (status = 'confirmed' OR COALESCE(amount_paid, 0) > 0)${before('created_at')} LIMIT 1`,
     [...guestEmails, exclude, ...sinceArg])) return false;
   return true;
 }

@@ -259,3 +259,27 @@ Migration `0016_referrals.sql` chỉ thêm bảng và cột, không sửa dữ l
    - Mỗi người được giới thiệu chỉ có một đơn giảm giá đang chờ thanh toán (đơn SePay, checkout thẻ, hoặc lịch booking đang giữ chỗ theo cùng email). Đơn tạo thêm trong lúc đó tính giá gốc, không báo lỗi.
 7. **Kiểm tra sau khi deploy:** mở `/r/<mã>` → phải chuyển hướng về trang chủ và có cookie `zr_ref`; `/pricing` hiện giá đã giảm cho tài khoản chưa từng trả tiền; `/docs` có nhóm Referrals.
 
+
+## 13. Mã ưu đãi (promo code) & hoá đơn doanh nghiệp
+
+Migration `0019_promo_codes_and_invoices.sql` thêm bảng `promo_codes`, `promo_redemptions`, `invoice_requests` và cột snapshot mã trên `billing_orders`, `card_subscriptions`, `bookings`, `course_orders`. Không sửa dữ liệu cũ. Tạo bookmark Time Travel rồi chạy riêng file (như mục 4b, không dùng `migrations apply`):
+
+```bash
+wrangler d1 execute zuey_me_db --remote --file=./migrations/0019_promo_codes_and_invoices.sql -y
+```
+
+**Mã ưu đãi** (Studio → **Mã KM**, `/api/v1/admin/promo-codes`, MCP `promo_code_*`; code ở `src/lib/promos/`):
+
+- Chỉ giảm theo %, 1–100. Áp cho gói SePay, thẻ Dodo, buổi tư vấn và khoá học; giới hạn theo sản phẩm, gói, khoá học, số tháng trả trước tối thiểu, khung thời gian, tổng lượt dùng và mỗi khách một lần (theo tài khoản, hoặc hộp thư đã chuẩn hoá với booking).
+- Khách nhập ở một ô **"Mã ưu đãi"** (body `discount_code`; `referral_code` cũ vẫn nhận). Mã promo được tra trước; tên mã promo và mã giới thiệu không bao giờ trùng nhau. **Không cộng dồn**: lấy % lớn hơn giữa referral và promo, bằng nhau thì giữ referral (referrer vẫn có hoa hồng). Khoá học: thành viên > referral > promo khi bằng nhau.
+- Mỗi checkout giữ một lượt đến khi đơn hết hạn (giải phóng tự động khi hết hạn, không cần cron); trả tiền xong lượt thành `redeemed`. Đơn dùng promo không tính là "đơn đầu" của chương trình giới thiệu.
+- Mã 100%: đơn 0đ được kích hoạt ngay. Trên thẻ Dodo, mã 100% thành đơn trả trước 0đ với số tháng bằng `card_cycles` (làm tròn xuống 1/3/6/12).
+- Thẻ Dodo: hệ thống tạo discount Dodo một lần dùng với `subscription_cycles = card_cycles`; webhook chấp nhận giá đã giảm trong số chu kỳ đó. Lần trừ đầu cao hơn giá đã giảm → thẻ `needs_attention` lý do `promo_discount_not_applied`, admin tự xử lý.
+- Đổi tên mã đã có người dùng bị chặn (`409 code_in_use`): tạo mã mới.
+
+**Hoá đơn doanh nghiệp** (Studio → **Hoá đơn**, `/studio#invoices`, `/api/v1/admin/invoice-requests`, MCP `invoice_request_*`):
+
+- Chỉ khi thanh toán SePay: khách tick "Xuất hoá đơn công ty" và nhập MST (`10 số` hoặc `10 số-3 số`) + email nhận hoá đơn. Dodo/PayPal trả `400 invoice_requires_sepay`. Đơn 0đ không tạo yêu cầu.
+- Khi đơn được thanh toán, yêu cầu chuyển `requested` và mọi email trong `ADMIN_EMAILS` nhận một email (Resend). Admin xuất hoá đơn điện tử thủ công, rồi nhập số hoá đơn ở Studio (*Mark issued*) hoặc `POST /api/v1/admin/invoice-requests/{id}/issue`. CSV cho kế toán: `GET /api/v1/admin/invoice-requests.csv?status=requested`.
+
+**Kiểm tra sau khi deploy:** tạo một mã thử ở Studio → Mã KM, nhập ở `/pricing` → hiện giá đã giảm; `GET /api/v1/promos/quote?code=<MÃ>` trả `200`; `/docs` có nhóm "Promo codes & invoices". Tắt mã thử sau khi kiểm tra.

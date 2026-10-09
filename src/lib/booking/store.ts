@@ -10,7 +10,12 @@ import { capturePaypalOrder, createPaypalOrder, missingPaypalConfig } from '../p
 import type { PaypalReversalEvent } from '../payments/paypal';
 import { missingSepayConfig, parseVndPrice, transferContent, vietQrTransfer } from '../payments/sepay';
 import type { SepayTransferInfo } from '../payments/sepay';
-import { BOOKING_PRICE_USD_CENTS, parseReferralCodeField, resolveCheckoutReferral } from '../referrals/checkout';
+import { promoWins, readDiscountCode } from '../promos/checkout-discount-code';
+import type { InvoiceInput } from '../promos/invoice-requests';
+import type { PromoCode } from '../promos/promo-codes';
+import { activateInvoiceRequest, createInvoiceRequest, parseInvoiceField } from '../promos/invoice-requests';
+import { redeemPromo, requirePromoApplicable, reservePromo } from '../promos/promo-redemptions';
+import { BOOKING_PRICE_USD_CENTS, resolveCheckoutReferral } from '../referrals/checkout';
 import { parseUsdVndRate } from '../members/plans';
 import { captureReferralCommission, rescheduleBookingCommissionHold } from '../referrals/commissions';
 import { applyPercent } from '../referrals/rates';
@@ -82,9 +87,13 @@ export interface BookingRow {
   referral_rate: number | null;
   referral_discount_percent: number | null;
   referral_commission_percent: number | null;
-  /** List price in the booking's currency (VND for SePay, USD cents for PayPal) before the referral discount. */
+  /** List price in the booking's currency (VND for SePay, USD cents for PayPal) before the referral or promo discount. */
   amount_before_referral: number | null;
   referral_ref: string | null;
+  /** Promo snapshot (all null without a promo; never together with a referral). */
+  promo_code_id: string | null;
+  promo_code: string | null;
+  promo_discount_percent: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -107,6 +116,9 @@ export interface GuestBookingView {
   currency: string | null;
   /** Referral discount on the consultation (null without a referral). */
   referral_discount_percent: number | null;
+  /** Promo code discount on the consultation (null without a promo). */
+  promo_code: string | null;
+  promo_discount_percent: number | null;
   meet_url: string | null;
   reschedule_count: number;
   can_reschedule: boolean;
@@ -276,8 +288,10 @@ export interface HoldInput {
   notes: string | null;
   timezone: string | null;
   payment_method: PaymentMethod;
-  /** Optional referral code typed by the guest (validated shape; applicability is checked at hold time). */
-  referral_code: string | null;
+  /** Raw `discount_code` / `referral_code` fields (promo or referral code); resolved at hold time. */
+  codes: { discount_code?: unknown; referral_code?: unknown };
+  /** Business invoice request (SePay only). */
+  invoice: InvoiceInput | null;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -307,7 +321,8 @@ export function parseHoldInput(body: Record<string, unknown>): HoldInput {
     notes: notes || null,
     timezone: tz && isValidTimeZone(tz) ? tz : null,
     payment_method: method,
-    referral_code: parseReferralCodeField(body),
+    codes: { discount_code: body.discount_code, referral_code: body.referral_code },
+    invoice: parseInvoiceField(body, method),
   };
 }
 
@@ -356,7 +371,7 @@ export function bookingAmountDue(row: BookingRow, env: RuntimeEnv): { amount: nu
   const list = listPrice(env, method);
   const base = row.amount_before_referral ?? list.amount;
   if (base === null) return list;
-  const discount = row.referrer_user_id ? row.referral_discount_percent ?? 0 : 0;
+  const discount = row.promo_code_id ? row.promo_discount_percent ?? 0 : row.referrer_user_id ? row.referral_discount_percent ?? 0 : 0;
   return { amount: applyPercent(base, discount, list.currency), currency: list.currency };
 }
 
@@ -371,7 +386,13 @@ export async function createHold(
   assertPaymentConfigured(env, input.payment_method);
   const slot = await findRuleSlot(d1, input.slot_start);
   if (!slot) throw new AppError(409, 'slot_unavailable', 'This time is not an open consultation slot');
-  const referral = await resolveCheckoutReferral(d1, { email: input.email, enteredCode: input.referral_code, request: opts.request, product: 'booking' });
+  const entry = await readDiscountCode(d1, input.codes);
+  const resolved = await resolveCheckoutReferral(d1, { email: input.email, enteredCode: entry.referralCode, request: opts.request, product: 'booking' });
+  const target = { product: 'booking' as const, email: input.email };
+  if (entry.promo) await requirePromoApplicable(d1, entry.promo, target);
+  // One discount per order: the larger percent wins, a tie goes to the referral.
+  const promo = entry.promo && promoWins(entry.promo.percent, resolved?.discountPercent) ? entry.promo : null;
+  const referral = promo ? null : resolved;
   const listAmount = listPrice(env, input.payment_method).amount;
 
   const now = bookingRuntime.now();
@@ -390,16 +411,19 @@ export async function createHold(
       await d1.prepare(
         `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email,
           company, notes, guest_timezone, payment_method, manage_token_hash, reschedule_count, created_at, updated_at,
-          referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral, usd_vnd_rate)
-         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
+          referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral, usd_vnd_rate,
+          promo_code_id, promo_code, promo_discount_percent)
+         VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, code, slot.start, slot.end, slot.duration_min, iso(now + HOLD_MS), input.name, input.email,
         input.company, input.notes, input.timezone, input.payment_method, tokenHash, nowIso, nowIso,
         referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
-        referral ? listAmount : null, parseUsdVndRate(env)
+        referral || promo ? listAmount : null, parseUsdVndRate(env),
+        promo?.id ?? null, promo?.code ?? null, promo?.percent ?? null
       ).run();
-      const row = await getBookingRow(d1, id);
+      let row = await getBookingRow(d1, id);
       if (!row) throw new Error('Inserted booking not found');
+      row = await attachHoldExtras(d1, env, row, { promo, invoice: input.invoice, listAmount });
       return {
         booking: toGuestView(row, env, now),
         manage_token: token,
@@ -412,6 +436,54 @@ export async function createHold(
     }
   }
   throw new AppError(500, 'code_generation_failed', 'Could not allocate a booking code');
+}
+
+/**
+ * After the hold row exists: reserves the promo (the hold is deleted when the code was taken meanwhile),
+ * records the invoice request, and confirms a hold that a 100% promo made free.
+ */
+async function attachHoldExtras(
+  d1: D1DatabaseLike, env: RuntimeEnv, row: BookingRow,
+  extras: { promo: PromoCode | null; invoice: InvoiceInput | null; listAmount: number | null },
+): Promise<BookingRow> {
+  const due = bookingAmountDue(row, env);
+  if (extras.promo) {
+    try {
+      await reservePromo(d1, {
+        promo: extras.promo, kind: 'booking', sourceId: row.id, sourceCode: row.code, target: { product: 'booking', email: row.guest_email },
+        currency: due.currency, amountBefore: extras.listAmount ?? 0, amountDue: due.amount ?? 0, expiresAt: row.hold_expires_at,
+      });
+    } catch (err) {
+      await d1.prepare("DELETE FROM bookings WHERE id = ? AND status = 'held'").bind(row.id).run().catch(() => undefined);
+      throw err;
+    }
+  }
+  if (extras.invoice && due.amount !== null && due.amount > 0) {
+    await createInvoiceRequest(d1, {
+      kind: 'booking', sourceId: row.id, sourceCode: row.code, userId: null, invoice: extras.invoice,
+      description: `Tư vấn 1:1 — ${row.duration_min} phút`, amountVnd: due.amount,
+    });
+  }
+  if (due.amount !== 0 || !extras.promo) return row;
+  const nowIso = iso(bookingRuntime.now());
+  await d1.prepare(
+    "UPDATE bookings SET status = 'confirmed', amount_expected = 0, currency = ?, amount_paid = 0, payment_ref = ?, updated_at = ? WHERE id = ? AND status = 'held'"
+  ).bind(due.currency, `promo:${extras.promo.code}`, nowIso, row.id).run();
+  await redeemPromo(d1, 'booking', row.id, 0);
+  const confirmed = await getBookingRow(d1, row.id);
+  if (!confirmed) return row;
+  await fulfilBooking(d1, env, confirmed, 'confirmed');
+  return (await getBookingRow(d1, row.id)) ?? confirmed;
+}
+
+/** Paid booking: the promo use becomes permanent and an invoice request goes to the admins. */
+async function settleBookingExtras(d1: D1DatabaseLike, env: RuntimeEnv, row: BookingRow): Promise<void> {
+  try {
+    if (row.promo_code_id) await redeemPromo(d1, 'booking', row.id, row.amount_paid);
+    if (row.payment_method === 'sepay') await activateInvoiceRequest(d1, env, 'booking', row.id, row.amount_paid);
+  } catch (err) {
+    console.error(`booking ${row.code} promo/invoice bookkeeping failed:`, err instanceof Error ? err.message : 'unknown');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +533,8 @@ export function toGuestView(row: BookingRow, env: RuntimeEnv, now: number): Gues
     amount_expected: row.amount_expected,
     currency: row.currency,
     referral_discount_percent: row.referrer_user_id ? row.referral_discount_percent : null,
+    promo_code: row.promo_code_id ? row.promo_code : null,
+    promo_discount_percent: row.promo_code_id ? row.promo_discount_percent : null,
     meet_url: row.status === 'confirmed' ? row.meet_url : null,
     reschedule_count: row.reschedule_count,
     can_reschedule: blocked === null,
@@ -632,6 +706,7 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
     if (changes === 1) {
       const confirmed = await getBookingRow(d1, row.id);
       if (confirmed) await fulfilBooking(d1, env, confirmed, 'confirmed');
+      if (confirmed) await settleBookingExtras(d1, env, confirmed);
       if (row.referrer_user_id) {
         await captureReferralCommission(d1, env, { kind: 'booking', id: row.id, payerText: n.payerText ?? null, payerEmail: n.payerEmail ?? null });
       }
@@ -889,6 +964,7 @@ export async function adminUpdateBooking(
     }
     const confirmed = await getBookingRow(d1, id);
     if (confirmed && confirmed.meet_status !== 'sent') await fulfilBooking(d1, env, confirmed, 'confirmed');
+    if (confirmed) await settleBookingExtras(d1, env, confirmed);
     if (row.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id });
   }
   const updated = await getBookingRow(d1, id);

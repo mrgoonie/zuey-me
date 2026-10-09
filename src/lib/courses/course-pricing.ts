@@ -1,6 +1,6 @@
 /**
  * Course prices. One function decides every displayed and charged amount:
- * final = list × (1 − max(subscriber %, referral %)). Discounts never stack.
+ * final = list × (1 − max(subscriber %, referral %, promo %)). Discounts never stack.
  */
 import type { D1DatabaseLike } from '../../db/store';
 import { AppError } from '../http';
@@ -62,8 +62,10 @@ export interface CourseQuote {
   /** Active plan that gives the subscriber discount (largest one). */
   subscriber_plan: PlanId | null;
   referral_pct: number;
+  /** Promo code percent offered (0 without a promo; up to 100). */
+  promo_pct: number;
   applied_pct: number;
-  discount_source: 'none' | 'subscriber' | 'referral';
+  discount_source: 'none' | 'subscriber' | 'referral' | 'promo';
   amount_usd_cents: number;
   usd_vnd_rate: number | null;
   /** VND for SePay (USD × rate, rounded up to 1,000 VND); null without a rate. */
@@ -77,6 +79,8 @@ export interface QuoteInput {
   table: PlanDiscountTable;
   activePlans: PlanId[];
   referralPct: number;
+  /** Promo code percent (0 without a promo). */
+  promoPct?: number;
   usdVndRate: number | null;
 }
 
@@ -88,9 +92,10 @@ export function quoteCoursePrice(input: QuoteInput): CourseQuote {
     if (discounts[plan] > subscriberPct) { subscriberPct = discounts[plan]; subscriberPlan = plan; }
   }
   const referralPct = Math.max(0, Math.min(MAX_DISCOUNT_PERCENT, Math.floor(input.referralPct)));
-  const applied = Math.max(subscriberPct, referralPct);
-  // Ties go to the subscriber discount: the referral code then earns commission without lowering the price further.
-  const source = applied === 0 ? 'none' : subscriberPct >= referralPct ? 'subscriber' : 'referral';
+  const promoPct = Math.max(0, Math.min(100, Math.floor(input.promoPct ?? 0)));
+  const applied = Math.max(subscriberPct, referralPct, promoPct);
+  // Ties go to the subscriber discount, then the referral (which still earns commission); a promo wins only when strictly larger.
+  const source = applied === 0 ? 'none' : subscriberPct === applied ? 'subscriber' : referralPct === applied ? 'referral' : 'promo';
   const list = input.course.price_usd_cents;
   const amount = Math.round((list * (100 - applied)) / 100);
   return {
@@ -98,6 +103,7 @@ export function quoteCoursePrice(input: QuoteInput): CourseQuote {
     subscriber_pct: subscriberPct,
     subscriber_plan: subscriberPlan,
     referral_pct: referralPct,
+    promo_pct: promoPct,
     applied_pct: applied,
     discount_source: source,
     amount_usd_cents: amount,

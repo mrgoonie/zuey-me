@@ -58,9 +58,29 @@ const ERROR_COPY: Record<string, string> = {
   confirmation_required: 'Email xác nhận không khớp với email tài khoản.',
   database_unavailable: 'Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.',
   referral_code_invalid: 'Mã giới thiệu không áp dụng được cho đơn này (mã không hoạt động, là mã của bạn, hoặc tài khoản đã từng thanh toán). Bỏ mã để thanh toán giá thường.',
+  discount_code_invalid: 'Không tìm thấy mã ưu đãi hoặc mã giới thiệu này. Kiểm tra lại mã hoặc bỏ mã để thanh toán giá thường.',
+  promo_code_not_found: 'Không tìm thấy mã ưu đãi này.',
+  invoice_requires_sepay: 'Hoá đơn công ty chỉ xuất cho thanh toán chuyển khoản (VietQR).',
+};
+
+/** Why a promo code was refused (`promo_code_invalid`, reason in the server message). */
+const PROMO_REASON_COPY: Record<string, string> = {
+  disabled: 'Mã ưu đãi này đã ngừng áp dụng.',
+  not_started: 'Mã ưu đãi này chưa đến thời gian áp dụng.',
+  expired: 'Mã ưu đãi này đã hết hạn.',
+  exhausted: 'Mã ưu đãi này đã hết lượt sử dụng.',
+  already_used: 'Bạn đã dùng mã ưu đãi này rồi (mỗi khách một lần).',
+  product_not_eligible: 'Mã ưu đãi này không áp dụng cho sản phẩm này.',
+  plan_not_eligible: 'Mã ưu đãi này không áp dụng cho gói này.',
+  course_not_eligible: 'Mã ưu đãi này không áp dụng cho khoá học này.',
+  term_too_short: 'Mã ưu đãi này chỉ áp dụng khi trả trước dài hơn.',
 };
 
 export function errorText(code: string, message: string): string {
+  if (code === 'promo_code_invalid') {
+    const reason = /\(([a-z_]+)\)/.exec(message)?.[1] ?? '';
+    return PROMO_REASON_COPY[reason] ?? 'Mã ưu đãi này không áp dụng được cho đơn hàng.';
+  }
   return ERROR_COPY[code] ?? message;
 }
 

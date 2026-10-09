@@ -9,6 +9,8 @@ import { AppError } from '../http';
 import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
 import { iso, isUniqueViolation, membersRuntime, siteUrl } from '../members/runtime';
 import { getUserById, logActivity } from '../members/users';
+import { activateInvoiceRequest } from '../promos/invoice-requests';
+import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode } from './course-orders';
 import { grantCourse, revokeCourse } from './course-purchases';
@@ -64,6 +66,12 @@ export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, ord
     await onCourseOrderPaid(d1, env, order, payerText);
   } catch (err) {
     console.error(`referral capture for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
+  }
+  try {
+    if (order.promo_code_id) await redeemPromo(d1, 'course_order', order.id, order.amount_paid);
+    if (order.provider === 'sepay') await activateInvoiceRequest(d1, env, 'course_order', order.id, order.amount_paid ?? order.amount_vnd);
+  } catch (err) {
+    console.error(`promo/invoice bookkeeping for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
   }
   const [user, course] = await Promise.all([getUserById(d1, order.user_id), getCourseById(d1, order.course_id)]);
   if (!user || !course) return;

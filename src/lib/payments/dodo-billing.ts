@@ -11,7 +11,10 @@ import { captureReferralCommission } from '../referrals/commissions';
 import type { ReversalOutcome } from '../referrals/refunds';
 import { reverseCommission } from '../referrals/refunds';
 import type { CheckoutReferral } from '../referrals/resolve-checkout-referral';
-import { allowedSubscriptionAmounts, minimumChargeCents, referralDiscountNotApplied } from './dodo-card-referral-pricing';
+import type { PromoCode } from '../promos/promo-codes';
+import { redeemPromo, releasePromo, reservePromo } from '../promos/promo-redemptions';
+import { applyPercent } from '../referrals/rates';
+import { allowedSubscriptionAmounts, discountNotApplied, minimumChargeCents } from './dodo-card-referral-pricing';
 import type { DodoEvent, DodoMetadata, DodoReversalEvent } from './dodo';
 import {
   cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, planForDodoProduct, requireDodoPlan,
@@ -49,6 +52,11 @@ export interface CardSubscription {
   /** Referral snapshot (null without a referral); the discount covers the first charge only. */
   referrer_user_id: string | null;
   referral_discount_percent: number | null;
+  /** Promo snapshot (null without a promo; never together with a referral): percent off the first `promo_cycles` charges. */
+  promo_code_id: string | null;
+  promo_code: string | null;
+  promo_discount_percent: number | null;
+  promo_cycles: number | null;
   /** Id of the first successful Dodo payment: refunds and disputes are matched to the card through it. */
   first_payment_id: string | null;
   created_at: string;
@@ -69,6 +77,10 @@ export interface CardSubscriptionView {
   attention_reason: string | null;
   /** Referral discount on the first charge only (null without a referral). */
   referral_discount_percent: number | null;
+  /** Promo code discount and the number of monthly charges it covers (null without a promo). */
+  promo_code: string | null;
+  promo_discount_percent: number | null;
+  promo_cycles: number | null;
   can_manage: boolean;
   can_cancel: boolean;
   created_at: string;
@@ -99,6 +111,10 @@ function rowToCard(row: Row): CardSubscription {
     last_event_at: strOrNull(row, 'last_event_at'),
     referrer_user_id: strOrNull(row, 'referrer_user_id'),
     referral_discount_percent: numOrNull(row, 'referral_discount_percent'),
+    promo_code_id: strOrNull(row, 'promo_code_id'),
+    promo_code: strOrNull(row, 'promo_code'),
+    promo_discount_percent: numOrNull(row, 'promo_discount_percent'),
+    promo_cycles: numOrNull(row, 'promo_cycles'),
     first_payment_id: strOrNull(row, 'first_payment_id'),
     created_at: str(row, 'created_at'),
     updated_at: str(row, 'updated_at'),
@@ -120,6 +136,9 @@ export function toCardView(card: CardSubscription, env: RuntimeEnv): CardSubscri
     currency: card.currency,
     attention_reason: card.attention_reason,
     referral_discount_percent: card.referrer_user_id ? card.referral_discount_percent : null,
+    promo_code: card.promo_code_id ? card.promo_code : null,
+    promo_discount_percent: card.promo_code_id ? card.promo_discount_percent : null,
+    promo_cycles: card.promo_code_id ? card.promo_cycles : null,
     can_manage: card.provider_customer_id !== null && status !== 'pending',
     can_cancel: card.provider_subscription_id !== null && status === 'active' && !card.cancel_at_period_end,
     created_at: card.created_at,
@@ -161,13 +180,16 @@ export interface CardCheckout extends CardSubscriptionView {
 }
 
 /**
- * Starts a monthly card subscription for a plan via a Dodo hosted checkout session. With a referral, a
- * single-use first-cycle discount is created at Dodo first and pre-applied to the session; the referral
- * terms are snapshotted on the pending row (`referral_ref` = Dodo discount id).
+ * Starts a monthly card subscription for a plan via a Dodo hosted checkout session. With a referral (first
+ * charge) or a promo code (its first `card_cycles` charges), a single-use discount is created at Dodo first and
+ * pre-applied to the session; the discount terms are snapshotted on the pending row (`referral_ref` = Dodo
+ * discount id). Pass at most one of `referral` and `promo` (the caller picks the larger discount).
  */
 export async function startCardCheckout(
-  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, plan: PlanId, request?: Request, referral: CheckoutReferral | null = null
+  d1: D1DatabaseLike, env: RuntimeEnv, userId: string, plan: PlanId, request?: Request, referral: CheckoutReferral | null = null,
+  promo: PromoCode | null = null,
 ): Promise<CardCheckout> {
+  if (promo) referral = null;
   const { productId } = requireDodoPlan(env, plan);
   const user = await getUserById(d1, userId);
   if (!user) throw new AppError(403, 'member_account_required', 'This action requires a member account');
@@ -186,23 +208,41 @@ export async function startCardCheckout(
   }
 
   const id = randomId('csub');
-  const discounted = referral !== null && referral.discountPercent > 0;
+  const listCents = getPlan(plan).price_usd_cents;
+  const discountPercent = promo ? promo.percent : referral?.discountPercent ?? 0;
   await d1.prepare(
     `INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, created_at, updated_at,
-       referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral)
-     VALUES (?, 'dodo', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
+       referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral,
+       promo_code_id, promo_code, promo_discount_percent, promo_cycles)
+     VALUES (?, 'dodo', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, userId, plan, user.email, iso(nowMs), iso(nowMs),
     referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
-    referral ? getPlan(plan).price_usd_cents : null).run();
+    referral ? listCents : null, promo?.id ?? null, promo?.code ?? null, promo?.percent ?? null, promo?.card_cycles ?? null).run();
+  const expiresAt = iso(nowMs + CARD_PENDING_TTL_MS);
+  if (promo) {
+    try {
+      await reservePromo(d1, {
+        promo, kind: 'card_subscription', sourceId: id, sourceCode: null, target: { product: 'membership', plan, months: 1, userId },
+        currency: 'USD', amountBefore: listCents, amountDue: applyPercent(listCents, promo.percent, 'USD'), expiresAt,
+      });
+    } catch (err) {
+      await d1.prepare("DELETE FROM card_subscriptions WHERE id = ? AND status = 'pending'").bind(id).run().catch(() => undefined);
+      throw err;
+    }
+  }
   let session: { sessionId: string; url: string };
   try {
     let discountCodes: string[] | undefined;
-    if (discounted) {
+    if (discountPercent > 0) {
       const discount = await createDodoDiscount(env, {
         productId,
-        percent: referral.discountPercent,
-        expiresAt: iso(nowMs + CARD_PENDING_TTL_MS),
-        metadata: { referral_order: id, card_ref: id, referrer_user_id: referral.referrerUserId },
+        percent: discountPercent,
+        expiresAt,
+        metadata: promo
+          ? { promo_code: promo.code, card_ref: id }
+          : { referral_order: id, card_ref: id, referrer_user_id: referral?.referrerUserId ?? '' },
+        cycles: promo ? promo.card_cycles : 1,
+        name: promo ? `Promo ${promo.code} ${promo.percent}%` : undefined,
       }, membersRuntime.fetch);
       await d1.prepare('UPDATE card_subscriptions SET referral_ref = ? WHERE id = ?').bind(discount.discountId, id).run();
       discountCodes = [discount.code];
@@ -217,11 +257,14 @@ export async function startCardCheckout(
     }, membersRuntime.fetch);
   } catch (err) {
     // Nothing was created at Dodo, so the placeholder row has no meaning.
+    if (promo) await releasePromo(d1, 'card_subscription', id).catch(() => undefined);
     await d1.prepare("DELETE FROM card_subscriptions WHERE id = ? AND status = 'pending'").bind(id).run().catch(() => undefined);
     throw err;
   }
   await d1.prepare('UPDATE card_subscriptions SET provider_session_id = ?, updated_at = ? WHERE id = ?').bind(session.sessionId, iso(nowMs), id).run();
-  await logActivity(d1, userId, 'billing.card_checkout', { plan, card_subscription_id: id, referral_discount_percent: referral?.discountPercent ?? null }, request);
+  await logActivity(d1, userId, 'billing.card_checkout', {
+    plan, card_subscription_id: id, referral_discount_percent: referral?.discountPercent ?? null, promo_code: promo?.code ?? null,
+  }, request);
   const card = await getCard(d1, id);
   if (!card) throw new AppError(500, 'internal_error', 'Card subscription was not persisted');
   return { ...toCardView(card, env), checkout_url: session.url };
@@ -306,10 +349,13 @@ function metadataMatches(card: CardSubscription, meta: DodoMetadata): boolean {
  * Price check for a plan: the configured product, USD, and the recurring amount at list price (or, on a
  * referral card's first activation, the snapshotted discounted first-cycle price, in case Dodo reports it).
  */
-function subscriptionMismatch(env: RuntimeEnv, card: CardSubscription, plan: PlanId, productId: string | null, amountCents: number | null, currency: string | null): string | null {
+function subscriptionMismatch(
+  env: RuntimeEnv, card: CardSubscription, plan: PlanId, productId: string | null, amountCents: number | null, currency: string | null, paidCharges: number,
+): string | null {
   if (productId !== dodoProductId(env, plan)) return 'product_mismatch';
-  // A row still `pending` has never been activated, so this event is the first cycle.
-  const allowed = allowedSubscriptionAmounts(card, plan, card.status === 'pending');
+  // A row still `pending` has never been activated, so this event is the first cycle; a promo covers several.
+  const cycle = card.status === 'pending' ? 1 : card.promo_code_id ? Math.max(1, paidCharges) : 2;
+  const allowed = allowedSubscriptionAmounts(card, plan, cycle);
   if (amountCents === null || !allowed.has(amountCents) || currency !== 'USD') return 'amount_mismatch';
   return null;
 }
@@ -341,6 +387,13 @@ async function flagUnmatched(d1: D1DatabaseLike, env: RuntimeEnv, event: DodoEve
   console.warn(`dodo ${event.type} for ${subscriptionId} could not be matched to a member (metadata missing); flagged for the admin`);
 }
 
+/** Successful charges recorded for a card (webhook ids are unique, so retries are not double-counted). */
+async function succeededCharges(d1: D1DatabaseLike, cardId: string): Promise<number> {
+  const row = await d1.prepare("SELECT COUNT(*) AS n FROM payment_events WHERE provider = 'dodo' AND card_subscription_id = ? AND raw_type = 'payment.succeeded'")
+    .bind(cardId).first<Row>();
+  return Number(row?.n ?? 0);
+}
+
 async function applySubscriptionEvent(
   d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'subscription' }, identityOk: boolean
 ): Promise<CardOutcome> {
@@ -353,7 +406,7 @@ async function applySubscriptionEvent(
     status = 'needs_attention';
     reason = card.user_id === null ? (reason ?? 'metadata_missing') : 'metadata_mismatch';
   } else if (target === 'active') {
-    const mismatch = subscriptionMismatch(env, card, card.plan, data.productId, data.amountCents, data.currency);
+    const mismatch = subscriptionMismatch(env, card, card.plan, data.productId, data.amountCents, data.currency, await succeededCharges(d1, card.id));
     if (mismatch) {
       status = 'needs_attention';
       reason = mismatch;
@@ -409,11 +462,13 @@ async function applyPaymentEvent(
        first_payment_id = COALESCE(first_payment_id, ?), updated_at = ? WHERE id = ?`
   ).bind(data.subscriptionId, data.customerId, first[1], first[2], first[3], first[0], nowIso, card.id).run();
   const isFirstPayment = succeeded && (card.first_payment_id ?? data.paymentId) === data.paymentId;
+  // Which charge this is (1 = first): decides whether a promo still covers it. The event is already recorded.
+  const cycle = isFirstPayment ? 1 : Math.max(2, await succeededCharges(d1, card.id));
 
   let reason: string | null = null;
   if (!identityOk || card.user_id === null || card.plan === null) reason = card.user_id === null ? 'metadata_missing' : 'metadata_mismatch';
-  else if (succeeded && (data.currency !== 'USD' || data.totalAmount === null || data.totalAmount < minimumChargeCents(card, card.plan, isFirstPayment))) {
-    // `total_amount` includes tax, so it is never below the price owed: discounted first charge, list price after.
+  else if (succeeded && (data.currency !== 'USD' || data.totalAmount === null || data.totalAmount < minimumChargeCents(card, card.plan, cycle))) {
+    // `total_amount` includes tax, so it is never below the price owed: discounted while a discount covers the charge, list price after.
     reason = 'amount_mismatch';
   }
   if (reason) {
@@ -430,13 +485,14 @@ async function applyPaymentEvent(
     if (card.user_id) await logActivity(d1, card.user_id, 'billing.card_ended', { plan: card.plan, card_subscription_id: card.id, status: 'failed' });
     return 'deactivated';
   }
-  if (isFirstPayment && card.referrer_user_id && data.totalAmount !== null) {
+  if (isFirstPayment && (card.referrer_user_id || card.promo_code_id) && data.totalAmount !== null) {
     const collected = data.totalAmount - (data.tax ?? 0);
     // Commission is on the amount collected, as for any referred charge.
-    await captureReferralCommission(d1, env, { kind: 'card_subscription', id: card.id, paymentId: data.paymentId, collectedCents: collected });
-    if (card.plan && referralDiscountNotApplied(card, card.plan, collected)) {
-      // Dodo ignored the pre-applied referral discount: flag it so the admin refunds the difference.
-      const reasonText = 'referral_discount_not_applied';
+    if (card.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'card_subscription', id: card.id, paymentId: data.paymentId, collectedCents: collected });
+    if (card.promo_code_id) await redeemPromo(d1, 'card_subscription', card.id, collected);
+    if (card.plan && discountNotApplied(card, card.plan, collected, 1)) {
+      // Dodo ignored the pre-applied discount: flag it so the admin refunds the difference.
+      const reasonText = card.promo_code_id ? 'promo_discount_not_applied' : 'referral_discount_not_applied';
       await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reasonText, nowIso, card.id).run();
       if (card.user_id) {
         await recomputeSubscription(d1, card.user_id, card.plan);

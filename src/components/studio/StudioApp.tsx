@@ -22,6 +22,8 @@ import {
   Receipt,
   Gift,
   SquarePlay,
+  TicketPercent,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { ArticlesPanel } from './ArticleEditor';
 import { ReadsPanel } from './ReadsPanel';
@@ -30,6 +32,7 @@ import { CoursesPanel } from './courses/CoursesPanel';
 import { BookingPanel } from './BookingPanel';
 import { BillingAttentionPanel } from './BillingAttentionPanel';
 import { ReferralsTab } from './ReferralsTab';
+import { InvoicesTab, PromosTab } from './PromosTab';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
 
 interface StudioAppProps {
@@ -44,7 +47,9 @@ interface StudioAppProps {
   deniedEmail?: string | null;
 }
 
-type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'videos' | 'courses' | 'booking' | 'billing' | 'referrals';
+type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'videos' | 'courses' | 'booking' | 'billing' | 'referrals' | 'promos' | 'invoices';
+
+const HASH_TABS: StudioTab[] = ['promos', 'invoices', 'referrals', 'billing'];
 
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
@@ -57,6 +62,12 @@ export const StudioApp: React.FC<StudioAppProps> = ({
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(initialAuth);
   const [activeTab, setActiveTab] = useState<StudioTab>('profile');
+
+  // Deep links from admin emails, e.g. `/studio#invoices`.
+  useEffect(() => {
+    const fromHash = HASH_TABS.find(tab => `#${tab}` === window.location.hash);
+    if (fromHash) setActiveTab(fromHash);
+  }, []);
   const [profile, setProfile] = useState<Profile>(initialProfile);
   const [links, setLinks] = useState<LinkItem[]>(initialLinks);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>(initialKeys);
@@ -342,7 +353,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     );
   }
 
-  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'videos' || activeTab === 'courses' || activeTab === 'booking' || activeTab === 'billing' || activeTab === 'referrals';
+  const isFeatureTab = activeTab === 'articles' || activeTab === 'reads' || activeTab === 'videos' || activeTab === 'courses' || activeTab === 'booking' || activeTab === 'billing' || activeTab === 'referrals' || activeTab === 'promos' || activeTab === 'invoices';
 
   // Filtered links for Links tab
   const filteredLinks = filterSection === 'all'
@@ -380,6 +391,8 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             { id: 'booking', label: 'Booking', icon: CalendarDays },
             { id: 'billing', label: 'Payments', icon: Receipt },
             { id: 'referrals', label: 'Referrals', icon: Gift },
+            { id: 'promos', label: 'Mã KM', icon: TicketPercent },
+            { id: 'invoices', label: 'Hoá đơn', icon: FileSpreadsheet },
             { id: 'keys', label: 'API & Agents', icon: Key },
           ] satisfies { id: StudioTab; label: string; icon: typeof User }[]).map(({ id, label, icon: Icon }) => (
             <button
@@ -436,6 +449,8 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           {activeTab === 'booking' && <BookingPanel />}
           {activeTab === 'billing' && <BillingAttentionPanel />}
           {activeTab === 'referrals' && <ReferralsTab />}
+          {activeTab === 'promos' && <PromosTab />}
+          {activeTab === 'invoices' && <InvoicesTab />}
 
           {saveStatus && (
             <div className="mb-6 p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">

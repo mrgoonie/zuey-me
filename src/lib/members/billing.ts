@@ -5,11 +5,18 @@ import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billin
 import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
 import type { SepayTransferInfo } from '../payments/sepay';
 import { SEPAY_BILLING_PREFIX, extractBillingCode, extractCourseOrderCode, missingSepayBankConfig, parseSepayTime, vietQrTransfer } from '../payments/sepay';
-import { bindEnteredReferral, parseReferralCodeField, resolveCheckoutReferral, sepayReferralAmounts } from '../referrals/checkout';
+import { bindEnteredReferral, resolveCheckoutReferral, sepayReferralAmounts } from '../referrals/checkout';
 import { captureReferralCommission } from '../referrals/commissions';
+import type { CheckoutReferral } from '../referrals/resolve-checkout-referral';
+import { promoWins, readDiscountCode } from '../promos/checkout-discount-code';
+import type { InvoiceInput } from '../promos/invoice-requests';
+import { activateInvoiceRequest, createInvoiceRequest, parseInvoiceField } from '../promos/invoice-requests';
+import type { PromoCode } from '../promos/promo-codes';
+import { redeemPromo, requirePromoApplicable, reservePromo } from '../promos/promo-redemptions';
 import { receiptEmail, renewalReminderEmail, sendLoggedEmail } from './email';
 import type { BillingMonths, Entitlement, PlanId } from './plans';
 import { BILLING_MONTHS, getPlan, isBillingMonths, isPlanId, parseUsdVndRate } from './plans';
+import type { Plan } from './plans';
 import type { Row } from './runtime';
 import { DAY_MS, iso, isUniqueViolation, membersRuntime, num, numOrNull, randomCode, randomId, siteUrl, str, strOrNull } from './runtime';
 import type { SubscriptionView } from './subscriptions';
@@ -45,6 +52,10 @@ export interface BillingOrder {
   referral_discount_percent: number | null;
   /** Prepaid VND total before the referral discount. */
   amount_before_referral: number | null;
+  /** Promo code snapshotted at order creation (null without a promo; never together with a referral). */
+  promo_code_id: string | null;
+  promo_code: string | null;
+  promo_discount_percent: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -64,6 +75,10 @@ export interface OrderView {
   /** Referral discount applied after the prepay discount, and the VND total before it (null without a referral). */
   referral_discount_percent: number | null;
   amount_before_referral_vnd: number | null;
+  /** Promo code applied instead of a referral discount, and the VND total before it (null without a promo). */
+  promo_code: string | null;
+  promo_discount_percent: number | null;
+  amount_before_promo_vnd: number | null;
   created_at: string;
   /** VietQR transfer instructions while the order is payable; null otherwise. */
   transfer: SepayTransferInfo | null;
@@ -94,6 +109,9 @@ export function rowToOrder(row: Row): BillingOrder {
     referrer_user_id: strOrNull(row, 'referrer_user_id'),
     referral_discount_percent: numOrNull(row, 'referral_discount_percent'),
     amount_before_referral: numOrNull(row, 'amount_before_referral'),
+    promo_code_id: strOrNull(row, 'promo_code_id'),
+    promo_code: strOrNull(row, 'promo_code'),
+    promo_discount_percent: numOrNull(row, 'promo_discount_percent'),
     created_at: str(row, 'created_at'),
     updated_at: str(row, 'updated_at'),
   };
@@ -130,6 +148,9 @@ export function toOrderView(order: BillingOrder, env: RuntimeEnv): OrderView {
     attention_reason: order.attention_reason,
     referral_discount_percent: order.referrer_user_id ? order.referral_discount_percent : null,
     amount_before_referral_vnd: order.referrer_user_id ? order.amount_before_referral : null,
+    promo_code: order.promo_code_id ? order.promo_code : null,
+    promo_discount_percent: order.promo_code_id ? order.promo_discount_percent : null,
+    amount_before_promo_vnd: order.promo_code_id ? sepayReferralAmounts(order.plan, order.months, order.usd_vnd_rate, 0).beforeVnd : null,
     created_at: order.created_at,
     transfer: payable ? vietQrTransfer(env, order.amount_vnd, order.code) : null,
   };
@@ -163,14 +184,17 @@ export async function listOrders(d1: D1DatabaseLike, userId: string, limit = 50)
 
 /**
  * Creates a prepaid SePay order for 1/3/6/12 months with the term discount (PREPAY_DISCOUNT_PERCENT), then
- * the referral discount when one applies (optional `referral_code`, the account binding or the `zr_ref`
- * cookie). Amounts are always computed here; the referral terms are snapshotted on the order.
+ * ONE code discount: the referral (optional typed code, the account binding or the `zr_ref` cookie) or a promo
+ * code typed in `discount_code`, whichever percent is larger (ties go to the referral). Amounts are always
+ * computed here and the discount terms are snapshotted on the order. An optional `invoice: { tax_id, email }`
+ * records a business invoice request that becomes due once the order is paid.
  */
 export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: string, body: Record<string, unknown>, request?: Request): Promise<BillingOrder> {
   if (!isPlanId(body.plan)) throw new AppError(400, 'invalid_field', "plan must be one of 'knowledges', 'ai', 'combo', 'community'", { field: 'plan' });
   const months = body.months ?? 1;
   if (!isBillingMonths(months)) throw new AppError(400, 'invalid_field', `months must be one of ${BILLING_MONTHS.join(', ')}`, { field: 'months' });
-  const enteredCode = parseReferralCodeField(body);
+  const entry = await readDiscountCode(d1, body);
+  const invoice = parseInvoiceField(body, 'sepay');
   const rate = requireBillingConfigured(env);
   await expireStaleOrders(d1, userId);
   const pending = await d1.prepare("SELECT COUNT(*) AS n FROM billing_orders WHERE user_id = ? AND status = 'pending'").bind(userId).first<Row>();
@@ -179,33 +203,89 @@ export async function createOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: s
   }
 
   const plan = getPlan(body.plan);
-  const referral = await resolveCheckoutReferral(d1, { userId, enteredCode, request, product: 'membership' });
-  const amounts = sepayReferralAmounts(plan.id, months, rate, referral?.discountPercent ?? 0);
+  const referral = await resolveCheckoutReferral(d1, { userId, enteredCode: entry.referralCode, request, product: 'membership' });
+  if (entry.promo) await requirePromoApplicable(d1, entry.promo, { product: 'membership', plan: plan.id, months, userId });
+  const usePromo = entry.promo !== null && promoWins(entry.promo.percent, referral?.discountPercent);
+  return insertSepayOrder(d1, env, userId, { plan, months, rate, referral: usePromo ? null : referral, promo: usePromo ? entry.promo : null, invoice }, request);
+}
+
+interface SepayOrderInput {
+  plan: Plan;
+  months: BillingMonths;
+  rate: number;
+  referral: CheckoutReferral | null;
+  promo: PromoCode | null;
+  invoice: InvoiceInput | null;
+}
+
+/**
+ * Inserts the order with its discount snapshot, reserves the promo use (the order is removed again if the code
+ * ran out meanwhile), binds a typed referral code and records the invoice request. A 100% promo makes a 0 VND
+ * order that is paid and fulfilled at once.
+ */
+async function insertSepayOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: string, input: SepayOrderInput, request?: Request): Promise<BillingOrder> {
+  const { plan, months, rate, referral, promo } = input;
+  const percent = promo ? promo.percent : referral?.discountPercent ?? 0;
+  const amounts = sepayReferralAmounts(plan.id, months, rate, percent);
   const now = membersRuntime.now();
+  const expiresAt = iso(now + ORDER_TTL_MS);
   const id = randomId('ord');
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const code = SEPAY_BILLING_PREFIX + randomCode(8);
+  let code = '';
+  for (let attempt = 0; attempt < 3 && !code; attempt++) {
+    const candidate = SEPAY_BILLING_PREFIX + randomCode(8);
     try {
       await d1.prepare(
         `INSERT INTO billing_orders (id, code, user_id, plan, months, amount_usd_cents, usd_vnd_rate, amount_vnd, status, expires_at, created_at, updated_at,
-           referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, code, userId, plan.id, months, amounts.usdCents, rate, amounts.vnd, iso(now + ORDER_TTL_MS), iso(now), iso(now),
+           referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral,
+           promo_code_id, promo_code, promo_discount_percent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, candidate, userId, plan.id, months, amounts.usdCents, rate, amounts.vnd, expiresAt, iso(now), iso(now),
         referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
-        referral ? amounts.beforeVnd : null).run();
-      const order = await getOrderByCode(d1, code);
-      if (!order) throw new AppError(500, 'internal_error', 'Order was not persisted');
-      // A typed code binds only now that the order exists, never for a checkout that failed validation.
-      await bindEnteredReferral(d1, env, userId, referral, request);
-      await logActivity(d1, userId, 'billing.order_created', {
-        code, plan: plan.id, months, amount_vnd: order.amount_vnd, referral_discount_percent: referral?.discountPercent ?? null,
-      }, request);
-      return order;
+        referral ? amounts.beforeVnd : null, promo?.id ?? null, promo?.code ?? null, promo?.percent ?? null).run();
+      code = candidate;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
     }
   }
-  throw new AppError(500, 'internal_error', 'Could not allocate an order code');
+  if (!code) throw new AppError(500, 'internal_error', 'Could not allocate an order code');
+  if (promo) {
+    try {
+      await reservePromo(d1, {
+        promo, kind: 'billing_order', sourceId: id, sourceCode: code, target: { product: 'membership', plan: plan.id, months, userId },
+        currency: 'VND', amountBefore: amounts.beforeVnd, amountDue: amounts.vnd, expiresAt,
+      });
+    } catch (err) {
+      await d1.prepare("DELETE FROM billing_orders WHERE id = ? AND status = 'pending'").bind(id).run().catch(() => undefined);
+      throw err;
+    }
+  }
+  // A typed code binds only now that the order exists, never for a checkout that failed validation.
+  await bindEnteredReferral(d1, env, userId, referral, request);
+  if (input.invoice && amounts.vnd > 0) {
+    await createInvoiceRequest(d1, {
+      kind: 'billing_order', sourceId: id, sourceCode: code, userId, invoice: input.invoice, amountVnd: amounts.vnd,
+      description: `Zuey ${plan.name} — ${months} tháng`,
+    });
+  }
+  await logActivity(d1, userId, 'billing.order_created', {
+    code, plan: plan.id, months, amount_vnd: amounts.vnd, referral_discount_percent: referral?.discountPercent ?? null,
+    promo_code: promo?.code ?? null, invoice: input.invoice ? true : null,
+  }, request);
+  if (amounts.vnd === 0) {
+    // Fully discounted: nothing to transfer, so the order is paid now.
+    const paidAt = iso(membersRuntime.now());
+    await d1.prepare("UPDATE billing_orders SET status = 'paid', paid_at = ?, amount_paid = 0, payment_ref = ?, updated_at = ? WHERE id = ? AND status = 'pending'")
+      .bind(paidAt, `promo:${promo?.code ?? 'free'}`, paidAt, id).run();
+  }
+  const order = await getOrderByCode(d1, code);
+  if (!order) throw new AppError(500, 'internal_error', 'Order was not persisted');
+  if (order.status === 'paid') await fulfilOrder(d1, env, order);
+  return order;
+}
+
+/** Months granted by a 100% promo used on the card rail: its card cycles, rounded down to a prepaid term. */
+export function freeCardMonths(cardCycles: number): BillingMonths {
+  return [...BILLING_MONTHS].reverse().find(m => m <= cardCycles) ?? 1;
 }
 
 export interface SubscriptionSummary {
@@ -244,10 +324,21 @@ export async function createMemberCheckout(
     if (body.months !== undefined && body.months !== 1) {
       throw new AppError(400, 'invalid_field', 'Card subscriptions renew monthly; months must be 1 or omitted', { field: 'months' });
     }
-    const enteredCode = parseReferralCodeField(body);
-    const referral = await resolveCheckoutReferral(d1, { userId, enteredCode, request, product: 'membership' });
-    const checkout = await startCardCheckout(d1, env, userId, body.plan, request, referral);
-    await bindEnteredReferral(d1, env, userId, referral, request);
+    parseInvoiceField(body, 'dodo');
+    const entry = await readDiscountCode(d1, body);
+    const referral = await resolveCheckoutReferral(d1, { userId, enteredCode: entry.referralCode, request, product: 'membership' });
+    if (entry.promo) await requirePromoApplicable(d1, entry.promo, { product: 'membership', plan: body.plan, months: 1, userId });
+    const promo = entry.promo !== null && promoWins(entry.promo.percent, referral?.discountPercent) ? entry.promo : null;
+    if (promo && promo.percent >= 100) {
+      // Nothing to charge: grant the covered months as a paid 0 VND prepaid order instead of a card subscription.
+      const rate = parseUsdVndRate(env);
+      if (rate === null) throw new AppError(503, 'billing_unconfigured', 'Membership billing is not configured: missing USD_VND_RATE', { missing: ['USD_VND_RATE'] });
+      const order = await insertSepayOrder(d1, env, userId, { plan: getPlan(body.plan), months: freeCardMonths(promo.card_cycles), rate, referral: null, promo, invoice: null }, request);
+      const view = toOrderView(order, env);
+      return { ...view, provider: 'sepay', status_url: `${siteUrl(env)}/billing/${view.code}` };
+    }
+    const checkout = await startCardCheckout(d1, env, userId, body.plan, request, promo ? null : referral, promo);
+    if (!promo) await bindEnteredReferral(d1, env, userId, referral, request);
     return { ...checkout, provider: 'dodo' };
   }
   if (provider !== 'sepay') throw new AppError(400, 'invalid_field', `provider must be one of ${CHECKOUT_PROVIDERS.join(', ')}`, { field: 'provider' });
@@ -299,6 +390,12 @@ async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: st
 /** Extends the plan from paid orders, then records and emails a receipt (email failure never undoes payment). */
 export async function fulfilOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder): Promise<SubscriptionView | null> {
   const sub = await recomputeSubscription(d1, order.user_id, order.plan);
+  try {
+    if (order.promo_code_id) await redeemPromo(d1, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
+    await activateInvoiceRequest(d1, env, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
+  } catch (err) {
+    console.error(`promo/invoice bookkeeping for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
+  }
   await logActivity(d1, order.user_id, 'billing.paid', { code: order.code, plan: order.plan, months: order.months, period_end: sub?.current_period_end ?? null });
   const user = await getUserById(d1, order.user_id);
   if (user && sub) {

@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import type { SubmitLike } from '../members/member-ui';
+import { InvoiceRequestFields, useInvoiceRequest } from '../members/InvoiceRequestFields';
 import { alertError, btnPrimary, input, isRecord, jsonBody, loginUrl, str } from '../members/member-ui';
 import { courseApi, focusRing } from './course-ui';
 
@@ -17,8 +18,9 @@ interface Props {
 const REF_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * Buy box: payment method, mandatory consent to the Terms and the no-refund policy, optional referral
- * code (prefilled from ?ref=). SePay continues on the order status page; Dodo opens the hosted checkout.
+ * Buy box: payment method, mandatory consent to the Terms and the no-refund policy, optional "Mã ưu đãi"
+ * (promo or referral code, prefilled from ?ref= or ?code=) and, for bank transfer, a business invoice request.
+ * SePay (and a free 100% promo order) continues on the order status page; Dodo opens the hosted checkout.
  */
 export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvailable }: Props) {
   const [provider, setProvider] = useState<Provider>(sepayAvailable || !cardAvailable ? 'sepay' : 'dodo');
@@ -26,13 +28,15 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
   const [referral, setReferral] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const invoice = useInvoiceRequest();
   const termsId = useId();
   const refId = useId();
   const errId = useId();
   const coursePath = `/courses/${courseSlug}`;
 
   useEffect(() => {
-    const ref = new URLSearchParams(window.location.search).get('ref');
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('code') ?? params.get('ref');
     if (ref && REF_RE.test(ref)) setReferral(ref);
   }, []);
 
@@ -55,12 +59,14 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
     if (busy) return;
     if (!accepted) { setError('Bạn cần đồng ý Điều khoản sử dụng và Chính sách (không hoàn tiền) để tiếp tục.'); return; }
     const code = referral.trim();
-    if (code && !REF_RE.test(code)) { setError('Mã giới thiệu chỉ gồm chữ, số, dấu gạch ngang hoặc gạch dưới.'); return; }
+    if (code && !REF_RE.test(code)) { setError('Mã ưu đãi chỉ gồm chữ, số, dấu gạch ngang hoặc gạch dưới.'); return; }
+    const inv = provider === 'sepay' ? invoice.payload() : { invoice: null, error: null };
+    if (inv.error) { setError(inv.error); return; }
     setBusy(true);
     setError(null);
     const res = await courseApi(`/api/v1/courses/${encodeURIComponent(courseSlug)}/checkout`, {
       method: 'POST',
-      body: jsonBody({ provider, accept_terms: true, ...(code ? { referral_code: code } : {}) }),
+      body: jsonBody({ provider, accept_terms: true, ...(code ? { discount_code: code } : {}), ...(inv.invoice ? { invoice: inv.invoice } : {}) }),
     });
     if (res.ok && isRecord(res.data)) {
       const checkoutUrl = str(res.data, 'checkout_url');
@@ -95,10 +101,12 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
       </fieldset>
 
       <div className="grid gap-1.5">
-        <label htmlFor={refId} className="text-sm font-medium">Mã giới thiệu <span className="font-normal text-stone-500">(không bắt buộc)</span></label>
-        <input id={refId} className={input} value={referral} onChange={e => setReferral(e.target.value)} maxLength={64} autoComplete="off" spellCheck={false} />
-        <p className="text-xs text-stone-600">Giảm giá thành viên và giảm giá giới thiệu không cộng dồn: hệ thống áp dụng mức cao hơn.</p>
+        <label htmlFor={refId} className="text-sm font-medium">Mã ưu đãi <span className="font-normal text-stone-500">(mã khuyến mãi hoặc mã giới thiệu, không bắt buộc)</span></label>
+        <input id={refId} className={`${input} font-mono`} value={referral} onChange={e => setReferral(e.target.value)} maxLength={64} autoComplete="off" spellCheck={false} />
+        <p className="text-xs text-stone-600">Giảm giá thành viên, mã giới thiệu và mã khuyến mãi không cộng dồn: hệ thống áp dụng mức cao nhất. Giá cuối cùng hiện ở trang đơn hàng.</p>
       </div>
+
+      {provider === 'sepay' && sepayAvailable && <InvoiceRequestFields state={invoice} />}
 
       <label htmlFor={termsId} className="flex min-h-[44px] cursor-pointer items-start gap-3 text-sm">
         <input id={termsId} type="checkbox" required checked={accepted} onChange={e => { setAccepted(e.target.checked); if (e.target.checked) setError(null); }} className={`mt-0.5 h-5 w-5 shrink-0 accent-stone-900 ${focusRing}`} />

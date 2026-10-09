@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isValidTimeZone, zonedDateKey } from '../../lib/booking/timezone';
 import { ReferralCodeField } from '../referral/ReferralCodeField';
-import { useReferralQuote } from '../referral/referral-quote';
+import { InvoiceRequestFields, useInvoiceRequest } from '../members/InvoiceRequestFields';
+import { errorText } from '../members/member-ui';
+import { discounted, promoPercentFor, useReferralQuote } from '../referral/referral-quote';
 
 // ---------------------------------------------------------------------------
 // Types and API helpers (responses are validated, never blindly cast)
@@ -329,19 +331,27 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
   const [hold, setHold] = useState<HoldState | null>(null);
   const remaining = useCountdown(hold?.booking.hold_expires_at ?? null);
   const referral = useReferralQuote();
-  const bookingQuote = referral.quote?.referral && referral.quote.referral.booking_discount_percent > 0 ? referral.quote : null;
+  const invoice = useInvoiceRequest();
+  const referralBookingPct = referral.quote?.referral?.booking_discount_percent ?? 0;
+  // A promo replaces the referral discount only when strictly larger (same rule as the server).
+  const promoPct = promoPercentFor(referral.promo, { product: 'booking' }) > referralBookingPct ? promoPercentFor(referral.promo, { product: 'booking' }) : 0;
+  const bookingQuote = promoPct === 0 && referral.quote?.referral && referralBookingPct > 0 ? referral.quote : null;
+  const listUsdCents = referral.quote?.booking.amount_usd_cents ?? 199900;
 
   const formValid = form.name.trim().length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
 
   const submit = async () => {
     if (!slot) return;
+    const inv = method === 'sepay' ? invoice.payload() : { invoice: null, error: null };
+    if (inv.error) { setError(inv.error); return; }
     setBusy(true);
     setError(null);
     const held = await callApi('/api/v1/booking/hold', {
       method: 'POST',
       body: JSON.stringify({
         slot_start: slot.start, ...form, timezone: tz, payment_method: method,
-        ...(referral.enteredCode ? { referral_code: referral.enteredCode } : {}),
+        ...(referral.enteredCode ? { discount_code: referral.enteredCode } : {}),
+        ...(inv.invoice ? { invoice: inv.invoice } : {}),
       }),
     });
     if (!held.ok) {
@@ -353,6 +363,8 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
         reload();
       } else if (held.code === 'referral_code_invalid') {
         setError('Mã giới thiệu không áp dụng được cho email này (mã không hoạt động, là mã của bạn, hoặc email đã từng thanh toán). Bỏ mã để đặt lịch giá thường.');
+      } else if (held.code === 'promo_code_invalid' || held.code === 'discount_code_invalid' || held.code === 'invoice_requires_sepay') {
+        setError(errorText(held.code, held.message));
       } else if (held.code === 'payment_unconfigured') {
         setError(`Phương thức thanh toán này chưa sẵn sàng (${held.message}). Vui lòng chọn phương thức khác hoặc email hi@zuey.me.`);
       } else setError(held.message);
@@ -362,6 +374,11 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
     const booking = parseBooking(bookingData);
     const token = str(held.data, 'manage_token');
     const manageUrl = `/booking/${encodeURIComponent(booking.id)}?token=${encodeURIComponent(token)}`;
+    if (booking.status === 'confirmed') {
+      // A 100% promo: confirmed at once, nothing to pay.
+      window.location.assign(manageUrl);
+      return;
+    }
     const co = await callApi(`/api/v1/booking/${encodeURIComponent(booking.id)}/checkout`, { method: 'POST', body: JSON.stringify({ token }) });
     setBusy(false);
     setHold({
@@ -464,7 +481,16 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
               <span className="block text-xs text-stone-600">Số tiền cuối cùng được xác nhận khi giữ chỗ (chỉ áp dụng cho email chưa từng thanh toán).</span>
             </p>
           )}
-          <ReferralCodeField state={referral} percent={null} />
+          {promoPct > 0 && (
+            <p className="text-sm tabular-nums">
+              Mã ưu đãi −{promoPct}%:{' '}
+              <span className="line-through text-stone-500">{usd(listUsdCents)}</span>{' '}
+              <strong className="text-emerald-800">{usd(discounted(listUsdCents, promoPct, 'USD'))}</strong>
+              <span className="block text-xs text-stone-600">Số tiền cuối cùng (VND hoặc USD theo phương thức) được xác nhận khi giữ chỗ.</span>
+            </p>
+          )}
+          <ReferralCodeField state={referral} percent={null} promoPercent={promoPercentFor(referral.promo, { product: 'booking' })} />
+          {method === 'sepay' && methods.includes('sepay') && <InvoiceRequestFields state={invoice} />}
           <p className="text-xs text-stone-600">Khi bấm “Giữ chỗ”, khung giờ được giữ cho bạn trong 15 phút để hoàn tất thanh toán. Lịch chỉ được xác nhận khi hệ thống nhận được thanh toán.</p>
           <div className="mt-2 flex flex-wrap justify-between gap-2">
             <button type="button" className={btnGhost} onClick={() => setStep(2)} disabled={busy}>Quay lại</button>
