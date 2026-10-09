@@ -3,7 +3,7 @@ import type { Row } from '../members/runtime';
 import { iso, membersRuntime, str } from '../members/runtime';
 import { CARD_PENDING_TTL_MS } from '../payments/dodo-billing';
 import { normalizeEmailForSelfCheck } from './codes';
-import { rawEmailsMatching, refereeUserIds } from './eligibility';
+import { refereeUserIds } from './eligibility';
 
 /**
  * The referral discount is for the referee's first order, so only one discounted checkout may be open at a
@@ -43,9 +43,8 @@ export async function hasPendingReferralCheckout(d1: D1DatabaseLike, input: { us
       [...ids, now])) return true;
   }
   if (!canonical) return false;
-  const guestEmails = await rawEmailsMatching(d1, 'bookings', 'guest_email', canonical);
-  return guestEmails.length > 0 && anyRow(d1,
-    `SELECT 1 FROM bookings WHERE guest_email IN (${placeholders(guestEmails.length)}) AND referrer_user_id IS NOT NULL
+  return anyRow(d1,
+    `SELECT 1 FROM bookings WHERE canonical_email = ? AND referrer_user_id IS NOT NULL
        AND status = 'held' AND hold_expires_at > ? LIMIT 1`,
-    [...guestEmails, now]);
+    [canonical, now]);
 }

@@ -6,7 +6,7 @@ import type { RuntimeEnv } from '../src/env';
 import { membersRuntime, safeNextPath } from '../src/lib/members/runtime';
 import { deleteAccount, findOrCreateVerifiedUser, getUserById } from '../src/lib/members/users';
 import { REF_COOKIE, bindReferrerByCode, bindReferrerOnSignup, readRefCookie } from '../src/lib/referrals/attribution';
-import { ensureReferralProfile } from '../src/lib/referrals/codes';
+import { ensureReferralProfile, normalizeEmailForSelfCheck } from '../src/lib/referrals/codes';
 import { isEligibleReferee } from '../src/lib/referrals/eligibility';
 import { resolveReferralForCheckout } from '../src/lib/referrals/resolve-checkout-referral';
 import { POST as verifyApi } from '../src/pages/api/members/auth/magic-link/verify';
@@ -204,9 +204,9 @@ describe('deleted accounts', () => {
 describe('referee eligibility and checkout resolution', () => {
   async function confirmedBooking(email: string): Promise<void> {
     await d1.prepare(
-      `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email, payment_method, manage_token_hash, created_at, updated_at)
-       VALUES ('bk1', 'BK1', ?, ?, 60, 'confirmed', ?, 'Guest', ?, 'paypal', 'h', ?, ?)`
-    ).bind(at(T0 - DAY), at(T0 - DAY + 3600000), at(T0 - DAY), email, at(T0 - 2 * DAY), at(T0 - 2 * DAY)).run();
+      `INSERT INTO bookings (id, code, slot_start, slot_end, duration_min, status, hold_expires_at, guest_name, guest_email, canonical_email, payment_method, manage_token_hash, created_at, updated_at)
+       VALUES ('bk1', 'BK1', ?, ?, 60, 'confirmed', ?, 'Guest', ?, ?, 'paypal', 'h', ?, ?)`
+    ).bind(at(T0 - DAY), at(T0 - DAY + 3600000), at(T0 - DAY), email, normalizeEmailForSelfCheck(email), at(T0 - 2 * DAY), at(T0 - 2 * DAY)).run();
   }
 
   it('treats any earlier paid order on the same canonical mailbox as ineligible', async () => {
@@ -216,7 +216,7 @@ describe('referee eligibility and checkout resolution', () => {
     const id = await member('j.a.n.e.doe@gmail.com');
     expect(await isEligibleReferee(d1, { userId: id })).toBe(false);
     await d1.prepare(
-      "INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, created_at, updated_at) VALUES ('cs1', 'dodo', NULL, NULL, 'cancelled', 'card@example.com', ?, ?)"
+      "INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, canonical_email, created_at, updated_at) VALUES ('cs1', 'dodo', NULL, NULL, 'cancelled', 'card@example.com', 'card@example.com', ?, ?)"
     ).bind(at(T0), at(T0)).run();
     expect(await isEligibleReferee(d1, { email: 'card@example.com' })).toBe(true);
     await d1.prepare("UPDATE card_subscriptions SET first_payment_id = 'pay_1' WHERE id = 'cs1'").run();

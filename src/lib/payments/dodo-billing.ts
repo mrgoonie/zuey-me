@@ -7,6 +7,7 @@ import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, numOrNull, randomId, siteUrl, str, strOrNull } from '../members/runtime';
 import { recomputeSubscription } from '../members/subscriptions';
 import { getUserById, logActivity } from '../members/users';
+import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { captureReferralCommission } from '../referrals/commissions';
 import type { ReversalOutcome } from '../referrals/refunds';
 import { reverseCommission } from '../referrals/refunds';
@@ -188,10 +189,10 @@ export async function startCardCheckout(
   const id = randomId('csub');
   const discounted = referral !== null && referral.discountPercent > 0;
   await d1.prepare(
-    `INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, created_at, updated_at,
+    `INSERT INTO card_subscriptions (id, provider, user_id, plan, status, customer_email, canonical_email, created_at, updated_at,
        referrer_user_id, referral_rate, referral_discount_percent, referral_commission_percent, amount_before_referral)
-     VALUES (?, 'dodo', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, userId, plan, user.email, iso(nowMs), iso(nowMs),
+     VALUES (?, 'dodo', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, userId, plan, user.email, normalizeEmailForSelfCheck(user.email), iso(nowMs), iso(nowMs),
     referral?.referrerUserId ?? null, referral?.rate ?? null, referral?.discountPercent ?? null, referral?.commissionPercent ?? null,
     referral ? getPlan(plan).price_usd_cents : null).run();
   let session: { sessionId: string; url: string };
@@ -332,9 +333,10 @@ async function flagUnmatched(d1: D1DatabaseLike, env: RuntimeEnv, event: DodoEve
   try {
     await d1.prepare(
       `INSERT INTO card_subscriptions (id, provider, provider_subscription_id, provider_customer_id, user_id, plan, status, customer_email,
-         attention_reason, last_event_at, created_at, updated_at)
-       VALUES (?, 'dodo', ?, ?, NULL, ?, 'needs_attention', ?, 'metadata_missing', ?, ?, ?)`
-    ).bind(randomId('csub'), subscriptionId, event.data.customerId, productPlan, event.data.customerEmail, event.occurredAt, nowIso, nowIso).run();
+         canonical_email, attention_reason, last_event_at, created_at, updated_at)
+       VALUES (?, 'dodo', ?, ?, NULL, ?, 'needs_attention', ?, ?, 'metadata_missing', ?, ?, ?)`
+    ).bind(randomId('csub'), subscriptionId, event.data.customerId, productPlan, event.data.customerEmail,
+      normalizeEmailForSelfCheck(event.data.customerEmail), event.occurredAt, nowIso, nowIso).run();
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
   }
@@ -369,11 +371,12 @@ async function applySubscriptionEvent(
     `UPDATE card_subscriptions SET status = ?, provider_subscription_id = COALESCE(provider_subscription_id, ?),
        provider_customer_id = COALESCE(?, provider_customer_id), current_period_end = COALESCE(?, current_period_end),
        cancel_at_period_end = ?, amount_cents = COALESCE(?, amount_cents), currency = COALESCE(?, currency),
-       customer_email = COALESCE(?, customer_email), attention_reason = ?, last_event_at = COALESCE(?, last_event_at), updated_at = ?
+       customer_email = COALESCE(?, customer_email), canonical_email = CASE WHEN ? IS NULL THEN canonical_email ELSE ? END,
+       attention_reason = ?, last_event_at = COALESCE(?, last_event_at), updated_at = ?
      WHERE id = ?`
   ).bind(
     status, data.subscriptionId, data.customerId, data.nextBillingDate, data.cancelAtPeriodEnd ? 1 : 0, data.amountCents, data.currency,
-    data.customerEmail, reason, event.occurredAt, nowIso, card.id
+    data.customerEmail, data.customerEmail, normalizeEmailForSelfCheck(data.customerEmail), reason, event.occurredAt, nowIso, card.id
   ).run();
 
   if (card.user_id && card.plan) {
