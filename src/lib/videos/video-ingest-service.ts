@@ -95,11 +95,15 @@ async function applyRewrite(deps: IngestDeps, youtubeId: string, rewriters: Tran
   }
 }
 
-/** Fetches transcript + metadata, stores the outcome and, with an AI binding, rewrites a fetched transcript. */
+/**
+ * Fetches transcript + metadata (captions in the edition's language), stores the outcome and,
+ * with an AI provider configured, rewrites a fetched transcript.
+ */
 export async function refreshEdition(deps: IngestDeps, youtubeId: string, opts: { fresh?: boolean; titleOverride?: string } = {}): Promise<RefreshOutcome> {
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const language = (await getEdition(deps.db, youtubeId))?.locale;
   const [markdown, watch] = await Promise.all([
-    fetchVideoMarkdown(youtubeId, { apiKey: deps.anymdApiKey, fresh: opts.fresh, fetchImpl }).then(
+    fetchVideoMarkdown(youtubeId, { apiKey: deps.anymdApiKey, fresh: opts.fresh, language, fetchImpl }).then(
       text => ({ ok: true as const, text }),
       (err: unknown) => ({ ok: false as const, error: err instanceof TranscriptFetchError ? err.message : 'AnyMD request failed' }),
     ),
