@@ -71,9 +71,25 @@
 .zb-chart canvas { width: 100% !important; max-height: 360px; }
 .zb-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
-.zb-diagram-svg { overflow-x: auto; max-width: 100%; }
-/* Keep Mermaid at its natural size so labels stay legible on phones; wide diagrams scroll inside the block. */
-.zb-diagram-svg svg { max-width: none !important; height: auto; display: block; margin-inline: auto; }
+/* Diagrams always fit the column width; zoom + drag (DiagramBlock) reveal detail without page scroll. */
+.zb-diagram { position: relative; border: 1px solid #e7e5e4; border-radius: 0.85rem; background: #fff; }
+.zb-diagram-viewport { overflow: hidden; border-radius: inherit; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.zb-diagram-viewport.is-zoomed { touch-action: none; cursor: grab; }
+.zb-diagram-viewport.is-zoomed:active { cursor: grabbing; }
+.zb-diagram-svg { transform-origin: 0 0; padding: 0.75rem 0.75rem 3.25rem; }
+.zb-diagram-svg svg { max-width: 100% !important; height: auto; display: block; margin-inline: auto; }
+.zb-diagram-tools {
+  position: absolute; right: 0.5rem; bottom: 0.5rem; display: flex; align-items: center;
+  border: 1px solid #e7e5e4; border-radius: 999px; background: rgba(255, 255, 255, 0.92); box-shadow: 0 1px 3px rgba(28, 25, 23, 0.12);
+}
+.zb-diagram-tools button {
+  min-width: 2.25rem; height: 2.25rem; padding: 0 0.5rem; border: 0; background: transparent; color: #1c1917;
+  font-size: 1.1rem; font-weight: 700; line-height: 1; cursor: pointer; border-radius: 999px;
+}
+.zb-diagram-tools .zb-diagram-level { font-size: 0.75rem; font-variant-numeric: tabular-nums; min-width: 3.1rem; }
+.zb-diagram-tools button:hover:not(:disabled) { background: #f5f5f4; }
+.zb-diagram-tools button:disabled { color: #a8a29e; cursor: default; }
+.zb-diagram-tools button:focus-visible { outline: 2px solid #d97706; outline-offset: 1px; }
 .zb-note { font-size: 0.8rem; color: #78716c; }
 
 .zb-embed { border: 1px solid #e7e5e4; border-radius: 1rem; padding: 1rem; background: #fafaf9; }
