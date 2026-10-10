@@ -153,7 +153,8 @@
 .zif-note { margin: 0; padding: 0.4rem 0.7rem; font-size: 0.7rem; color: #57534e; background: #fafaf9; border-top: 1px solid rgba(120, 113, 108, 0.15); }
 .zif-note-error { color: #9f1239; background: #fff1f2; }
 .zif-placeholder { padding: 1rem 0.7rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start; font-size: 0.84rem; color: #57534e; }
-.zif-full { width: min(1100px, calc(100vw - 1.5rem)); max-width: none; height: calc(100dvh - 2rem); max-height: none; padding: 0.6rem; display: flex; flex-direction: column; }
+.zif-full { width: min(1100px, calc(100vw - 1.5rem)); max-width: none; height: calc(100dvh - 2rem); max-height: none; padding: 0.6rem; flex-direction: column; }
+/* Flex only while open: a bare display rule would override the closed dialog's display:none and leave its shadow over the page. */
 .zif-full[open] { display: flex; }
 .zif-full .zif { flex: 1; display: flex; flex-direction: column; margin: 0; }
 .zif-full .zif iframe { flex: 1; height: auto !important; min-height: 60vh; }

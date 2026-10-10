@@ -12,6 +12,9 @@ export const QUOTE_RESERVED_CHARS = 600;
 /** Selections outside this range get no "Ask Zuey AI" tooltip. */
 export const MIN_SELECTION_CHARS = 3;
 export const MAX_SELECTION_CHARS = 4000;
+/** Window event that opens the article's Zuey AI drawer without a quote (fired by the sticky action bar). */
+export const OPEN_ARTICLE_AI_EVENT = 'zuey:open-article-ai';
+
 /** A passage waiting for sign-in is offered again for this long. */
 export const PENDING_QUOTE_TTL_MS = 30 * 60 * 1000;
 
