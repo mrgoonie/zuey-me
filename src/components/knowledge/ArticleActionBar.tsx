@@ -1,4 +1,6 @@
+import { Sparkles } from 'lucide-react';
 import type { Locale } from '../../lib/i18n/locales';
+import { OPEN_ARTICLE_AI_EVENT } from '../ai/article-chat-context';
 import { ShareMenu } from './ShareMenu';
 import { knowledgeStrings } from './strings';
 import './article-action-bar.css';
@@ -21,7 +23,7 @@ const AI_TARGETS: Array<{ name: string; url: (prompt: string) => string }> = [
   { name: 'Gemini', url: p => `https://gemini.google.com/app?q=${encodeURIComponent(p)}` },
 ];
 
-/** Sticky bottom bar on article pages: home, share (social + copy), and send-to-AI shortcuts. */
+/** Sticky bottom bar on article pages: home, share (social + copy), Zuey AI, and send-to-AI shortcuts. */
 export function ArticleActionBar({ locale, title, publicUrl, markdownUrl, canCopyPrivate }: Props) {
   const t = knowledgeStrings(locale);
   const prompt = t.aiPrompt(publicUrl);
@@ -36,6 +38,9 @@ export function ArticleActionBar({ locale, title, publicUrl, markdownUrl, canCop
       </a>
       <ShareMenu locale={locale} title={title} publicUrl={publicUrl} markdownUrl={markdownUrl} canCopyPrivate={canCopyPrivate} />
       <span className="zab-sep" aria-hidden="true" />
+      <button type="button" className="zab-btn zab-ai zab-zuey" onClick={() => window.dispatchEvent(new Event(OPEN_ARTICLE_AI_EVENT))}>
+        <Sparkles size={14} aria-hidden="true" />Zuey AI
+      </button>
       {AI_TARGETS.map(target => (
         <a key={target.name} className="zab-btn zab-ai" href={target.url(prompt)} target="_blank" rel="noopener noreferrer" aria-label={t.askAi(target.name)} title={t.askAi(target.name)}>
           {target.name}

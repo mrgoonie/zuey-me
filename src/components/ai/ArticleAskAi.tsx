@@ -4,7 +4,7 @@ import { Sparkles } from 'lucide-react';
 import type { Locale } from '../../lib/i18n/locales';
 import { trackEvent } from '../../lib/posthog';
 import type { ArticleChatContext } from './article-chat-context';
-import { MAX_SELECTION_CHARS, MIN_SELECTION_CHARS, normalizeQuote, readPendingQuote, savePendingQuote } from './article-chat-context';
+import { MAX_SELECTION_CHARS, MIN_SELECTION_CHARS, OPEN_ARTICLE_AI_EVENT, normalizeQuote, readPendingQuote, savePendingQuote } from './article-chat-context';
 import './article-ask-ai.css';
 
 // The chat panel (and its CSS) is fetched only when a reader first asks; the article page stays light.
@@ -71,6 +71,13 @@ export function ArticleAskAi({ locale, slug, title, url, scopeSelector, labels }
     const pending = readPendingQuote(slug);
     if (pending) openWith(pending);
   }, [scopeSelector, slug, openWith]);
+
+  // The action bar's "Zuey AI" button opens the drawer for a general question about the article.
+  useEffect(() => {
+    const onOpen = () => { trackEvent('article_ask_ai_opened', { slug }); openWith(null); };
+    window.addEventListener(OPEN_ARTICLE_AI_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ARTICLE_AI_EVENT, onOpen);
+  }, [slug, openWith]);
 
   useEffect(() => {
     let timer = 0;

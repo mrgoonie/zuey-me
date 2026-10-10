@@ -38,6 +38,9 @@
 .zab-btn:hover, .zab-btn[aria-expanded='true'] { background: #f5f5f4; }
 .zab-btn:focus-visible { outline: 2px solid #d97706; outline-offset: 1px; }
 .zab-ai { padding: 0 0.6rem; font-size: 0.78rem; }
+.zab-zuey { gap: 0.3rem; background: #1c1917; color: #fff7ed; }
+.zab-zuey:hover { background: #292524; }
+.zab-zuey svg { color: #fbbf24; }
 .zab-sep { width: 1px; height: 22px; margin: 0 2px; background: #e7e5e4; }
 .zab-toast {
   position: absolute;
@@ -54,6 +57,13 @@
 }
 @media (max-width: 380px) {
   .zab-ai { padding: 0 0.45rem; font-size: 0.74rem; }
+}
+/* Very narrow phones: tighter buttons, and the bar scrolls sideways rather than clipping a button. */
+@media (max-width: 350px) {
+  .zab { overflow-x: auto; scrollbar-width: none; }
+  .zab-btn { min-width: 34px; }
+  .zab-ai { padding: 0 0.35rem; font-size: 0.7rem; }
+  .zab-sep { margin: 0; }
 }
 @media print {
   .zab { display: none; }
