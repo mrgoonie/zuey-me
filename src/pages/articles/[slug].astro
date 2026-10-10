@@ -1,7 +1,7 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import { BlockRenderer } from '../../components/blocks/BlockRenderer';
-import { ShareMenu } from '../../components/knowledge/ShareMenu';
+import { ArticleActionBar } from '../../components/knowledge/ArticleActionBar';
 import { ArticleAskAi } from '../../components/ai/ArticleAskAi';
 import { AI_COPY } from '../../components/ai/copy';
 import { TagBadges } from '../../components/knowledge/TagBadges';
@@ -68,25 +68,11 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
   lang={LOCALE_LABELS[uiLocale].htmlLang}
 >
   {jsonLd && <script is:inline type="application/ld+json" set:html={jsonLd} />}
-  <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6">
+  <main class="relative min-h-screen w-full flex flex-col items-center pt-3 pb-24 sm:pt-8 md:pt-12 px-2.5 sm:px-4 md:px-6">
     <article class="w-full max-w-[860px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12">
       <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap gap-3 justify-between items-center">
         <a href={`/articles?lang=${uiLocale}`} class="hover:text-stone-900">← {t.sectionTitle}</a>
-        {view && (
-          <span class="flex flex-wrap gap-3 items-center">
-            <a href={articlePath(view.slug, view.locale, true)} class="hover:text-stone-900" type="text/markdown">{t.markdown}</a>
-            {!view.preview && (
-              <ShareMenu
-                client:visible
-                locale={view.locale}
-                title={view.title}
-                publicUrl={canonical}
-                markdownUrl={articleUrl(origin, view.slug, view.locale, true)}
-                canCopyPrivate={canCopyPrivate}
-              />
-            )}
-          </span>
-        )}
+        {view && <a href={articlePath(view.slug, view.locale, true)} class="hover:text-stone-900" type="text/markdown">{t.markdown}</a>}
       </nav>
 
       {view ? (
@@ -189,6 +175,16 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
         </div>
       )}
     </article>
+    {view && !view.preview && (
+      <ArticleActionBar
+        client:idle
+        locale={view.locale}
+        title={view.title}
+        publicUrl={canonical}
+        markdownUrl={articleUrl(origin, view.slug, view.locale, true)}
+        canCopyPrivate={canCopyPrivate}
+      />
+    )}
     {view && !view.preview && (
       <ArticleAskAi client:idle locale={uiLocale} slug={view.slug} title={view.title} url={canonical} scopeSelector="[data-ask-ai-scope]"
         labels={{ ask: AI_COPY[uiLocale].askAboutSelection, drawerTitle: AI_COPY[uiLocale].drawerTitle, loading: AI_COPY[uiLocale].loading }} />
