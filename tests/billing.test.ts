@@ -532,6 +532,30 @@ describe('new-order Telegram and Discord notices', () => {
     }
   });
 
+  it('announces an order paid by admin reconciliation once, and stays silent for transfers already applied', async () => {
+    try {
+      const m = await member('buyer3@example.com');
+      const o = await order(m, 'community', 1, notifyEnv());
+      sepayTransactions = [{ id: 901, amount_in: String(o.amount), amount_out: '0', transaction_content: `CK ${o.code}`, reference_number: 'FT901' }];
+      const reconcile = () => reconcileApi(ctx({ env: notifyEnv(), method: 'POST', headers: { Authorization: `Bearer ${adminKey}` } }));
+      const res = await reconcile();
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(field((await read(res)).data, 'results'))).toContain('"amount":');
+      expect(telegram).toHaveLength(1);
+      expect(telegram[0].text).toContain(o.code);
+      expect(telegram[0].text).toContain('Chuyển khoản SePay (đối soát)');
+      expect(telegram[0].text).toContain('FT901');
+      expect(discord).toHaveLength(1);
+
+      await reconcile();
+      expect((await webhook(transfer(o.code, o.amount, 901), notifyEnv())).outcome).toBe('duplicate_event');
+      expect(telegram).toHaveLength(1);
+      expect(discord).toHaveLength(1);
+    } finally {
+      experienceRuntime.fetch = originalFetch;
+    }
+  });
+
   it('keeps the payment when the channels are down or not configured', async () => {
     try {
       channelsUp = false;

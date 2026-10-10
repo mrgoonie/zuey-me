@@ -43,14 +43,15 @@ export const env = (): RuntimeEnv => ({
   COURSE_MEDIA_SECRET: 'media-secret-for-tests',
 });
 
-export interface CtxOpts { method?: string; body?: unknown; headers?: Record<string, string>; params?: Record<string, string>; path?: string }
+export interface CtxOpts { method?: string; body?: unknown; rawBody?: string; headers?: Record<string, string>; params?: Record<string, string>; path?: string; env?: RuntimeEnv }
 
 export function ctx(opts: CtxOpts = {}): APIContext {
   const headers = new Headers(opts.headers ?? {});
-  if (opts.body !== undefined) headers.set('Content-Type', 'application/json');
-  const request = new Request(`${ORIGIN}${opts.path ?? '/api/test'}`, { method: opts.method ?? 'GET', headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
+  const body = opts.rawBody ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body));
+  if (body !== undefined) headers.set('Content-Type', 'application/json');
+  const request = new Request(`${ORIGIN}${opts.path ?? '/api/test'}`, { method: opts.method ?? 'GET', headers, body });
   // Handlers only read request/params/locals; a full APIContext is not constructible in tests.
-  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: env() } } };
+  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: opts.env ?? env() } } };
   return partial as unknown as APIContext;
 }
 

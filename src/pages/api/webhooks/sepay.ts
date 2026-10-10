@@ -4,9 +4,8 @@ import { applyPayment, requireDb } from '../../../lib/booking/store';
 import { applyBillingPayment } from '../../../lib/members/billing';
 import { applyCourseSepayPayment } from '../../../lib/courses/course-payment-webhooks';
 import { parseSepayPayload, verifySepayAuthorization } from '../../../lib/payments/sepay';
-import { notifyOrder } from '../../../lib/notifications/order-notify';
+import { announceOrder } from '../../../lib/notifications/order-notify';
 import type { OrderKind } from '../../../lib/notifications/order-notify';
-import { runtimeWaitUntil } from '../../../lib/blocks/articles';
 
 /**
  * SePay bank-transfer webhook (`Authorization: Apikey <key>`). Routes by transfer content:
@@ -26,12 +25,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     if (transfer.direction !== 'in') return jsonOk({ outcome: 'ignored' });
     const d1 = requireDb(env);
     const paymentRef = transfer.referenceCode ?? transfer.eventId;
-    const waitUntil = runtimeWaitUntil(locals.runtime);
-    const announce = async (kind: OrderKind, code: string, outcome: string) => {
-      const sent = notifyOrder(env, { kind, code, amountVnd: transfer.amount, outcome, paymentRef });
-      if (waitUntil) waitUntil(sent);
-      else await sent;
-    };
+    const announce = (kind: OrderKind, code: string, outcome: string) =>
+      announceOrder(locals.runtime, env, { kind, source: 'sepay', code, amount: transfer.amount, currency: 'VND', outcome, paymentRef });
     if (transfer.billingCode) {
       const result = await applyBillingPayment(d1, env, {
         eventId: transfer.eventId,

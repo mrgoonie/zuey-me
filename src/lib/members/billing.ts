@@ -494,7 +494,7 @@ function saigonDate(ms: number): string {
 export interface ReconcileResult {
   checked: number;
   matched: number;
-  results: { transaction_id: string; order_code: string; outcome: string }[];
+  results: { transaction_id: string; order_code: string; outcome: string; amount: number; payment_ref: string | null }[];
 }
 
 /** Applies a transfer carrying a course order code (ZSC); injected so billing stays independent of courses. */
@@ -546,7 +546,7 @@ export async function reconcileSepay(d1: D1DatabaseLike, env: RuntimeEnv, applyC
     };
     const result = billingCode || !applyCourse ? await applyBillingPayment(d1, env, notice) : await applyCourse(notice);
     out.matched += 1;
-    out.results.push({ transaction_id: id, order_code: code, outcome: result.outcome });
+    out.results.push({ transaction_id: id, order_code: code, outcome: result.outcome, amount: notice.amount, payment_ref: notice.paymentRef });
   }
   return out;
 }
