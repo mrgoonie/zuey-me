@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
@@ -21,6 +21,7 @@ import { POST as cardPortalApi } from '../src/pages/api/v1/billing/card/[id]/por
 import { POST as cardCancelApi } from '../src/pages/api/v1/billing/card/[id]/cancel';
 import { POST as dodoWebhook } from '../src/pages/api/webhooks/dodo';
 import { POST as paypalWebhook } from '../src/pages/api/webhooks/paypal';
+import { experienceRuntime } from '../src/lib/experience/runtime';
 
 const ORIGIN = 'https://zuey.test';
 const HCM = 'Asia/Ho_Chi_Minh';
@@ -679,5 +680,74 @@ describe('unconfigured card rails', () => {
     expect(String(field(data, 'status_url'))).toBe(`${ORIGIN}/billing/${String(field(data, 'code'))}`);
     expect((await ordersApi(ctx({ method: 'POST', body: { plan: 'ai', provider: 'stripe' }, headers: m.browser }))).status).toBe(400);
     expect((await ordersApi(ctx({ method: 'POST', body: { plan: 'ai', provider: 'dodo', months: 3 }, headers: m.browser }))).status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin order notices (Telegram + Discord)
+// ---------------------------------------------------------------------------
+
+describe('admin order notices for card payments', () => {
+  const DISCORD_URL = 'https://discord.com/api/webhooks/1/test-token';
+  const notifyEnv = (): RuntimeEnv => env({ TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_GROUP_ID_SEPAY_NOTI: '-1009', DISCORD_WEBHOOK_SEPAY_NOTI: DISCORD_URL });
+  let notices: { channel: 'telegram' | 'discord'; text: string }[];
+  const originalFetch = experienceRuntime.fetch;
+
+  beforeEach(() => {
+    notices = [];
+    experienceRuntime.fetch = async (input, init) => {
+      const url = String(input);
+      const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+      if (url.startsWith('https://api.telegram.org/')) notices.push({ channel: 'telegram', text: String(field(body, 'text')) });
+      else if (url === DISCORD_URL) notices.push({ channel: 'discord', text: String(field(body, 'content')) });
+      else return originalFetch(input, init);
+      return json({ ok: true });
+    };
+  });
+  afterEach(() => { experienceRuntime.fetch = originalFetch; });
+
+  it('announces a newly activated Dodo membership once', async () => {
+    const m = await member('lan@example.com');
+    const { metadata } = await startCard(m, 'combo');
+    const body = subscriptionPayload('subscription.active', { metadata });
+    expect((await sendDodo(body, { id: 'msg_notice' }, notifyEnv())).outcome).toBe('activated');
+    expect(notices.map(n => n.channel).sort()).toEqual(['discord', 'telegram']);
+    const text = notices[0].text;
+    expect(text).toContain('Đơn hàng mới đã thanh toán');
+    expect(text).toContain('Gói thành viên');
+    expect(text).toContain('combo · sub_1');
+    expect(text).toContain('19.00 USD');
+    expect(text).toContain('Thẻ (Dodo)');
+    expect((await sendDodo(body, { id: 'msg_notice' }, notifyEnv())).outcome).toBe('duplicate_event');
+    expect(notices).toHaveLength(2);
+  });
+
+  it('announces a PayPal booking confirmed by webhook, not its redelivery', async () => {
+    const b = await paypalHold(notifyEnv());
+    await paypalCheckout(b);
+    expect((await sendPaypal(paypalEvent({ eventId: 'WH-NOTICE-1' }), notifyEnv())).outcome).toBe('confirmed');
+    expect(notices).toHaveLength(2);
+    const code = (await getBookingRow(d1, b.id))?.code ?? '';
+    expect(notices[0].text).toContain(code);
+    expect(notices[0].text).toContain('Lịch tư vấn');
+    expect(notices[0].text).toContain('1,999.00 USD');
+    expect(notices[0].text).toContain('PayPal');
+    expect(notices[0].text).toContain('CAPTURE-1');
+    expect((await sendPaypal(paypalEvent({ eventId: 'WH-NOTICE-2', captureId: 'CAPTURE-2' }), notifyEnv())).outcome).toBe('already_confirmed');
+    expect(notices).toHaveLength(2);
+  });
+
+  it('announces a capture on return once and never shows the guest the internal result', async () => {
+    const b = await paypalHold(notifyEnv());
+    await paypalCheckout(b);
+    captureResponse = { status: 201, body: captureBody() };
+    const res = await captureApi(ctx({ env: notifyEnv(), method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+    const { data } = await read(res);
+    expect(field(data, 'capture_status')).toBe('confirmed');
+    expect(field(data, 'applied')).toBeUndefined();
+    expect(notices).toHaveLength(2);
+    expect(notices[0].text).toContain('PayPal');
+    expect((await sendPaypal(paypalEvent({}), notifyEnv())).outcome).toBe('duplicate_event');
+    expect(notices).toHaveLength(2);
   });
 });

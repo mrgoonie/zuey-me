@@ -8,6 +8,10 @@ import { GET as catalogApi } from '../src/pages/api/v1/courses/index';
 import { POST as checkoutApi } from '../src/pages/api/v1/courses/[course]/checkout';
 import { POST as resolveApi } from '../src/pages/api/v1/admin/course-orders/[code]/resolve';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
+import { POST as dodoWebhook } from '../src/pages/api/webhooks/dodo';
+import type { RuntimeEnv } from '../src/env';
+import { experienceRuntime } from '../src/lib/experience/runtime';
+import { signDodoPayload } from '../src/lib/payments/dodo';
 import type { Member } from './helpers/courses';
 import { ctx, env, field, member, publishedCourse, read, resetCourseState, sepayTime, state } from './helpers/courses';
 
@@ -167,6 +171,42 @@ describe('Dodo course payments, refunds and disputes', () => {
     // The flagged order keeps its payment id, so a Dodo refund still closes it (an admin grant can no longer follow).
     expect(await dodo('evt_low_refund', 'refund.succeeded', { payment_id: 'pay_low' })).toMatchObject({ outcome: 'reversed' });
     expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+  });
+
+  it('announces a course paid by card through the webhook route, but not its redelivery', async () => {
+    await publishedCourse();
+    const lan = await member('lan@example.com');
+    const card = await read(await checkout(lan, { provider: 'dodo', accept_terms: true }));
+    const code = String(field(card.data, 'code'));
+    const notifyEnv: RuntimeEnv = { ...env(), TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_GROUP_ID_SEPAY_NOTI: '-1009' };
+    const texts: string[] = [];
+    const originalFetch = experienceRuntime.fetch;
+    experienceRuntime.fetch = async (input, init) => {
+      if (!String(input).startsWith('https://api.telegram.org/')) return originalFetch(input, init);
+      const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+      texts.push(String(field(body, 'text')));
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      const body = JSON.stringify({ type: 'payment.succeeded', data: { payment_id: 'pay_route', total_amount: 4900, currency: 'USD', metadata: { course_order: code, user_id: lan.userId } } });
+      const deliver = async () => {
+        const ts = String(Math.floor(state.now / 1000));
+        const signature = await signDodoPayload('whsec_dGVzdA==', 'evt_route', ts, body);
+        return field(await read(await dodoWebhook(ctx({
+          env: notifyEnv, method: 'POST', rawBody: body, headers: { 'webhook-id': 'evt_route', 'webhook-timestamp': ts, 'webhook-signature': signature },
+        }))), 'data', 'outcome');
+      };
+      expect(await deliver()).toBe('paid');
+      expect(texts).toHaveLength(1);
+      expect(texts[0]).toContain(code);
+      expect(texts[0]).toContain('Khoá học');
+      expect(texts[0]).toContain('49.00 USD');
+      expect(texts[0]).toContain('pay_route');
+      expect(await deliver()).toBe('duplicate_event');
+      expect(texts).toHaveLength(1);
+    } finally {
+      experienceRuntime.fetch = originalFetch;
+    }
   });
 
   it('flags a card payment whose checkout belongs to another account instead of dropping it', async () => {

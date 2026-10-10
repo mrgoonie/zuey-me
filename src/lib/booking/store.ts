@@ -743,6 +743,9 @@ export async function applyPaypalReversal(
 
 export type CaptureStatus = 'confirmed' | 'pending' | 'not_approved' | 'declined' | 'needs_attention' | 'unchanged';
 
+/** What applying the capture did (for the admin notice); never sent to the guest. */
+export interface AppliedCapture { outcome: PaymentOutcome; amount: number; currency: string; ref: string }
+
 /**
  * Guest returned from PayPal: captures the approved order server-side and applies the capture through
  * the same idempotent path as the PAYMENT.CAPTURE.COMPLETED webhook (event id = capture id). An expired
@@ -750,11 +753,11 @@ export type CaptureStatus = 'confirmed' | 'pending' | 'not_approved' | 'declined
  */
 export async function capturePaypalBooking(
   d1: D1DatabaseLike, env: RuntimeEnv, id: string, token: string | null
-): Promise<{ booking: GuestBookingView; capture_status: CaptureStatus }> {
+): Promise<{ booking: GuestBookingView; capture_status: CaptureStatus; applied: AppliedCapture | null }> {
   const row = await getBookingForGuest(d1, id, token);
   const now = bookingRuntime.now();
   if (row.payment_method !== 'paypal') throw new AppError(409, 'invalid_payment_method', 'This booking is not paid with PayPal');
-  if (row.status !== 'held') return { booking: toGuestView(row, env, now), capture_status: 'unchanged' };
+  if (row.status !== 'held') return { booking: toGuestView(row, env, now), capture_status: 'unchanged', applied: null };
   if (row.hold_expires_at < iso(now)) {
     throw new AppError(409, 'hold_not_active', 'This hold expired before the payment was captured, so you have not been charged. Please choose a slot again.', { status: 'expired' });
   }
@@ -763,6 +766,7 @@ export async function capturePaypalBooking(
   const order = await capturePaypalOrder(env, row.payment_ref, bookingRuntime.fetch, now);
   const capture = order.capture;
   let status: CaptureStatus = order.status === 'NOT_APPROVED' ? 'not_approved' : capture?.status === 'PENDING' ? 'pending' : 'declined';
+  let applied: AppliedCapture | null = null;
   if (capture?.status === 'COMPLETED') {
     if (capture.amountCents === null || !capture.currency) throw new AppError(502, 'payment_provider_error', 'PayPal capture has no amount');
     const result = await applyPayment(d1, env, {
@@ -779,9 +783,10 @@ export async function capturePaypalBooking(
       payerEmail: order.payer?.email ?? null,
     });
     status = result.outcome === 'needs_attention' ? 'needs_attention' : 'confirmed';
+    applied = { outcome: result.outcome, amount: capture.amountCents, currency: capture.currency, ref: capture.id };
   }
   const fresh = (await getBookingRow(d1, row.id)) ?? row;
-  return { booking: toGuestView(fresh, env, bookingRuntime.now()), capture_status: status };
+  return { booking: toGuestView(fresh, env, bookingRuntime.now()), capture_status: status, applied };
 }
 
 // ---------------------------------------------------------------------------
