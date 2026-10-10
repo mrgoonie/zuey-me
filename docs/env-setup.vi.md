@@ -221,6 +221,7 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
 2. Thêm bot làm admin của hai nhóm kín (tiếng Anh, tiếng Việt) với quyền *Invite users via link* và *Ban users*. Lưu ID nhóm (dạng `-100…`) vào `TELEGRAM_GROUP_EN_ID` và `TELEGRAM_GROUP_VI_ID`.
 3. Tạo chuỗi ngẫu nhiên cho `TELEGRAM_WEBHOOK_SECRET`, rồi đăng ký webhook một lần theo lệnh `setWebhook` ghi trong `.env.example` (URL `https://zuey.me/api/v1/community/telegram-webhook`, `allowed_updates=["chat_member"]`).
 4. Thiếu biến nào thì các endpoint cộng đồng trả `503 community_unconfigured`; thành viên vẫn thấy thẻ cộng đồng trong `/account#community` nhưng chưa nhận được link mời.
+5. Thông báo đơn hàng mới: thêm bot vào nhóm admin (chỉ cần là thành viên), lưu ID nhóm vào `TELEGRAM_GROUP_ID_SEPAY_NOTI`. Webhook SePay gửi tin vào nhóm khi một chuyển khoản trả xong đơn (gói thành viên, khoá học, lịch tư vấn) hoặc cần admin kiểm tra (thiếu tiền, trễ hạn). Muốn nhận thêm ở Discord: tạo webhook cho kênh (Cài đặt kênh → Tích hợp → Webhook) và lưu URL vào secret `DISCORD_WEBHOOK_SEPAY_NOTI`. Kênh nào để trống thì không gửi; Telegram hay Discord lỗi cũng không làm hỏng webhook SePay.
 
 ## 10. OAuth / MCP cho ứng dụng bên ngoài
 

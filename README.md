@@ -78,6 +78,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | Jev relevance (TypeSafe AI) | `TYPESAFEAI_API_KEY` enables reranking; `TYPESAFE_API_BASE` / `TYPESAFE_MODEL` (optional) |
 | Interactive blocks | `SANDBOX_FETCH_ALLOWLIST` (empty disables the fetch proxy) |
 | Telegram community | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_EN_ID`, `TELEGRAM_GROUP_VI_ID`, `TELEGRAM_WEBHOOK_SECRET` |
+| New-order notices | `TELEGRAM_GROUP_ID_SEPAY_NOTI` (admin group; reuses `TELEGRAM_BOT_TOKEN`), `DISCORD_WEBHOOK_SEPAY_NOTI` (channel webhook, secret); each empty = that channel off |
 | Referral program | R2 binding `REFERRAL_KYC` (bucket `zuey-referral-kyc`); reuses `USD_VND_RATE`, `MEMBER_HASH_SALT`, `CRON_SECRET` |
 | MCP from other web origins | `MCP_ALLOWED_ORIGINS` (optional) |
 | Reads / reminders cron (GitHub) | secret `ZUEY_ADMIN_API_KEY`, variable `SITE_URL` |

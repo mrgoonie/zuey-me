@@ -137,6 +137,10 @@ export interface RuntimeEnv {
   TELEGRAM_GROUP_VI_ID?: string;
   /** secret_token passed to setWebhook; Telegram echoes it in X-Telegram-Bot-Api-Secret-Token. */
   TELEGRAM_WEBHOOK_SECRET?: string;
+  /** Chat id of the admin group that gets new-order notices from the SePay webhook (sent with TELEGRAM_BOT_TOKEN). */
+  TELEGRAM_GROUP_ID_SEPAY_NOTI?: string;
+  /** Discord channel webhook URL that also gets the new-order notices (secret: anyone holding it can post). */
+  DISCORD_WEBHOOK_SEPAY_NOTI?: string;
 }
 
 declare global {
