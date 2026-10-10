@@ -51,6 +51,10 @@ export interface KnowledgeStrings {
   askAi: (name: string) => string;
   aiPrompt: (url: string) => string;
   nativeShare: string;
+  shareTo: string;
+  copyLink: string;
+  home: string;
+  articleActions: string;
   notFoundTitle: string;
   notFoundBody: string;
   semanticOff: string;
@@ -111,6 +115,10 @@ const vi: KnowledgeStrings = {
   askAi: n => `Hỏi ${n} về bài này`,
   aiPrompt: url => `Đọc và tóm tắt bài viết công khai này, sau đó trả lời câu hỏi của tôi: ${url}`,
   nativeShare: 'Chia sẻ…',
+  shareTo: 'Chia sẻ lên',
+  copyLink: 'Sao chép liên kết',
+  home: 'Trang chủ',
+  articleActions: 'Thao tác bài viết',
   notFoundTitle: 'Không tìm thấy bài viết',
   notFoundBody: 'Bài viết không tồn tại hoặc chưa được xuất bản.',
   semanticOff: 'Tìm theo từ khoá',
@@ -170,6 +178,10 @@ const en: KnowledgeStrings = {
   askAi: n => `Ask ${n} about this`,
   aiPrompt: url => `Read and summarise this public article, then answer my questions: ${url}`,
   nativeShare: 'Share…',
+  shareTo: 'Share to',
+  copyLink: 'Copy link',
+  home: 'Home',
+  articleActions: 'Article actions',
   notFoundTitle: 'Article not found',
   notFoundBody: 'This article does not exist or is not published.',
   semanticOff: 'Keyword search',
@@ -229,6 +241,10 @@ const zh: KnowledgeStrings = {
   askAi: n => `向 ${n} 询问本文`,
   aiPrompt: url => `请阅读并总结这篇公开文章，然后回答我的问题：${url}`,
   nativeShare: '分享…',
+  shareTo: '分享到',
+  copyLink: '复制链接',
+  home: '首页',
+  articleActions: '文章操作',
   notFoundTitle: '未找到文章',
   notFoundBody: '文章不存在或尚未发布。',
   semanticOff: '关键词搜索',
@@ -288,6 +304,10 @@ const ko: KnowledgeStrings = {
   askAi: n => `${n}에게 이 글 묻기`,
   aiPrompt: url => `이 공개 글을 읽고 요약한 뒤 제 질문에 답해 주세요: ${url}`,
   nativeShare: '공유…',
+  shareTo: '공유 대상',
+  copyLink: '링크 복사',
+  home: '홈',
+  articleActions: '글 작업',
   notFoundTitle: '글을 찾을 수 없습니다',
   notFoundBody: '글이 없거나 아직 게시되지 않았습니다.',
   semanticOff: '키워드 검색',
@@ -347,6 +367,10 @@ const ja: KnowledgeStrings = {
   askAi: n => `${n} にこの記事を質問`,
   aiPrompt: url => `この公開記事を読んで要約し、私の質問に答えてください: ${url}`,
   nativeShare: '共有…',
+  shareTo: '共有先',
+  copyLink: 'リンクをコピー',
+  home: 'ホーム',
+  articleActions: '記事の操作',
   notFoundTitle: '記事が見つかりません',
   notFoundBody: '記事が存在しないか、まだ公開されていません。',
   semanticOff: 'キーワード検索',
