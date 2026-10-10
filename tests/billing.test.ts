@@ -31,6 +31,7 @@ import { GET as subscriptionApi } from '../src/pages/api/v1/billing/subscription
 import { POST as reconcileApi } from '../src/pages/api/v1/billing/reconcile';
 import { POST as remindersApi } from '../src/pages/api/v1/billing/reminders';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
+import { experienceRuntime } from '../src/lib/experience/runtime';
 
 const T0 = Date.parse('2026-10-05T00:00:00.000Z');
 const ORIGIN = 'https://zuey.test';
@@ -473,5 +474,77 @@ describe('paywall matrix', () => {
     expect(field(fetched, 'status')).toBe('pending');
     const denied = await membersMcpModule.call('me_get', {}, c).then(() => null, (e: unknown) => e);
     expect(denied instanceof AppError && denied.code === 'insufficient_scope').toBe(true);
+  });
+});
+
+describe('new-order Telegram and Discord notices', () => {
+  const DISCORD_URL = 'https://discord.com/api/webhooks/1/test-token';
+  const notifyEnv = (): RuntimeEnv => env({ TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_GROUP_ID_SEPAY_NOTI: '-1009', DISCORD_WEBHOOK_SEPAY_NOTI: DISCORD_URL });
+  let telegram: { url: string; chatId: unknown; text: string }[];
+  let discord: { content: string; allowedMentions: unknown }[];
+  let channelsUp: boolean;
+  const originalFetch = experienceRuntime.fetch;
+
+  beforeEach(() => {
+    telegram = [];
+    discord = [];
+    channelsUp = true;
+    experienceRuntime.fetch = async (input, init) => {
+      const url = String(input);
+      const isTelegram = url.startsWith('https://api.telegram.org/');
+      if (!isTelegram && url !== DISCORD_URL) return originalFetch(input, init);
+      if (!channelsUp) throw new Error('offline');
+      const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+      if (isTelegram) telegram.push({ url, chatId: field(body, 'chat_id'), text: String(field(body, 'text')) });
+      else discord.push({ content: String(field(body, 'content')), allowedMentions: field(body, 'allowed_mentions') });
+      return isTelegram ? json({ ok: true, result: {} }) : new Response(null, { status: 204 });
+    };
+  });
+
+  it('announces a paid order and a transfer needing attention, but not unmatched or duplicate transfers', async () => {
+    try {
+      const m = await member('buyer@example.com');
+      const o = await order(m, 'knowledges', 1, notifyEnv());
+      const paid = transfer(`thanh toan ${o.code}`, o.amount);
+      expect((await webhook(paid, notifyEnv())).outcome).toBe('paid');
+      expect(telegram).toHaveLength(1);
+      expect(telegram[0].url).toBe('https://api.telegram.org/botbot-token/sendMessage');
+      expect(telegram[0].chatId).toBe('-1009');
+      expect(telegram[0].text).toContain('Đơn hàng mới đã thanh toán');
+      expect(telegram[0].text).toContain(o.code);
+      expect(telegram[0].text).toContain('Gói thành viên');
+      expect(discord).toHaveLength(1);
+      expect(discord[0].content).toBe(telegram[0].text);
+      expect(discord[0].allowedMentions).toEqual({ parse: [] });
+
+      expect((await webhook(paid, notifyEnv())).outcome).toBe('duplicate_event');
+      expect((await webhook(transfer('ZSBNOPE00', 1000), notifyEnv())).outcome).toBe('ignored');
+      expect(telegram).toHaveLength(1);
+      expect(discord).toHaveLength(1);
+
+      const short = await order(m, 'knowledges', 3, notifyEnv());
+      expect((await webhook(transfer(`ck ${short.code}`, short.amount - 1000), notifyEnv())).outcome).toBe('needs_attention');
+      expect(telegram).toHaveLength(2);
+      expect(telegram[1].text).toContain('cần kiểm tra');
+      expect(discord).toHaveLength(2);
+    } finally {
+      experienceRuntime.fetch = originalFetch;
+    }
+  });
+
+  it('keeps the payment when the channels are down or not configured', async () => {
+    try {
+      channelsUp = false;
+      const m = await member('buyer2@example.com');
+      const o = await order(m, 'knowledges', 1, notifyEnv());
+      expect((await webhook(transfer(`ck ${o.code}`, o.amount), notifyEnv())).outcome).toBe('paid');
+      channelsUp = true;
+      const o2 = await order(m, 'knowledges', 3);
+      expect((await webhook(transfer(`ck ${o2.code}`, o2.amount))).outcome).toBe('paid');
+      expect(telegram).toHaveLength(0);
+      expect(discord).toHaveLength(0);
+    } finally {
+      experienceRuntime.fetch = originalFetch;
+    }
   });
 });
