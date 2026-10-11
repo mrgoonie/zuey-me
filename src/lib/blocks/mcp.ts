@@ -162,7 +162,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' } }, required: ['slug', 'locale', 'expected_revision'] },
     },
     {
-      name: 'article_revisions', description: 'Admin: revision history; with revision + locale returns that stored document (restore by saving it via article_update).',
+      name: 'article_revisions', description: 'Admin: revision history; with revision + locale returns that stored document (restore by saving it via article_update) and recovery: null, or {dropped_blocks, degraded_embeds, unreadable} when the snapshot failed validation and was recovered (saving it makes the loss permanent).',
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, revision: { type: 'integer' } }, required: ['slug'] },
     },
     {

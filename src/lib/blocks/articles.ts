@@ -887,15 +887,19 @@ export async function listRevisions(d1: D1DatabaseLike | undefined, slug: string
   }));
 }
 
-/** Admin: a stored revision's document (to inspect or restore by saving it as a new draft). */
+/**
+ * Admin: a stored revision's document (to inspect or restore by saving it as a new draft). `recovery`
+ * is null when the snapshot was read as stored; otherwise restoring and saving it makes the loss permanent.
+ */
 export async function getRevisionDocument(
   d1: D1DatabaseLike | undefined, slug: string, locale: Locale, revision: number,
-): Promise<{ revision: number; locale: Locale; title: string; excerpt: string; document: ArticleDocument } | null> {
+): Promise<{ revision: number; locale: Locale; title: string; excerpt: string; document: ArticleDocument; recovery: DocumentRecovery | null } | null> {
   const db = requireDb(d1);
   const art = await loadArticleRow(db, slug);
   if (!art) return null;
   const row = await db.prepare('SELECT * FROM article_revisions WHERE article_id = ? AND locale = ? AND revision = ? ORDER BY created_at DESC LIMIT 1')
     .bind(art.id, locale, revision).first<Row>();
   if (!row) return null;
-  return { revision, locale, title: s(row, 'title'), excerpt: s(row, 'excerpt'), document: parseStoredDoc(s(row, 'document_json'), slug) };
+  const read = readStoredDocWithRecovery(s(row, 'document_json'), slug);
+  return { revision, locale, title: s(row, 'title'), excerpt: s(row, 'excerpt'), document: read.doc ?? emptyDocument(), recovery: read.recovery };
 }

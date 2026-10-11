@@ -3,11 +3,12 @@ import type { APIRoute } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createSession } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
-import { createArticle, getArticle, publishArticle } from '../src/lib/blocks/articles';
+import { createArticle, getArticle, getRevisionDocument, publishArticle } from '../src/lib/blocks/articles';
 import { articlesMcpModule } from '../src/lib/blocks/mcp';
 import type { McpContext } from '../src/lib/mcp/types';
 import { requireCan, resolvePrincipal } from '../src/lib/members/policy';
 import { GET as getApi } from '../src/pages/api/v1/articles/[slug]';
+import { GET as revisionsApi } from '../src/pages/api/v1/articles/[slug]/revisions';
 
 // The admin draft read tells editors when the stored draft had to be recovered, so a save that
 // sends the whole document never silently makes the loss permanent.
@@ -35,10 +36,10 @@ async function seed(slug: string, draftJson: string | null): Promise<void> {
   d1.raw.query('UPDATE article_editions SET draft_json = ? WHERE article_id = ?').run(draftJson, rec.id);
 }
 
-async function restGet(slug: string, query: string, cookie?: string): Promise<{ status: number; data: Record<string, unknown> }> {
+async function restGet(slug: string, query: string, cookie?: string, handler: APIRoute = getApi): Promise<{ status: number; data: Record<string, unknown> }> {
   const request = new Request(`https://zuey.test/api/v1/articles/${slug}${query}`, { headers: cookie ? { cookie } : {} });
   const context = { request, params: { slug }, url: new URL(request.url), locals: { runtime: { env: { DB: d1 } } } };
-  const res = await getApi(context as unknown as Parameters<APIRoute>[0]);
+  const res = await handler(context as unknown as Parameters<APIRoute>[0]);
   const body = (await res.json()) as { data?: Record<string, unknown> };
   return { status: res.status, data: body.data ?? {} };
 }
@@ -60,6 +61,13 @@ async function mcpGet(args: Record<string, unknown>, cookie?: string): Promise<R
   return { ...out };
 }
 
+/** Creates an article whose first revision snapshot is replaced by `snapshotJson`; returns that revision. */
+async function seedRevision(slug: string, snapshotJson: string): Promise<number> {
+  const rec = await createArticle(d1, { slug, title: slug });
+  d1.raw.query('UPDATE article_revisions SET document_json = ? WHERE article_id = ?').run(snapshotJson, rec.id);
+  return rec.revision;
+}
+
 beforeAll(async () => {
   console.warn = () => {};
   adminCookie = `zuey_session=${await createSession('admin@zuey.me', d1)}`;
@@ -67,6 +75,8 @@ beforeAll(async () => {
   await seed('lossy', LOSSY);
   await seed('broken-json', '{not json');
   await seed('all-invalid', ALL_INVALID);
+  await seedRevision('history-lossy', LOSSY);
+  await seedRevision('history-broken', '{not json');
 });
 afterAll(() => { console.warn = originalWarn; });
 
@@ -113,5 +123,32 @@ describe('admin draft read reports recovery', () => {
     const tool = articlesMcpModule.tools.find(t => t.name === 'article_get');
     expect(tool?.description).toContain('recovery');
     expect(tool?.description).toContain('dropped_blocks');
+  });
+});
+
+describe('admin revision read reports recovery', () => {
+  it('is null for a revision stored valid', async () => {
+    const doc = await getRevisionDocument(d1, 'clean', 'vi', 1);
+    expect(doc?.recovery).toBeNull();
+  });
+
+  it('counts what a lossy snapshot lost (REST and MCP)', async () => {
+    const expected = { dropped_blocks: 1, degraded_embeds: 1, unreadable: false };
+    const rest = await restGet('history-lossy', '?lang=vi&revision=1', adminCookie, revisionsApi);
+    expect(rest.status).toBe(200);
+    expect(rest.data.recovery).toEqual(expected);
+    expect((rest.data.document as { blocks: Array<{ id: string }> }).blocks.map(b => b.id)).toEqual(['p1', 'e1']);
+    const mcp = await articlesMcpModule.call('article_revisions', { slug: 'history-lossy', locale: 'vi', revision: 1 }, mcpCtx(adminCookie));
+    expect(typeof mcp === 'object' && mcp !== null && 'recovery' in mcp ? mcp.recovery : undefined).toEqual(expected);
+  });
+
+  it('flags an unreadable snapshot returned empty', async () => {
+    const rest = await restGet('history-broken', '?lang=vi&revision=1', adminCookie, revisionsApi);
+    expect(rest.data.recovery).toEqual({ dropped_blocks: 0, degraded_embeds: 0, unreadable: true });
+    expect(rest.data.document).toEqual({ version: 1, blocks: [] });
+  });
+
+  it('documents the field in the MCP tool description', () => {
+    expect(articlesMcpModule.tools.find(t => t.name === 'article_revisions')?.description).toContain('recovery');
   });
 });

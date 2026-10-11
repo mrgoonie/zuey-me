@@ -246,17 +246,7 @@ export const articlesOpenApi: OpenApiFragment = {
           },
           preview: { type: 'boolean' },
           locale_fallback: { type: 'boolean', description: 'The requested locale had no edition; another edition is returned' },
-          recovery: {
-            type: ['object', 'null'],
-            description: 'Admin draft reads (?draft=1) only: null when the stored draft passed validation; otherwise how it was recovered for display. '
-              + 'Saving the returned document over it makes the loss permanent, so editors should confirm first.',
-            required: ['dropped_blocks', 'degraded_embeds', 'unreadable'],
-            properties: {
-              dropped_blocks: { type: 'integer', minimum: 0, description: 'Invalid blocks skipped on read' },
-              degraded_embeds: { type: 'integer', minimum: 0, description: 'Embeds whose stored provider no longer matches their URL, shown as plain links' },
-              unreadable: { type: 'boolean', description: 'The stored draft (or every block of it) could not be read; the document is returned empty' },
-            },
-          },
+          recovery: { ...ref('DocumentRecovery'), description: 'Admin draft reads (?draft=1) only' },
         },
       }],
     },
@@ -274,6 +264,17 @@ export const articlesOpenApi: OpenApiFragment = {
       },
     },
     ArticleEdition: editionSummary,
+    DocumentRecovery: {
+      type: ['object', 'null'],
+      description: 'null when the stored document passed validation; otherwise how it was recovered for display. '
+        + 'Saving the returned document over the stored one makes the loss permanent, so editors should confirm first.',
+      required: ['dropped_blocks', 'degraded_embeds', 'unreadable'],
+      properties: {
+        dropped_blocks: { type: 'integer', minimum: 0, description: 'Invalid blocks skipped on read' },
+        degraded_embeds: { type: 'integer', minimum: 0, description: 'Embeds whose stored provider no longer matches their URL, shown as plain links' },
+        unreadable: { type: 'boolean', description: 'The stored document (or every block of it) could not be read; it is returned empty' },
+      },
+    },
     SurveyResults: {
       type: 'object',
       properties: {
@@ -384,7 +385,7 @@ export const articlesOpenApi: OpenApiFragment = {
           '200': ok('History or document', {
             oneOf: [
               { type: 'array', items: { type: 'object', properties: { revision: { type: 'integer' }, locale: localeEnum, action: { type: 'string' }, title: { type: 'string' }, actor: { type: 'string' }, created_at: { type: 'string' } } } },
-              { type: 'object', properties: { revision: { type: 'integer' }, locale: localeEnum, title: { type: 'string' }, excerpt: { type: 'string' }, document: ref('ArticleDocument') } },
+              { type: 'object', properties: { revision: { type: 'integer' }, locale: localeEnum, title: { type: 'string' }, excerpt: { type: 'string' }, document: ref('ArticleDocument'), recovery: ref('DocumentRecovery') } },
             ],
           }),
           '404': notFound, ...errorResponses,
