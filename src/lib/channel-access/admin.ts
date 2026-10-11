@@ -1,6 +1,8 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { recordAdminAccess } from '../ai/chat-store';
 import { AppError } from '../http';
+import type { Principal } from '../members/policy';
 import type { Row } from '../members/runtime';
 import { str, strOrNull } from '../members/runtime';
 import { logActivity } from '../members/users';
@@ -14,8 +16,9 @@ import { SENDER_ID_RE, SUPPORTED_CHANNEL_TYPES, isChannelType } from './link-tok
 /**
  * Admin recovery for chat accounts linked to the wrong member (mistaken community backfill, a link made on
  * someone else's device, a support request from the real owner). Lookup shows who holds a sender id;
- * unlinking frees it so the real owner can link at /connect, logs `channel.unlinked` on the affected member
- * with the admin as actor and tells dewee to re-check that sender at once.
+ * unlinking frees it so the real owner can link at /connect, tells the affected member only that an admin
+ * unlinked it (`channel.unlinked` with `by: 'admin'`), keeps who did it and why in the admin-only
+ * `admin_access_audit` log and tells dewee to re-check that sender at once.
  */
 
 export const MAX_UNLINK_REASON_LENGTH = 500;
@@ -23,6 +26,19 @@ export const MAX_UNLINK_REASON_LENGTH = 500;
 export interface ChannelRef {
   provider: ChannelType;
   external_id: string;
+}
+
+/**
+ * Decodes a URL path segment once. Astro leaves reserved characters such as `%3A` encoded in route params,
+ * so `777%3A002` must become `777:002` before validation; malformed encoding is a 400.
+ */
+export function decodePathParam(raw: string | undefined, field: string): string | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new AppError(400, 'invalid_field', `${field} is not valid URL encoding`, { field });
+  }
 }
 
 /** Validates a provider/external id pair from a path or tool arguments; throws AppError 400. */
@@ -74,10 +90,9 @@ export async function adminGetChannelIdentity(d1: D1DatabaseLike, ref: ChannelRe
 }
 
 export interface AdminUnlinkOptions {
-  /** Who did it (admin email or credential kind), recorded as the activity actor. */
-  admin: string;
+  /** The admin doing it; recorded with the reason only in the admin-only audit log, never shown to the member. */
+  principal: Principal;
   reason: string | null;
-  request?: Request;
   waitUntil?: WaitUntil;
 }
 
@@ -98,9 +113,14 @@ export async function adminUnlinkChannelIdentity(
   const res = await d1.prepare('DELETE FROM channel_identities WHERE provider = ? AND external_id = ? AND user_id = ?')
     .bind(ref.provider, ref.external_id, identity.user_id).run();
   if ((res.meta?.changes ?? 0) === 0) throw new AppError(404, 'not_found', 'This chat account is not linked to any member');
-  await logActivity(d1, identity.user_id, 'channel.unlinked', {
-    provider: ref.provider, external_id: ref.external_id, by: 'admin', admin: opts.admin, reason: opts.reason,
-  }, opts.request);
+  // The member sees only that an admin unlinked it: no admin identity, reason or admin user agent.
+  await logActivity(d1, identity.user_id, 'channel.unlinked', { provider: ref.provider, external_id: ref.external_id, by: 'admin' });
+  try {
+    await recordAdminAccess(d1, opts.principal, 'channel.unlink',
+      `channel_identity:${ref.provider}:${ref.external_id}:user=${identity.user_id}`, opts.reason ?? '');
+  } catch (err) {
+    console.error('admin_access_audit insert failed:', err instanceof Error ? err.message : 'unknown');
+  }
   // dewee may have cached allow/deny for this sender under the old member: let it re-check now.
   await deferChannelAccessPush(invalidateSenders(env, [ref.external_id]), opts.waitUntil);
   return { unlinked: true, identity };

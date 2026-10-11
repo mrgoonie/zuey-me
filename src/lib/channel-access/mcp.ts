@@ -1,6 +1,5 @@
 import { AppError } from '../http';
 import type { McpContext, McpToolModule } from '../mcp/types';
-import { adminLabel } from '../members/billing-attention';
 import type { Principal } from '../members/policy';
 import { requireCan, resolvePrincipal } from '../members/policy';
 import { MAX_UNLINK_REASON_LENGTH, adminGetChannelIdentity, adminUnlinkChannelIdentity, parseChannelRef, parseUnlinkReason } from './admin';
@@ -58,11 +57,11 @@ export const channelAccessMcpModule: McpToolModule = {
     },
     {
       name: 'channel_identity_unlink',
-      description: 'Admin: unlink a chat account from whichever member holds it (e.g. a wrong community backfill or a link made on someone else\'s device), so the real owner can link it at /connect. Logs channel.unlinked on the affected member with you as actor and the optional reason, and tells dewee to drop its cached gate decision for that sender. Read-only keys are refused; 404 not_found when the sender id is not linked.',
+      description: 'Admin: unlink a chat account from whichever member holds it (e.g. a wrong community backfill or a link made on someone else\'s device), so the real owner can link it at /connect. The affected member\'s activity log shows only that an admin unlinked it (channel.unlinked, by admin); you and the optional reason are recorded in the admin-only admin_access_audit log. Also tells dewee to drop its cached gate decision for that sender. Read-only keys are refused; 404 not_found when the sender id is not linked.',
       inputSchema: {
         type: 'object',
         required: ['provider', 'external_id'],
-        properties: { ...refProperties, reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Why it was unlinked (written to the member activity log)' } },
+        properties: { ...refProperties, reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Why it was unlinked (admin-only audit log; never shown to the member)' } },
       },
     },
   ],
@@ -79,7 +78,7 @@ export const channelAccessMcpModule: McpToolModule = {
         requireCan(p, 'admin');
         const ref = parseChannelRef(args.provider, args.external_id);
         const reason = parseUnlinkReason(args.reason);
-        return adminUnlinkChannelIdentity(requireDb(ctx), ctx.env, ref, { admin: adminLabel(p), reason, request: ctx.request, waitUntil: ctx.waitUntil });
+        return adminUnlinkChannelIdentity(requireDb(ctx), ctx.env, ref, { principal: p, reason, waitUntil: ctx.waitUntil });
       }
       default:
         throw new AppError(404, 'unknown_tool', `Unknown tool ${name}`);

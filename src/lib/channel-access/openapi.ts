@@ -21,7 +21,7 @@ const adminAuth = [...adminSecurity, { MemberSession: [] }];
 const channelType = { type: 'string', enum: [...SUPPORTED_CHANNEL_TYPES] };
 const identityParams = [
   { name: 'provider', in: 'path', required: true, schema: channelType },
-  { name: 'external_id', in: 'path', required: true, schema: { type: 'string', pattern: SENDER_ID_RE.source }, description: 'Platform sender id (Telegram numeric user id)' },
+  { name: 'external_id', in: 'path', required: true, schema: { type: 'string', pattern: SENDER_ID_RE.source }, description: 'Platform sender id (Telegram numeric user id); percent-encoding such as `%3A` for `:` is decoded once, malformed encoding is a 400 `invalid_field`' },
 ];
 
 export const channelAccessOpenApi: OpenApiFragment = {
@@ -104,13 +104,14 @@ export const channelAccessOpenApi: OpenApiFragment = {
         tags: [TAG], summary: 'Admin: unlink a chat account from whichever member holds it (MCP channel_identity_unlink)', security: adminAuth, parameters: identityParams,
         description: [
           'Recovery for a chat account linked to the wrong member (mistaken community backfill, a link made on someone else\'s device, a support request',
-          'from the real owner): the sender id is freed so its owner can link it at /connect. `channel.unlinked` is logged on the affected member with the',
-          'admin as actor and the optional reason, and dewee is told to drop its cached gate decision for that sender. Read-only keys are refused.',
+          'from the real owner): the sender id is freed so its owner can link it at /connect. The affected member\'s activity log gets `channel.unlinked`',
+          'with only `by: "admin"`; the admin and the optional reason go to the admin-only `admin_access_audit` log (action `channel.unlink`).',
+          'dewee is told to drop its cached gate decision for that sender. Read-only keys are refused.',
           'The JSON body is optional; scripted calls must still send `Content-Type: application/json` (the origin check rejects body-less unsafe requests).',
         ].join(' '),
         requestBody: {
           required: false,
-          content: json({ type: 'object', properties: { reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Written to the member activity log' } } }),
+          content: json({ type: 'object', properties: { reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Written to the admin-only audit log; never shown to the member' } } }),
         },
         responses: {
           '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean', enum: [true] }, identity: ref('AdminChannelIdentity') } }),
