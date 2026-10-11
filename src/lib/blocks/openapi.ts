@@ -6,6 +6,7 @@ import { MAX_ARTICLE_PAGE } from './pagination';
 import {
   BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
 } from './schema';
+import { ICON_ALIASES, ICON_ALIGNS, ICON_NAMES, ICON_PIXELS, ICON_SIZES, ICON_TONES } from './icons';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const inline = { type: 'string', maxLength: LIMITS.text, description: 'Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, `code`, [label](https://...) — no HTML' };
@@ -13,6 +14,16 @@ const short = { type: 'string', maxLength: LIMITS.shortText };
 const id = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: 'Unique within the document; generated when omitted' };
 const httpsUrl = { type: 'string', format: 'uri', pattern: '^https://', maxLength: LIMITS.url };
 const colsInt = { type: 'integer', minimum: 1, maximum: LIMITS.layoutColsMax };
+const iconName = {
+  type: 'string',
+  enum: [...ICON_NAMES, ...Object.keys(ICON_ALIASES)],
+  description: 'Curated Lucide icon name (https://lucide.dev/icons). Aliases are accepted and stored as the canonical name; anything else is rejected.',
+};
+
+/** Example icon block (also returned by the block_schema MCP tool). */
+export const ICON_BLOCK_EXAMPLE = { type: 'icon', name: 'lightbulb', size: 'lg', tone: 'accent', label: 'Ý tưởng chính', align: 'center' } as const;
+/** Example callout with an icon (also returned by the block_schema MCP tool). */
+export const CALLOUT_ICON_EXAMPLE = { type: 'callout', tone: 'tip', icon: 'rocket', text: 'Deploy **after** the tests pass.' } as const;
 
 function block(type: string, properties: Record<string, unknown>, required: string[] = []) {
   return {
@@ -33,7 +44,11 @@ export const blockSchemas: Record<string, unknown> = {
     items: { type: 'array', minItems: 1, maxItems: LIMITS.listItems, items: { type: 'object', required: ['text'], properties: { text: inline, checked: { type: 'boolean' } } } },
   }, ['items']),
   BlockQuote: block('quote', { text: inline, cite: short }, ['text']),
-  BlockCallout: block('callout', { tone: { type: 'string', enum: [...CALLOUT_TONES] }, text: inline }, ['text']),
+  BlockCallout: block('callout', {
+    tone: { type: 'string', enum: [...CALLOUT_TONES] },
+    text: inline,
+    icon: { ...iconName, description: 'Optional allowlisted icon replacing the tone glyph' },
+  }, ['text']),
   BlockCode: block('code', { language: { type: 'string', maxLength: 40 }, code: { type: 'string', maxLength: LIMITS.code } }, ['code']),
   BlockDivider: block('divider', {}),
   BlockImage: block('image', { url: httpsUrl, alt: short, caption: short }, ['url']),
@@ -97,6 +112,16 @@ export const blockSchemas: Record<string, unknown> = {
     open: { type: 'boolean', default: false },
     blocks: { type: 'array', maxItems: LIMITS.toggleChildren, items: ref('Block'), description: 'May not contain toggle or layout blocks' },
   }, ['summary', 'blocks']),
+  BlockIcon: {
+    ...block('icon', {
+      name: iconName,
+      size: { type: 'string', enum: [...ICON_SIZES], default: 'md', description: `Pixels: ${ICON_SIZES.map(s => `${s} ${ICON_PIXELS[s]}`).join(', ')}` },
+      tone: { type: 'string', enum: [...ICON_TONES], default: 'default' },
+      label: { type: 'string', maxLength: LIMITS.iconLabel, description: 'Accessible name for an icon that carries meaning (role="img"); omit for a decorative icon (aria-hidden). Also the Markdown/text fallback.' },
+      align: { type: 'string', enum: [...ICON_ALIGNS], default: 'start' },
+    }, ['name']),
+    examples: [ICON_BLOCK_EXAMPLE],
+  },
 };
 
 export const BLOCK_SCHEMA_NOTES = [
@@ -106,6 +131,7 @@ export const BLOCK_SCHEMA_NOTES = [
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
   `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,
   'Toggle blocks may contain any block except toggle and layout.',
+  `Icon blocks and callout.icon accept only the ${ICON_NAMES.length} curated icon names (or their aliases); block_schema returns them under icons. Add label when the icon carries meaning; omit it for decoration.`,
   'Inline text supports **bold**, *italic*, ~~strike~~, ==highlight==, `code` and [label](https://...).',
 ];
 

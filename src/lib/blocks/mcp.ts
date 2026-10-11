@@ -15,7 +15,8 @@ import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
 import type { ArticleDocument } from './schema';
 import { BLOCK_TYPES, LIMITS } from './schema';
-import { BLOCK_SCHEMA_NOTES, blockSchemas } from './openapi';
+import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE, blockSchemas } from './openapi';
+import { iconCatalog } from './icons';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
 
@@ -123,7 +124,7 @@ function discoveryFromArgs(args: Record<string, unknown>) {
 
 export const articlesMcpModule: McpToolModule = {
   tools: [
-    { name: 'block_schema', description: 'Describe the article block document schema (all block types, layout rules, limits).', inputSchema: { type: 'object', properties: {} } },
+    { name: 'block_schema', description: 'Describe the article block document schema (all block types, layout rules, limits, the icon allowlist under icons, and examples).', inputSchema: { type: 'object', properties: {} } },
     {
       name: 'article_list',
       description: 'List published articles with discovery filters (q uses the authorization-first knowledge search; tags, category and labels are public). include_drafts (admin) lists every edition.',
@@ -178,7 +179,10 @@ export const articlesMcpModule: McpToolModule = {
     const d1 = ctx.d1;
     switch (name) {
       case 'block_schema':
-        return { version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas };
+        return {
+          version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas,
+          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE },
+        };
       case 'article_list': {
         const query = discoveryFromArgs(args);
         if (args.include_drafts === true) {

@@ -80,6 +80,7 @@ export function blockWeight(block: Block): number {
     case 'audio': case 'video': w = 40 + len(block.title) + len(block.caption); break;
     case 'file': w = 20 + len(block.name) + len(block.caption); break;
     case 'bookmark': w = 20 + len(block.title) + len(block.description); break;
+    case 'icon': w = 1 + (block.label ? block.label.length : 0); break;
     case 'toggle': w = len(block.summary) + block.blocks.reduce((n, b) => n + blockWeight(b), 0); break;
   }
   return Math.max(1, w);

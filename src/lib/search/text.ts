@@ -23,6 +23,7 @@ function blockText(block: Block): string[] {
     case 'file': return [block.name, p(block.caption)];
     case 'bookmark': return [block.title ?? '', block.description ?? '', block.siteName ?? ''];
     case 'toggle': return [p(block.summary)];
+    case 'icon': return [block.label ?? ''];
     default: return [];
   }
 }

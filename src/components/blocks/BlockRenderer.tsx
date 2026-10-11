@@ -10,6 +10,8 @@ import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
+import { IconGlyph } from './block-icons';
+import { isIconName } from '../../lib/blocks/icons';
 import { InteractiveFrame } from '../ai/InteractiveFrame';
 
 type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
@@ -128,10 +130,12 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </blockquote>
       );
     case 'callout': {
-      const icon = block.tone === 'warn' ? '!' : block.tone === 'tip' ? '★' : 'i';
+      const glyph = block.tone === 'warn' ? '!' : block.tone === 'tip' ? '★' : 'i';
       return (
         <aside className={`zb-callout zb-callout-${block.tone}`} role="note">
-          <span className="zb-callout-icon" aria-hidden="true">{icon}</span>
+          <span className="zb-callout-icon" aria-hidden="true">
+            {isIconName(block.icon) ? <IconGlyph name={block.icon} size={20} /> : glyph}
+          </span>
           <div style={{ minWidth: 0 }}><Inline text={block.text} /></div>
         </aside>
       );
@@ -171,6 +175,12 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'layout': return <LayoutView block={block} ctx={ctx} />;
     // Sandboxed, click-to-run in articles; previews never execute code automatically.
     case 'interactive': return <InteractiveFrame block={block} />;
+    case 'icon':
+      return (
+        <div className={`zb-icon zb-icon-${block.align ?? 'start'} zb-icon-tone-${block.tone}`}>
+          <IconGlyph name={block.name} size={block.size} label={block.label} />
+        </div>
+      );
     case 'math':
     case 'gallery':
     case 'audio':
