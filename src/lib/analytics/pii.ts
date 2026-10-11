@@ -15,10 +15,15 @@ const SENSITIVE_PARAMS = new Set([
 const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'email', 'session', 'signature'];
 
 /**
- * Quantifiers are bounded (RFC 5321 limits: 64-char local part, 253-char domain, 63-char label) so a failed
- * match is abandoned after a fixed number of steps; unbounded runs made long inputs scan quadratically.
+ * Emails are `local@domain.tld` within RFC 5321 limits (64-char local part, 253-char domain, 63-char label).
+ * Letters, marks and digits from any script are allowed so Unicode (IDN) addresses such as `user@bücher.example`
+ * match. The scan starts at each `@` (`EMAIL_DOMAIN_RE`) and walks back over at most 64 local-part characters,
+ * so it never restarts at every character: a regex that began with the local part did, which is slow on long
+ * non-ASCII text in V8.
  */
-const EMAIL_RE = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}/g;
+const EMAIL_DOMAIN_RE = /@[\p{L}\p{M}\p{N}.-]{1,253}\.[\p{L}\p{M}]{2,63}/gu;
+const EMAIL_LOCAL_CHAR_RE = /^[\p{L}\p{M}\p{N}._%+-]$/u;
+const MAX_EMAIL_LOCAL_LENGTH = 64;
 /** A run of base64url characters and dots: the only text a JWT (`eyJ….….…`) can span. */
 const TOKEN_RUN_RE = /[A-Za-z0-9_.-]+/g;
 
@@ -51,7 +56,7 @@ function redactJwts(value: string): string {
 }
 /** zuey.me member sessions (`zm_`), OAuth tokens (`zoa_`/`zor_`), API keys (`zk_`), and common provider secrets. */
 const SECRET_RE = /\b(?:zm|zoa|zor|zk|sk|rk|whsec|ghp|gho|github_pat|xox[abpr])_[A-Za-z0-9_-]{12,}/g;
-/** `name=value` pairs of sensitive parameters embedded in free text such as autocapture's `$elements_chain`. */
+/** `name=value` pairs of sensitive parameters embedded in free text such as autocapture's `$elements_chain` or an `$elements` href. */
 const INLINE_PARAM_RE = /([?&#;]\s*)([A-Za-z0-9_.-]+)=([^&#\s"'<>]*)/g;
 
 /**
@@ -93,13 +98,54 @@ export function isSensitiveParam(name: string): boolean {
   return SENSITIVE_FRAGMENTS.some(f => n.includes(f));
 }
 
-/** Every email contains `@`; checking for it first skips the email scan for most strings. */
+/** The code point ending just before `index` (a surrogate pair counts as one character). */
+function charBefore(value: string, index: number): string {
+  const low = value.charCodeAt(index - 1);
+  const pair = index >= 2 && low >= 0xdc00 && low <= 0xdfff;
+  return value.slice(pair ? index - 2 : index - 1, index);
+}
+
+/** `[start, end)` of every email, left to right and non-overlapping. */
+function emailRanges(value: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  if (!value.includes('@')) return ranges;
+  let floor = 0;
+  EMAIL_DOMAIN_RE.lastIndex = 0;
+  let match = EMAIL_DOMAIN_RE.exec(value);
+  while (match !== null) {
+    const at = match.index;
+    let start = at;
+    for (let length = 0; length < MAX_EMAIL_LOCAL_LENGTH && start > floor; length++) {
+      const char = charBefore(value, start);
+      if (!EMAIL_LOCAL_CHAR_RE.test(char)) break;
+      start -= char.length;
+    }
+    if (start === at) {
+      EMAIL_DOMAIN_RE.lastIndex = at + 1;
+    } else {
+      floor = at + match[0].length;
+      ranges.push([start, floor]);
+    }
+    match = EMAIL_DOMAIN_RE.exec(value);
+  }
+  EMAIL_DOMAIN_RE.lastIndex = 0;
+  return ranges;
+}
+
 function hasEmail(value: string): boolean {
-  return value.includes('@') && test(EMAIL_RE, value);
+  return emailRanges(value).length > 0;
 }
 
 function redactEmails(value: string): string {
-  return value.includes('@') ? value.replace(EMAIL_RE, REDACTED) : value;
+  const ranges = emailRanges(value);
+  if (ranges.length === 0) return value;
+  let out = '';
+  let last = 0;
+  for (const [start, end] of ranges) {
+    out += `${value.slice(last, start)}${REDACTED}`;
+    last = end;
+  }
+  return out + value.slice(last);
 }
 
 function test(re: RegExp, value: string): boolean {
@@ -129,27 +175,53 @@ function capLength(value: string): string {
   while (end > 0 && !SEGMENT_DELIMITER_RE.test(value.charAt(end - 1))) end--;
   return `${value.slice(0, end)}${REDACTED}`;
 }
-/** Percent-decoding passes: enough for double (`%2540`) and triple encoding. */
-const MAX_DECODE_PASSES = 3;
+/** Percent-decoding passes before a value that still decodes further is treated as hiding something. */
+const MAX_DECODE_PASSES = 8;
+const ESCAPE_RUN_RE = /(?:%[0-9A-Fa-f]{2})+/g;
+const ASCII_ESCAPE_RE = /%([0-7][0-9A-Fa-f])/g;
+/** Characters a redacted segment keeps as they are: unreserved ones plus those that never split a URL. */
+const SEGMENT_UNSAFE_RE = /[^A-Za-z0-9._~+\-:@!$*,()]/gu;
+const NON_ASCII_RE = /[^\x00-\x7F]/;
 
 /**
- * Decodes ASCII percent escapes (`%40`, `%2540`, `%20`, any hex case) up to three times. Malformed or
- * non-ASCII escapes stay as they are, so this never throws. Emails are ASCII, so nothing they need is lost.
+ * One percent-decoding pass. Each run of escapes is decoded as UTF-8 (`b%C3%BCcher`, `h%E1%BB%8Dc`); a run
+ * that is not valid UTF-8 keeps its non-ASCII escapes and only has its ASCII ones (`%40`) decoded, so this
+ * never throws.
  */
-function decodeAsciiEscapes(value: string): string {
-  let out = value;
-  for (let pass = 0; pass < MAX_DECODE_PASSES; pass++) {
-    const next = out.replace(/%([0-7][0-9A-Fa-f])/g, (_match: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-    if (next === out) break;
-    out = next;
-  }
-  return out;
+function decodeOnce(value: string): string {
+  return value.replace(ESCAPE_RUN_RE, (run: string) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run.replace(ASCII_ESCAPE_RE, (_match: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    }
+  });
 }
 
-function encodeSegment(value: string): string {
+/**
+ * Decodes percent escapes until the value stops changing (`%40`, `%2540`, `%252540`, ...). Returns null
+ * when it still changes after `MAX_DECODE_PASSES`: nothing legitimate is encoded that deep.
+ */
+function decodeEscapes(value: string): string | null {
+  let out = value;
+  for (let pass = 0; pass <= MAX_DECODE_PASSES; pass++) {
+    const next = decodeOnce(out);
+    if (next === out) return out;
+    out = next;
+  }
+  return null;
+}
+
+/**
+ * Re-encodes a decoded segment after redaction. Delimiters, `%` and controls are escaped so the URL keeps its
+ * shape; `:` and `@` stay literal (`mailto:`). Non-ASCII text is escaped as UTF-8, matching how it arrived,
+ * unless the original segment already carried it raw (free text), in which case it stays raw.
+ */
+function encodeSegment(value: string, keepRawUnicode: boolean): string {
   return value
     .split(REDACTED)
-    .map(part => part.replace(/[^A-Za-z0-9._~+-]/gu, char => {
+    .map(part => part.replace(SEGMENT_UNSAFE_RE, (char: string) => {
+      if (keepRawUnicode && NON_ASCII_RE.test(char)) return char;
       try {
         return encodeURIComponent(char);
       } catch {
@@ -162,19 +234,25 @@ function encodeSegment(value: string): string {
 /**
  * Redacts emails that only appear once percent-decoded (`john%40x.com`, `john%2540x.com`, `zuey%20john%40x.com`).
  * A segment carrying one is decoded, its emails replaced, and re-encoded so the rest of the URL keeps its shape.
+ * A segment still encoded after the decoding limit is redacted whole.
  */
 function redactEncodedEmails(value: string): string {
   if (!value.includes('%')) return value;
   return value.replace(SEGMENT_RE, (segment: string) => {
     if (!segment.includes('%')) return segment;
-    const decoded = decodeAsciiEscapes(segment);
-    return hasEmail(decoded) ? encodeSegment(decoded.replace(EMAIL_RE, REDACTED)) : segment;
+    const decoded = decodeEscapes(segment);
+    if (decoded === null) return REDACTED;
+    if (!hasEmail(decoded)) return segment;
+    return encodeSegment(redactEmails(decoded),NON_ASCII_RE.test(segment));
   });
 }
 
-/** True when a string carries an email address, literally or percent-encoded. */
+/** True when a string carries an email address, literally or percent-encoded, or is encoded too deep to inspect. */
 export function looksLikeEmail(value: string): boolean {
-  return hasEmail(value) || (value.includes('%') && hasEmail(decodeAsciiEscapes(value)));
+  if (hasEmail(value)) return true;
+  if (!value.includes('%')) return false;
+  const decoded = decodeEscapes(value);
+  return decoded === null || hasEmail(decoded);
 }
 
 export function looksLikeJwt(value: string): boolean {
@@ -251,11 +329,13 @@ const MAX_DEPTH = 6;
 
 /**
  * Deep-scrubs an arbitrary property bag (PostHog's automatic properties, `$set`, `$elements`):
- * URLs lose sensitive parameters and every string is redacted. Returns a new value; input untouched.
+ * URLs lose sensitive parameters and every string is redacted. Objects nested deeper than `MAX_DEPTH` are
+ * replaced by `[redacted]` rather than passed through. Returns a new value; input untouched.
  */
 export function scrubValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') return scrubString(value);
-  if (depth >= MAX_DEPTH || value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= MAX_DEPTH) return REDACTED;
   if (Array.isArray(value)) return value.map(item => scrubValue(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) out[key] = scrubValue(item, depth + 1);
