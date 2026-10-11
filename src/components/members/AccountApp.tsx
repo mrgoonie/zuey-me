@@ -4,7 +4,7 @@ import { ApiKeysPanel } from './ApiKeysPanel';
 import { ChannelLinks } from './ChannelLinks';
 import { MyLearningSection } from '../courses/MyLearningSection';
 import { MemberDialog } from './MemberDialog';
-import { reset as resetAnalytics } from '../../lib/analytics/client';
+import { reset as resetAnalytics, signOutAnalytics } from '../../lib/analytics/client';
 import type { SubmitLike } from './member-ui';
 import {
   alertError, alertOk, btnDanger, btnGhost, btnPrimary, callApi, card, fmtDate, fmtDateTime, fmtVnd, input, isRecord, jsonBody, loginUrl,
@@ -475,7 +475,7 @@ export function AccountApp({ keyScopes }: { keyScopes: readonly string[] }) {
     setSigningOut(true);
     const res = await callApi('/api/members/auth/logout', { method: 'POST' });
     if (res.ok) {
-      resetAnalytics();
+      signOutAnalytics('account');
       window.location.assign('/');
     } else { setSigningOut(false); setError(res.message); }
   }

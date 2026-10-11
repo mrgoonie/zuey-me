@@ -12,7 +12,9 @@ Destination today: PostHog project **Zuey.me** (env setup: [env-setup.vi.md §14
 | `src/lib/analytics/pii.ts` | PII guard: URL parameter stripping, email/JWT/secret redaction, deep scrubbing |
 | `src/lib/analytics/consent.ts` | Do Not Track, Global Privacy Control, the local opt-out flag and blocked-storage detection |
 | `src/lib/analytics/identity.ts` | Identity lifecycle rules (`planIdentity`), distinct-id validation, identity endpoint parsing |
-| `src/lib/analytics/client.ts` | Browser API: `track()`, `identify()`, `reset()`, `optOut()`, `optIn()`, `bootAnalytics()` |
+| `src/lib/analytics/client.ts` | Browser API: `track()`, `trackOnce()`, `identify()`, `reset()`, `signOutAnalytics()`, `optOut()`, `optIn()`, `bootAnalytics()` |
+| `src/lib/analytics/attribution.ts` | Session attribution: allowlisted UTM values and the referrer origin, stored per tab session |
+| `src/lib/analytics/funnel.ts` | Helpers shared by the funnel events (`failureReason`, `daysAhead`, `moneyProps`) |
 | `src/lib/analytics/server.ts` | Server API: `captureServerEvent()` (typed), `sendServerEvent()` (by name, for the outbox), `serverDestinations()` |
 | `src/lib/analytics/destinations/posthog.ts` | PostHog config from env, browser adapter (`window.posthog`), server adapter (HTTP capture API), `before_send` scrubber |
 | `src/pages/api/members/auth/identity.ts` | `GET /api/members/auth/identity` → `{ member_id }` for the session cookie |
@@ -56,7 +58,7 @@ Autocapture is off on `/account`, `/login`, `/billing`, `/booking`, `/chat`, `/c
 | Anonymous visitor | PostHog anonymous id; `person_profiles: 'identified_only'`, so no person profile is created |
 | Page load with a verified member session | `bootAnalytics()` asks `/api/members/auth/identity` and calls `identify(member_id)`. The answer is cached in the tab (sessionStorage) for 10 minutes, or 2 minutes when signed out; the cache is used only while it matches the browser-wide identity key (localStorage), and it is removed, never written, on `/login`, `/account`, `/oauth`, so the page after a sign-in redirect identifies at once |
 | Already identified | `identify()` is skipped only when PostHog's `get_distinct_id()` already equals the member id |
-| Member signs out (`/account`, Studio member session) or deletes the account | `reset()` before navigating: clears the stored member and starts a new anonymous id |
+| Member signs out (`/account`, Studio member session) or deletes the account | `reset()` before navigating: clears the stored member and starts a new anonymous id. Sign-out on `/account` first sends `logout` under the member id (`signOutAnalytics()`); the admin Studio does not run analytics, so its sign-out only resets. Account deletion only resets |
 | Session expired or ended on another device | The next identity check returns `null` and the browser is reset |
 | A different member signs in on the same browser | `reset()` first, then `identify()`; the two people are never merged |
 | Sign-out in another tab | That tab's `reset()` clears the shared identity key; other tabs ignore their now-stale cache and re-check the server |
@@ -84,6 +86,36 @@ Owner values: `growth` (acquisition, profile, affiliate, sign-up), `product` (in
 | `article_ask_ai_sent` | 1 | client | A question started from an article is sent to Zuey AI | `slug` string, `quoted` boolean | `src/components/ai/ZueyAiPanel.tsx` | product |
 
 PII policy for all rows: properties are public content identifiers (slugs, ids, locale codes, public URLs) and counts. A link card URL that contains an email (for example `mailto:`) is sent with the address replaced by `[redacted]`.
+
+### Funnel events (client)
+
+Sign-up, pricing, checkout and booking steps sent from the browser. They follow the same consent gate as every client event and carry no email, name, phone, token, order code, booking id, payment reference or URL. Failure reasons are the API's snake_case error code (`failureReason()`), anything else becomes `unknown`. Money props are list prices in major units of their own currency (VND as shown, USD cents / 100), never converted.
+
+| Event | Version | Trigger | Properties | Emitted in | Owner |
+|---|---|---|---|---|---|
+| `sign_up_started` | 1 | The sign-in form is submitted, or a Google/GitHub button is pressed (the same form signs up and signs in) | `method` (`magic_link` \| `google` \| `github`) | `src/components/members/MemberAuth.tsx` | growth |
+| `magic_link_requested` | 1 | The API accepted a sign-in link request | none | same | growth |
+| `auth_failed` | 1 | The link request fails, a sign-in link fails to verify, or `/login` opens with an OAuth/callback error | `stage` (`magic_link_request` \| `magic_link_verify` \| `callback`), `reason` string (error code) | same | growth |
+| `logout` | 1 | A member signs out on a member-facing page (sent before `reset()`); the admin Studio does not run analytics and sends no `logout` | `surface` (`account`) | `src/components/members/AccountApp.tsx` | growth |
+| `pricing_viewed` | 1 | The pricing table is shown (once per page load) | `months` number, `card_available` boolean, `preselected_plan`? | `src/components/members/PricingTable.tsx` | revenue |
+| `billing_term_selected` | 1 | Another billing term is picked | `months`, `previous_months` | same | revenue |
+| `plan_selected` | 1 | A plan's buy button is pressed | `plan`, `provider` (`sepay` \| `dodo`), `months` | same | revenue |
+| `begin_checkout` | 1 | The checkout request is about to be sent (form valid) | `order_type` (`membership` \| `course`), `provider`, `discount_entered` boolean, `plan`?, `months`?, `course`? (slug), `value`?, `currency`? | `PricingTable.tsx`, `src/components/courses/CourseCheckout.tsx` | revenue |
+| `checkout_created` | 1 | The API created the order or card session | same keys plus `free` boolean (fully discounted), without `discount_entered` | same | revenue |
+| `payment_initiated` | 1 | The browser leaves for the payment page (card checkout or VietQR order page); not sent for a free order | `order_type`, `provider`, `plan`?, `months`?, `course`? | same | revenue |
+| `booking_availability_viewed` | 1 | Booking slots loaded (once per page load) | `slot_count` number | `src/components/booking/BookingWidget.tsx` | revenue |
+| `booking_slot_selected` | 1 | A slot is picked | `duration_min` number, `days_ahead` number (whole days, not the date) | same | revenue |
+| `booking_hold_created` | 1 | The slot hold (booking request) succeeded | `payment_method` (`sepay` \| `paypal`), `discounted` boolean, `free` boolean | same | revenue |
+| `booking_checkout_started` | 1 | The booking payment was started (PayPal order or VietQR shown) | `payment_method`, `value`?, `currency`? | same | revenue |
+
+**Late hydration.** React islands can hydrate before the layout's boot script decides consent. `track()` calls made before that are queued (at most 50, `MAX_PENDING_EVENTS`) and sent once analytics activates, or dropped when it stays off (DNT, GPC, opt-out, blocked storage, non-production host). Mount-time events use `trackOnce(key, …)`, which sends a key once per page load, so React StrictMode double effects and remounts do not double count.
+
+**Session attribution.** On the first page of a tab session where analytics is active, `src/lib/analytics/attribution.ts` stores (sessionStorage `zuey_analytics_attribution`, wrapped in try/catch) the first touch: the five `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` values that are slug-like campaign codes (`utm_source=google`, `utm_campaign=spring-2026`): after trimming and lowercasing, only `a-z`, `0-9`, `.`, `_`, `-`, at most 64 characters, no run of 8 or more digits and no token. Anything else (spaces, so names and search terms; `@`, `+`, `%`; phone numbers) drops that value entirely; free text is never kept. The referrer is kept as its **origin only** (http/https, other sites only; `zuey.me` and `www.zuey.me` count as the same site). Paths and queries are dropped because they routinely carry search terms, webmail message ids, document ids and sign-in tokens; the origin is enough to tell channels apart. Click ids (`gclid`, `fbclid`) and any other parameter are ignored. Later pages in the session keep the first touch, a direct visit stays direct, and the stored value is re-validated on read. Every client event of the session then carries `session_utm_*` and `session_referrer` when present. Opting out removes the stored value; nothing is stored while analytics is off.
+
+**Funnel join.** `pricing_viewed` → `plan_selected` → `begin_checkout` → `purchase` (server) → `subscription_activated` (server) share one `distinct_id` for a member: the browser identifies with `member_id` from `/api/members/auth/identity`, which is `users.id`, the same id the server outbox uses (covered by a test in `tests/analytics-outbox.test.ts`). Creating an order requires a signed-in member (an anonymous `begin_checkout` is followed by a redirect to sign in), so `checkout_created` and `payment_initiated` are always identified; steps taken anonymously before sign-in in the same browser are merged into the member by PostHog at `identify()`. Not joined, by design:
+
+- Booking guests: the server events use a one-off `guest_` id (hash of the booking id, no person profile), so a guest's `booking_*` client steps and their `purchase` stay separate. Join on aggregate counts, not on people.
+- Browsers with analytics off: the server `purchase` and subscription events still arrive (see Environments and consent) with no client steps before them.
 
 ### Server events
 
