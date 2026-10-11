@@ -1,4 +1,5 @@
 import type { Block } from '../../lib/blocks/schema';
+import type { CodeHighlights } from '../../lib/blocks/code-syntax';
 import type { PublicLessonBlock } from '../../lib/courses/lesson-blocks';
 import { BlockRenderer } from '../blocks/BlockRenderer';
 import { CourseMediaWidget } from './CourseMediaWidget';
@@ -13,6 +14,8 @@ interface Props {
   courseSlug: string;
   lessonSlug: string;
   signedIn: boolean;
+  /** Server-computed code tokens for the article runs. */
+  highlights?: CodeHighlights;
 }
 
 function Widget({ block, courseSlug, lessonSlug, signedIn }: { block: PublicLessonBlock } & Omit<Props, 'segments'>) {
@@ -25,13 +28,13 @@ function Widget({ block, courseSlug, lessonSlug, signedIn }: { block: PublicLess
 }
 
 /** Lesson body: article runs through the shared block renderer, course widgets through their own components. */
-export function LessonContent({ segments, courseSlug, lessonSlug, signedIn }: Props) {
+export function LessonContent({ segments, courseSlug, lessonSlug, signedIn, highlights }: Props) {
   if (segments.length === 0) return <p className="text-stone-600">Bài học này chưa có nội dung.</p>;
   return (
     <div className="min-w-0">
       {segments.map((seg, i) => seg.kind === 'article'
         // Surveys are an article feature (their answers are keyed by article), so they render read-only here.
-        ? <BlockRenderer key={`a-${i}`} doc={{ version: 1, blocks: seg.blocks }} interactive={false} />
+        ? <BlockRenderer key={`a-${i}`} doc={{ version: 1, blocks: seg.blocks }} highlights={highlights} interactive={false} />
         : <Widget key={seg.block.id} block={seg.block} courseSlug={courseSlug} lessonSlug={lessonSlug} signedIn={signedIn} />)}
     </div>
   );
