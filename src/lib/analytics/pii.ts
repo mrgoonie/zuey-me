@@ -19,7 +19,36 @@ const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'email', 'session', 
  * match is abandoned after a fixed number of steps; unbounded runs made long inputs scan quadratically.
  */
 const EMAIL_RE = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}/g;
-const JWT_RE = /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g;
+/** A run of base64url characters and dots: the only text a JWT (`eyJ….….…`) can span. */
+const TOKEN_RUN_RE = /[A-Za-z0-9_.-]+/g;
+
+/**
+ * Replaces JWTs inside one token run: a dot-separated part holding `eyJ` plus at least 4 more characters,
+ * followed by two parts of at least 4 characters. It matches what `eyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]{4,}` would,
+ * including a token glued to other text (`%20eyJ…`), but scans each run once. The regex restarted at every
+ * `eyJ` in a long run, which made crafted input quadratic.
+ */
+function redactJwtRun(run: string): string {
+  if (!run.includes('eyJ')) return run;
+  const parts = run.split('.');
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i] ?? '';
+    const start = part.indexOf('eyJ');
+    const isJwt = start >= 0 && part.length - start >= 7 && (parts[i + 1]?.length ?? 0) >= 4 && (parts[i + 2]?.length ?? 0) >= 4;
+    if (isJwt) {
+      out.push(`${part.slice(0, start)}${REDACTED}`);
+      i += 2;
+    } else {
+      out.push(part);
+    }
+  }
+  return out.join('.');
+}
+
+function redactJwts(value: string): string {
+  return value.includes('eyJ') ? value.replace(TOKEN_RUN_RE, redactJwtRun) : value;
+}
 /** zuey.me member sessions (`zm_`), OAuth tokens (`zoa_`/`zor_`), API keys (`zk_`), and common provider secrets. */
 const SECRET_RE = /\b(?:zm|zoa|zor|zk|sk|rk|whsec|ghp|gho|github_pat|xox[abpr])_[A-Za-z0-9_-]{12,}/g;
 /** `name=value` pairs of sensitive parameters embedded in free text such as autocapture's `$elements_chain`. */
@@ -62,6 +91,15 @@ export function isSensitiveParam(name: string): boolean {
   const n = name.toLowerCase();
   if (SENSITIVE_PARAMS.has(n)) return true;
   return SENSITIVE_FRAGMENTS.some(f => n.includes(f));
+}
+
+/** Every email contains `@`; checking for it first skips the email scan for most strings. */
+function hasEmail(value: string): boolean {
+  return value.includes('@') && test(EMAIL_RE, value);
+}
+
+function redactEmails(value: string): string {
+  return value.includes('@') ? value.replace(EMAIL_RE, REDACTED) : value;
 }
 
 function test(re: RegExp, value: string): boolean {
@@ -130,17 +168,17 @@ function redactEncodedEmails(value: string): string {
   return value.replace(SEGMENT_RE, (segment: string) => {
     if (!segment.includes('%')) return segment;
     const decoded = decodeAsciiEscapes(segment);
-    return test(EMAIL_RE, decoded) ? encodeSegment(decoded.replace(EMAIL_RE, REDACTED)) : segment;
+    return hasEmail(decoded) ? encodeSegment(decoded.replace(EMAIL_RE, REDACTED)) : segment;
   });
 }
 
 /** True when a string carries an email address, literally or percent-encoded. */
 export function looksLikeEmail(value: string): boolean {
-  return test(EMAIL_RE, value) || (value.includes('%') && test(EMAIL_RE, decodeAsciiEscapes(value)));
+  return hasEmail(value) || (value.includes('%') && hasEmail(decodeAsciiEscapes(value)));
 }
 
 export function looksLikeJwt(value: string): boolean {
-  return test(JWT_RE, value);
+  return redactJwts(value) !== value;
 }
 
 /** True when a string carries an email address, a JWT or a recognisable secret token, or is too long to inspect. */
@@ -200,13 +238,9 @@ export function scrubUrl(raw: string): string {
  * codes and booking ids in paths inside arbitrary text.
  */
 export function redactString(value: string): string {
-  return redactEncodedEmails(
-    templatePaths(capLength(value))
-      .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match))
-      .replace(JWT_RE, REDACTED)
-      .replace(SECRET_RE, REDACTED)
-      .replace(EMAIL_RE, REDACTED),
-  );
+  const params = templatePaths(capLength(value))
+    .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match));
+  return redactEncodedEmails(redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED)));
 }
 
 function scrubString(value: string): string {

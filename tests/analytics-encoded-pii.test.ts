@@ -121,6 +121,27 @@ describe('long inputs', () => {
     expect(out.startsWith(`contact ${REDACTED} `)).toBe(true);
   });
 
+  test('a 16 KB run of eyJ just under the cap is scrubbed in linear time', () => {
+    const run = 'eyJ'.repeat(Math.floor((MAX_SCRUB_LENGTH - 40) / 3));
+    const [out, ms] = timed(() => scrubValue({ a: `https://zuey.me/?x=${run}`, b: run, c: `${run}.abcd` }));
+    expect(ms).toBeLessThan(20);
+    expect(JSON.stringify(out)).toContain(run);
+    const [jwt, jwtMs] = timed(() => redactString(`${run}.abcd.efgh`));
+    expect(jwtMs).toBeLessThan(10);
+    expect(jwt).toBe(REDACTED);
+  });
+
+  test('JWTs are still redacted when glued to other text or encoded spaces', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdEFGH_ijk-lmn';
+    expect(redactString(`Bearer%20${jwt}`)).toBe(`Bearer%20${REDACTED}`);
+    expect(redactString(`x${jwt} y`)).toBe(`x${REDACTED} y`);
+    expect(redactString(`a.b.${jwt}.tail`)).toBe(`a.b.${REDACTED}.tail`);
+    expect(redactString('eyJabc.defg.hijk')).toBe('eyJabc.defg.hijk');
+    expect(redactString('eyJabcd.def.hijk')).toBe('eyJabcd.def.hijk');
+    expect(containsPii(`?t=${jwt}`)).toBe(true);
+    expect(containsPii('eyJ only')).toBe(false);
+  });
+
   test('a cut never leaves part of an email, encoded email or token behind', () => {
     const pad = 'x'.repeat(MAX_SCRUB_LENGTH - 10);
     for (const tail of [EMAIL, 'jane.doe%40example.com', 'zm_abcdefghijklmnopqrstuvwxyz']) {
