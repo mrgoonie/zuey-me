@@ -111,7 +111,7 @@ export const chatOpenApi: OpenApiFragment = {
     '/api/v1/chat/sessions/{id}/messages': {
       post: {
         tags, summary: 'Ask Zuey AI (Server-Sent Events stream)', security: memberSecurity, parameters: [idParam],
-        description: 'Streams `event: sources` ({sources}), `event: delta` ({text}) and finally `event: done` ({message_id, content, cancelled, artifacts, artifact_errors, usage}) or `event: error` ({message_id, code, message, retryable}). The first token typically takes 8–11 s; comment keep-alives are sent meanwhile. Closing the connection aborts the gateway run. Grounding only uses what the caller may read: without read_full, paid articles contribute their public preview only.',
+        description: 'Streams `event: sources` ({sources}), `event: delta` ({text}) and finally `event: done` ({message_id, content, cancelled, artifacts, artifact_errors, usage, latency_ms, cost_cents}) or `event: error` ({message_id, code, message, retryable, latency_ms}). `latency_ms` is measured on the server from accepting the question; `cost_cents` is the estimated cost (US cents) counted against the plan AI budget. The first token typically takes 8–11 s; comment keep-alives are sent meanwhile. Closing the connection aborts the gateway run. Grounding only uses what the caller may read: without read_full, paid articles contribute their public preview only.',
         requestBody: {
           required: true,
           content: json({ type: 'object', required: ['message'], properties: { message: { type: 'string', minLength: 1, maxLength: MAX_QUESTION_CHARS }, locale: { type: 'string', enum: ['en', 'vi', 'zh', 'ko', 'ja'] } } }),

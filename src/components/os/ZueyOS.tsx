@@ -17,6 +17,7 @@ import { STORAGE_KEYS, readStored, writeStored } from '../home/storage';
 import { WeatherBackdrop } from '../home/WeatherBackdrop';
 import { APPS, DOCK_APPS, SLOT_APPS, appFromHash, type AppId, type Rect, type SlotAppId } from './apps';
 import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
+import { track } from '../../lib/analytics/client';
 import { AppGlyph } from './AppGlyph';
 import { AppearancePanel } from './AppearancePanel';
 import { Dock } from './Dock';
@@ -226,6 +227,9 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   }, []);
 
   const openApp = useCallback((id: AppId) => {
+    // Opening a window never changes the pathname, so pageviews alone miss it.
+    const w = winsRef.current[id];
+    track('app_opened', { app: id, already_open: w.open && !w.min });
     setExpo(null);
     dispatch({ type: 'open', id });
     setHash(id);

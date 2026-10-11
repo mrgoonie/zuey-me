@@ -195,5 +195,14 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
       <ArticleAskAi client:idle locale={uiLocale} slug={view.slug} title={view.title} url={canonical} scopeSelector="[data-ask-ai-scope]"
         labels={{ ask: AI_COPY[uiLocale].askAboutSelection, drawerTitle: AI_COPY[uiLocale].drawerTitle, loading: AI_COPY[uiLocale].loading }} />
     )}
+    {view && !view.preview && (
+      <div hidden data-article-analytics data-slug={view.slug} data-locale={view.locale} data-access={view.access}
+        data-locked={view.truncated ? '1' : '0'} data-reading-minutes={view.reading_minutes} data-locked-sections={lockedHeadings.length}></div>
+    )}
   </main>
 </Layout>
+
+<script>
+  import { initArticleAnalytics } from '../../scripts/article-analytics';
+  initArticleAnalytics();
+</script>
