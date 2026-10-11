@@ -26,6 +26,8 @@ import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
 import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
+import { needsOverwriteConfirm, overwriteConfirmMessage, parseDraftRecovery, recoveryWarning } from './recovered-draft';
+import type { DraftRecovery } from './recovered-draft';
 import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../../lib/blocks/icons';
 import type { IconSize } from '../../lib/blocks/icons';
 
@@ -800,6 +802,8 @@ interface Editing {
   saved: string;
   /** New-article email to members; null before the article's first publish. */
   emailNotification: EmailNotification | null;
+  /** The stored draft of this edition failed validation and is shown recovered; null when shown as stored. */
+  recovery: DraftRecovery | null;
 }
 
 interface EmailNotification { status: string; sendAfter: string; sentCount: number }
@@ -839,6 +843,8 @@ function editingFrom(data: unknown, requested: Locale | undefined): Editing | nu
     originalSlug: data.slug, revision: data.revision, status: fallback ? 'draft' : data.status === 'published' ? 'published' : 'draft',
     hasUnpublished: fallback || data.has_unpublished_changes === true, editions: parseEditions(data.editions), newEdition: fallback,
     draft, saved: snapshot(draft), emailNotification: parseEmailNotification(data.email_notification),
+    // A fallback shows another edition, so its recovery does not concern the (new) edition being written.
+    recovery: fallback ? null : parseDraftRecovery(data.recovery),
   };
 }
 
@@ -1013,7 +1019,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     setTab('blocks');
     if (initialSlug) { void load(initialSlug); return; }
     const draft = blankDraft('vi');
-    setEditing({ originalSlug: null, revision: 0, status: 'draft', hasUnpublished: true, editions: [], newEdition: true, draft, saved: snapshot(draft), emailNotification: null });
+    setEditing({ originalSlug: null, revision: 0, status: 'draft', hasUnpublished: true, editions: [], newEdition: true, draft, saved: snapshot(draft), emailNotification: null, recovery: null });
     setJsonText(JSON.stringify(draft.doc, null, 2));
     setServerErrors([]);
     setConflict(null);
@@ -1035,6 +1041,11 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
   const save = useCallback(async (overrideRevision?: number) => {
     if (!editing || busy) return;
     if (clientErrors.length > 0) { setStatus({ text: 'Sửa lỗi block trước khi lưu.', error: true }); return; }
+    // Saving always sends the whole document: never write a recovered draft back without an explicit yes.
+    if (editing.recovery && needsOverwriteConfirm(editing.recovery) && !window.confirm(overwriteConfirmMessage(editing.recovery, editing.draft.locale))) {
+      setStatus({ text: 'Chưa lưu: bản nháp đã lưu được giữ nguyên.', error: false });
+      return;
+    }
     setBusy(true);
     setServerErrors([]);
     const d = editing.draft;
@@ -1197,6 +1208,11 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       {editing.newEdition && editing.originalSlug && (
         <p className="text-[11px] text-sky-300 rounded-lg border border-sky-900 bg-sky-950/40 px-3 py-2">
           Bản {LOCALE_LABELS[d.locale].native} chưa có. Viết nội dung rồi lưu để tạo — bản dịch do người viết, hệ thống không tự dịch.
+        </p>
+      )}
+      {editing.recovery && (
+        <p role="alert" className="text-[11px] text-amber-200 rounded-lg border border-amber-700 bg-amber-950/40 px-3 py-2">
+          {recoveryWarning(editing.recovery, d.locale)}
         </p>
       )}
 

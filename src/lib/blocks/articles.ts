@@ -75,6 +75,8 @@ export interface ArticleRecord extends ArticleSummary {
   category_id: string | null;
   tag_ids: string[];
   draft: ArticleDocument;
+  /** How the stored draft was recovered to produce `draft`; null when it was read as stored. */
+  draft_recovery: DocumentRecovery | null;
   published: ArticleDocument | null;
   editions: EditionSummary[];
 }
@@ -88,6 +90,21 @@ export interface ArticleView extends ArticleSummary {
   preview: boolean;
   /** True when the requested locale had no edition and another edition is shown instead. */
   locale_fallback: boolean;
+  /**
+   * Admin draft views only: how the stored draft had to be recovered to be shown, or null when it
+   * passed today's validation. Saving the shown document over a recovered draft makes the loss permanent.
+   */
+  recovery?: DocumentRecovery | null;
+}
+
+/** Counts of a lenient stored-document read; `unreadable` means the document is shown as empty. */
+export interface DocumentRecovery {
+  /** Invalid blocks skipped on read. */
+  dropped_blocks: number;
+  /** Embeds whose stored provider no longer matched their URL and now show as plain links. */
+  degraded_embeds: number;
+  /** The stored JSON (or every one of its blocks) could not be read. */
+  unreadable: boolean;
 }
 
 export interface ArticleInput {
@@ -155,16 +172,20 @@ function parseJson(text: string): unknown {
  * unreadable or every one of its blocks had to be dropped: callers that write must not persist that.
  * Warnings carry counts only, never document content.
  */
-function readStoredDoc(text: string, slug: string): ArticleDocument | null {
+function readStoredDocWithRecovery(text: string, slug: string): { doc: ArticleDocument | null; recovery: DocumentRecovery | null } {
   const res = readStoredDocument(parseJson(text));
   if (!res) {
     console.warn(`Stored document for article "${slug}" is unreadable`);
-    return null;
+    return { doc: null, recovery: { dropped_blocks: 0, degraded_embeds: 0, unreadable: true } };
   }
-  if (res.dropped || res.degraded) {
-    console.warn(`Stored document for article "${slug}" recovered: ${res.dropped} invalid block(s) dropped, ${res.degraded} embed(s) shown as links`);
-  }
-  return res.dropped > 0 && res.doc.blocks.length === 0 ? null : res.doc;
+  if (!res.dropped && !res.degraded) return { doc: res.doc, recovery: null };
+  console.warn(`Stored document for article "${slug}" recovered: ${res.dropped} invalid block(s) dropped, ${res.degraded} embed(s) shown as links`);
+  const unreadable = res.dropped > 0 && res.doc.blocks.length === 0;
+  return { doc: unreadable ? null : res.doc, recovery: { dropped_blocks: res.dropped, degraded_embeds: res.degraded, unreadable } };
+}
+
+function readStoredDoc(text: string, slug: string): ArticleDocument | null {
+  return readStoredDocWithRecovery(text, slug).doc;
 }
 
 /** Display read: an unreadable stored document shows as empty (never written back; see `requireStoredDraft`). */
@@ -336,7 +357,7 @@ function buildSummary(
 }
 
 export function toSummary(rec: ArticleRecord): ArticleSummary {
-  const { draft: _draft, published: _published, category_id: _c, tag_ids: _t, ...summary } = rec;
+  const { draft: _draft, draft_recovery: _r, published: _published, category_id: _c, tag_ids: _t, ...summary } = rec;
   return summary;
 }
 
@@ -429,12 +450,14 @@ export async function getArticle(
   if (!pick) return null;
   const deco = await loadDecorations(d1, [{ articleId: art.id, locale: pick.edition.locale }]);
   const summary = buildSummary(art, pick.edition, editions, deco, { includeEditions: true });
+  const draft = readStoredDocWithRecovery(pick.edition.draftJson, slug);
   return {
     ...summary,
     editions: summary.editions ?? [],
     category_id: art.categoryId,
     tag_ids: (deco.tags.get(art.id) ?? []).map(t => t.id),
-    draft: parseStoredDoc(pick.edition.draftJson, slug),
+    draft: draft.doc ?? emptyDocument(),
+    draft_recovery: draft.recovery,
     published: pick.edition.publishedJson ? parseStoredDoc(pick.edition.publishedJson, slug) : null,
     locale_fallback: pick.fallback,
   };
@@ -546,7 +569,10 @@ export async function getArticleView(
   const publicSummary: ArticleSummary = viewer.isAdmin ? summary : { ...summary, editions: undefined };
   if (draft) {
     const emailNotification = d1 ? await getArticleNotification(d1, rec.id) : null;
-    return { ...publicSummary, email_notification: emailNotification, document: rec.draft, truncated: false, preview: true, locale_fallback };
+    return {
+      ...publicSummary, email_notification: emailNotification, document: rec.draft, recovery: rec.draft_recovery,
+      truncated: false, preview: true, locale_fallback,
+    };
   }
   if (!rec.published) return null;
   const { doc, truncated, outline } = applyPaywall(rec.published, rec.access, viewer);
