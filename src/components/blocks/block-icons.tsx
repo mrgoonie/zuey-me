@@ -49,7 +49,7 @@ export const ICON_COMPONENTS: Readonly<Record<IconName, LucideIcon>> = {
   'rss': Rss, 'smile': Smile,
 };
 
-interface IconGlyphProps {
+export interface IconGlyphProps {
   /** Untrusted input is fine: anything outside the allowlist renders nothing. */
   name: unknown;
   size: IconSize | number;

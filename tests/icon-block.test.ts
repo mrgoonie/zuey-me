@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -126,6 +126,11 @@ describe('icon block validation', () => {
 });
 
 describe('icon rendering', () => {
+  // The server renders icons synchronously; browsers load the icon map lazily (import.meta.env.SSR is live process.env in Bun).
+  const previousSsr = process.env.SSR;
+  beforeAll(() => { process.env.SSR = 'true'; });
+  afterAll(() => { if (previousSsr === undefined) delete process.env.SSR; else process.env.SSR = previousSsr; });
+
   it('renders a decorative icon as aria-hidden inline SVG', () => {
     const html = render([{ type: 'icon', name: 'rocket', size: 'lg', tone: 'accent', align: 'center' }]);
     expect(html).toContain('class="zb-icon zb-icon-center zb-icon-tone-accent"');
