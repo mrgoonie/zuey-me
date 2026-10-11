@@ -35,9 +35,16 @@ function randomId(prefix: string): string {
 
 class Validator {
   errors: ValidationError[] = [];
+  /** Blocks skipped by a lenient (stored-document) read. */
+  dropped = 0;
+  /** Embeds whose provider was downgraded to `generic` by a lenient read. */
+  degraded = 0;
   private ids = new Set<string>();
   private count = 0;
   private inToggle = false;
+
+  /** Lenient mode reads documents that were already stored: invalid blocks are skipped instead of failing the document. */
+  constructor(private readonly lenient = false) {}
 
   err(path: string, message: string): void {
     if (this.errors.length < MAX_ERRORS) this.errors.push({ path, message });
@@ -102,8 +109,11 @@ class Validator {
     const out: Block[] = [];
     let failed = false;
     v.forEach((item, i) => {
+      const mark = this.errors.length;
       const block = this.block(item, `${path}[${i}]`, layoutDepth);
-      if (block) out.push(block); else failed = true;
+      if (block) out.push(block);
+      else if (this.lenient) { this.errors.length = mark; this.dropped += 1; }
+      else failed = true;
     });
     return failed ? undefined : out;
   }
@@ -125,7 +135,10 @@ class Validator {
     const id = this.id(v, path);
     const before = this.errors.length;
     const block = this.typed(type, id ?? '', v, path, layoutDepth);
-    return id !== undefined && block && this.errors.length === before ? block : undefined;
+    if (id !== undefined && block && this.errors.length === before) return block;
+    // A rejected block must not reserve its id for a later block (matters for lenient reads).
+    if (id !== undefined) this.ids.delete(id);
+    return undefined;
   }
 
   private typed(type: BlockType, id: string, v: Obj, path: string, layoutDepth: number): Block | undefined {
@@ -197,14 +210,23 @@ class Validator {
         const detected = detectProvider(url);
         let provider: EmbedProvider = detected;
         if (v.provider !== undefined) {
-          if (!isOneOf(EMBED_PROVIDERS, v.provider)) { this.err(`${path}.provider`, `must be one of ${EMBED_PROVIDERS.join(', ')}`); return undefined; }
           // The provider decides which player host is framed, so it must come from the URL itself.
           // `generic` stays allowed: it only downgrades the embed to a plain link.
-          if (v.provider !== detected && v.provider !== 'generic') {
-            this.err(`${path}.provider`, `"${v.provider}" does not match the URL host (detected "${detected}"); omit provider or use "${detected}"`);
+          const raw = v.provider;
+          const valid = isOneOf(EMBED_PROVIDERS, raw) && (raw === detected || raw === 'generic');
+          if (valid) {
+            provider = raw;
+          } else if (this.lenient) {
+            // A stored embed keeps its content as a plain link rather than losing the whole block.
+            this.degraded += 1;
+            provider = 'generic';
+          } else if (!isOneOf(EMBED_PROVIDERS, raw)) {
+            this.err(`${path}.provider`, `must be one of ${EMBED_PROVIDERS.join(', ')}`);
+            return undefined;
+          } else {
+            this.err(`${path}.provider`, `"${raw}" does not match the URL host (detected "${detected}"); omit provider or use "${detected}"`);
             return undefined;
           }
-          provider = v.provider;
         }
         const caption = this.str(v, 'caption', path, S, { optional: true });
         return { id, type, url, provider, ...(caption ? { caption } : {}) };
@@ -493,4 +515,24 @@ export function validateDocument(input: unknown): ValidationResult {
   const blocks = v.blocks(input.blocks, '$.blocks', 0);
   if (v.errors.length || !blocks) return { ok: false, errors: v.errors.length ? v.errors : [{ path: '$.blocks', message: 'invalid' }] };
   return { ok: true, doc: { version: 1, blocks } };
+}
+
+export interface StoredDocumentRead {
+  doc: ArticleDocument;
+  /** Invalid blocks that were skipped. */
+  dropped: number;
+  /** Embeds whose stored provider no longer matched their URL and now render as plain links. */
+  degraded: number;
+}
+
+/**
+ * Reads a document that was validated when it was written. A block that fails today's rules is
+ * skipped (and a mismatched embed provider becomes `generic`) so one block can never blank a whole
+ * document. Returns null only when the envelope itself is unreadable. Writes keep `validateDocument`.
+ */
+export function readStoredDocument(input: unknown): StoredDocumentRead | null {
+  if (!isObj(input) || (input.version !== undefined && input.version !== 1) || !Array.isArray(input.blocks)) return null;
+  const v = new Validator(true);
+  const blocks = v.blocks(input.blocks, '$.blocks', 0) ?? [];
+  return { doc: { version: 1, blocks }, dropped: v.dropped, degraded: v.degraded };
 }

@@ -159,6 +159,10 @@ describe('embeds load when scrolled into view', () => {
     const view = article(X_URL, 'x');
     expect(view.querySelector('noscript')).toBeNull();
     expect(byText(view, '.zb-embed-placeholder span', 'sẽ tự tải khi bạn cuộn tới')).not.toBeNull();
+    // The opt-out reserved (hidden) in the server markup is visible and usable once the script runs.
+    const optOut = byText(view, 'button', 'Không tự tải');
+    expect(optOut?.style.visibility).toBe('');
+    expect(optOut?.hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps working, and keeps the opt-out for this page, when localStorage throws', () => {
@@ -347,6 +351,45 @@ describe('Studio: pasted links become embed blocks', () => {
     }));
     click(byText(view, 'button', 'Chuyển về đoạn văn'));
     expect(changes).toEqual([[{ id: 'e1', type: 'paragraph', text: X_URL }]]);
+  });
+
+  it('offers only the detected provider and generic, and the hint follows the stored provider', () => {
+    const options = (view: HTMLElement) => [...view.querySelectorAll('select option')].map(o => o.getAttribute('value'));
+    const embed = (url: string, provider: EmbedProvider) => mount(React.createElement(editor.EmbedFields, {
+      block: { id: 'e1', type: 'embed', url, provider }, onChange: () => {},
+    }));
+    const detected = embed(X_URL, 'x');
+    expect(options(detected)).toEqual(['x', 'generic']);
+    expect(detected.textContent).toContain('nhúng được');
+
+    // A `generic` override renders a plain link, so the hint must not promise an embed.
+    const overridden = embed(X_URL, 'generic');
+    expect(options(overridden)).toEqual(['x', 'generic']);
+    expect(overridden.textContent).toContain('hiển thị dạng liên kết');
+    expect(overridden.textContent).not.toContain('nhúng được');
+
+    expect(options(embed('https://example.com/post', 'generic'))).toEqual(['generic']);
+  });
+
+  it('replaces one block with several in the block list (caption kept as its own paragraph)', () => {
+    const lists: Block[][] = [];
+    const blocks: Block[] = [
+      { id: 'p0', type: 'paragraph', text: 'Trước' },
+      { id: 'e1', type: 'embed', url: X_URL, provider: 'x', caption: 'Ghi chú' },
+      { id: 'p2', type: 'paragraph', text: 'Sau' },
+    ];
+    const view = mount(React.createElement(editor.BlockListEditor, {
+      blocks, onChange: (next: Block[]) => { lists.push(next); }, ctx: { layoutDepth: 0, inToggle: false, slug: 'bai-thu' },
+    }));
+    click(byText(view, 'button', 'Chuyển về đoạn văn'));
+    expect(lists).toHaveLength(1);
+    const [next] = lists;
+    expect(next.map(b => b.type)).toEqual(['paragraph', 'paragraph', 'paragraph', 'paragraph']);
+    expect(next[0]).toEqual(blocks[0]);
+    expect(next[1]).toEqual({ id: 'e1', type: 'paragraph', text: X_URL });
+    expect(next[2]).toMatchObject({ type: 'paragraph', text: 'Ghi chú' });
+    expect(next[3]).toEqual(blocks[2]);
+    expect(new Set(next.map(b => b.id)).size).toBe(4);
   });
 
   it('keeps the caption as a second paragraph when turning an embed back into text', () => {

@@ -3,7 +3,7 @@ import { AppError, jsonError } from '../http';
 import { authenticateAdmin } from '../auth';
 import type { ArticleAccess, ArticleDocument, ArticleStatus, Block } from './schema';
 import { emptyDocument, walkBlocks } from './schema';
-import { validateDocument } from './validate';
+import { readStoredDocument, validateDocument } from './validate';
 import { applyPaywall } from './paywall';
 import type { LockedOutline, Viewer } from './paywall';
 import type { RuntimeEnv } from '../../env';
@@ -150,11 +150,34 @@ function parseJson(text: string): unknown {
   }
 }
 
+/**
+ * Reads a stored edition/revision document block by block. Returns null when the stored JSON is
+ * unreadable or every one of its blocks had to be dropped: callers that write must not persist that.
+ * Warnings carry counts only, never document content.
+ */
+function readStoredDoc(text: string, slug: string): ArticleDocument | null {
+  const res = readStoredDocument(parseJson(text));
+  if (!res) {
+    console.warn(`Stored document for article "${slug}" is unreadable`);
+    return null;
+  }
+  if (res.dropped || res.degraded) {
+    console.warn(`Stored document for article "${slug}" recovered: ${res.dropped} invalid block(s) dropped, ${res.degraded} embed(s) shown as links`);
+  }
+  return res.dropped > 0 && res.doc.blocks.length === 0 ? null : res.doc;
+}
+
+/** Display read: an unreadable stored document shows as empty (never written back; see `requireStoredDraft`). */
 function parseStoredDoc(text: string, slug: string): ArticleDocument {
-  const res = validateDocument(parseJson(text));
-  if (res.ok) return res.doc;
-  console.error(`Stored document for article "${slug}" failed validation`);
-  return emptyDocument();
+  return readStoredDoc(text, slug) ?? emptyDocument();
+}
+
+/** Write paths: refuse to carry on from a draft that could not be read instead of saving it as empty. */
+function requireStoredDraft(text: string, slug: string, locale: Locale): ArticleDocument {
+  const doc = readStoredDoc(text, slug);
+  if (doc) return doc;
+  throw new AppError(409, 'stored_document_unreadable',
+    `The stored ${locale} draft could not be read; send a complete document to replace it`, { locale });
 }
 
 function asLocale(v: unknown): Locale {
@@ -557,12 +580,13 @@ function firstImage(blocks: Block[]): string | null {
 
 async function recordRevision(
   db: D1DatabaseLike, articleId: string, locale: Locale, revision: number,
-  action: 'create' | 'save' | 'publish' | 'delete_edition', title: string, excerpt: string, doc: ArticleDocument, actor: string,
+  action: 'create' | 'save' | 'publish' | 'delete_edition', title: string, excerpt: string, docJson: string, actor: string,
 ): Promise<void> {
+  // The snapshot is the stored JSON itself, so a read-side recovery is never baked into history.
   await db.prepare(`
     INSERT INTO article_revisions (id, article_id, locale, revision, action, title, excerpt, document_json, actor, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(newId('rev_'), articleId, locale, revision, action, title, excerpt, JSON.stringify(doc), actor, nowIso()).run();
+  `).bind(newId('rev_'), articleId, locale, revision, action, title, excerpt, docJson, actor, nowIso()).run();
 }
 
 /** Keeps the legacy single-locale columns of `articles` equal to the primary edition (older builds read them). */
@@ -613,7 +637,7 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
     INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, revision, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?)
   `).bind(newId('ed_'), id, locale, input.title, input.excerpt ?? '', docJson, now, now).run();
-  await recordRevision(db, id, locale, 1, 'create', input.title, input.excerpt ?? '', doc, actor);
+  await recordRevision(db, id, locale, 1, 'create', input.title, input.excerpt ?? '', docJson, actor);
   await setArticleTags(db, id, tagIds);
   const rec = await getArticle(db, input.slug, { locale });
   if (!rec) throw new AppError(500, 'internal_error', 'Article was not persisted');
@@ -647,6 +671,10 @@ export async function updateArticle(
     const target = await db.prepare('SELECT id FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL').bind(art.id, primary).first<Row>();
     if (!target) throw new AppError(400, 'invalid_field', `primary_locale ${primary} has no edition`, { field: 'primary_locale' });
   }
+  // Without a new document the stored draft is kept byte for byte; it is only checked so an
+  // unreadable draft is never re-saved (or snapshotted into a revision) as an empty one.
+  if (!input.document && edition) requireStoredDraft(edition.draftJson, slug, locale);
+  const docJson = input.document ? JSON.stringify(input.document) : edition ? edition.draftJson : JSON.stringify(emptyDocument());
   const categoryId = input.category !== undefined ? await resolveCategoryRef(db, input.category) : art.categoryId;
   const tagIds = input.tags ? await resolveTagRefs(db, input.tags, { createMissing: true, locale, actor }) : null;
 
@@ -660,24 +688,23 @@ export async function updateArticle(
 
   const title = input.title ?? edition?.title ?? '';
   const excerpt = input.excerpt ?? edition?.excerpt ?? '';
-  const doc = input.document ?? (edition ? parseStoredDoc(edition.draftJson, slug) : emptyDocument());
   if (edition) {
     await db.prepare('UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, revision = ?, updated_at = ? WHERE article_id = ? AND locale = ?')
-      .bind(title, excerpt, JSON.stringify(doc), revision, now, art.id, locale).run();
+      .bind(title, excerpt, docJson, revision, now, art.id, locale).run();
   } else if (editionRow) {
     // Re-creating a deleted edition reuses its row (article_id + locale is unique) and starts as a draft.
     await db.prepare(`
       UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, published_json = NULL, published_revision = NULL,
         status = 'draft', published_words = 0, cover_url = NULL, published_at = NULL, revision = ?, updated_at = ?, deleted_at = NULL
       WHERE article_id = ? AND locale = ?
-    `).bind(title, excerpt, JSON.stringify(doc), revision, now, art.id, locale).run();
+    `).bind(title, excerpt, docJson, revision, now, art.id, locale).run();
   } else {
     await db.prepare(`
       INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, revision, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-    `).bind(newId('ed_'), art.id, locale, title, excerpt, JSON.stringify(doc), revision, now, now).run();
+    `).bind(newId('ed_'), art.id, locale, title, excerpt, docJson, revision, now, now).run();
   }
-  await recordRevision(db, art.id, locale, revision, edition ? 'save' : 'create', title, excerpt, doc, actor);
+  await recordRevision(db, art.id, locale, revision, edition ? 'save' : 'create', title, excerpt, docJson, actor);
   if (tagIds) await setArticleTags(db, art.id, tagIds);
   await mirrorPrimary(db, art.id);
   // Access, tags and category affect what each search tier may contain: always rebuild.
@@ -723,7 +750,8 @@ export async function publishArticle(
   const row = await db.prepare('SELECT * FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL').bind(art.id, locale).first<Row>();
   if (!row) throw new AppError(404, 'not_found', `No ${locale} edition to publish`);
   const edition = toEditionRow(row);
-  const doc = parseStoredDoc(edition.draftJson, slug);
+  // Publishing copies draft_json as stored; an unreadable draft would publish an empty article.
+  const doc = requireStoredDraft(edition.draftJson, slug, locale);
   const now = nowIso();
   // Durable "was this article ever published" signal, independent of article_notifications rows.
   const previouslyPublished = Boolean(await db.prepare(`
@@ -740,7 +768,7 @@ export async function publishArticle(
       published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
     WHERE article_id = ? AND locale = ?
   `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale).run();
-  await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, doc, ctx.actor ?? 'admin');
+  await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin');
   await mirrorPrimary(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
@@ -770,7 +798,7 @@ export async function deleteEdition(
   const edition = toEditionRow(row);
   await db.prepare('UPDATE article_editions SET deleted_at = ?, updated_at = ?, revision = ? WHERE article_id = ? AND locale = ?')
     .bind(now, now, expected + 1, art.id, locale).run();
-  await recordRevision(db, art.id, locale, expected + 1, 'delete_edition', edition.title, edition.excerpt, parseStoredDoc(edition.draftJson, slug), ctx.actor ?? 'admin');
+  await recordRevision(db, art.id, locale, expected + 1, 'delete_edition', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin');
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
   const rec = await getArticle(db, slug);

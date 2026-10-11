@@ -1,6 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import { findBlock } from '../blocks/schema';
-import { validateDocument } from '../blocks/validate';
+import { readStoredDocument } from '../blocks/validate';
 import { AppError } from '../http';
 import { LOCALES, isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
@@ -267,8 +267,8 @@ async function editionInfo(db: D1DatabaseLike, articleId: string): Promise<Map<s
 
 function blockExists(docs: string[], blockId: string): boolean {
   return docs.some(text => {
-    const res = validateDocument(parseJson(text));
-    return res.ok && findBlock(res.doc.blocks, blockId) !== null;
+    const res = readStoredDocument(parseJson(text));
+    return res !== null && findBlock(res.doc.blocks, blockId) !== null;
   });
 }
 

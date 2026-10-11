@@ -3,13 +3,13 @@ import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
-  BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, emptyDocument,
+  BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, emptyDocument,
 } from '../../lib/blocks/schema';
 import type {
-  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
+  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
   ResponsiveSpan, SurveyBlock, ToggleBlock,
 } from '../../lib/blocks/schema';
-import { embedFromPastedText, recognizeEmbed } from '../../lib/blocks/embed';
+import { embedFromPastedText, embedSrc, recognizeEmbed } from '../../lib/blocks/embed';
 import { formatBytes } from '../../lib/blocks/markdown';
 import { validateDocument } from '../../lib/blocks/validate';
 import type { ValidationError } from '../../lib/blocks/validate';
@@ -362,6 +362,10 @@ function GalleryFields({ images, onChange }: { images: GalleryImage[]; onChange:
 
 export function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: BlockReplace }) {
   const rec = recognizeEmbed(block.url);
+  // What the reader actually gets: a `generic` override shows a link even for an embeddable URL.
+  const src = embedSrc(block.url, block.provider);
+  // Only the provider detected from the URL or `generic` (plain link) pass validation.
+  const providers = Array.from(new Set<EmbedProvider>([rec.provider, 'generic']));
   return (
     <div className="space-y-2">
       <Text label="URL (YouTube, Vimeo, SoundCloud, Spotify, X, Facebook, Instagram, TikTok, LinkedIn)" value={block.url}
@@ -372,7 +376,7 @@ export function EmbedFields({ block, onChange }: { block: Extract<Block, { type:
           onChange({ ...block, url, provider: follow ? detected : block.provider });
         }} />
       <p className="text-[11px] text-stone-400" aria-live="polite">
-        Nhận diện: <b className="text-stone-200">{rec.label}</b> · {rec.src ? 'nhúng được (tự tải khi người đọc cuộn tới)' : 'hiển thị dạng liên kết'}
+        Nhận diện: <b className="text-stone-200">{rec.label}</b> · {src ? 'nhúng được (tự tải khi người đọc cuộn tới)' : 'hiển thị dạng liên kết'}
       </p>
       {rec.provider === 'facebook' && !rec.src && (
         <p className="text-[11px] text-amber-300">
@@ -386,7 +390,7 @@ export function EmbedFields({ block, onChange }: { block: Extract<Block, { type:
       ])}>
         Chuyển về đoạn văn
       </button>
-      <Select label="Nhà cung cấp" value={block.provider} options={EMBED_PROVIDERS} onChange={provider => onChange({ ...block, provider })} />
+      <Select label="Nhà cung cấp" value={block.provider} options={providers} onChange={provider => onChange({ ...block, provider })} />
       <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
     </div>
   );
@@ -631,7 +635,7 @@ function BlockPreview({ block, slug }: { block: Block; slug: string }) {
 
 // ---------- Block list editor (recursive for layouts and toggles) ----------
 
-function BlockListEditor({ blocks, onChange, ctx }: { blocks: Block[]; onChange: (b: Block[]) => void; ctx: ListCtx }) {
+export function BlockListEditor({ blocks, onChange, ctx }: { blocks: Block[]; onChange: (b: Block[]) => void; ctx: ListCtx }) {
   const allowed = allowedTypes(ctx);
   const [previewing, setPreviewing] = useState<Set<string>>(() => new Set());
   const [insertAt, setInsertAt] = useState<number | null>(null);

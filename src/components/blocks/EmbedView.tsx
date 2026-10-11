@@ -190,7 +190,8 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
               ? <button type="button" className="zb-btn" onClick={() => setRequested(true)}>Tải nội dung từ {label}</button>
               : hydrated
                 ? <span>Nội dung từ {label} sẽ tự tải khi bạn cuộn tới.</span>
-                : <noscript>Nội dung từ {label} cần JavaScript để hiển thị tại đây. {original}</noscript>}
+                // The link to the original post is the one below the frame, shown in every state.
+                : <noscript>Nội dung từ {label} cần JavaScript để hiển thị tại đây.</noscript>}
           </div>
         )}
       </div>
@@ -207,8 +208,10 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
       <div className="zb-embed-meta">
         {original}
         {autoLoad && (
-          // Rendered from the first paint (disabled until the stored choice is read) so it never shifts the line.
+          // Rendered from the first paint so it never shifts the line, but invisible and disabled until the
+          // stored choice is read: without JavaScript it would be a button that can never work.
           <button type="button" className="zb-embed-link-btn" disabled={pref === null}
+            style={pref === null ? { visibility: 'hidden' } : undefined}
             onClick={() => writeEmbedPref(pref === 'click' ? 'auto' : 'click')}>
             {pref === 'click' ? 'Tự tải nội dung nhúng trên thiết bị này' : 'Không tự tải nội dung nhúng trên thiết bị này'}
           </button>
