@@ -133,7 +133,7 @@ export const experienceOpenApi: OpenApiFragment = {
         tags: [TAG], summary: 'Admin/cron: remove lapsed members, retire stale invites', security: adminAuth,
         description: [
           'Admins, or the scheduler worker with `Authorization: Bearer <CRON_SECRET>`. Removes joined members whose `community` entitlement lapsed and retires invite links that expired or belong to lapsed members.',
-          'Admins (verified email in ADMIN_EMAILS) are never removed, and their live invites are kept; they are counted in `exempt_admins`.',
+          'Admins (verified email in ADMIN_EMAILS) keep their live invites and are never removed while the seat is held by their own linked Telegram account (channel identity); these are counted in `exempt_admins`. Anyone else who joined through an admin invite is treated as a lapsed member.',
           `Memberships are paged by id: each run examines up to \`limit\` rows and makes at most ${SWEEP_TELEGRAM_BUDGET} Telegram calls, then returns \`next_cursor\`.`,
           'Without `cursor` the run resumes from the stored point of the same mode (live or dry run) and saves the next one, so a backlog drains over several scheduled runs; a pass that reaches the end (`complete: true`) clears it.',
           'With `cursor` the run starts after that id (`cursor=` for the beginning) and leaves the stored point alone.',

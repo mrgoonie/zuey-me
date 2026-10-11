@@ -192,6 +192,16 @@ async function removeFromChat(cfg: TelegramConfig, chatId: string, telegramUserI
   await telegram(cfg, 'unbanChatMember', { chat_id: chatId, user_id: Number(telegramUserId), only_if_banned: true });
 }
 
+/**
+ * The admin exemption covers only the admin's own Telegram account: the one linked to them in
+ * `channel_identities`. A forwarded admin invite joined by anyone else gets the normal entitlement check.
+ */
+async function isLinkedTelegramAccount(d1: D1DatabaseLike, userId: string, telegramUserId: string): Promise<boolean> {
+  const row = await d1.prepare("SELECT 1 AS linked FROM channel_identities WHERE provider = 'telegram' AND external_id = ? AND user_id = ?")
+    .bind(telegramUserId, userId).first<Row>();
+  return row !== null;
+}
+
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -205,7 +215,7 @@ export type WebhookOutcome = 'joined' | 'joined_then_removed' | 'left' | 'ignore
  * Handles a Bot API `chat_member` update (webhook registered with secret_token and
  * allowed_updates ["chat_member"]). Links the joining Telegram user to the member who received
  * the single-use invite; a member whose entitlement lapsed before joining is removed at once,
- * unless they are an admin (verified email in ADMIN_EMAILS).
+ * unless they are an admin (verified email in ADMIN_EMAILS) joining with their own linked Telegram account.
  */
 export async function handleTelegramUpdate(d1: D1DatabaseLike, env: RuntimeEnv, secretHeader: string | null, update: unknown): Promise<WebhookOutcome> {
   const cfg = requireConfig(env);
@@ -249,8 +259,10 @@ export async function handleTelegramUpdate(d1: D1DatabaseLike, env: RuntimeEnv, 
   await d1.prepare(
     "UPDATE community_memberships SET status = 'joined', telegram_user_id = ?, joined_at = ?, updated_at = ? WHERE id = ?"
   ).bind(telegramUserId, nowIso, nowIso, str(row, 'id')).run();
-  // Admins (verified email in ADMIN_EMAILS) may join without a plan, matching the sweep exemption.
-  if (isAdminIdentity(str(row, 'user_email'), strOrNull(row, 'user_email_verified_at'), env)) return 'joined';
+  // Admins (verified email in ADMIN_EMAILS) may join without a plan with their own linked Telegram account,
+  // matching the sweep exemption.
+  if (isAdminIdentity(str(row, 'user_email'), strOrNull(row, 'user_email_verified_at'), env)
+    && (await isLinkedTelegramAccount(d1, userId, telegramUserId))) return 'joined';
   const { entitlements } = await getEntitlements(d1, userId);
   if (!entitlements.includes('community')) {
     const chatId = cfg.chats[chat];
@@ -305,7 +317,10 @@ export interface SweepResult {
   removed: number;
   /** Invite links retired (always 0 in a dry run). */
   revoked: number;
-  /** Lapsed memberships kept because the user is an admin (verified email in ADMIN_EMAILS). */
+  /**
+   * Lapsed memberships kept because the user is an admin (verified email in ADMIN_EMAILS): their live invites,
+   * and seats held by their own linked Telegram account.
+   */
   exempt_admins: number;
   /** What was done, or in a dry run what would be done. Failed actions are listed in `errors` instead. */
   actions: SweepAction[];
@@ -362,7 +377,7 @@ function telegramCost(action: SweepActionKind, reason: SweepReason): number {
 
 /**
  * Admin/cron: removes joined members whose `community` entitlement lapsed and retires invite links that
- * expired or belong to lapsed members. Admins are never removed. Pages through memberships by id with a
+ * expired or belong to lapsed members. Admins on their own linked Telegram account are never removed. Pages through memberships by id with a
  * per-run row and Telegram budget, resuming from the stored cursor, so a backlog drains over several runs.
  * Safe to re-run; a dry run makes no Telegram calls and no membership writes.
  */
@@ -397,7 +412,11 @@ export async function sweepCommunity(d1: D1DatabaseLike, env: RuntimeEnv, opts: 
       entitled = (await getEntitlements(d1, userId)).entitlements.includes('community');
       entitledCache.set(userId, entitled);
     }
-    const admin = isAdminIdentity(str(row, 'user_email'), strOrNull(row, 'user_email_verified_at'), env);
+    const telegramUserId = strOrNull(row, 'telegram_user_id');
+    // An admin's open invite is kept (the join handler checks who uses it); a joined seat only when the
+    // member is the admin's own linked Telegram account.
+    const admin = isAdminIdentity(str(row, 'user_email'), strOrNull(row, 'user_email_verified_at'), env)
+      && (str(row, 'status') === 'invited' || (telegramUserId !== null && (await isLinkedTelegramAccount(d1, userId, telegramUserId))));
 
     let action: SweepActionKind | null = null;
     let reason: SweepReason = 'entitlement_lapsed';
@@ -427,7 +446,6 @@ export async function sweepCommunity(d1: D1DatabaseLike, env: RuntimeEnv, opts: 
     lastId = id;
     if (!action) continue;
 
-    const telegramUserId = strOrNull(row, 'telegram_user_id');
     const item: SweepAction = { id, user_id: userId, chat: isCommunityChat(chat) ? chat : 'en', telegram_user_id: telegramUserId, action, reason };
     if (action === 'remove' && (!chatId || !telegramUserId)) {
       out.errors.push({ id, code: 'community_unconfigured', message: `No configured group or Telegram user for membership ${id}` });
