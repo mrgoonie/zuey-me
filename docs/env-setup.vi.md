@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0020_promo_codes_and_invoices.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0021_channel_identities.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -209,6 +209,16 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
 4. Thiếu biến nào thì API chat trả `503 ai_unconfigured` kèm tên biến còn thiếu.
 5. `SANDBOX_FETCH_ALLOWLIST`: danh sách host mà block tương tác (HTML/JS) được GET qua `/api/v1/sandbox/fetch`, phân tách bằng dấu phẩy, hỗ trợ `*.example.com`. Để trống thì tắt proxy. Hiện dùng `api.open-meteo.com,geocoding-api.open-meteo.com,api.github.com,api.frankfurter.app`.
 
+### Zuey AI trên Telegram: chỉ thành viên có gói mới chat được
+
+Dewee hỏi zuey.me trước khi agent trả lời một tin nhắn Telegram (Channel Access Gate). Quyền `agent_chat` có trong các gói Zuey AI, Kết hợp và Cộng đồng.
+
+1. `CHANNEL_ACCESS_SERVICE_KEY`: khoá dịch vụ (scope `channel_access:check`) chỉ dùng cho bên xác minh. Tạo bằng `openssl rand -hex 32` (tối thiểu 32 ký tự), đặt cùng giá trị cho Pages và cho cấu hình MCP server của dewee (header `Authorization: Bearer <khoá>`). Dewee gọi tool `channel_access_check` ở `https://zuey.me/api/mcp` (JSON-RPC) hoặc `POST /api/v1/channel-access/check` (kèm `Content-Type: application/json`). Khoá admin và khoá cá nhân `zk_` đều bị từ chối, và khoá dịch vụ không mở được gì khác. Endpoint OAuth `/mcp` không nhận khoá này.
+2. `CHANNEL_LINK_TOKEN_SECRET`: secret HMAC chung với dewee để ký token liên kết ở `/connect?token=…` (tối thiểu 32 ký tự). Định dạng: `base64url(JSON payload) + "." + base64url(HMAC-SHA256(secret, phần payload))`, payload `{v:1, channel_type, channel_instance, sender_id, sender_username?, tenant?, exp, nonce}`. Mỗi token chỉ dùng được một lần. Bên xác minh chỉ trả link `/connect` khi người gửi nhắn riêng cho bot (`chat_type: direct`); trong nhóm, bot chỉ nhắc nhắn riêng để liên kết, vì ai trong nhóm cũng mở được link.
+3. Tuỳ chọn `DEWEE_CHANNEL_INSTANCE_ID`: id channel instance của bot trên dewee. Khi có cùng `DEWEE_GATEWAY_URL` và `DEWEE_GATEWAY_TOKEN`, mỗi khi gói có `agent_chat` bật hoặc tắt (thanh toán, hoàn tiền, huỷ thẻ), khi thành viên liên kết, huỷ liên kết hoặc xoá tài khoản, zuey.me gọi `POST {DEWEE_GATEWAY_URL}/v1/channels/instances/{id}/access/invalidate`. Các lệnh gọi chạy song song, tối đa 2 giây, sau khi webhook thanh toán đã trả lời; lỗi gọi không ảnh hưởng thanh toán và dewee vẫn kiểm tra lại sau tối đa 300 giây. Khi đặt biến này, token liên kết có `channel_instance` khác sẽ bị từ chối.
+4. Migration `0021_channel_identities.sql` tạo bảng liên kết và nạp sẵn Telegram ID từ cộng đồng (chỉ ID thuộc đúng một thành viên).
+5. Thiếu biến nào thì bên xác minh trả `503 channel_access_unconfigured` và trang `/connect` báo chưa sẵn sàng; với `on_error: deny` dewee sẽ chặn, không mở cửa.
+
 ### Jev (TypeSafe AI): xếp hạng lại kết quả
 
 1. Đăng nhập [typesafe.ai](https://typesafe.ai), tạo API key, lưu vào `TYPESAFEAI_API_KEY`.
@@ -221,7 +231,8 @@ Lần xuất bản đầu tiên của một bài sẽ gửi email cho mọi thà
 2. Thêm bot làm admin của hai nhóm kín (tiếng Anh, tiếng Việt) với quyền *Invite users via link* và *Ban users*. Lưu ID nhóm (dạng `-100…`) vào `TELEGRAM_GROUP_EN_ID` và `TELEGRAM_GROUP_VI_ID`.
 3. Tạo chuỗi ngẫu nhiên cho `TELEGRAM_WEBHOOK_SECRET`, rồi đăng ký webhook một lần theo lệnh `setWebhook` ghi trong `.env.example` (URL `https://zuey.me/api/v1/community/telegram-webhook`, `allowed_updates=["chat_member"]`).
 4. Thiếu biến nào thì các endpoint cộng đồng trả `503 community_unconfigured`; thành viên vẫn thấy thẻ cộng đồng trong `/account#community` nhưng chưa nhận được link mời.
-5. Thông báo đơn hàng mới: thêm bot vào nhóm admin (chỉ cần là thành viên), lưu ID nhóm vào `TELEGRAM_GROUP_ID_SEPAY_NOTI`. Hệ thống gửi tin vào nhóm khi một đơn được thanh toán xong (gói thành viên, khoá học, lịch tư vấn) hoặc cần admin kiểm tra (thiếu tiền, trễ hạn, sai tài khoản), dù tiền đến từ webhook SePay, nút đối soát SePay của admin, thẻ qua Dodo hay PayPal. Giao dịch đã xử lý rồi (gửi lại, trùng) không tạo tin mới. Muốn nhận thêm ở Discord: tạo webhook cho kênh (Cài đặt kênh → Tích hợp → Webhook) và lưu URL vào secret `DISCORD_WEBHOOK_SEPAY_NOTI`. Kênh nào để trống thì không gửi; Telegram hay Discord lỗi cũng không làm hỏng webhook SePay.
+5. `POST /api/v1/community/sweep` gỡ khỏi nhóm những thành viên đã hết gói. Admin chạy tay; endpoint cũng nhận `Authorization: Bearer <CRON_SECRET>` nhưng chưa được lên lịch trong worker `zuey-me-scheduler`.
+6. Thông báo đơn hàng mới: thêm bot vào nhóm admin (chỉ cần là thành viên), lưu ID nhóm vào `TELEGRAM_GROUP_ID_SEPAY_NOTI`. Hệ thống gửi tin vào nhóm khi một đơn được thanh toán xong (gói thành viên, khoá học, lịch tư vấn) hoặc cần admin kiểm tra (thiếu tiền, trễ hạn, sai tài khoản), dù tiền đến từ webhook SePay, nút đối soát SePay của admin, thẻ qua Dodo hay PayPal. Giao dịch đã xử lý rồi (gửi lại, trùng) không tạo tin mới. Muốn nhận thêm ở Discord: tạo webhook cho kênh (Cài đặt kênh → Tích hợp → Webhook) và lưu URL vào secret `DISCORD_WEBHOOK_SEPAY_NOTI`. Kênh nào để trống thì không gửi; Telegram hay Discord lỗi cũng không làm hỏng webhook SePay.
 
 ## 10. OAuth / MCP cho ứng dụng bên ngoài
 

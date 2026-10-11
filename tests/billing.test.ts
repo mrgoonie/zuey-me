@@ -315,7 +315,7 @@ describe('order → SePay webhook → entitlement', () => {
     const e = env({ RESEND_API_KEY: undefined });
     const o = await order(m, 'ai', 1, e);
     expect((await webhook(transfer(o.code, o.amount), e)).outcome).toBe('paid');
-    expect((await subscription(m)).entitlements).toEqual(['ai_chat']);
+    expect((await subscription(m)).entitlements).toEqual(['ai_chat', 'agent_chat']);
     expect(emails).toHaveLength(0);
     expect(d1.raw.query("SELECT status FROM email_log WHERE kind = 'payment_receipt'").get()).toEqual({ status: 'skipped' });
   });
@@ -350,7 +350,7 @@ describe('reconciliation and reminders', () => {
     expect(res.status).toBe(200);
     const data = (await read(res)).data;
     expect(field(data, 'matched')).toBe(1);
-    expect((await subscription(m)).entitlements).toEqual(['read_full', 'ai_chat', 'community']);
+    expect((await subscription(m)).entitlements).toEqual(['read_full', 'ai_chat', 'agent_chat', 'community']);
 
     // The webhook for the same SePay transaction arrives late: no double extension.
     expect((await webhook(transfer(o.code, o.amount, 777))).outcome).toBe('duplicate_event');

@@ -371,7 +371,7 @@ describe('Dodo card subscription lifecycle', () => {
     expect(field(view, 'status')).toBe('active');
     expect(field(view, 'current_period_end')).toBe(firstEnd);
     expect(field(view, 'can_cancel')).toBe(true);
-    expect((await entitlements(m)).sort()).toEqual(['ai_chat', 'read_full']);
+    expect((await entitlements(m)).sort()).toEqual(['agent_chat', 'ai_chat', 'read_full']);
 
     // A second card checkout for the same plan is refused while one is live.
     const again = await ordersApi(ctx({ method: 'POST', body: { plan: 'combo', provider: 'dodo' }, headers: m.browser }));
@@ -384,7 +384,7 @@ describe('Dodo card subscription lifecycle', () => {
     m = await member('lan@example.com'); // fresh session after the month jump
     expect((await sendDodo(subscriptionPayload('subscription.renewed', { metadata, next: renewedEnd }))).outcome).toBe('updated');
     expect(field(await cardOf(m, id), 'current_period_end')).toBe(renewedEnd);
-    expect((await entitlements(m)).sort()).toEqual(['ai_chat', 'read_full']);
+    expect((await entitlements(m)).sort()).toEqual(['agent_chat', 'ai_chat', 'read_full']);
 
     // Portal link and scheduled cancellation (session only).
     const portal = await cardPortalApi(ctx({ method: 'POST', params: { id }, headers: m.browser }));
@@ -396,7 +396,7 @@ describe('Dodo card subscription lifecycle', () => {
     const patch = calls.find(c => c.method === 'PATCH');
     expect(patch?.url).toBe(`${DODO_BASE}/subscriptions/sub_1`);
     expect(parsed(patch?.body ?? '')).toEqual({ cancel_at_next_billing_date: true });
-    expect((await entitlements(m)).sort()).toEqual(['ai_chat', 'read_full']);
+    expect((await entitlements(m)).sort()).toEqual(['agent_chat', 'ai_chat', 'read_full']);
 
     // The provider ends the subscription: access stops.
     now = Date.parse('2026-12-05T00:00:10.000Z');
@@ -412,11 +412,11 @@ describe('Dodo card subscription lifecycle', () => {
     const { metadata } = await startCard(m, 'ai');
     const sub = { metadata, productId: 'pdt_ai', amount: 900 };
     expect((await sendDodo(subscriptionPayload('subscription.active', sub))).outcome).toBe('activated');
-    expect(await entitlements(m)).toEqual(['ai_chat']);
+    expect(await entitlements(m)).toEqual(['ai_chat', 'agent_chat']);
     expect((await sendDodo(subscriptionPayload('subscription.on_hold', { ...sub, status: 'on_hold' }))).outcome).toBe('deactivated');
     expect(await entitlements(m)).toEqual([]);
     expect((await sendDodo(subscriptionPayload('subscription.active', sub))).outcome).toBe('activated');
-    expect(await entitlements(m)).toEqual(['ai_chat']);
+    expect(await entitlements(m)).toEqual(['ai_chat', 'agent_chat']);
   });
 
   it('marks a failed first charge as failed without granting access', async () => {

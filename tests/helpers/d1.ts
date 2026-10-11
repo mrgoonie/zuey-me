@@ -26,6 +26,9 @@ class Statement implements D1PreparedStatementLike {
     return { results: rows as T[] };
   }
   async run(): Promise<D1RunResultLike> {
+    return this.runSync();
+  }
+  runSync(): D1RunResultLike {
     const res = this.db.query(this.sql).run(...this.params);
     return { meta: { changes: res.changes, last_row_id: Number(res.lastInsertRowid) } };
   }
@@ -42,6 +45,13 @@ export function createTestD1(): D1DatabaseLike & { raw: Database } {
     raw: db,
     prepare(sql: string) {
       return new Statement(db, sql);
+    },
+    // Same contract as D1 batch: one transaction, rolled back entirely when any statement fails.
+    async batch(statements: D1PreparedStatementLike[]) {
+      return db.transaction(() => statements.map(s => {
+        if (!(s instanceof Statement)) throw new Error('batch expects statements from this database');
+        return s.runSync();
+      }))();
     },
   };
 }

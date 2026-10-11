@@ -131,6 +131,7 @@ export const experienceOpenApi: OpenApiFragment = {
     '/api/v1/community/sweep': {
       post: {
         tags: [TAG], summary: 'Admin/cron: remove lapsed members, retire stale invites', security: adminAuth,
+        description: 'Idempotent. Admins run it; it also accepts `Authorization: Bearer <CRON_SECRET>` for a scheduled caller (not scheduled yet).',
         responses: { '200': ok('Sweep result', ref('CommunitySweep')), ...denied, '503': communityMissing },
       },
     },

@@ -12,9 +12,11 @@ import { taxonomyOpenApi } from '../taxonomy/openapi';
 import { promosOpenApi } from '../promos/promo-openapi';
 import { referralsOpenApi } from '../referrals/openapi';
 import { videosOpenApi } from '../videos/openapi';
+import { channelAccessOpenApi } from '../channel-access/openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
 export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [
   readsOpenApi, coursesOpenApi, coursesAdminOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
   chatOpenApi, oauthOpenApi, experienceOpenApi, videosOpenApi, referralsOpenApi, promosOpenApi,
+  channelAccessOpenApi,
 ];

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ApiKeysPanel } from './ApiKeysPanel';
+import { ChannelLinks } from './ChannelLinks';
 import { MyLearningSection } from '../courses/MyLearningSection';
 import { MemberDialog } from './MemberDialog';
 import { reset as resetAnalytics } from '../../lib/analytics/client';
@@ -135,6 +136,7 @@ function EmailSection({ me }: { me: Me }) {
           </li>
         ))}
       </ul>
+      <ChannelLinks />
     </Section>
   );
 }
@@ -362,6 +364,8 @@ const ACTIVITY_COPY: Record<string, string> = {
   'email_change.requested': 'Yêu cầu đổi email',
   'email_change.confirmed': 'Đổi email',
   'identity.linked': 'Liên kết tài khoản',
+  'channel.linked': 'Liên kết tài khoản chat (Telegram)',
+  'channel.unlinked': 'Huỷ liên kết tài khoản chat (Telegram)',
   'sessions.revoked_others': 'Đăng xuất thiết bị khác',
   'session.revoked': 'Đăng xuất một thiết bị',
   'api_key.created': 'Tạo khoá API',
