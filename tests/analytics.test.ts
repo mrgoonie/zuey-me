@@ -13,7 +13,7 @@ import {
   IDENTITY_CACHE_KEY, IDENTITY_STORAGE_KEY, isValidDistinctId, parseIdentityCache, parseIdentityResponse, planIdentity,
 } from '../src/lib/analytics/identity';
 import { REDACTED, containsPii, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
-import { sendServerEvent, serverDestinations } from '../src/lib/analytics/server';
+import { captureServerEvent, isServerCaptureHost, sendServerEvent, serverDestinations } from '../src/lib/analytics/server';
 
 const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c3JfMTIzIn0.c2lnbmF0dXJlLXZhbHVl';
 const KEY = 'phc_abcdefghijklmnopqrstuvwxyz0123456789';
@@ -348,8 +348,15 @@ describe('server capture', () => {
     expect(seen[0].body).toEqual({
       api_key: KEY, event: 'server_test', distinct_id: 'usr_a', uuid: '0191c8a2-7d9e-7a1b-9c3d-2e4f5a6b7c8d',
       timestamp: '2026-10-11T03:00:00.000Z',
-      properties: { plan: 'ai', event_version: 2, schema_version: 1, $lib: 'zuey-me-server' },
+      // No GeoIP from the server's egress IP; a member id still updates its person profile.
+      properties: { plan: 'ai', event_version: 2, schema_version: 1, $lib: 'zuey-me-server', $geoip_disable: true },
     });
+
+    await sendServerEvent({ event: 'server_test', distinctId: 'guest_0123456789abcdef01234567', properties: { plan: 'ai' } }, [dest], {
+      taxonomy: testTaxonomy,
+    });
+    // A booking guest never creates a person profile.
+    expect(seen[1].body).toMatchObject({ properties: { $geoip_disable: true, $process_person_profile: false } });
   });
 
   test('never throws on network errors', async () => {
@@ -392,9 +399,26 @@ describe('server capture', () => {
   });
 
   test('no destinations outside production unless debug is set', () => {
-    expect(serverDestinations({ PUBLIC_POSTHOG_KEY: KEY }, { production: false })).toEqual([]);
-    expect(serverDestinations({ PUBLIC_POSTHOG_KEY: KEY, PUBLIC_ANALYTICS_DEBUG: '1' }, { production: false }).map(d => d.name)).toEqual(['posthog']);
-    expect(serverDestinations({}, { production: true }).map(d => d.name)).toEqual(['posthog']);
+    expect(serverDestinations({ PUBLIC_POSTHOG_KEY: KEY }, { production: false, requestHost: 'zuey.me' })).toEqual([]);
+    expect(serverDestinations({ PUBLIC_POSTHOG_KEY: KEY, PUBLIC_ANALYTICS_DEBUG: '1' }, { production: false, requestHost: 'localhost' }).map(d => d.name)).toEqual(['posthog']);
+    expect(serverDestinations({}, { production: true, requestHost: 'zuey.me' }).map(d => d.name)).toEqual(['posthog']);
+    expect(serverDestinations({}, { production: true, requestHost: 'WWW.ZUEY.ME' }).map(d => d.name)).toEqual(['posthog']);
+  });
+
+  test('a production build on a preview or unknown host never sends to the production project', () => {
+    // Previews are production builds with the production key from wrangler.toml and the same database.
+    const prodEnv = { PUBLIC_POSTHOG_KEY: KEY };
+    for (const host of ['feat-x.zuey-me.pages.dev', 'zuey-me.pages.dev', 'zuey.me.evil.com', 'localhost', null]) {
+      expect(isServerCaptureHost(prodEnv, host)).toBe(false);
+      expect(serverDestinations(prodEnv, { production: true, requestHost: host })).toEqual([]);
+    }
+    expect(isServerCaptureHost({ ...prodEnv, PUBLIC_ANALYTICS_DEBUG: '1' }, 'feat-x.zuey-me.pages.dev')).toBe(true);
+  });
+
+  test('captureServerEvent without a production request host sends nothing', async () => {
+    const result = await captureServerEvent({ PUBLIC_POSTHOG_KEY: KEY }, 'login', 'usr_a', { method: 'magic_link' }, { requestHost: 'x.pages.dev' });
+    expect(result.delivered).toBe(false);
+    expect(result.results).toEqual([{ destination: 'none', ok: false, reason: 'disabled' }]);
   });
 });
 

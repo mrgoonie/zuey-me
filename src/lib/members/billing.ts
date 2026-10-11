@@ -1,4 +1,5 @@
 import type { D1DatabaseLike } from '../../db/store';
+import { queueNeedsAttention, queuePurchase } from '../analytics/commerce-events';
 import type { WaitUntil } from '../channel-access/invalidate';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
@@ -387,6 +388,9 @@ async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: st
      WHERE id = ? AND status <> 'paid'`
   ).bind(reason, n.amount, n.paymentRef, n.eventId, iso(membersRuntime.now()), order.id).run();
   await logActivity(d1, order.user_id, 'billing.needs_attention', { code: order.code, reason, amount: n.amount });
+  await queueNeedsAttention(d1, {
+    distinctId: order.user_id, provider: 'sepay', orderType: 'membership', reference: n.eventId, reason, amountMinor: n.amount, currency: 'VND', plan: order.plan,
+  });
 }
 
 /** Extends the plan from paid orders, then records and emails a receipt (email failure never undoes payment). */
@@ -401,6 +405,11 @@ export async function fulfilOrder(
     console.error(`promo/invoice bookkeeping for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
   }
   await logActivity(d1, order.user_id, 'billing.paid', { code: order.code, plan: order.plan, months: order.months, period_end: sub?.current_period_end ?? null });
+  // One verified transfer pays an order exactly once (a second one is flagged), so the order id is the transaction key.
+  await queuePurchase(d1, {
+    distinctId: order.user_id, provider: 'sepay', orderType: 'membership', transactionId: `billing_order:${order.id}`,
+    amountMinor: order.amount_paid ?? order.amount_vnd, currency: 'VND', plan: order.plan, months: order.months, occurredAt: order.paid_at,
+  });
   const user = await getUserById(d1, order.user_id);
   if (user && sub) {
     const mail = await sendLoggedEmail(d1, env, {

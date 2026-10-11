@@ -356,6 +356,9 @@ export interface PaypalReversalEvent {
   captureId: string | null;
   /** Purchase-unit custom_id (the booking id) when PayPal propagates it. */
   customId: string | null;
+  /** Amount taken back by this refund or reversal (cents); null for disputes or when absent. */
+  amountCents: number | null;
+  currency: string | null;
 }
 
 /** Capture id from a refund's `rel: "up"` link (`…/v2/payments/captures/{id}`). */
@@ -378,7 +381,12 @@ export function parsePaypalReversalEvent(payload: unknown): PaypalReversalEvent 
     const customId = typeof resource.custom_id === 'string' && resource.custom_id ? resource.custom_id : null;
     const captureId = captureIdFromLinks(resource);
     if (!captureId && !customId) return null;
-    return { eventId: payload.id, eventType: payload.event_type, kind: captureKind, captureId, customId };
+    const amount = isRecord(resource.amount) ? resource.amount : {};
+    return {
+      eventId: payload.id, eventType: payload.event_type, kind: captureKind, captureId, customId,
+      amountCents: decimalToCents(amount.value),
+      currency: typeof amount.currency_code === 'string' ? amount.currency_code.toUpperCase() : null,
+    };
   }
   if (payload.event_type === 'CUSTOMER.DISPUTE.CREATED') {
     const txs = Array.isArray(resource.disputed_transactions) ? resource.disputed_transactions.filter(isRecord) : [];
@@ -386,7 +394,7 @@ export function parsePaypalReversalEvent(payload: unknown): PaypalReversalEvent 
     const captureId = tx && typeof tx.seller_transaction_id === 'string' ? tx.seller_transaction_id : null;
     if (!captureId) return null;
     const customId = tx && typeof tx.custom === 'string' && tx.custom ? tx.custom : null;
-    return { eventId: payload.id, eventType: payload.event_type, kind: 'dispute', captureId, customId };
+    return { eventId: payload.id, eventType: payload.event_type, kind: 'dispute', captureId, customId, amountCents: null, currency: null };
   }
   return null;
 }

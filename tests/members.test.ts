@@ -193,6 +193,21 @@ describe('magic link sign-in', () => {
     expect((await read(reuse)).error?.code).toBe('invalid_token');
   });
 
+  it('queues a server-side sign_up for the new account and a login per later session, keyed by member id only', async () => {
+    await signInByMagicLink('lan@example.com');
+    await signInByMagicLink('lan@example.com');
+    const rows = d1.raw.query<{ event: string; distinct_id: string; dedupe_key: string; properties: string }, []>(
+      'SELECT event, distinct_id, dedupe_key, properties FROM analytics_outbox ORDER BY created_at, event',
+    ).all();
+    const user = d1.raw.query<{ id: string }, []>('SELECT id FROM users').get();
+    expect(rows.map(r => r.event).sort()).toEqual(['login', 'sign_up']);
+    expect(rows.every(r => r.distinct_id === user?.id)).toBe(true);
+    expect(rows.find(r => r.event === 'sign_up')?.dedupe_key).toBe(`sign_up:${user?.id}`);
+    expect(rows.find(r => r.event === 'login')?.dedupe_key).toMatch(/^login:ms_/);
+    expect(rows.map(r => JSON.parse(r.properties))).toEqual([{ method: 'magic_link' }, { method: 'magic_link' }]);
+    expect(JSON.stringify(rows)).not.toContain('lan@example.com');
+  });
+
   it('expires links after 15 minutes and rejects open redirects', async () => {
     await magicLinkApi(ctx({ method: 'POST', body: { email: 'lan@example.com', next: '//evil.test/x' } }));
     const token = lastToken();

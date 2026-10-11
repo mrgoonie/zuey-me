@@ -2,6 +2,7 @@
  * PostHog destination: environment-driven configuration, the browser adapter over the `window.posthog`
  * snippet, and the server adapter over the HTTP capture API (web-standard `fetch` only).
  */
+import { isGuestDistinctId } from '../identity';
 import { hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
 import type { ClientDestination, DestinationResult, ServerAnalyticsEvent, ServerDestination } from './types';
 
@@ -205,6 +206,14 @@ export const postHogClientDestination: ClientDestination = {
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * Sent with every server event: the request comes from a Cloudflare egress IP, so GeoIP is disabled to keep it
+ * from overwriting the location PostHog derived from the member's own browser.
+ */
+export const SERVER_EVENT_FLAGS = { $lib: 'zuey-me-server', $geoip_disable: true } as const;
+/** Booking guests are one-off hashed ids: their events never create a PostHog person profile. */
+export const GUEST_EVENT_FLAGS = { $process_person_profile: false } as const;
+
 /** Server adapter posting one event to PostHog's capture endpoint. Resolves with a result, never rejects. */
 export function createPostHogServerDestination(config: PostHogConfig, fetchImpl: FetchLike = fetch): ServerDestination {
   return {
@@ -220,7 +229,7 @@ export function createPostHogServerDestination(config: PostHogConfig, fetchImpl:
             distinct_id: event.distinctId,
             uuid: event.uuid,
             timestamp: event.occurredAt,
-            properties: { ...event.properties, $lib: 'zuey-me-server' },
+            properties: { ...event.properties, ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
           }),
           signal,
         });

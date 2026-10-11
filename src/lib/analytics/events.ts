@@ -83,6 +83,68 @@ export const ANALYTICS_EVENTS = {
     version: 1, source: 'client', owner: 'product', trigger: 'A question started from an article is sent to Zuey AI',
     props: { slug: str, quoted: bool },
   },
+
+  // Server events. Written to the analytics outbox right after the verified state change, as a separate
+  // statement (`src/lib/analytics/outbox.ts`), and delivered by the scheduler; never emitted from the browser.
+  sign_up: {
+    version: 1, source: 'server', owner: 'growth', trigger: 'A verified account is created at sign-in',
+    props: { method: str },
+  },
+  login: {
+    version: 1, source: 'server', owner: 'growth', trigger: 'An existing member opens a new session',
+    props: { method: str },
+  },
+  purchase: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'A verified payment is accepted (one per order or card charge)',
+    props: {
+      provider: str, order_type: str, amount: num, currency: str, renewal: bool,
+      plan: { kind: 'string', optional: true }, months: { kind: 'number', optional: true },
+      // A card charge that was collected but held for admin review (wrong amount, discount not applied).
+      flagged: { kind: 'boolean', optional: true },
+    },
+  },
+  refund: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'Money of a verified payment goes back (refund or lost chargeback)',
+    props: {
+      provider: str, order_type: str, reason: str,
+      amount: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true },
+      partial: { kind: 'boolean', optional: true }, plan: { kind: 'string', optional: true },
+    },
+  },
+  payment_failed: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'The provider reports a failed charge',
+    props: {
+      provider: str, order_type: str,
+      amount: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true }, plan: { kind: 'string', optional: true },
+    },
+  },
+  payment_needs_attention: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'A received payment is flagged for the admin instead of granting access',
+    props: {
+      provider: str, order_type: str, reason: str,
+      amount: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true }, plan: { kind: 'string', optional: true },
+    },
+  },
+  subscription_activated: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'A plan becomes active for a member who had no active access to it',
+    props: { plan: str, provider: str, period_end: str },
+  },
+  subscription_renewed: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'The access end of an active plan moves forward (new prepaid order or card renewal)',
+    props: { plan: str, provider: str, period_end: str },
+  },
+  subscription_cancel_scheduled: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'A card subscription is set to end at the close of its paid period',
+    props: { plan: str, provider: str },
+  },
+  subscription_cancelled: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'The provider reports a card subscription as cancelled',
+    props: { plan: str, provider: str },
+  },
+  subscription_expired: {
+    version: 1, source: 'server', owner: 'revenue', trigger: 'Access to a plan ends (period over or access revoked)',
+    props: { plan: str, period_end: str, provider: { kind: 'string', optional: true } },
+  },
 } as const satisfies Taxonomy;
 
 type Events = typeof ANALYTICS_EVENTS;

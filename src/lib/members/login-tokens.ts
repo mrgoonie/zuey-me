@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { queueAuthEvent } from '../analytics/commerce-events';
 import { AppError } from '../http';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { emailChangeNoticeEmail, emailChangeVerifyEmail, magicLinkEmail, sendLoggedEmail } from './email';
@@ -119,8 +120,9 @@ export async function consumeMagicLink(
 ): Promise<{ user: UserRecord; created: boolean; next: string; sessionToken: string }> {
   const token = await consumeToken(d1, rawToken, 'magic_link');
   const { user, created } = await findOrCreateVerifiedUser(d1, { email: token.email });
-  const { token: sessionToken } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
+  const { token: sessionToken, session } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
   await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: 'magic_link' }, request);
+  await queueAuthEvent(d1, { userId: user.id, created, method: 'magic_link', sessionId: session.id });
   return { user, created, next: safeNextPath(token.next_path), sessionToken };
 }
 

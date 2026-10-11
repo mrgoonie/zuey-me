@@ -397,12 +397,28 @@ describe('booking commissions and PayPal refunds', () => {
 
     // The refund event is not a capture: it never confirms or re-pays anything.
     expect(parsePaypalCaptureEvent(refunded(null))).toBeNull();
-    expect(parsePaypalReversalEvent(refunded(null))).toEqual({ eventId: 'WH-REFUND', eventType: 'PAYMENT.CAPTURE.REFUNDED', kind: 'refund', captureId: 'CAPTURE-1', customId: null });
+    expect(parsePaypalReversalEvent(refunded(null))).toEqual({ eventId: 'WH-REFUND', eventType: 'PAYMENT.CAPTURE.REFUNDED', kind: 'refund', captureId: 'CAPTURE-1', customId: null, amountCents: 189905, currency: 'USD' });
     expect(await sendPaypal(refunded(null))).toBe('reversed');
     expect((await getCommissionBySource(d1, 'booking', id))?.status).toBe('reversed');
     const booking = await d1.prepare('SELECT status FROM bookings WHERE id = ?').bind(id).first<{ status: string }>();
     expect(booking?.status).toBe('confirmed');
     expect(await sendPaypal(refunded(id))).toBe('already_reversed');
+    // Analytics: one refund for the redelivered webhook, with the provider's amount in USD.
+    const { results } = await d1.prepare("SELECT properties FROM analytics_outbox WHERE event = 'refund'").all<{ properties: string }>();
+    expect((results ?? []).map(r => JSON.parse(r.properties))).toEqual([
+      { provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 1899.05, currency: 'USD', partial: false },
+    ]);
+  });
+
+  it('reports a partial PayPal refund with the refunded amount', async () => {
+    await paypalBooking();
+    const partial = refunded(null);
+    const resource = partial.resource;
+    if (typeof resource !== 'object' || resource === null) throw new Error('fixture');
+    Object.assign(resource, { amount: { currency_code: 'USD', value: '500.00' } });
+    expect(await sendPaypal({ ...partial, id: 'WH-PARTIAL' })).toBe('reversed');
+    const row = await d1.prepare("SELECT properties FROM analytics_outbox WHERE event = 'refund'").first<{ properties: string }>();
+    expect(JSON.parse(row?.properties ?? '{}')).toMatchObject({ amount: 500, currency: 'USD', partial: true, reason: 'refund' });
   });
 
   it('reverses on CUSTOMER.DISPUTE.CREATED matched by the disputed capture id', async () => {

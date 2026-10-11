@@ -1,4 +1,5 @@
 /** Job list and runner of the zuey-me-scheduler worker, kept apart from the entrypoint so tests can import it. */
+import { analyticsDrainCheck } from './analytics-drain-check';
 
 export interface SchedulerEnv {
   /** Base URL of the zuey.me app, e.g. https://zuey.me */
@@ -98,6 +99,8 @@ export function scheduledJobs(env: SchedulerEnv): Job[] {
       skipCodes: ['community_unconfigured'],
       check: sweepCheck,
     },
+    // Delivers queued server analytics events (purchases, subscription lifecycle, sign-ins) with retry.
+    { path: '/api/v1/analytics/outbox/drain', check: analyticsDrainCheck },
   ];
 }
 

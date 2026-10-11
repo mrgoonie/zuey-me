@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { queueSubscriptionChange } from '../analytics/commerce-events';
 import { channelAccessPushConfigured, deferChannelAccessPush, invalidateUserChannelAccess } from '../channel-access/invalidate';
 import type { WaitUntil } from '../channel-access/invalidate';
 import type { Entitlement, PlanId } from './plans';
@@ -85,7 +86,8 @@ export interface RecomputeOptions {
 /**
  * Rebuilds a plan's period end from every paid SePay order (each extends from max(paid_at, previous
  * end) by its months) and from active card subscriptions (provider period end). Deterministic, so
- * re-running is idempotent; when nothing grants the plan any more, access ends now.
+ * re-running is idempotent; when nothing grants the plan any more, access ends now. Queues the
+ * resulting lifecycle analytics event (activated, renewed or expired; never throws).
  */
 export async function recomputeSubscription(
   d1: D1DatabaseLike, userId: string, plan: PlanId, opts: RecomputeOptions = {}
@@ -102,6 +104,7 @@ export async function recomputeSubscription(
 }
 
 async function rebuildSubscription(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<SubscriptionView | null> {
+  const before = await d1.prepare('SELECT status, current_period_end FROM subscriptions WHERE user_id = ? AND plan = ?').bind(userId, plan).first<Row>();
   const { results } = await d1.prepare(
     "SELECT months, paid_at FROM billing_orders WHERE user_id = ? AND plan = ? AND status = 'paid' AND paid_at IS NOT NULL ORDER BY paid_at, id"
   ).bind(userId, plan).all<Row>();
@@ -111,7 +114,9 @@ async function rebuildSubscription(d1: D1DatabaseLike, userId: string, plan: Pla
     if (!Number.isFinite(paidAt)) continue;
     end = addMonths(Math.max(paidAt, end), num(r, 'months'));
   }
-  end = Math.max(end, await cardAccessEnd(d1, userId, plan));
+  const cardEnd = await cardAccessEnd(d1, userId, plan);
+  const provider = cardEnd > end ? 'dodo' : 'sepay';
+  end = Math.max(end, cardEnd);
   const now = membersRuntime.now();
   if (end === 0) {
     // A revoked card subscription was the only source: end access now instead of at the old period end.
@@ -119,16 +124,21 @@ async function rebuildSubscription(d1: D1DatabaseLike, userId: string, plan: Pla
       `UPDATE subscriptions SET status = 'expired', current_period_end = CASE WHEN current_period_end > ? THEN ? ELSE current_period_end END, updated_at = ?
        WHERE user_id = ? AND plan = ?`
     ).bind(iso(now), iso(now), iso(now), userId, plan).run();
-    const views = await listSubscriptions(d1, userId);
-    return views.find(v => v.plan === plan) ?? null;
+  } else {
+    const endIso = iso(end);
+    const status = end > now ? 'active' : 'expired';
+    await d1.prepare(
+      `INSERT INTO subscriptions (id, user_id, plan, status, current_period_end, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (user_id, plan) DO UPDATE SET status = excluded.status, current_period_end = excluded.current_period_end, updated_at = excluded.updated_at`
+    ).bind(randomId('sub'), userId, plan, status, endIso, iso(now), iso(now)).run();
   }
-  const endIso = iso(end);
-  const status = end > now ? 'active' : 'expired';
-  await d1.prepare(
-    `INSERT INTO subscriptions (id, user_id, plan, status, current_period_end, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (user_id, plan) DO UPDATE SET status = excluded.status, current_period_end = excluded.current_period_end, updated_at = excluded.updated_at`
-  ).bind(randomId('sub'), userId, plan, status, endIso, iso(now), iso(now)).run();
   const views = await listSubscriptions(d1, userId);
-  return views.find(v => v.plan === plan) ?? null;
+  const view = views.find(v => v.plan === plan) ?? null;
+  const previousEndMs = before ? Date.parse(str(before, 'current_period_end')) || 0 : 0;
+  await queueSubscriptionChange(d1, {
+    userId, plan, provider, after: view, previousEndMs,
+    wasActive: before !== null && str(before, 'status') === 'active' && previousEndMs > now,
+  });
+  return view;
 }

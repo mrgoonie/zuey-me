@@ -23,6 +23,13 @@ export function isValidDistinctId(id: string): boolean {
   return DISTINCT_ID_RE.test(id) && !containsPii(id);
 }
 
+/** Prefix of the hashed distinct id of a guest without a member account (one per booking). */
+export const GUEST_ID_PREFIX = 'guest_';
+
+export function isGuestDistinctId(id: string): boolean {
+  return id.startsWith(GUEST_ID_PREFIX);
+}
+
 export type IdentityStep = 'reset' | 'identify';
 
 /** Steps that move the browser from the previously identified member to the current one. */
