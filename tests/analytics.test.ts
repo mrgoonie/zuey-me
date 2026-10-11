@@ -2,9 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { PROVIDER_LABELS } from '../src/lib/blocks/embed';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
 import {
-  BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, resolveConsentStorage,
-  setOptOut, type ConsentEnvironment,
+  BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, lazyConsentEnvironment,
+  resolveConsentStorage, setOptOut, type ConsentEnvironment,
 } from '../src/lib/analytics/consent';
+import { CONSENT_CONTROL_COPY, renderConsentControl } from '../src/lib/analytics/consent-control';
 import {
   DEFAULT_POSTHOG_KEY, createPostHogServerDestination, getPostHog, isSensitivePath, postHogClientDestination, resolvePostHogConfig, scrubCaptureResult,
 } from '../src/lib/analytics/destinations/posthog';
@@ -563,13 +564,83 @@ describe('blocked storage', () => {
   });
 });
 
-describe('privacy page consent copy', () => {
-  test('both languages carry the blocked-storage status text', async () => {
-    const source = await Bun.file(new URL('../src/pages/privacy.astro', import.meta.url)).text();
-    expect(source.match(/storageOff: '/g)?.length).toBe(2);
-    expect(source).toContain('data-storage-off={c.analytics.storageOff}');
-    // `inline-flex` would otherwise override the `hidden` attribute and leave an empty button on screen.
-    expect(source).toContain('inline-flex items-center [&[hidden]]:hidden');
+describe('privacy consent control', () => {
+  const quotaFull = (): never => { throw new DOMException('The quota has been exceeded.', 'QuotaExceededError'); };
+  const securityError = (): never => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+
+  /** A browser environment whose storage counts every resolution, like the page's lazy localStorage probe. */
+  function browser(nav: ConsentEnvironment['navigator'], resolve: () => ConsentEnvironment['storage']) {
+    let reads = 0;
+    const env = lazyConsentEnvironment(nav, null, () => {
+      reads += 1;
+      return resolve() ?? null;
+    });
+    return { env, reads: () => reads };
+  }
+
+  /** What the page shows for an environment, in one language. */
+  const shown = (env: ConsentEnvironment, lang: 'vi' | 'en') => renderConsentControl(consentState(env), CONSENT_CONTROL_COPY[lang]);
+
+  test('Do Not Track and Global Privacy Control are decided before any storage access', () => {
+    for (const nav of [{ doNotTrack: '1' }, { doNotTrack: 'yes' }, { globalPrivacyControl: true }]) {
+      const local = new MemoryStorage();
+      const writes: string[] = [];
+      const spy = { getItem: (k: string) => local.getItem(k), setItem: (k: string, v: string) => { writes.push(k); local.setItem(k, v); }, removeItem: (k: string) => local.removeItem(k) };
+      const { env, reads } = browser(nav, () => resolveConsentStorage(() => spy));
+      expect(consentState(env)).toBe('do_not_track');
+      expect(reads()).toBe(0);
+      expect(writes).toEqual([]);
+      expect(shown(env, 'en')).toEqual({ status: CONSENT_CONTROL_COPY.en.dnt, toggle: null });
+    }
+  });
+
+  test('a visitor without DNT gets the storage probe and a working toggle', () => {
+    const local = new MemoryStorage();
+    const { env, reads } = browser({}, () => resolveConsentStorage(() => local));
+    expect(consentState(env)).toBe('granted');
+    expect(reads()).toBe(1);
+    expect(local.getItem(STORAGE_PROBE_KEY)).toBeNull();
+    expect(shown(env, 'vi')).toEqual({ status: CONSENT_CONTROL_COPY.vi.granted, toggle: CONSENT_CONTROL_COPY.vi.optOut });
+    expect(shown(env, 'en')).toEqual({ status: CONSENT_CONTROL_COPY.en.granted, toggle: CONSENT_CONTROL_COPY.en.optOut });
+  });
+
+  test('full storage keeps analytics off and says the choice cannot be saved, not that storage is blocked', () => {
+    const full = new MemoryStorage();
+    full.setItem = quotaFull;
+    const { env } = browser({}, () => resolveConsentStorage(() => full));
+    expect(consentState(env)).toBe('storage_blocked');
+    const vi = shown(env, 'vi');
+    const en = shown(env, 'en');
+    expect(vi.toggle).toBeNull();
+    expect(en.toggle).toBeNull();
+    expect(vi.status).toContain('không lưu được lựa chọn');
+    expect(vi.status).toContain('đã đầy');
+    expect(en.status).toContain('cannot save choices');
+    expect(en.status).toContain('full');
+    expect(en.status).not.toContain('Your browser blocks local storage');
+  });
+
+  test('blocked storage shows the same cannot-save copy in both languages', () => {
+    const { env } = browser({}, () => resolveConsentStorage(securityError));
+    expect(consentState(env)).toBe('storage_blocked');
+    expect(shown(env, 'vi')).toEqual({ status: CONSENT_CONTROL_COPY.vi.storageOff, toggle: null });
+    expect(shown(env, 'en')).toEqual({ status: CONSENT_CONTROL_COPY.en.storageOff, toggle: null });
+    expect(CONSENT_CONTROL_COPY.vi.storageOff).toContain('bị chặn');
+    expect(CONSENT_CONTROL_COPY.en.storageOff).toContain('blocked');
+  });
+
+  test('a toggle click appends whether the choice was saved', () => {
+    expect(renderConsentControl('opted_out', CONSENT_CONTROL_COPY.en, 'saved'))
+      .toEqual({ status: `${CONSENT_CONTROL_COPY.en.optedOut} ${CONSENT_CONTROL_COPY.en.saved}`, toggle: CONSENT_CONTROL_COPY.en.optIn });
+    expect(renderConsentControl('granted', CONSENT_CONTROL_COPY.vi, 'notSaved').status)
+      .toBe(`${CONSENT_CONTROL_COPY.vi.granted} ${CONSENT_CONTROL_COPY.vi.notSaved}`);
+  });
+
+  test('both languages fill every control string', () => {
+    expect(Object.keys(CONSENT_CONTROL_COPY.vi).sort()).toEqual(Object.keys(CONSENT_CONTROL_COPY.en).sort());
+    for (const copy of Object.values(CONSENT_CONTROL_COPY)) {
+      for (const text of Object.values(copy)) expect(text.trim().length).toBeGreaterThan(0);
+    }
   });
 });
 

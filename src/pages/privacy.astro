@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
+import { CONSENT_CONTROL_COPY } from '../lib/analytics/consent-control';
 
 // Vietnamese is the authoritative version; every other locale reads the English translation.
 const locale = resolveLocale(Astro.request);
@@ -23,15 +24,6 @@ interface AnalyticsCopy {
   neverTitle: string;
   never: string[];
   controlTitle: string;
-  granted: string;
-  optedOut: string;
-  dnt: string;
-  storageOff: string;
-  noScript: string;
-  optOut: string;
-  optIn: string;
-  saved: string;
-  storageBlocked: string;
 }
 
 interface Processor {
@@ -138,7 +130,7 @@ const content: Record<'vi' | 'en', {
         'zuey.me dùng PostHog (project riêng của zuey.me, máy chủ tại Mỹ) để hiểu ở mức tổng hợp trang nào được xem và tính năng nào được dùng. Mỗi trình duyệt có một mã ẩn danh ngẫu nhiên lưu trong cookie/localStorage của PostHog.',
         'Khi bạn đăng nhập, mã ẩn danh đó được gắn với mã thành viên nội bộ của bạn (một chuỗi ngẫu nhiên, không phải email hay tên) để thống kê không bị đếm trùng giữa các trang. Khi đăng xuất hoặc xoá tài khoản, liên kết này bị xoá khỏi trình duyệt và một mã ẩn danh mới được tạo, nên người dùng chung máy không bị gộp vào nhau.',
         'Mỗi sự kiện chỉ được gửi các thuộc tính đã khai báo trước. Địa chỉ trang và nguồn giới thiệu được lọc bỏ các tham số nhạy cảm (ví dụ token, code, email, key, secret, state, session) trước khi gửi; trên các trang tài khoản, thanh toán và đặt lịch, toàn bộ tham số bị bỏ, mã đơn hàng và mã lịch hẹn trong đường dẫn được thay bằng ký hiệu chung và tiêu đề trang không được gửi. Biểu mẫu khảo sát, đặt lịch, thanh toán và khung chat không bị ghi lại thao tác bấm. Không ghi lại phiên màn hình (session replay).',
-        'Analytics trên trình duyệt không chạy khi trình duyệt bật Do Not Track hoặc Global Privacy Control, hoặc khi bạn tắt ở đây. Lựa chọn được lưu trong trình duyệt này; xoá dữ liệu trình duyệt sẽ xoá lựa chọn. Nếu trình duyệt chặn lưu trữ cục bộ, analytics trên trình duyệt cũng tắt.',
+        'Analytics trên trình duyệt không chạy khi trình duyệt bật Do Not Track hoặc Global Privacy Control, hoặc khi bạn tắt ở đây. Lựa chọn được lưu trong trình duyệt này; xoá dữ liệu trình duyệt sẽ xoá lựa chọn. Nếu trình duyệt không lưu được lựa chọn (bộ nhớ cục bộ bị chặn hoặc đã đầy), analytics trên trình duyệt cũng tắt.',
         'Riêng máy chủ của zuey.me ghi nhận các sự kiện tài khoản và mua hàng (đăng ký, đăng nhập, thanh toán, hoàn tiền, bắt đầu, gia hạn và kết thúc gói) từ hệ thống thanh toán và đăng nhập, không phải từ trình duyệt, rồi gửi sang PostHog chỉ kèm mã thành viên nội bộ, không có email, số điện thoại hay token và không suy ra vị trí. Vì không đến từ trình duyệt, các sự kiện này vẫn được gửi kể cả khi bạn tắt analytics trên trình duyệt hoặc trình duyệt bật Do Not Track hay Global Privacy Control. Lịch hẹn của khách chưa có tài khoản dùng một mã ngẫu nhiên riêng và không tạo hồ sơ người dùng.',
       ],
       neverTitle: 'Không bao giờ gửi sang analytics',
@@ -150,15 +142,6 @@ const content: Record<'vi' | 'en', {
         'Nội dung bạn nhập trong biểu mẫu đặt lịch hay khảo sát.',
       ],
       controlTitle: 'Lựa chọn của bạn',
-      granted: 'Đang bật thống kê sử dụng trên trình duyệt này.',
-      optedOut: 'Bạn đã tắt thống kê sử dụng trên trình duyệt này.',
-      dnt: 'Trình duyệt của bạn đang bật Do Not Track hoặc Global Privacy Control, nên thống kê luôn tắt.',
-      storageOff: 'Trình duyệt của bạn đang chặn lưu trữ cục bộ, nên thống kê sử dụng luôn tắt và không cần lưu lựa chọn. Cho phép lưu trữ cho zuey.me nếu bạn muốn bật lại.',
-      noScript: 'Cần bật JavaScript để thay đổi lựa chọn này.',
-      optOut: 'Tắt thống kê',
-      optIn: 'Bật lại thống kê',
-      saved: 'Đã lưu lựa chọn.',
-      storageBlocked: 'Trình duyệt chặn lưu trữ cục bộ nên không lưu được lựa chọn.',
     },
     processorsTitle: 'Các bên xử lý dữ liệu',
     processorsIntro: 'zuey.me dùng các dịch vụ sau. Mỗi bên chỉ nhận phần dữ liệu cần cho chức năng tương ứng.',
@@ -281,7 +264,7 @@ const content: Record<'vi' | 'en', {
         'zuey.me uses PostHog (a project dedicated to zuey.me, hosted in the US) to understand in aggregate which pages are viewed and which features are used. Each browser gets a random anonymous id stored in PostHog’s cookie/localStorage.',
         'When you sign in, that anonymous id is linked to your internal member id (a random string, never your email or name) so usage is not double-counted across pages. Signing out or deleting your account removes the link from the browser and starts a new anonymous id, so people sharing a device are never merged.',
         'Each event carries only properties declared in advance. Page addresses and referrers are stripped of sensitive parameters (such as token, code, email, key, secret, state, session) before sending; on account, payment and booking pages the whole query is dropped, order and booking codes in the path are replaced by a placeholder and the page title is not sent. Clicks inside survey, booking, checkout and chat forms are not recorded. Session replay is not recorded.',
-        'Analytics in your browser does not run when your browser sends Do Not Track or Global Privacy Control, or when you turn it off here. The choice is stored in this browser; clearing browser data clears it. If your browser blocks local storage, browser analytics stays off too.',
+        'Analytics in your browser does not run when your browser sends Do Not Track or Global Privacy Control, or when you turn it off here. The choice is stored in this browser; clearing browser data clears it. If this browser cannot save the choice (local storage is blocked or full), browser analytics stays off too.',
         'Separately, our server records account and purchase events (sign-up, sign-in, payments, refunds, subscription start, renewal and end) from the payment and sign-in systems, not from your browser, and sends them to PostHog under your internal member id only, with no email, phone number or token and without deriving a location. Because they do not come from the browser, they are sent even when browser analytics is off or your browser sends Do Not Track or Global Privacy Control. Bookings by guests without an account use a one-off random id that creates no profile.',
       ],
       neverTitle: 'Never sent to analytics',
@@ -293,15 +276,6 @@ const content: Record<'vi' | 'en', {
         'What you type into booking or survey forms.',
       ],
       controlTitle: 'Your choice',
-      granted: 'Usage analytics is on in this browser.',
-      optedOut: 'You turned usage analytics off in this browser.',
-      dnt: 'Your browser sends Do Not Track or Global Privacy Control, so analytics is always off.',
-      storageOff: 'Your browser blocks local storage, so usage analytics stays off and no choice needs saving. Allow storage for zuey.me if you want to turn it back on.',
-      noScript: 'JavaScript is needed to change this choice.',
-      optOut: 'Turn analytics off',
-      optIn: 'Turn analytics back on',
-      saved: 'Choice saved.',
-      storageBlocked: 'Your browser blocks local storage, so the choice cannot be saved.',
     },
     processorsTitle: 'Processors',
     processorsIntro: 'zuey.me relies on the services below. Each receives only the data its function needs.',
@@ -416,17 +390,10 @@ const fallback = lang !== locale;
         <div
           id="analytics-consent"
           class="mt-4 rounded-2xl border border-stone-200 bg-white/80 p-4"
-          data-granted={c.analytics.granted}
-          data-opted-out={c.analytics.optedOut}
-          data-dnt={c.analytics.dnt}
-          data-storage-off={c.analytics.storageOff}
-          data-opt-out={c.analytics.optOut}
-          data-opt-in={c.analytics.optIn}
-          data-saved={c.analytics.saved}
-          data-storage-blocked={c.analytics.storageBlocked}
+          data-lang={lang}
         >
           <h3 class="text-base font-bold">{c.analytics.controlTitle}</h3>
-          <p class="mt-2 text-sm text-stone-700" data-consent-status role="status" aria-live="polite">{c.analytics.noScript}</p>
+          <p class="mt-2 text-sm text-stone-700" data-consent-status role="status" aria-live="polite">{CONSENT_CONTROL_COPY[lang].noScript}</p>
           <button
             type="button"
             hidden
@@ -483,25 +450,25 @@ const fallback = lang !== locale;
 
 <script>
   import { currentConsent, optIn, optOut } from '../lib/analytics/client';
-  import { consentControlView } from '../lib/analytics/consent';
+  import { CONSENT_CONTROL_COPY, isConsentControlLang, renderConsentControl } from '../lib/analytics/consent-control';
 
   const root = document.getElementById('analytics-consent');
   const status = root?.querySelector<HTMLElement>('[data-consent-status]');
   const toggle = root?.querySelector<HTMLButtonElement>('[data-consent-toggle]');
   if (root && status && toggle) {
-    const label = (name: string): string => root.dataset[name] ?? '';
-    const render = (note?: string): void => {
-      const view = consentControlView(currentConsent());
-      const text = label(view.status);
-      status.textContent = note ? `${text} ${note}` : text;
+    const lang = root.dataset.lang;
+    const copy = CONSENT_CONTROL_COPY[isConsentControlLang(lang) ? lang : 'en'];
+    const render = (note?: 'saved' | 'notSaved'): void => {
+      const view = renderConsentControl(currentConsent(), copy, note);
+      status.textContent = view.status;
       toggle.hidden = view.toggle === null;
-      toggle.textContent = view.toggle ? label(view.toggle) : '';
+      toggle.textContent = view.toggle ?? '';
     };
     toggle.addEventListener('click', () => {
       const before = currentConsent();
       if (before === 'opted_out') optIn();
       else optOut();
-      render(currentConsent() !== before ? label('saved') : label('storageBlocked'));
+      render(currentConsent() !== before ? 'saved' : 'notSaved');
     });
     render();
   }
