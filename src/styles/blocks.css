@@ -66,6 +66,28 @@
   white-space: pre;
 }
 .zb-code-lang { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a8a29e; margin-bottom: 0.4rem; }
+/* Syntax token palette for the dark code surface; every colour keeps >= 7:1 contrast on #1c1917. */
+.zb-code {
+  --zb-tk-comment: #a8a29e; --zb-tk-keyword: #f0abfc; --zb-tk-string: #bef264; --zb-tk-constant: #fdba74;
+  --zb-tk-function: #93c5fd; --zb-tk-type: #fcd34d; --zb-tk-tag: #fda4af; --zb-tk-attr: #5eead4;
+  --zb-tk-variable: #c4b5fd; --zb-tk-regexp: #fb923c; --zb-tk-inserted: #86efac; --zb-tk-deleted: #fca5a5;
+  --zb-tk-heading: #fcd34d; --zb-tk-link: #7dd3fc; --zb-tk-meta: #a5b4fc;
+}
+.zb-tk-comment { color: var(--zb-tk-comment); font-style: italic; }
+.zb-tk-keyword { color: var(--zb-tk-keyword); }
+.zb-tk-string { color: var(--zb-tk-string); }
+.zb-tk-constant { color: var(--zb-tk-constant); }
+.zb-tk-function { color: var(--zb-tk-function); }
+.zb-tk-type { color: var(--zb-tk-type); }
+.zb-tk-tag { color: var(--zb-tk-tag); }
+.zb-tk-attr { color: var(--zb-tk-attr); }
+.zb-tk-variable { color: var(--zb-tk-variable); }
+.zb-tk-regexp { color: var(--zb-tk-regexp); }
+.zb-tk-inserted { color: var(--zb-tk-inserted); }
+.zb-tk-deleted { color: var(--zb-tk-deleted); }
+.zb-tk-heading { color: var(--zb-tk-heading); font-weight: 700; }
+.zb-tk-link { color: var(--zb-tk-link); text-decoration: underline; text-underline-offset: 2px; }
+.zb-tk-meta { color: var(--zb-tk-meta); }
 .zb-divider { border: 0; border-top: 1px solid #d6d3d1; margin: 0.6rem 0; width: 100%; }
 .zb-figure { margin: 0; }
 .zb-figure img { display: block; max-width: 100%; height: auto; border-radius: 1rem; }

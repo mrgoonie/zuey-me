@@ -12,6 +12,7 @@ import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
 import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
 import { readingMinutes } from '../../lib/search/text';
+import { hasHighlightableCode } from '../../lib/blocks/code-syntax';
 import { articleOgImage } from '../../lib/og/article-og-service';
 import { relatedVideosForArticle } from '../../lib/videos/related-content';
 import { formatDuration } from '../../lib/videos/youtube-url';
@@ -56,6 +57,11 @@ const relatedVideos = view && !view.preview && d1
   ? await relatedVideosForArticle(d1, view.id, view.locale, { origin, limit: 3 }).catch(() => [])
   : [];
 const relatedVideosLabel = uiLocale === 'vi' ? 'Video liên quan' : 'Related videos';
+// Code blocks are tokenised here so readers without JS get colours and the island hydrates with the same markup.
+const articleBlocks = view?.document.blocks ?? [];
+const codeHighlights = hasHighlightableCode(articleBlocks)
+  ? await import('../../lib/blocks/code-highlight').then(m => m.highlightBlocks(articleBlocks)).catch(() => undefined)
+  : undefined;
 const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.truncated && !view.preview && canReadFull(viewer));
 ---
 
@@ -115,7 +121,7 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
 
           {/* Readable body: selections inside it get the "Ask Zuey AI" tooltip; tabindex lets the drawer return focus here. */}
           <div data-ask-ai-scope tabindex="-1" class="focus:outline-none">
-            <BlockRenderer client:load doc={view.document} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
+            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
           </div>
 
           {view.truncated && (

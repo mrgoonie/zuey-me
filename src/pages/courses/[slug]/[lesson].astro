@@ -9,6 +9,7 @@ import { fmtMinutes } from '../../../components/courses/course-ui';
 import type { CourseDetail, LessonView } from '../../../lib/courses/course-views';
 import { courseDetail, lessonView } from '../../../lib/courses/course-views';
 import { lessonSegments } from '../../../lib/courses/lesson-blocks';
+import { hasHighlightableCode } from '../../../lib/blocks/code-syntax';
 import type { LessonDenial } from '../../../lib/courses/course-access';
 import { AppError } from '../../../lib/http';
 import { resolvePrincipal } from '../../../lib/members/policy';
@@ -49,6 +50,11 @@ const paid = view ? !view.lesson.is_trial : true;
 if (paid || failure) Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 
 const segments: LessonSegment[] = view?.document ? lessonSegments(view.document.blocks) : [];
+// Code blocks are tokenised on the server so readers without JS get colours and hydration matches.
+const articleBlocks = segments.flatMap(seg => (seg.kind === 'article' ? seg.blocks : []));
+const codeHighlights = hasHighlightableCode(articleBlocks)
+  ? await import('../../../lib/blocks/code-highlight').then(m => m.highlightBlocks(articleBlocks)).catch(() => undefined)
+  : undefined;
 const showWatermark = Boolean(view?.document && paid && watermark);
 const lessonPath = `/courses/${slug}/${lessonSlug}`;
 const coursePath = `/courses/${course?.slug ?? slug}`;
@@ -146,7 +152,7 @@ const denial = view?.denial ? DENIAL_COPY[view.denial] : null;
               </div>
             </section>
           ) : (
-            <LessonContent client:load segments={segments} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} />
+            <LessonContent client:load segments={segments} highlights={codeHighlights} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} />
           )}
 
           {!denial && (

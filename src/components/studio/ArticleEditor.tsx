@@ -576,7 +576,7 @@ function BlockPreview({ block, slug }: { block: Block; slug: string }) {
   return (
     <div className="rounded-2xl bg-[#F5EFEB] p-3 sm:p-4 min-w-0 overflow-hidden">
       {res.ok
-        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} />
+        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight />
         : <ul className="text-[11px] text-rose-700 font-mono">{res.errors.slice(0, 5).map((e, i) => <li key={i}>{e.path}: {e.message}</li>)}</ul>}
     </div>
   );
@@ -884,7 +884,7 @@ function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale
             <button type="button" className={btnCls} onClick={() => setViewing(null)}>Đóng</button>
           </div>
           <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-            <BlockRenderer doc={viewing.doc} interactive={false} />
+            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight />
           </div>
         </div>
       )}
@@ -1193,7 +1193,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       )}
       {tab === 'preview' && (
         <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
+          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
         </div>
       )}
       {tab === 'json' && (

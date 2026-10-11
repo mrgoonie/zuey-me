@@ -1,7 +1,9 @@
-import { lazy, Suspense, useState } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
-import type { ArticleDocument, Block, EmbedBlock, LayoutBlock } from '../../lib/blocks/schema';
+import type { ArticleDocument, Block, CodeBlock, EmbedBlock, LayoutBlock } from '../../lib/blocks/schema';
+import { highlightedText, isTokenKind, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
+import type { CodeHighlights, HighlightLine } from '../../lib/blocks/code-syntax';
 import { resolveSpan } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
@@ -45,6 +47,8 @@ function IconSlot(props: IconGlyphProps) {
 interface RenderContext {
   articleSlug?: string;
   interactive: boolean;
+  highlights?: CodeHighlights;
+  liveHighlight: boolean;
 }
 
 function renderNodes(nodes: InlineNode[]): ReactNode[] {
@@ -125,6 +129,53 @@ function LayoutView({ block, ctx }: { block: LayoutBlock; ctx: RenderContext }) 
   );
 }
 
+/** Studio previews re-highlight after typing pauses for this long. */
+const LIVE_HIGHLIGHT_DELAY_MS = 150;
+
+function renderLines(lines: HighlightLine[]): ReactNode[] {
+  return lines.map((line, i) => (
+    <Fragment key={i}>
+      {i > 0 && '\n'}
+      {line.map(([text, kind], j) => (isTokenKind(kind)
+        ? <span key={j} className={`zb-tk-${kind}`}>{text}</span>
+        : <Fragment key={j}>{text}</Fragment>))}
+    </Fragment>
+  ));
+}
+
+/**
+ * Code block. Tokens come pre-computed from the server (`highlights`, so no-JS readers get colours and hydration
+ * matches) or, in Studio previews, from the highlighter loaded lazily on the client. Tokens are used only when
+ * their text reproduces the source exactly; otherwise — and for unsupported languages — the code renders plain.
+ */
+function CodeView({ block, ctx }: { block: CodeBlock; ctx: RenderContext }) {
+  const provided = ctx.highlights?.[block.id];
+  const source = `${block.language}\u0000${block.code}`;
+  const [live, setLive] = useState<{ source: string; lines: HighlightLine[] | null } | null>(null);
+  const wantsLive = ctx.liveHighlight && !provided && resolveHighlightLanguage(block.language) !== null;
+
+  useEffect(() => {
+    if (!wantsLive) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      import('../../lib/blocks/code-highlight')
+        .then(m => { if (!cancelled) setLive({ source, lines: m.highlightCode(block.code, block.language) }); })
+        // The highlighter chunk failed to load (offline, deploy skew): the preview keeps plain code.
+        .catch(() => { if (!cancelled) setLive({ source, lines: null }); });
+    }, LIVE_HIGHLIGHT_DELAY_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [wantsLive, source, block.code, block.language]);
+
+  const candidate = provided ?? (live?.source === source ? live.lines : null);
+  const lines = candidate && highlightedText(candidate) === block.code ? candidate : null;
+  return (
+    <pre className="zb-code">
+      {block.language && <span className="zb-code-lang">{block.language}</span>}
+      <code>{lines ? renderLines(lines) : block.code}</code>
+    </pre>
+  );
+}
+
 function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
   switch (block.type) {
     case 'paragraph': return <p><Inline text={block.text} /></p>;
@@ -166,13 +217,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </aside>
       );
     }
-    case 'code':
-      return (
-        <pre className="zb-code">
-          {block.language && <span className="zb-code-lang">{block.language}</span>}
-          <code>{block.code}</code>
-        </pre>
-      );
+    case 'code': return <CodeView block={block} ctx={ctx} />;
     case 'divider': return <hr className="zb-divider" />;
     case 'image':
       return (
@@ -229,12 +274,15 @@ interface BlockRendererProps {
   /** Published article slug; enables survey voting. */
   articleSlug?: string;
   /** False in editor previews (surveys are shown but cannot be submitted). */
-  interactive?: boolean;
+  interactive?: boolean;  /** Server-computed code tokens by block id (see `highlightBlocks`); missing blocks render plain. */
+  highlights?: CodeHighlights;
+  /** Highlight code blocks on the client by lazy-loading the highlighter (Studio previews). */
+  liveHighlight?: boolean;
 }
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
-export function BlockRenderer({ doc, articleSlug, interactive = true }: BlockRendererProps) {
-  const ctx: RenderContext = { articleSlug, interactive };
+export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false }: BlockRendererProps) {
+  const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight };
   return (
     <div className="zb-doc">
       {doc.blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
