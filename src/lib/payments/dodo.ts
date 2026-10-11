@@ -231,6 +231,12 @@ export async function cancelDodoSubscription(env: RuntimeEnv, subscriptionId: st
   return parseSubscriptionData(body);
 }
 
+/** The subscription a Dodo payment charged (`GET /payments/{id}`); null for a one-time payment. Throws when the lookup fails. */
+export async function getDodoPaymentSubscriptionId(env: RuntimeEnv, paymentId: string, fetchImpl: FetchLike): Promise<string | null> {
+  const body = await dodoRequest(env, `/payments/${encodeURIComponent(paymentId)}`, { method: 'GET' }, fetchImpl, 'payment lookup');
+  return strOrNull(body, 'subscription_id');
+}
+
 // ---------------------------------------------------------------------------
 // Webhook payloads
 // ---------------------------------------------------------------------------
