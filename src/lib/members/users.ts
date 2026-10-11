@@ -151,6 +151,18 @@ export interface ActivityEntry {
   created_at: string;
 }
 
+/** Writes an activity entry and throws on failure, for callers that must retry rather than lose the entry. */
+export async function insertActivity(
+  d1: D1DatabaseLike,
+  userId: string,
+  action: string,
+  detail: Record<string, unknown> | null = null,
+  request?: Request,
+): Promise<void> {
+  await d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso()).run();
+}
+
 export async function logActivity(
   d1: D1DatabaseLike,
   userId: string,
@@ -159,8 +171,7 @@ export async function logActivity(
   request?: Request,
 ): Promise<void> {
   try {
-    await d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso()).run();
+    await insertActivity(d1, userId, action, detail, request);
   } catch (err) {
     // Auditing must not break the user's action, but failures are surfaced in logs.
     console.error('user_activity insert failed:', err instanceof Error ? err.message : 'unknown');

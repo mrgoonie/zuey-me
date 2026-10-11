@@ -14,7 +14,10 @@ import { membersRuntime } from '../src/lib/members/runtime';
 import { createMemberSession } from '../src/lib/members/session';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import type { DodoEvent } from '../src/lib/payments/dodo';
+import { parseDodoReversalEvent } from '../src/lib/payments/dodo';
 import { applyDodoEvent, applyDodoReversal } from '../src/lib/payments/dodo-billing';
+import { minimumChargeCents } from '../src/lib/payments/dodo-card-referral-pricing';
+import { AppError } from '../src/lib/http';
 import { POST as drainApi } from '../src/pages/api/v1/analytics/outbox/drain';
 import { POST as ordersApi } from '../src/pages/api/v1/billing/orders/index';
 import { POST as reconcileApi } from '../src/pages/api/v1/billing/reconcile';
@@ -27,11 +30,14 @@ const T0 = Date.parse('2026-10-05T00:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
 const ORIGIN = 'https://zuey.test';
 const CRON = 'cron-secret-for-tests';
+const DODO_BASE = 'https://dodo.test';
 
 type TestDb = ReturnType<typeof createTestD1>;
 let d1: TestDb;
 let now: number;
 let sepayTransactions: Record<string, unknown>[];
+/** Payments answered by the fake Dodo `GET /payments/{id}`; any other id is a 404. */
+let dodoPayments: Record<string, Record<string, unknown>>;
 let adminKey: string;
 
 interface OutboxRow {
@@ -72,6 +78,10 @@ async function fakeFetch(input: string): Promise<Response> {
   if (input === 'https://api.resend.com/emails') return json({ id: 'email_1' });
   if (input.startsWith('https://my.sepay.vn/userapi/transactions/list')) {
     return json({ status: 200, error: null, messages: { success: true }, transactions: sepayTransactions });
+  }
+  if (input.startsWith(`${DODO_BASE}/payments/`)) {
+    const found = dodoPayments[decodeURIComponent(input.slice(`${DODO_BASE}/payments/`.length))];
+    return found ? json(found) : json({ code: 'NOT_FOUND' }, 404);
   }
   return json({ error: 'unexpected' }, 500);
 }
@@ -145,6 +155,7 @@ beforeEach(async () => {
   d1 = createTestD1();
   now = T0;
   sepayTransactions = [];
+  dodoPayments = {};
   membersRuntime.now = () => now;
   membersRuntime.fetch = fakeFetch;
   bookingRuntime.now = () => now;
@@ -322,6 +333,135 @@ describe('Dodo card events', () => {
     expect(logged[0]).toMatchObject({ card_subscription_id: 'csub_1', kind: 'refund', payment_id: 'pay_2', amount: 400, partial: true, renewal: true });
     // A payment this site never recorded stays unmatched.
     expect(await applyDodoReversal(d1, { ...refund, objectId: 'ref_x', paymentId: 'pay_unknown' })).toEqual({ outcome: 'ignored', card_subscription_id: null });
+  });
+
+  function promoCard(cycles: number): void {
+    d1.raw.run("UPDATE card_subscriptions SET promo_code_id = 'promo_1', promo_code = 'HALF', promo_discount_percent = 50, promo_cycles = ? WHERE id = 'csub_1'", [cycles]);
+  }
+
+  function cardState(): { status: string; attention_reason: string | null } | null {
+    return d1.raw.query<{ status: string; attention_reason: string | null }, []>("SELECT status, attention_reason FROM card_subscriptions WHERE id = 'csub_1'").get();
+  }
+
+  it('counts a payment redelivered under another webhook id once for promo coverage and the minimum charge', async () => {
+    await seedCard();
+    promoCard(2);
+    const discounted = minimumChargeCents({ referrer_user_id: null, referral_discount_percent: null, promo_code_id: 'promo_1', promo_discount_percent: 50, promo_cycles: 2 }, 'knowledges', 1);
+    expect(discounted).toBeLessThan(PRICE);
+    const at = new Date(T0).toISOString();
+    expect((await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', at, discounted))).outcome).toBe('updated');
+    now += 1000;
+    expect((await applyDodoEvent(d1, env(), 'wh_2', payment('payment.succeeded', 'pay_1', at, discounted))).outcome).toBe('updated');
+    now += 30 * DAY;
+    // The second charge is still covered by the two-cycle promo.
+    expect((await applyDodoEvent(d1, env(), 'wh_3', payment('payment.succeeded', 'pay_2', new Date(now).toISOString(), discounted))).outcome).toBe('updated');
+    expect(cardState()).toEqual({ status: 'active', attention_reason: null });
+    now += 30 * DAY;
+    // The third is not: a discounted amount is held for review.
+    expect((await applyDodoEvent(d1, env(), 'wh_4', payment('payment.succeeded', 'pay_3', new Date(now).toISOString(), discounted))).outcome).toBe('needs_attention');
+    expect(cardState()).toEqual({ status: 'needs_attention', attention_reason: 'amount_mismatch' });
+  });
+
+  it('still counts charges collected before charge rows were recorded, one per webhook row', async () => {
+    await seedCard();
+    promoCard(2);
+    d1.raw.run("UPDATE card_subscriptions SET first_payment_id = 'pay_0' WHERE id = 'csub_1'");
+    d1.raw.run(
+      "INSERT INTO payment_events (provider, event_id, card_subscription_id, amount, currency, raw_type, received_at) VALUES ('dodo', 'wh_legacy', 'csub_1', 450, 'USD', 'payment.succeeded', ?)",
+      [new Date(T0 - 30 * DAY).toISOString()],
+    );
+    const discounted = minimumChargeCents({ referrer_user_id: null, referral_discount_percent: null, promo_code_id: 'promo_1', promo_discount_percent: 50, promo_cycles: 2 }, 'knowledges', 1);
+    // The legacy charge was cycle 1, so this is cycle 2: still discounted.
+    expect((await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', new Date(T0).toISOString(), discounted))).outcome).toBe('updated');
+    now += 30 * DAY;
+    expect((await applyDodoEvent(d1, env(), 'wh_2', payment('payment.succeeded', 'pay_2', new Date(now).toISOString(), discounted))).outcome).toBe('needs_attention');
+  });
+
+  const dodoEnv = (): RuntimeEnv => env({ DODO_API_KEY: 'dodo_test_key', DODO_API_BASE: DODO_BASE });
+
+  function reversalLogs(): number {
+    return d1.raw.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM user_activity WHERE user_id = ? AND action = 'billing.card_reversal'").get(userId)?.n ?? 0;
+  }
+
+  async function rejection(p: Promise<unknown>): Promise<[number, string] | null> {
+    const err = await p.then(() => null, (e: unknown) => e);
+    return err instanceof AppError ? [err.status, err.code] : null;
+  }
+
+  // Dodo's dispute webhook object: no customer, and the amount as a string.
+  const lostDispute = (disputeId: string, paymentId: string) => parseDodoReversalEvent({
+    business_id: 'bus_1', type: 'dispute.lost', timestamp: new Date(T0).toISOString(),
+    data: {
+      payload_type: 'Dispute', dispute_id: disputeId, payment_id: paymentId, business_id: 'bus_1', amount: '900', currency: 'USD',
+      created_at: new Date(T0).toISOString(), dispute_stage: 'chargeback', dispute_status: 'dispute_lost',
+    },
+  });
+
+  it('applies a lost dispute that arrives before its renewal charge, through the Dodo payment lookup, once', async () => {
+    await seedCard();
+    await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', new Date(T0).toISOString()));
+    dodoPayments.pay_2 = { payment_id: 'pay_2', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' } };
+    const dispute = lostDispute('dsp_2', 'pay_2');
+    if (!dispute) throw new Error('dispute payload not parsed');
+    expect(await applyDodoReversal(d1, dispute, dodoEnv())).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    now += 60 * 1000;
+    await applyDodoEvent(d1, env(), 'wh_2', payment('payment.succeeded', 'pay_2', new Date(now).toISOString()));
+    expect(await applyDodoReversal(d1, dispute, dodoEnv())).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    expect(rows('refund').map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_2']);
+    expect(reversalLogs()).toBe(1);
+  });
+
+  it('asks Dodo to retry a refund that arrives before the first charge, then logs it once', async () => {
+    await seedCard();
+    dodoPayments.pay_1 = { payment_id: 'pay_1', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' } };
+    const refund = { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_1', paymentId: 'pay_1', amount: PRICE, currency: 'USD', isPartial: false } as const;
+    expect(await rejection(applyDodoReversal(d1, refund, dodoEnv()))).toEqual([409, 'payment_not_recorded']);
+    expect(reversalLogs()).toBe(0);
+    await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', new Date(T0).toISOString()));
+    expect((await applyDodoReversal(d1, refund, dodoEnv())).card_subscription_id).toBe('csub_1');
+    await applyDodoReversal(d1, refund, dodoEnv());
+    expect(rows('refund').map(r => r.dedupe_key)).toEqual(['refund:dodo:refund:ref_1']);
+    expect(reversalLogs()).toBe(1);
+  });
+
+  it('matches a refund of a renewal charged before charge rows existed, and ignores payments of no card here', async () => {
+    await seedCard();
+    d1.raw.run("UPDATE card_subscriptions SET first_payment_id = 'pay_0', provider_customer_id = 'cus_1' WHERE id = 'csub_1'");
+    dodoPayments.pay_old = { payment_id: 'pay_old', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' } };
+    const refund = { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_old', paymentId: 'pay_old', amount: PRICE, currency: 'USD', isPartial: false } as const;
+    expect(await applyDodoReversal(d1, refund, dodoEnv())).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    expect(await applyDodoReversal(d1, refund, dodoEnv())).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    expect(reversalLogs()).toBe(1);
+
+    const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      dodoPayments.pay_other = { payment_id: 'pay_other', subscription_id: 'sub_other', customer: { customer_id: 'cus_1' } };
+      dodoPayments.pay_once = { payment_id: 'pay_once', subscription_id: null, customer: { customer_id: 'cus_1' } };
+      for (const paymentId of ['pay_other', 'pay_once', 'pay_missing']) {
+        expect(await applyDodoReversal(d1, { ...refund, objectId: `ref_${paymentId}`, paymentId }, dodoEnv())).toEqual({ outcome: 'ignored', card_subscription_id: null });
+      }
+      // Without an API key the lookup cannot run: ignored as before.
+      expect(await applyDodoReversal(d1, { ...refund, objectId: 'ref_x', paymentId: 'pay_old2' }, env())).toEqual({ outcome: 'ignored', card_subscription_id: null });
+    } finally {
+      warn.mockRestore();
+    }
+    expect(reversalLogs()).toBe(1);
+  });
+
+  it('logs a reversal once when the activity log write fails and Dodo retries', async () => {
+    await seedCard();
+    await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', new Date(T0).toISOString()));
+    now += 30 * DAY;
+    await applyDodoEvent(d1, env(), 'wh_2', payment('payment.succeeded', 'pay_2', new Date(now).toISOString()));
+    d1.raw.run("CREATE TRIGGER fail_reversal_log BEFORE INSERT ON user_activity WHEN NEW.action = 'billing.card_reversal' BEGIN SELECT RAISE(ABORT, 'log unavailable'); END");
+    const refund = { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_2', paymentId: 'pay_2', amount: PRICE, currency: 'USD', isPartial: false } as const;
+    expect(await applyDodoReversal(d1, refund).then(() => 'applied', () => 'failed')).toBe('failed');
+    expect(reversalLogs()).toBe(0);
+    d1.raw.run('DROP TRIGGER fail_reversal_log');
+    expect(await applyDodoReversal(d1, refund)).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    await applyDodoReversal(d1, refund);
+    expect(reversalLogs()).toBe(1);
+    expect(rows('refund').map(r => r.dedupe_key)).toEqual(['refund:dodo:refund:ref_2']);
   });
 
   it('counts a collected charge held for review as a flagged purchase, once', async () => {
