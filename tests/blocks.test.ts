@@ -309,6 +309,32 @@ describe('articles REST, Markdown and MCP', () => {
     expect(adminMcp).toContain(PAID_SECRETS[3]);
   });
 
+  it('withholds the paid part of a top-level layout and toggle from REST, .md and MCP', async () => {
+    await createAndPublish('paid-containers', 'knowledges', [
+      layout({ base: 1, md: 2, lg: 2 }, [
+        // The free cell alone is over a third of the article's weight, so the cut falls right after it.
+        { blocks: [para(`Free cell paragraph ${'with enough text to count. '.repeat(8)}`)] },
+        { blocks: [para(`${PAID_SECRETS[0]} paid cell paragraph with enough text to count.`), para(`${PAID_SECRETS[1]} paid cell paragraph with enough text to count.`)] },
+      ]),
+      { type: 'toggle', summary: 'Members toggle', blocks: PAID_SECRETS.slice(2).map(s => para(`${s} paid toggle paragraph with enough text to count.`)) },
+    ]);
+
+    const restBody = await json(await call(getApi, { params: { slug: 'paid-containers' } }));
+    const restText = JSON.stringify(restBody);
+    expect(restText).toContain('"truncated":true');
+    expect(restText).toContain('Free cell paragraph');
+    for (const s of PAID_SECRETS) expect(restText).not.toContain(s);
+    expect(restText).not.toContain('Members toggle');
+
+    const md = await (await call(mdApi, { params: { slug: 'paid-containers' }, path: '/articles/paid-containers.md' })).text();
+    expect(md).toContain('Free cell paragraph');
+    for (const s of PAID_SECRETS) expect(md).not.toContain(s);
+    for (const format of ['json', 'markdown']) {
+      const anonMcp = JSON.stringify(await articlesMcpModule.call('article_get', { slug: 'paid-containers', format }, mcpCtx(false)));
+      for (const s of PAID_SECRETS) expect(anonMcp).not.toContain(s);
+    }
+  });
+
   it('returns a locked outline of withheld headings without leaking withheld text', async () => {
     await createAndPublish('paid-outline', 'knowledges', [
       { type: 'heading', level: 1, text: 'Open heading' },
