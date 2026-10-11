@@ -4,13 +4,15 @@
  */
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { queuePaymentFailed } from '../analytics/commerce-events';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime } from '../members/runtime';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import type { CoursePaymentOutcome } from './course-order-payments';
 import {
-  fulfilCourseOrder, markCourseOrderAttention, recordCoursePaymentEvent, releaseCoursePaymentEvent, restoreCourseOrder, reverseCourseOrder,
+  fulfilCourseOrder, markCourseOrderAttention, queueCourseMoneyBack, recordCoursePaymentEvent, releaseCoursePaymentEvent, restoreCourseOrder,
+  reverseCourseOrder,
 } from './course-order-payments';
 
 export interface CourseTransferNotice {
@@ -91,6 +93,8 @@ function text(r: Record<string, unknown>, k: string): string | null {
 
 /** Dispute outcomes that take access away, and those that give it back. */
 const DISPUTE_REVOKE = new Set(['dispute.opened', 'dispute.accepted', 'dispute.lost', 'dispute.expired']);
+/** Outcomes where the money actually went back (an opened dispute may still be won). */
+const DISPUTE_MONEY_LOST = new Set(['dispute.accepted', 'dispute.lost', 'dispute.expired']);
 const DISPUTE_RESTORE = new Set(['dispute.won', 'dispute.cancelled']);
 
 async function orderByPaymentId(d1: D1DatabaseLike, paymentId: string): Promise<CourseOrder | null> {
@@ -132,13 +136,21 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   }
   try {
     if (!order) return { outcome: 'unmatched', order_code: null };
-    if (type === 'payment.failed') return { outcome: 'ignored', order_code: order.code };
+    if (type === 'payment.failed') {
+      await queuePaymentFailed(d1, {
+        distinctId: order.user_id, provider: 'dodo', orderType: 'course', reference: paymentId ?? eventId, amountMinor: amount, currency,
+      });
+      return { outcome: 'ignored', order_code: order.code };
+    }
     if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch });
     if (type === 'refund.succeeded') {
-      return { outcome: (await reverseCourseOrder(d1, order, 'refunded', 'dodo_refund')) ? 'reversed' : 'ignored', order_code: order.code };
+      return { outcome: (await reverseCourseOrder(d1, order, 'refunded', 'dodo_refund', 'system', { amountMinor: amount, currency })) ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DISPUTE_REVOKE.has(type)) {
-      return { outcome: (await reverseCourseOrder(d1, order, 'charged_back', type)) ? 'reversed' : 'ignored', order_code: order.code };
+      const reversed = await reverseCourseOrder(d1, order, 'charged_back', type);
+      // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once.
+      if (DISPUTE_MONEY_LOST.has(type)) await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
+      return { outcome: reversed ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DISPUTE_RESTORE.has(type)) {
       return { outcome: (await restoreCourseOrder(d1, env, order, type)) ? 'restored' : 'ignored', order_code: order.code };

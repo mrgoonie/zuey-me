@@ -146,6 +146,29 @@ describe('Dodo course payments, refunds and disputes', () => {
     expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
   });
 
+  it('reports a chargeback only when a dispute is lost, and a won dispute is not a second purchase', async () => {
+    await publishedCourse();
+    const lan = await member('lan@example.com');
+    const code = await paidByCard(lan);
+    const events = (event: string) => state.d1.raw
+      .query<{ dedupe_key: string; properties: string }, [string]>('SELECT dedupe_key, properties FROM analytics_outbox WHERE event = ? ORDER BY created_at')
+      .all(event);
+    expect(events('purchase')).toHaveLength(1);
+
+    await dodo('evt_o1', 'dispute.opened', { payment_id: `pay_${code}` });
+    expect(events('refund')).toHaveLength(0);
+    await dodo('evt_w1', 'dispute.won', { payment_id: `pay_${code}` });
+    expect(events('purchase')).toHaveLength(1);
+    expect(events('refund')).toHaveLength(0);
+
+    await dodo('evt_o2', 'dispute.opened', { payment_id: `pay_${code}` });
+    await dodo('evt_l1', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' });
+    await dodo('evt_l2', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' });
+    const refunds = events('refund');
+    expect(refunds).toHaveLength(1);
+    expect(JSON.parse(refunds[0].properties)).toMatchObject({ provider: 'dodo', order_type: 'course', reason: 'chargeback', amount: 49, currency: 'USD' });
+  });
+
   it('flags a duplicate purchase and refunding it keeps the original access', async () => {
     const { course } = await publishedCourse();
     const lan = await member('lan@example.com');

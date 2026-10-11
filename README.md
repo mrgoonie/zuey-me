@@ -9,7 +9,7 @@ Personal profile, Page Builder Studio, REST API, MCP Server, and AI Agent Skill 
 
 ## Architecture & Responsibilities
 
-The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed by **Cloudflare D1** (`zuey_me_db`) and client-side **PostHog** analytics.
+The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed by **Cloudflare D1** (`zuey_me_db`) and **PostHog** analytics (client events, plus server payment, subscription and sign-in events delivered from the D1 `analytics_outbox` by the scheduler worker; see [docs/analytics-events.md](docs/analytics-events.md#server-event-outbox)).
 
 - **Public Profile & Modals**: `src/components/ProfileView.tsx` renders the link-in-bio interface, fast social share sheet, and QR code modal.
 - **Data & Storage**: `src/db/` defines the schema (`src/db/types.ts`), initial seed data (`src/db/data.ts`), and edge D1 store (`src/db/store.ts`).

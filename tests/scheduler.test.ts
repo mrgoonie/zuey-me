@@ -16,6 +16,14 @@ async function failure(p: Promise<unknown>): Promise<string | null> {
 
 const unconfigured ={ success: false, error: { code: 'community_unconfigured', message: 'The Telegram community is not configured yet' } };
 
+const DRAIN = '/api/v1/analytics/outbox/drain';
+const drained = { status: 'ok', skipped_reason: null, claimed: 2, sent: 2, retried: 0, dead: 0, expired_queued: 0, purged: 0, pending: 0, queries: 5, budget_exhausted: false };
+
+/** A healthy 200 answer of a job other than the sweep: the analytics drain reports its summary, the rest an empty data object. */
+function healthy(url: string): Response {
+  return new Response(JSON.stringify({ success: true, data: url.endsWith(DRAIN) ? drained : {} }));
+}
+
 describe('scheduler worker jobs', () => {
   it('runs the community sweep as a dry run unless COMMUNITY_SWEEP_MODE is live', () => {
     const sweepPath = (mode?: string) => scheduledJobs({ ...env, COMMUNITY_SWEEP_MODE: mode }).find(j => j.path.startsWith(SWEEP))?.path;
@@ -46,14 +54,18 @@ describe('scheduler worker jobs', () => {
   });
 
   it('does not fail the whole run when only the community sweep is unconfigured', async () => {
-    const fetchImpl: FetchLike = async url => (url.includes(SWEEP) ? new Response(JSON.stringify(unconfigured), { status: 503 }) : new Response('{"success":true,"data":{}}'));
-    const log = console.log;
+    const fetchImpl: FetchLike = async url => (url.includes(SWEEP) ? new Response(JSON.stringify(unconfigured), { status: 503 }) : healthy(url));
+    const warned: string[] = [];
+    const [warn, log] = [console.warn, console.log];
+    console.warn = (msg: string) => { warned.push(msg); };
     console.log = () => {};
     try {
       expect(await failure(runAll(env, fetchImpl))).toBeNull();
     } finally {
+      console.warn = warn;
       console.log = log;
     }
+    expect(warned).toEqual([]);
     expect(await failure(runAll({ SITE_URL: env.SITE_URL }, fetchImpl))).toContain('CRON_SECRET');
   });
 
@@ -123,7 +135,7 @@ describe('scheduler worker jobs', () => {
       try {
         const fetchImpl: FetchLike = async url => (url.includes(SWEEP)
           ? new Response(JSON.stringify(result({ revoked: 1, errors: [telegramDown] })))
-          : new Response('{"success":true,"data":{}}'));
+          : healthy(url));
         expect(await failure(runAll({ ...env, COMMUNITY_SWEEP_MODE: 'live' }, fetchImpl))).toBeNull();
       } finally {
         console.warn = warn;

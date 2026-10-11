@@ -45,8 +45,9 @@ Autocapture is off on `/account`, `/login`, `/billing`, `/booking`, `/chat`, `/c
 
 - Key and host come from `PUBLIC_POSTHOG_KEY` / `PUBLIC_POSTHOG_HOST` (runtime binding first, currently the `[vars]` of `wrangler.toml`, then build-time env). The built-in key of project Zuey.me is used only by production builds without a configured key.
 - The browser captures only on `zuey.me` and `www.zuey.me` in production builds. Preview deployments (`*.pages.dev`) are production builds and receive the same key from `wrangler.toml`, but their hostname is not allowlisted, so they stay silent; so do `localhost` and dev builds. `PUBLIC_ANALYTICS_DEBUG=1` lifts the hostname/dev check.
-- The server sends nothing outside production builds unless `PUBLIC_ANALYTICS_DEBUG=1`. It has no hostname to check, so server events emitted by a preview deployment would reach the production project; no server event exists yet, and the outbox must gate on the request host before adding one.
+- The server sends nothing outside production builds, and only when the request host is `zuey.me` or `www.zuey.me` (`isServerCaptureHost()` in `src/lib/analytics/server.ts`, the same allowlist as the browser). A preview deployment (`*.pages.dev`) therefore never delivers server events to the production project: its outbox drain answers `skipped` with `skipped_reason: "not_production_host"` and leaves the rows queued. `PUBLIC_ANALYTICS_DEBUG=1` lifts both checks.
 - PostHog is not even initialised (no network request) when the browser sends Do Not Track (`1`/`yes`) or Global Privacy Control, when the visitor turned analytics off at `/privacy#analytics` (localStorage `zuey_analytics_opt_out=1`), or when the browser blocks localStorage. Blocked storage (reading or writing throws; probed once per page with the temporary key `zuey_analytics_storage_probe`) gives the consent state `storage_blocked`: `/privacy#analytics` then says storage is blocked and shows no toggle, because no choice could be saved. Opting out also calls PostHog `opt_out_capturing()` and `reset()`.
+- These browser choices do not cover [server events](#server-events). Account and purchase events (sign-up, sign-in, purchases, refunds, payment issues, subscription lifecycle) are recorded from payment and sign-in webhooks on the server, not from the browser, so they are sent regardless of the toggle, Do Not Track or GPC. They use only the pseudonymous member id (never an email, phone number or token), carry `$geoip_disable: true` so no location is derived from the server's IP, and booking guests' events carry `$process_person_profile: false` so no person profile is created for them. The privacy page (`/privacy#analytics`) says the same.
 
 ## Identity lifecycle
 
@@ -66,7 +67,7 @@ Only the opaque member id (`users.id`) is ever used as `distinct_id`. `identify(
 
 ## Events
 
-Owner values: `growth` (acquisition, profile, affiliate), `product` (in-app features). All current events are client events emitted through `track()`; their names predate the taxonomy and are kept so existing PostHog insights keep working.
+Owner values: `growth` (acquisition, profile, affiliate, sign-up), `product` (in-app features), `revenue` (payments and subscriptions). The client events below are emitted through `track()`; their names predate the taxonomy and are kept so existing PostHog insights keep working. Server events follow in their own table.
 
 | Event | Version | Source | Trigger | Properties | Emitted in | Owner |
 |---|---|---|---|---|---|---|
@@ -84,12 +85,46 @@ Owner values: `growth` (acquisition, profile, affiliate), `product` (in-app feat
 
 PII policy for all rows: properties are public content identifiers (slugs, ids, locale codes, public URLs) and counts. A link card URL that contains an email (for example `mailto:`) is sent with the address replaced by `[redacted]`.
 
+### Server events
+
+Owner `revenue` covers payments and subscriptions. Server events are written to the analytics outbox right after the verified state change, as a separate statement, and delivered later (see below). `distinct_id` is the member id (`users.id`); a booking guest has no account and gets `guest_` + 24 hex characters of SHA-256 of the booking id, sent with `$process_person_profile: false`. Every server event is sent with `$lib: "zuey-me-server"` and `$geoip_disable: true`. Amounts are what the customer paid (tax included), in major units of the original currency, never converted: VND as paid, USD cents / 100. A refund carries the amount the provider reports taken back, with `partial` when it is less than the payment.
+
+| Event | Version | Trigger | Properties | Emitted in | Owner |
+|---|---|---|---|---|---|
+| `sign_up` | 1 | A member account is created by a verified sign-in | `method` string (`magic_link`, `google`, …) | `src/lib/members/login-tokens.ts`, `src/lib/members/oauth.ts` | growth |
+| `login` | 1 | An existing member signs in (verified magic link or OAuth); the sign-in that creates the account sends `sign_up` instead | `method` string | same | growth |
+| `purchase` | 1 | A payment is verified: SePay transfer (webhook, reconcile or admin resolve) for a membership or course order, Dodo charge (first or renewal), PayPal or SePay booking payment | `provider` (`sepay` \| `dodo` \| `paypal`), `order_type` (`membership` \| `course` \| `booking`), `amount` number, `currency` string, `renewal` boolean, `plan`?, `months`?, `flagged`? (`true` when the money was collected but the Dodo charge is held for admin review) | `src/lib/members/billing.ts`, `src/lib/payments/dodo-billing.ts`, `src/lib/courses/course-order-payments.ts`, `src/lib/booking/store.ts` | revenue |
+| `refund` | 1 | A refund or lost chargeback is applied (Dodo, PayPal, course orders). An opened dispute only revokes access; `reason: chargeback` is sent once the dispute is lost (Dodo `dispute.lost`, `dispute.accepted`, `dispute.expired`), and a won dispute restores access without a second `purchase` | `provider`, `order_type`, `reason` (`refund` \| `chargeback`), `amount`?, `currency`?, `partial`?, `plan`? | `src/lib/payments/dodo-billing.ts`, `src/lib/courses/course-order-payments.ts`, `src/lib/booking/store.ts` | revenue |
+| `payment_failed` | 1 | Dodo reports a failed charge | `provider`, `order_type`, `amount`?, `currency`?, `plan`? | `src/lib/payments/dodo-billing.ts`, `src/lib/courses/course-payment-webhooks.ts` | revenue |
+| `payment_needs_attention` | 1 | A verified payment is flagged for admin review (underpaid, overpaid, expired order, discount not applied, …) | `provider`, `order_type`, `reason` string, `amount`?, `currency`?, `plan`? | billing, Dodo, course and booking payment flows | revenue |
+| `subscription_activated` | 1 | A plan becomes active for a member who had no active access | `plan`, `provider` (`sepay` \| `dodo`), `period_end` ISO date | `src/lib/members/subscriptions.ts` (`recomputeSubscription`) | revenue |
+| `subscription_renewed` | 1 | An active plan's period end moves forward by at least 7 days | `plan`, `provider`, `period_end` | same | revenue |
+| `subscription_cancel_scheduled` | 1 | A card subscription is set to cancel at period end | `plan`, `provider` | `src/lib/payments/dodo-billing.ts` | revenue |
+| `subscription_cancelled` | 1 | A card subscription is cancelled by the provider | `plan`, `provider` | same | revenue |
+| `subscription_expired` | 1 | Active access ends: revoked by a recompute, or a prepaid period runs out (found by the outbox drain) | `plan`, `period_end`, `provider`? | `src/lib/members/subscriptions.ts`, `src/lib/analytics/outbox.ts` | revenue |
+
+PII policy: no email, name, token, bank content or order code is ever stored in the outbox or sent; `enqueueServerEvent()` validates every row against the taxonomy and rejects PII-looking values before it is stored.
+
+## Server event outbox
+
+Table `analytics_outbox` (`migrations/0022_analytics_outbox.sql`), code in `src/lib/analytics/outbox.ts` and `src/lib/analytics/commerce-events.ts`.
+
+- **One row per fact, at-least-once delivery with idempotent keys.** Each row has a `dedupe_key` with a unique index; a repeat insert is ignored. Keys come from the verified fact, not from the webhook delivery: `purchase:<provider>:<transaction>` where the transaction is the billing/course order id for one-time orders (one order is paid once; extra transfers are flagged instead), the Dodo payment id (each renewal charge has its own id) or the PayPal capture / SePay transaction id for bookings. Lifecycle keys include the resulting `period_end`, so a renewal or a later re-activation is a new event, and the drain's expiry sweep uses the same key as the recompute.
+- **Payment first.** The insert is a separate statement after the payment state has been written and every error is caught and logged (`analytics outbox: could not queue …`); a failed or missing outbox never changes a webhook's answer or a member's access.
+- **Delivery.** The `zuey-me-scheduler` Worker calls `POST /api/v1/analytics/outbox/drain` every 5 minutes with `CRON_SECRET` (admins may call it too; optional body `{ "limit": 1–40 }`, default 30). The drain first queues `subscription_expired` for prepaid periods that ended in the last 3 days (one `INSERT … SELECT`, at most 200 per run), then leases due rows in batches of 10 (2-minute lease, a crashed run's rows are reclaimed), sends each through `sendServerEvent()` with the row id as event `uuid` so PostHog de-duplicates a retried delivery, and writes each batch's outcome with one `UPDATE` per group of rows that share it. It stops after 20 seconds.
+- **Bounded runs.** One run issues at most 20 D1 statements (`MAX_DRAIN_QUERIES`) and 40 PostHog requests, under the Workers free plan's 50 per invocation. A batch is claimed only when its worst case (one claim plus one settle statement per row) still fits; a typical run of 30 deliveries uses about 9 statements. The response reports `queries`, `pending` (rows still waiting) and `budget_exhausted`.
+- **Retry.** A failed row is retried after 5, 10, 20, … minutes (capped at 6 hours), so it survives a destination outage of about 22 hours. A row is marked `dead` with `last_error` and never retried automatically after 10 attempts, on a payload rejection (HTTP 400/413/422), or when the taxonomy no longer accepts its payload. Auth errors (401/403/404) from a wrong or rotated key are retried. After fixing the cause, an operator requeues dead rows with `UPDATE analytics_outbox SET status = 'pending', attempts = 0, next_attempt_at = <now ISO> WHERE status = 'dead'` (record a time-travel restore point first).
+- **Monitoring.** The scheduler reads each drain summary (`workers/scheduler/src/analytics-drain-check.ts`). It logs a warning when rows were dead-lettered or the run was skipped on a non-production host, and fails the cron invocation when every claimed row failed or analytics is disabled on the production host while rows are pending.
+- **Retention.** Delivered rows are deleted 30 days after `sent_at` (up to 500 per run, index `(status, sent_at)`); pending and dead rows are kept. Dedupe keys are not needed after that window: providers redeliver webhooks within days, lifecycle keys include the period end, the expiry sweep looks back only 3 days, and a dispute won later restores access without queueing a purchase.
+- **Preview gate.** Without a destination (not a production build, no key, or a non-production host) the drain claims nothing and the rows stay `pending`.
+- Known limit: Dodo refunds and chargebacks are matched through the card's first payment only, so a refund of a renewal charge sends no `refund` event yet ([#100](https://github.com/mrgoonie/zuey-me/issues/100)).
+
 ## Adding an event
 
 1. Add the entry to `ANALYTICS_EVENTS` (name in `snake_case`, `version: 1`, `source`, `owner`, `trigger`, `props`).
 2. Call `track('name', { ... })` in the browser or `captureServerEvent(env, 'name', memberId, { ... })` on the server; TypeScript enforces the property shape.
 3. Add a row to the table above and a test case if the event has non-trivial properties.
-4. Server events that must not be lost go through the analytics outbox (separate change), which stores the event `uuid` and retries `sendServerEvent()` with it so destinations de-duplicate.
+4. Server events that must not be lost go through `enqueueServerEvent()` with a dedupe key derived from the verified fact (see the outbox section); never call `captureServerEvent()` for them.
 
 ## Verifying in production
 
@@ -97,4 +132,4 @@ PostHog → *Activity → Live events*, filtered to project Zuey.me:
 
 1. `$pageview` from zuey.me shows a `$current_url` without sensitive parameters (try `/login/verify?token=test`).
 2. After signing in and reloading, events carry the member id as `distinct_id`; after signing out, a new anonymous id.
-3. With Do Not Track/GPC on, or after "Turn analytics off" on `/privacy#analytics`, no new events arrive from that browser.
+3. With Do Not Track/GPC on, or after "Turn analytics off" on `/privacy#analytics`, no new events arrive from that browser. Server-side account and purchase events still arrive under the member id (see Environments and consent).

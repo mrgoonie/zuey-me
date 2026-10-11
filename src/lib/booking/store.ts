@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import { hashString } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { guestDistinctId, queueNeedsAttention, queuePurchase, queueRefund } from '../analytics/commerce-events';
 import { authenticateAdmin } from '../auth';
 import { AppError } from '../http';
 import type { FetchLike } from '../integrations/google-calendar';
@@ -663,6 +664,9 @@ async function markAttention(d1: D1DatabaseLike, row: BookingRow, reason: string
     `UPDATE bookings SET status = 'needs_attention', attention_reason = ?, amount_paid = ?, payment_ref = COALESCE(?, payment_ref), updated_at = ?
      WHERE id = ? AND status <> 'confirmed'`
   ).bind(reason, n.amount, n.paymentRef, nowIso, row.id).run();
+  await queueNeedsAttention(d1, {
+    distinctId: await guestDistinctId(row.id), provider: n.provider, orderType: 'booking', reference: n.eventId, reason, amountMinor: n.amount, currency: n.currency,
+  });
 }
 
 /**
@@ -705,6 +709,11 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
       if (!isUniqueViolation(err)) throw err;
     }
     if (changes === 1) {
+      // Keyed by the provider transaction (SePay transfer, PayPal capture shared by the webhook and the return path).
+      await queuePurchase(d1, {
+        distinctId: await guestDistinctId(row.id), provider: n.provider, orderType: 'booking', transactionId: n.eventId,
+        amountMinor: n.amount, currency: n.currency, occurredAt: nowIso,
+      });
       const confirmed = await getBookingRow(d1, row.id);
       if (confirmed) await fulfilBooking(d1, env, confirmed, 'confirmed');
       if (confirmed) await settleBookingExtras(d1, env, confirmed);
@@ -738,6 +747,17 @@ export async function applyPaypalReversal(
   }
   if (!row || row.payment_method !== 'paypal') return { outcome: 'unmatched', booking_id: null };
   const result = await reverseCommission(d1, { sourceKind: 'booking', sourceId: row.id }, `paypal_${event.kind}`);
+  // A newly opened dispute may still be won; refunds and reversals took the money back.
+  if (event.kind !== 'dispute') {
+    // The provider's amount: a partial refund must not be reported as the whole booking.
+    const amountMinor = event.amountCents ?? row.amount_paid;
+    await queueRefund(d1, {
+      distinctId: await guestDistinctId(row.id), provider: 'paypal', orderType: 'booking', reference: event.eventId,
+      reason: event.kind === 'refund' ? 'refund' : 'chargeback',
+      amountMinor, currency: event.currency ?? row.currency,
+      partial: amountMinor !== null && row.amount_paid !== null ? amountMinor < row.amount_paid : undefined,
+    });
+  }
   return { outcome: result.outcome, booking_id: row.id };
 }
 

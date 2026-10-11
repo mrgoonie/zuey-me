@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { queueAuthEvent } from '../analytics/commerce-events';
 import { AppError } from '../http';
 import { timingSafeEqualStrings } from '../payments/sepay';
 import type { Row } from './runtime';
@@ -256,8 +257,9 @@ export async function handleMemberOAuthCallback(request: Request, env: RuntimeEn
       if (linked) await logActivity(d1, user.id, 'identity.linked', { provider }, request);
       return redirect(cookie.next, [stateCookie('', 0)]);
     }
-    const { token } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
+    const { token, session } = await createMemberSession(d1, user.id, request, await ipHash(env, request));
     await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: provider }, request);
+    await queueAuthEvent(d1, { userId: user.id, created, method: provider, sessionId: session.id });
     const clearRef = created ? await bindReferrerOnSignup(d1, user, request, env) : null;
     return redirect(cookie.next, [stateCookie('', 0), memberCookie(token), ...(clearRef ? [clearRef] : [])]);
   } catch (err) {
@@ -279,8 +281,9 @@ export async function memberCookieForStudioLogin(request: Request, d1: D1Databas
     const { user, created } = await completeOAuthLogin(d1, profile, null);
     const current = await resolveMemberSession(request, d1);
     if (current && current.user.id === user.id) return null;
-    const { token } = await createMemberSession(d1, user.id, request);
+    const { token, session } = await createMemberSession(d1, user.id, request);
     await logActivity(d1, user.id, created ? 'account.created' : 'login', { method: profile.provider, via: 'studio' }, request);
+    await queueAuthEvent(d1, { userId: user.id, created, method: profile.provider, sessionId: session.id });
     return memberCookie(token);
   } catch (err) {
     console.warn('Studio member session skipped:', err instanceof AppError ? err.code : err instanceof Error ? err.message : 'unknown');

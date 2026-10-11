@@ -1,4 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
+import {
+  queueCardStateChange, queueCardSubscriptionEnd, queueNeedsAttention, queuePaymentFailed, queuePurchase, queueRefund,
+} from '../analytics/commerce-events';
 import type { WaitUntil } from '../channel-access/invalidate';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
@@ -293,6 +296,7 @@ export async function cancelCardSubscription(
       .bind(updated?.nextBillingDate ?? null, iso(membersRuntime.now()), card.id).run();
     if (card.plan) await recomputeSubscription(d1, userId, card.plan, { env });
     await logActivity(d1, userId, 'billing.card_cancel_scheduled', { plan: card.plan, card_subscription_id: card.id }, request);
+    await queueCardSubscriptionEnd(d1, 'subscription_cancel_scheduled', card);
   }
   const fresh = await getCard(d1, card.id);
   if (!fresh) throw new AppError(404, 'not_found', 'Card subscription not found');
@@ -433,6 +437,7 @@ async function applySubscriptionEvent(
     status, data.subscriptionId, data.customerId, data.nextBillingDate, data.cancelAtPeriodEnd ? 1 : 0, data.amountCents, data.currency,
     data.customerEmail, data.customerEmail, normalizeEmailForSelfCheck(data.customerEmail), reason, event.occurredAt, nowIso, card.id
   ).run();
+  await queueCardStateChange(d1, card, { status, cancelAtPeriodEnd: data.cancelAtPeriodEnd, reason }, event.occurredAt);
 
   if (card.user_id && card.plan) {
     const sub = await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
@@ -470,6 +475,19 @@ async function applyPaymentEvent(
   const isFirstPayment = succeeded && (card.first_payment_id ?? data.paymentId) === data.paymentId;
   // Which charge this is (1 = first): decides whether a promo still covers it. The event is already recorded.
   const cycle = isFirstPayment ? 1 : Math.max(2, await succeededCharges(d1, card.id));
+  const analytics = {
+    distinctId: card.user_id ?? '', provider: 'dodo', orderType: 'membership', plan: card.plan,
+    amountMinor: data.totalAmount, currency: data.currency, occurredAt: event.occurredAt,
+  } as const;
+  // Every collected charge (first or renewal) is its own transaction, keyed by the Dodo payment id. A charge held
+  // for review was still collected, so it counts as revenue with `flagged: true`.
+  const queueCharge = async (flagged: boolean): Promise<void> => {
+    if (!succeeded || !card.user_id || data.totalAmount === null || !data.currency) return;
+    await queuePurchase(d1, {
+      ...analytics, transactionId: data.paymentId, amountMinor: data.totalAmount, currency: data.currency,
+      renewal: !isFirstPayment, months: 1, flagged,
+    });
+  };
 
   let reason: string | null = null;
   if (!identityOk || card.user_id === null || card.plan === null) reason = card.user_id === null ? 'metadata_missing' : 'metadata_mismatch';
@@ -483,8 +501,11 @@ async function applyPaymentEvent(
       await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
       await logActivity(d1, card.user_id, 'billing.needs_attention', { plan: card.plan, card_subscription_id: card.id, reason, amount: data.totalAmount, currency: data.currency });
     }
+    if (card.user_id) await queueNeedsAttention(d1, { ...analytics, reference: data.paymentId, reason });
+    await queueCharge(true);
     return 'needs_attention';
   }
+  if (event.type === 'payment.failed' && card.user_id) await queuePaymentFailed(d1, { ...analytics, reference: data.paymentId });
   if (event.type === 'payment.failed' && card.status === 'pending') {
     // The first charge failed: no subscription starts. Renewal failures arrive as subscription.on_hold.
     await d1.prepare("UPDATE card_subscriptions SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'").bind(nowIso, card.id).run();
@@ -506,10 +527,13 @@ async function applyPaymentEvent(
         await logActivity(d1, card.user_id, 'billing.needs_attention', {
           plan: card.plan, card_subscription_id: card.id, reason: reasonText, amount: data.totalAmount, tax: data.tax ?? 0, currency: data.currency,
         });
+        await queueNeedsAttention(d1, { ...analytics, reference: data.paymentId, reason: reasonText });
       }
+      await queueCharge(true);
       return 'needs_attention';
     }
   }
+  await queueCharge(false);
   return 'updated';
 }
 
@@ -560,6 +584,13 @@ export async function applyDodoReversal(
     await logActivity(d1, userId, 'billing.card_reversal', {
       card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial,
     });
+    // An opened dispute may still be won; only money that actually went back is a refund.
+    if (event.kind !== 'dispute_opened') {
+      await queueRefund(d1, {
+        distinctId: userId, provider: 'dodo', orderType: 'membership', reference: `${event.kind}:${event.objectId ?? event.paymentId}`,
+        reason: event.kind === 'refund' ? 'refund' : 'chargeback', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
+      });
+    }
   }
   return { outcome: result.outcome, card_subscription_id: cardId };
 }

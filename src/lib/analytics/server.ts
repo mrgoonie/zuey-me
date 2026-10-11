@@ -9,9 +9,10 @@ import {
   type EventProperties, type ServerEventName, type Taxonomy, type ValidationError,
 } from './events';
 import {
-  createPostHogServerDestination, isProductionBuild, resolvePostHogConfig,
+  createPostHogServerDestination, isProductionBuild, isTruthyFlag, resolvePostHogConfig,
   type AnalyticsEnv, type FetchLike,
 } from './destinations/posthog';
+import { PRODUCTION_HOSTNAMES } from './constants';
 import type { DestinationResult, ServerAnalyticsEvent, ServerDestination } from './destinations/types';
 import { isValidDistinctId } from './identity';
 
@@ -34,6 +35,8 @@ export interface ServerCaptureOptions {
   /** When the business fact happened. Defaults to now. */
   occurredAt?: Date | string;
   taxonomy?: Taxonomy;
+  /** Hostname of the request that triggers delivery; see `isServerCaptureHost`. */
+  requestHost?: string | null;
 }
 
 export interface ServerEventInput {
@@ -46,13 +49,25 @@ export interface ServerEventInput {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Destinations configured for this environment. Development and test runs send nothing unless
- * PUBLIC_ANALYTICS_DEBUG is set, mirroring the browser.
+ * Server delivery runs only for requests to the production hostnames (`zuey.me`, `www.zuey.me`).
+ * Preview deployments (`*.pages.dev`) are production builds with the production PostHog key and share
+ * the production database, so the hostname is what keeps them from sending. PUBLIC_ANALYTICS_DEBUG is
+ * the explicit override, as in the browser.
+ */
+export function isServerCaptureHost(env: AnalyticsEnv, requestHost: string | null | undefined): boolean {
+  if (isTruthyFlag(env.PUBLIC_ANALYTICS_DEBUG)) return true;
+  return typeof requestHost === 'string' && PRODUCTION_HOSTNAMES.includes(requestHost.toLowerCase());
+}
+
+/**
+ * Destinations configured for this environment and request host. Development and test runs send
+ * nothing unless PUBLIC_ANALYTICS_DEBUG is set, and other hosts than production send nothing.
  */
 export function serverDestinations(
   env: AnalyticsEnv,
-  options: { production?: boolean; fetchImpl?: FetchLike } = {},
+  options: { requestHost: string | null; production?: boolean; fetchImpl?: FetchLike },
 ): ServerDestination[] {
+  if (!isServerCaptureHost(env, options.requestHost)) return [];
   const production = options.production ?? isProductionBuild();
   const config = resolvePostHogConfig(env, { production });
   if (!config || (!production && !config.debug)) return [];
@@ -124,7 +139,10 @@ export async function sendServerEvent(
   }
 }
 
-/** Typed server capture for events whose taxonomy source is `server`. */
+/**
+ * Typed, immediate server capture for events whose taxonomy source is `server`. Business events that
+ * must not be lost go through the outbox (`enqueueServerEvent`) instead.
+ */
 export async function captureServerEvent<E extends ServerEventName>(
   env: AnalyticsEnv,
   event: E,
@@ -133,7 +151,7 @@ export async function captureServerEvent<E extends ServerEventName>(
   options: ServerCaptureOptions = {},
 ): Promise<ServerDeliveryResult> {
   try {
-    return await sendServerEvent({ event, distinctId, properties }, serverDestinations(env), options);
+    return await sendServerEvent({ event, distinctId, properties }, serverDestinations(env, { requestHost: options.requestHost ?? null }), options);
   } catch (err) {
     return {
       delivered: false, uuid: options.uuid ?? '',

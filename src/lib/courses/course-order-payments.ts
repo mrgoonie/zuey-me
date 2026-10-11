@@ -5,6 +5,7 @@
  */
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { queueNeedsAttention, queuePurchase, queueRefund } from '../analytics/commerce-events';
 import { AppError } from '../http';
 import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
 import { iso, isUniqueViolation, membersRuntime, siteUrl } from '../members/runtime';
@@ -48,13 +49,29 @@ export async function markCourseOrderAttention(d1: D1DatabaseLike, order: Course
      WHERE id = ? AND status <> 'paid'`
   ).bind(reason, extra.amount ?? 0, extra.currency ?? null, extra.ref ?? null, extra.eventId ?? null, iso(membersRuntime.now()), order.id).run();
   await logActivity(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null });
+  await queueNeedsAttention(d1, {
+    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: extra.eventId ?? `course_order:${order.id}:${reason}`,
+    reason, amountMinor: extra.amount, currency: extra.currency ?? (order.provider === 'sepay' ? 'VND' : null),
+  });
+}
+
+/** Amount and currency actually paid for an order (falls back to the amount due on its rail). */
+function paidAmount(order: CourseOrder): { amountMinor: number | null; currency: string } {
+  if (order.amount_paid !== null && order.currency_paid) return { amountMinor: order.amount_paid, currency: order.currency_paid };
+  return order.provider === 'sepay'
+    ? { amountMinor: order.amount_paid ?? order.amount_vnd, currency: 'VND' }
+    : { amountMinor: order.amount_paid ?? order.amount_usd_cents, currency: 'USD' };
 }
 
 /**
  * Grants the course for a paid order, notifies the referral program and emails a receipt.
  * Referral and email failures are logged and never undo the purchase.
  */
-export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<void> {
+export async function fulfilCourseOrder(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null,
+  /** `countPurchase: false` when access returns for money that was already counted (a won dispute). */
+  opts: { countPurchase?: boolean } = {},
+): Promise<void> {
   const granted = await grantCourse(d1, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' });
   if (!granted) {
     // Bought twice (two open checkouts paid): keep the money traceable for a manual refund.
@@ -62,6 +79,14 @@ export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, ord
       .bind(iso(membersRuntime.now()), order.id).run();
   }
   await logActivity(d1, order.user_id, 'courses.order_paid', { code: order.code, course_id: order.course_id, provider: order.provider });
+  // A course order is paid by one verified payment, so the order id is the transaction.
+  const paid = paidAmount(order);
+  if (opts.countPurchase !== false && paid.amountMinor !== null) {
+    await queuePurchase(d1, {
+      distinctId: order.user_id, provider: order.provider, orderType: 'course', transactionId: `course_order:${order.id}`,
+      amountMinor: paid.amountMinor, currency: paid.currency, occurredAt: order.paid_at,
+    });
+  }
   try {
     await onCourseOrderPaid(d1, env, order, payerText);
   } catch (err) {
@@ -98,7 +123,11 @@ export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, ord
 export type ReversalKind = 'refunded' | 'charged_back';
 
 /** Marks a paid order refunded or charged back, revokes access and reverses referral commission. */
-export async function reverseCourseOrder(d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reason: string, actor = 'system'): Promise<boolean> {
+export async function reverseCourseOrder(
+  d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reason: string, actor = 'system',
+  /** Amount the provider reports taken back; defaults to the amount paid. */
+  reversed: { amountMinor: number | null; currency: string | null } | null = null,
+): Promise<boolean> {
   const res = await d1.prepare(`UPDATE course_orders SET status = ?, attention_reason = ?, updated_at = ? WHERE id = ? AND status IN ('paid', 'needs_attention')`)
     .bind(kind, reason.slice(0, 200), iso(membersRuntime.now()), order.id).run();
   if (!res.meta?.changes) return false;
@@ -114,15 +143,39 @@ export async function reverseCourseOrder(d1: D1DatabaseLike, order: CourseOrder,
     console.error(`referral reversal for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
   }
   await logActivity(d1, order.user_id, `courses.order_${kind}`, { code: order.code, reason, actor });
+  // A refund always took the money back. A chargeback is reported by the dispute handler only once the dispute is
+  // lost: an opened dispute revokes access but may still be won.
+  if (kind === 'refunded') await queueCourseMoneyBack(d1, order, kind, reversed);
   return true;
 }
 
-/** A dispute the merchant won: the order is paid again and access returns. */
+/**
+ * Queues the `refund` event of money that went back for a course order, once per order and kind. A flagged order
+ * that was never paid (`paid_at` is null) never produced a purchase event, so it is not lost revenue either.
+ */
+export async function queueCourseMoneyBack(
+  d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind,
+  reversed: { amountMinor: number | null; currency: string | null } | null = null,
+): Promise<void> {
+  if (order.paid_at === null) return;
+  const paid = paidAmount(order);
+  const amountMinor = reversed?.amountMinor ?? paid.amountMinor;
+  await queueRefund(d1, {
+    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:${kind}`,
+    reason: kind === 'refunded' ? 'refund' : 'chargeback', amountMinor, currency: reversed?.currency ?? paid.currency,
+    partial: amountMinor !== null && paid.amountMinor !== null ? amountMinor < paid.amountMinor : undefined,
+  });
+}
+
+/**
+ * A dispute the merchant won: the order is paid again and access returns. No purchase event is queued: the
+ * original one still stands, because an opened dispute never queued a refund.
+ */
 export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string): Promise<boolean> {
   const res = await d1.prepare("UPDATE course_orders SET status = 'paid', attention_reason = ?, updated_at = ? WHERE id = ? AND status = 'charged_back'")
     .bind(reason, iso(membersRuntime.now()), order.id).run();
   if (!res.meta?.changes) return false;
-  await fulfilCourseOrder(d1, env, { ...order, status: 'paid' });
+  await fulfilCourseOrder(d1, env, { ...order, status: 'paid' }, null, { countPurchase: false });
   return true;
 }
 

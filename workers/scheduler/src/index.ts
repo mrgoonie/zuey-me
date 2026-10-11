@@ -3,7 +3,6 @@
  * (Pages Functions have no cron). Each tick POSTs the app's job endpoint with a shared secret; all logic and
  * idempotency live in the app, so a missed or doubled tick is harmless. Jobs are listed in ./jobs.ts.
  */
-
 import type { SchedulerEnv } from './jobs';
 import { runAll } from './jobs';
 

@@ -344,6 +344,15 @@ describe('PayPal payments', () => {
     expect((await read(second)).data?.outcome).toBe('already_confirmed');
     expect(calls.filter(c => c.url === 'https://api.resend.com/emails').length).toBe(1);
     expect(d1.raw.query('SELECT COUNT(*) AS n FROM payment_events').get()).toEqual({ n: 2 });
+    // Exactly one purchase for the capture, in USD major units, under an opaque guest id (no email or name).
+    const outbox = d1.raw.query<{ distinct_id: string; dedupe_key: string; properties: string }, []>(
+      "SELECT distinct_id, dedupe_key, properties FROM analytics_outbox WHERE event = 'purchase'",
+    ).all();
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0].dedupe_key).toBe('purchase:paypal:CAP-full');
+    expect(outbox[0].distinct_id).toMatch(/^guest_[0-9a-f]{24}$/);
+    expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false });
+    expect(JSON.stringify(outbox)).not.toContain('lan@example.com');
 
     // Guest view exposes Meet link but never the token hash.
     const guest = await bookingApi(ctx({ env, url: `http://localhost/api/v1/booking/${b.id}?token=${encodeURIComponent(b.token)}`, params: { id: b.id } }));
