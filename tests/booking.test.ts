@@ -491,6 +491,80 @@ describe('reschedule and admin', () => {
     expect(r.admin_note).toBe('Guest asked; refund manually');
   });
 
+  describe('purchase on admin resolve', () => {
+    const auth = (): Record<string, string> => ({ Authorization: `Bearer ${adminKey}` });
+    const admin = async (env: RuntimeEnv, id: string, action: string): Promise<Response> =>
+      adminActionApi(ctx({ env, method: 'POST', body: { id, action }, headers: auth() }));
+    const sepay = async (env: RuntimeEnv, code: string, amount: number, id: number): Promise<Response> => sepayWebhook(ctx({
+      env, method: 'POST', headers: { Authorization: 'Apikey sepay-key' },
+      body: { id, gateway: 'MBBank', transactionDate: '2026-10-05 07:05:00', accountNumber: '0123456789', content: `CK ZBK${code}`, transferType: 'in', transferAmount: amount, referenceCode: `FT${id}` },
+    }));
+    const purchases = () => d1.raw.query<{ distinct_id: string; dedupe_key: string; properties: string }, []>(
+      "SELECT distinct_id, dedupe_key, properties FROM analytics_outbox WHERE event = 'purchase'",
+    ).all();
+
+    it('webhook then resolve: counts the flagged transfers once, under the webhook key', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env, method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      expect((await read(await sepay(env, b.code, 50000000, 7001))).data?.outcome).toBe('needs_attention');
+      expect((await read(await sepay(env, b.code, 2000000, 7002))).data?.outcome).toBe('needs_attention');
+      expect(purchases()).toHaveLength(0);
+
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe('purchase:sepay:7001');
+      expect(outbox[0].distinct_id).toMatch(/^guest_[0-9a-f]{24}$/);
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+      expect(JSON.stringify(outbox)).not.toContain('lan@example.com');
+    });
+
+    it('webhook then resolve: a booking the webhook already counted is not counted again', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT7);
+      await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-paid' });
+      expect(purchases()).toHaveLength(1);
+      expect((await admin(env, b.id, 'mark_attention')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect(purchases().map(p => p.dedupe_key)).toEqual(['purchase:paypal:CAP-paid']);
+    });
+
+    it('resolve then webhook: the later transfer adds no second purchase', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env, method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      // Payment verified by hand (e.g. a transfer without the booking code) before any webhook matched it.
+      expect((await admin(env, b.id, 'mark_attention')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect((await read(await sepay(env, b.code, 52000000, 7101))).data?.outcome).toBe('already_confirmed');
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe(`purchase:sepay:booking:${b.id}`);
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+    });
+
+    it('resolve twice: one purchase, also across a cancel and a second resolve', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT7);
+      now += 20 * 60 * 1000;
+      await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-late' });
+      expect((await row(b.id)).attention_reason).toBe('late_payment');
+
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      const again = await admin(env, b.id, 'resolve');
+      expect(again.status).toBe(409);
+      expect((await read(again)).error?.code).toBe('already_confirmed');
+      expect((await admin(env, b.id, 'cancel')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe('purchase:paypal:CAP-late');
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false });
+    });
+  });
+
   it('exposes MCP tools and an OpenAPI fragment', async () => {
     expect(bookingMcpModule.tools.map(t => t.name)).toEqual(['booking_slots', 'booking_list', 'availability_get', 'availability_set', 'booking_update_status']);
     let adminChecks = 0;

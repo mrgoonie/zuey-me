@@ -956,13 +956,49 @@ export async function rescheduleBooking(
   return toGuestView(fulfilled, env, bookingRuntime.now());
 }
 
+interface BookingPaymentEvent { provider: string; event_id: string; amount: number | null; currency: string | null; received_at: string }
+
+/**
+ * Queues the `purchase` of a booking an admin confirmed after verifying its payment. It uses the webhook's key:
+ * the first provider transaction recorded for the booking (a booking the webhook confirmed has none before the
+ * confirming one, since any earlier one would have flagged it). So a booking the webhook already counted, then
+ * flagged and resolved, is not counted again; repeated resolves share the key too. The amount is everything the
+ * guest paid through that provider in that currency (an underpayment plus its top-up). Without any recorded
+ * transaction (a transfer the admin matched by hand) the booking id is the key and the amount is the price due.
+ */
+async function queueResolvedPurchase(d1: D1DatabaseLike, env: RuntimeEnv, row: BookingRow, nowIso: string): Promise<void> {
+  const distinctId = await guestDistinctId(row.id);
+  const { results } = await d1.prepare(
+    'SELECT provider, event_id, amount, currency, received_at FROM payment_events WHERE booking_id = ? ORDER BY id'
+  ).bind(row.id).all<BookingPaymentEvent>();
+  const first = (results ?? [])[0];
+  if (first) {
+    const provider = PAYMENT_METHODS.find(m => m === first.provider);
+    if (!provider || !first.currency) return;
+    const amountMinor = (results ?? [])
+      .filter(e => e.provider === first.provider && e.currency === first.currency)
+      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
+    await queuePurchase(d1, {
+      distinctId, provider, orderType: 'booking', transactionId: first.event_id, amountMinor, currency: first.currency, occurredAt: first.received_at,
+    });
+    return;
+  }
+  const provider = paymentMethodOf(row);
+  if (!provider) return;
+  const expected = expectedAmount(row, env);
+  await queuePurchase(d1, {
+    distinctId, provider, orderType: 'booking', transactionId: `booking:${row.id}`,
+    amountMinor: row.amount_paid ?? expected.amount ?? 0, currency: row.currency ?? expected.currency, occurredAt: nowIso,
+  });
+}
+
 export type AdminAction = 'cancel' | 'resolve' | 'mark_attention' | 'note';
 export const ADMIN_ACTIONS: AdminAction[] = ['cancel', 'resolve', 'mark_attention', 'note'];
 
 /**
  * Admin-only state changes. `cancel` never refunds automatically but reverses the referral commission;
  * `resolve` confirms a booking whose payment the admin verified manually (still guarded by the active-slot
- * unique index) and captures its referral commission like a webhook-confirmed one.
+ * unique index), queues its `purchase` and captures its referral commission like a webhook-confirmed one.
  */
 export async function adminUpdateBooking(
   d1: D1DatabaseLike, env: RuntimeEnv, id: string, action: AdminAction, note: string | null
@@ -989,6 +1025,7 @@ export async function adminUpdateBooking(
       throw err;
     }
     const confirmed = await getBookingRow(d1, id);
+    if (confirmed) await queueResolvedPurchase(d1, env, confirmed, nowIso);
     if (confirmed && confirmed.meet_status !== 'sent') await fulfilBooking(d1, env, confirmed, 'confirmed');
     if (confirmed) await settleBookingExtras(d1, env, confirmed);
     if (row.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id });
