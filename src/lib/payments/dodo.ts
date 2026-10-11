@@ -249,10 +249,18 @@ export async function cancelDodoSubscription(env: RuntimeEnv, subscriptionId: st
   return parseSubscriptionData(body);
 }
 
-/** The subscription a Dodo payment charged (`GET /payments/{id}`); null for a one-time payment. Throws `DodoApiError` when the lookup fails. */
-export async function getDodoPaymentSubscriptionId(env: RuntimeEnv, paymentId: string, fetchImpl: FetchLike): Promise<string | null> {
+export interface DodoPaymentLookup {
+  subscriptionId: string | null;
+  metadata: DodoMetadata;
+}
+
+/**
+ * A Dodo payment (`GET /payments/{id}`): the subscription it charged (null for a one-time payment) and the checkout
+ * metadata it carries. Throws `DodoApiError` when the lookup fails.
+ */
+export async function lookupDodoPayment(env: RuntimeEnv, paymentId: string, fetchImpl: FetchLike): Promise<DodoPaymentLookup> {
   const body = await dodoRequest(env, `/payments/${encodeURIComponent(paymentId)}`, { method: 'GET' }, fetchImpl, 'payment lookup');
-  return strOrNull(body, 'subscription_id');
+  return { subscriptionId: strOrNull(body, 'subscription_id'), metadata: parseMetadata(body.metadata) };
 }
 
 // ---------------------------------------------------------------------------
