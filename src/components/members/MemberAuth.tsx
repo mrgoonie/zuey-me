@@ -1,4 +1,6 @@
 import { useEffect, useId, useState } from 'react';
+import { track, trackOnce } from '../../lib/analytics/client';
+import { failureReason } from '../../lib/analytics/funnel';
 import type { SubmitLike } from './member-ui';
 import { alertError, alertInfo, alertOk, btnGhost, btnPrimary, callApi, card, input, isRecord, jsonBody, str } from './member-ui';
 
@@ -28,15 +30,26 @@ export function LoginForm({ next, error }: LoginProps) {
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(error ? (LOGIN_ERRORS[error] ?? 'Đăng nhập không thành công. Vui lòng thử lại.') : null);
 
+  // An OAuth or verification error redirected back here (rror is already limited to [a-z_] by the page).
+  useEffect(() => {
+    if (error) trackOnce(`auth_failed:callback:${error}`, 'auth_failed', { stage: 'callback', reason: failureReason(error) });
+  }, [error]);
+
   async function submit(e: SubmitLike) {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
     setMessage(null);
+    track('sign_up_started', { method: 'magic_link' });
     const res = await callApi('/api/members/auth/magic-link', { method: 'POST', body: jsonBody({ email, next }) });
     setBusy(false);
-    if (res.ok) setSentTo(email.trim());
-    else setMessage(res.message);
+    if (res.ok) {
+      track('magic_link_requested', {});
+      setSentTo(email.trim());
+    } else {
+      track('auth_failed', { stage: 'magic_link_request', reason: failureReason(res.code) });
+      setMessage(res.message);
+    }
   }
 
   const oauthHref = (provider: 'google' | 'github') => `/api/members/auth/${provider}?next=${encodeURIComponent(next)}`;
@@ -75,8 +88,8 @@ export function LoginForm({ next, error }: LoginProps) {
         <span className="h-px flex-1 bg-stone-300" />hoặc<span className="h-px flex-1 bg-stone-300" />
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <a className={btnGhost} href={oauthHref('google')}>Tiếp tục với Google</a>
-        <a className={btnGhost} href={oauthHref('github')}>Tiếp tục với GitHub</a>
+        <a className={btnGhost} href={oauthHref('google')} onClick={() => track('sign_up_started', { method: 'google' })}>Tiếp tục với Google</a>
+        <a className={btnGhost} href={oauthHref('github')} onClick={() => track('sign_up_started', { method: 'github' })}>Tiếp tục với GitHub</a>
       </div>
       <p className="mt-5 text-xs text-stone-500">
         Khi đăng nhập, bạn đồng ý để Zuey lưu email và lịch sử đăng nhập nhằm bảo vệ tài khoản. Bạn có thể xuất hoặc xoá dữ liệu bất kỳ lúc nào trong trang Tài khoản.
@@ -115,6 +128,7 @@ export function TokenConfirm({ mode }: TokenConfirmProps) {
     const res = await callApi(isLogin ? '/api/members/auth/magic-link/verify' : '/api/v1/me/email/confirm', { method: 'POST', body: jsonBody({ token }) });
     setBusy(false);
     if (!res.ok) {
+      if (isLogin) track('auth_failed', { stage: 'magic_link_verify', reason: failureReason(res.code) });
       setError(res.message);
       return;
     }

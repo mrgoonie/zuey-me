@@ -84,6 +84,76 @@ export const ANALYTICS_EVENTS = {
     props: { slug: str, quoted: bool },
   },
 
+  // Funnel events (auth, pricing, checkout, booking). Properties are enums, public plan/course ids and
+  // amounts only: never the email, name, sign-in link, order code, booking code, manage token or provider URL.
+  sign_up_started: {
+    version: 1, source: 'client', owner: 'growth', trigger: 'The visitor starts signing in or up: submits the email form or picks Google/GitHub',
+    props: { method: str },
+  },
+  magic_link_requested: {
+    version: 1, source: 'client', owner: 'growth', trigger: 'The server accepted a sign-in link request',
+    props: {},
+  },
+  auth_failed: {
+    version: 1, source: 'client', owner: 'growth', trigger: 'A sign-in step fails (link request, link confirmation, or an OAuth error sent back to /login)',
+    props: { stage: str, reason: str },
+  },
+  logout: {
+    version: 1, source: 'client', owner: 'growth', trigger: 'A member signs out (sent before the identity is reset)',
+    props: { surface: str },
+  },
+  pricing_viewed: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The pricing table is shown (once per page load)',
+    props: { months: num, card_available: bool, preselected_plan: { kind: 'string', optional: true } },
+  },
+  billing_term_selected: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The visitor switches the prepaid term on the pricing table',
+    props: { months: num, previous_months: num },
+  },
+  plan_selected: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'A plan checkout button is pressed on the pricing table',
+    props: { plan: str, provider: str, months: num },
+  },
+  begin_checkout: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'A checkout request is about to be sent (form checks passed)',
+    props: {
+      order_type: str, provider: str, discount_entered: bool,
+      plan: { kind: 'string', optional: true }, months: { kind: 'number', optional: true }, course: { kind: 'string', optional: true },
+      value: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true },
+    },
+  },
+  checkout_created: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The server created the order or card checkout session',
+    props: {
+      order_type: str, provider: str, free: bool,
+      plan: { kind: 'string', optional: true }, months: { kind: 'number', optional: true }, course: { kind: 'string', optional: true },
+      value: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true },
+    },
+  },
+  payment_initiated: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The browser is sent to pay: hosted card checkout or the VietQR transfer page',
+    props: {
+      order_type: str, provider: str,
+      plan: { kind: 'string', optional: true }, months: { kind: 'number', optional: true }, course: { kind: 'string', optional: true },
+    },
+  },
+  booking_availability_viewed: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The booking widget loaded the open slots (once per page load)',
+    props: { slot_count: num },
+  },
+  booking_slot_selected: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'A time slot is picked in the booking widget',
+    props: { duration_min: num, days_ahead: num },
+  },
+  booking_hold_created: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The server held the slot for the guest',
+    props: { payment_method: str, discounted: bool, free: bool },
+  },
+  booking_checkout_started: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The payment step of a held booking is ready (PayPal order or VietQR details)',
+    props: { payment_method: str, value: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true } },
+  },
+
   // Server events. Written to the analytics outbox right after the verified state change, as a separate
   // statement (`src/lib/analytics/outbox.ts`), and delivered by the scheduler; never emitted from the browser.
   sign_up: {

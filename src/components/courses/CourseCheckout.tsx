@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react';
+import { track } from '../../lib/analytics/client';
 import type { SubmitLike } from '../members/member-ui';
 import { InvoiceRequestFields, useInvoiceRequest } from '../members/InvoiceRequestFields';
 import { alertError, btnPrimary, input, isRecord, jsonBody, loginUrl, str } from '../members/member-ui';
@@ -64,6 +65,8 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
     if (inv.error) { setError(inv.error); return; }
     setBusy(true);
     setError(null);
+    const funnel = { order_type: 'course', provider, course: courseSlug };
+    track('begin_checkout', { ...funnel, discount_entered: code.length > 0 });
     const res = await courseApi(`/api/v1/courses/${encodeURIComponent(courseSlug)}/checkout`, {
       method: 'POST',
       body: jsonBody({ provider, accept_terms: true, ...(code ? { discount_code: code } : {}), ...(inv.invoice ? { invoice: inv.invoice } : {}) }),
@@ -71,8 +74,18 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
     if (res.ok && isRecord(res.data)) {
       const checkoutUrl = str(res.data, 'checkout_url');
       const orderCode = str(res.data, 'code');
-      if (provider === 'dodo' && checkoutUrl) { window.location.assign(checkoutUrl); return; }
-      if (orderCode) { window.location.assign(`/courses/orders/${encodeURIComponent(orderCode)}`); return; }
+      const free = str(res.data, 'status') === 'paid';
+      if ((provider === 'dodo' && checkoutUrl) || orderCode) track('checkout_created', { ...funnel, free });
+      if (provider === 'dodo' && checkoutUrl) {
+        track('payment_initiated', funnel);
+        window.location.assign(checkoutUrl);
+        return;
+      }
+      if (orderCode) {
+        if (!free) track('payment_initiated', funnel);
+        window.location.assign(`/courses/orders/${encodeURIComponent(orderCode)}`);
+        return;
+      }
     }
     setBusy(false);
     if (!res.ok && res.status === 401) { window.location.assign(loginUrl(coursePath)); return; }

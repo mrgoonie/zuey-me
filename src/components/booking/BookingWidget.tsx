@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { track, trackOnce } from '../../lib/analytics/client';
+import { daysAhead, moneyProps } from '../../lib/analytics/funnel';
 import { isValidTimeZone, zonedDateKey } from '../../lib/booking/timezone';
 import { ReferralCodeField } from '../referral/ReferralCodeField';
 import { InvoiceRequestFields, useInvoiceRequest } from '../members/InvoiceRequestFields';
@@ -340,6 +342,17 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
 
   const formValid = form.name.trim().length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
 
+  // First successful slot load of this page; a reload after a taken slot is not a new view.
+  useEffect(() => {
+    if (!loading && !slotsError) trackOnce('booking_availability_viewed', 'booking_availability_viewed', { slot_count: slots.length });
+  }, [loading, slotsError, slots]);
+
+  const selectSlot = (s: Slot) => {
+    track('booking_slot_selected', { duration_min: s.duration_min, days_ahead: daysAhead(s.start, Date.now()) });
+    setSlot(s);
+    setError(null);
+  };
+
   const submit = async () => {
     if (!slot) return;
     const inv = method === 'sepay' ? invoice.payload() : { invoice: null, error: null };
@@ -374,12 +387,23 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
     const booking = parseBooking(bookingData);
     const token = str(held.data, 'manage_token');
     const manageUrl = `/booking/${encodeURIComponent(booking.id)}?token=${encodeURIComponent(token)}`;
+    track('booking_hold_created', {
+      payment_method: method,
+      discounted: (booking.referral_discount_percent ?? 0) > 0 || promoPct > 0,
+      free: booking.status === 'confirmed',
+    });
     if (booking.status === 'confirmed') {
       // A 100% promo: confirmed at once, nothing to pay.
       window.location.assign(manageUrl);
       return;
     }
     const co = await callApi(`/api/v1/booking/${encodeURIComponent(booking.id)}/checkout`, { method: 'POST', body: JSON.stringify({ token }) });
+    if (co.ok) {
+      const amount = method === 'paypal'
+        ? moneyProps(typeof co.data.amount_usd_cents === 'number' ? co.data.amount_usd_cents : null, 'USD')
+        : moneyProps(typeof co.data.amount === 'number' ? co.data.amount : null, 'VND');
+      track('booking_checkout_started', { payment_method: method, ...amount });
+    }
     setBusy(false);
     setHold({
       booking,
@@ -419,7 +443,7 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
           <TimeZoneSelect tz={tz} onChange={setTz} id="booking-tz" />
           {loading && <p className="text-sm text-stone-600">Đang tải lịch trống…</p>}
           {slotsError && <p className="text-sm text-rose-700">{slotsError} <button type="button" className="underline" onClick={reload}>Thử lại</button></p>}
-          {!loading && !slotsError && <SlotPicker slots={slots} tz={tz} selected={slot?.start ?? null} onSelect={s => { setSlot(s); setError(null); }} />}
+          {!loading && !slotsError && <SlotPicker slots={slots} tz={tz} selected={slot?.start ?? null} onSelect={selectSlot} />}
           <div className="mt-5 flex justify-end">
             <button type="button" className={btnPrimary} disabled={!slot} onClick={() => setStep(2)}>Tiếp tục</button>
           </div>

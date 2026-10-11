@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { track, trackOnce } from '../../lib/analytics/client';
+import { moneyProps } from '../../lib/analytics/funnel';
 import type { PlansCatalog } from '../../lib/members/account';
 import { ReferralCodeField } from '../referral/ReferralCodeField';
 import { discounted, promoPercentFor, useReferralQuote } from '../referral/referral-quote';
@@ -40,8 +42,24 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
   const discountFor = (m: number) => catalog.plans[0]?.prices.find(p => p.months === m)?.discount_percent ?? 0;
   const discountNote = catalog.months.filter(m => discountFor(m) > 0).map(m => `${m} tháng −${discountFor(m)}%`).join(', ');
 
+  // Once per page load, with the term the visitor first sees; later changes are billing_term_selected.
+  useEffect(() => {
+    trackOnce('pricing_viewed', 'pricing_viewed', {
+      months, card_available: cardPlans.size > 0, ...(initialPlan ? { preselected_plan: initialPlan } : {}),
+    });
+  }, []);
+
+  function selectTerm(next: number) {
+    if (next === months) return;
+    track('billing_term_selected', { months: next, previous_months: months });
+    setMonths(next);
+  }
+
   async function checkout(planId: string, provider: Provider) {
     if (busy) return;
+    // Card subscriptions renew monthly; the prepaid term applies to bank transfer only.
+    const term = provider === 'dodo' ? 1 : months;
+    track('plan_selected', { plan: planId, provider, months: term });
     setBusy(`${planId}:${provider}`);
     setError(null);
     const code = referral.enteredCode ? { discount_code: referral.enteredCode } : {};
@@ -49,14 +67,31 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
     if (inv.error) { setBusy(null); setError(inv.error); return; }
     const extra = { ...code, ...(inv.invoice ? { invoice: inv.invoice } : {}) };
     const payload = provider === 'dodo' ? { plan: planId, provider, ...extra } : { plan: planId, months, provider, ...extra };
+    const plan = catalog.plans.find(p => p.id === planId);
+    // List price before any referral or promo discount; the verified amount arrives with the server purchase.
+    const listPrice = provider === 'dodo'
+      ? moneyProps(plan?.price_usd_cents, 'USD')
+      : moneyProps(plan?.prices.find(p => p.months === months)?.amount_vnd, 'VND');
+    const funnel = { order_type: 'membership', plan: planId, months: term };
+    track('begin_checkout', { ...funnel, provider, discount_entered: Boolean(referral.enteredCode), ...listPrice });
     const res = await callApi('/api/v1/billing/orders', { method: 'POST', body: jsonBody(payload) });
     if (res.ok && isRecord(res.data)) {
+      // The server answers with the rail it used: a 100% promo on a card plan becomes a paid 0 VND order.
+      const created = str(res.data, 'provider') === 'dodo' ? 'dodo' : 'sepay';
+      const free = str(res.data, 'status') === 'paid';
+      const amountVnd = res.data.amount_vnd;
+      track('checkout_created', {
+        ...funnel, provider: created, free,
+        ...(created === 'sepay' && typeof amountVnd === 'number' ? moneyProps(amountVnd, 'VND') : {}),
+      });
       if (provider === 'dodo' && str(res.data, 'checkout_url')) {
+        track('payment_initiated', { ...funnel, provider: 'dodo' });
         window.location.assign(str(res.data, 'checkout_url'));
         return;
       }
       // SePay order, or a free (100% promo) order that is already paid.
       if (str(res.data, 'code')) {
+        if (!free) track('payment_initiated', { ...funnel, provider: 'sepay' });
         window.location.assign(`/billing/${encodeURIComponent(str(res.data, 'code'))}`);
         return;
       }
@@ -76,7 +111,7 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
         <div className="grid grid-cols-4 gap-1 rounded-full bg-[#F5EFEB] p-1 border border-stone-200/90">
           {catalog.months.map(m => (
             <label key={m} className={`cursor-pointer rounded-full px-1 py-2 text-center text-xs sm:text-sm font-semibold focus-within:ring-2 focus-within:ring-amber-500 ${months === m ? 'bg-stone-900 text-amber-50' : 'text-stone-700 hover:bg-white/70'}`}>
-              <input type="radio" name="months" value={m} checked={months === m} onChange={() => setMonths(m)} className="sr-only" />
+              <input type="radio" name="months" value={m} checked={months === m} onChange={() => selectTerm(m)} className="sr-only" />
               {MONTH_LABEL[m] ?? `${m} tháng`}
               {discountFor(m) > 0 && <span className="block text-[10px] sm:text-[11px] font-bold opacity-80">−{discountFor(m)}%</span>}
             </label>
