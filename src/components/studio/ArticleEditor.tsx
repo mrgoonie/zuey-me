@@ -26,8 +26,8 @@ import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
 import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
-import { parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage } from './recovered-draft';
-import type { DraftRecovery, RestoredRevision } from './recovered-draft';
+import { latestDraftFrom, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage } from './recovered-draft';
+import type { DraftRecovery, LatestDraft, RestoredRevision } from './recovered-draft';
 import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../../lib/blocks/icons';
 import type { IconSize } from '../../lib/blocks/icons';
 
@@ -1048,11 +1048,12 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
 
   const setDraft = (patch: Partial<Draft>) => setEditing(e => (e ? { ...e, draft: { ...e.draft, ...patch } } : e));
 
-  const save = useCallback(async (overrideRevision?: number) => {
+  /** latest: the re-read stored state when overwriting after a conflict (its revision and recovery win). */
+  const save = useCallback(async (latest?: LatestDraft) => {
     if (!editing || busy) return;
     if (clientErrors.length > 0) { setStatus({ text: 'Sửa lỗi block trước khi lưu.', error: true }); return; }
     // Saving always sends the whole document: never write a recovered draft back without an explicit yes.
-    const confirmQuestion = saveConfirmMessage(editing.recovery, editing.restored, editing.draft.locale);
+    const confirmQuestion = saveConfirmMessage(latest ? latest.recovery : editing.recovery, editing.restored, editing.draft.locale);
     if (confirmQuestion && !window.confirm(confirmQuestion)) {
       setStatus({ text: 'Chưa lưu: bản nháp đã lưu được giữ nguyên.', error: false });
       return;
@@ -1068,7 +1069,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       ? await api(`/api/v1/articles/${encodeURIComponent(editing.originalSlug)}`, {
         method: 'PUT',
         body: {
-          ...common, expected_revision: overrideRevision ?? editing.revision,
+          ...common, expected_revision: latest?.revision ?? editing.revision,
           ...(d.slug !== editing.originalSlug ? { slug: d.slug } : {}),
           ...(editing.editions.some(e => e.locale === d.primary_locale) ? { primary_locale: d.primary_locale } : {}),
         },
@@ -1104,9 +1105,12 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     if (!editing?.originalSlug) return;
     if (!window.confirm('Ghi đè thay đổi vừa được lưu ở nơi khác bằng bản của bạn?')) return;
     const res = await api(`/api/v1/articles/${encodeURIComponent(editing.originalSlug)}?draft=1&lang=${editing.draft.locale}`);
-    if (!res.ok || !isObj(res.data) || typeof res.data.revision !== 'number') { setStatus({ text: res.message || 'Không đọc được bản mới nhất', error: true }); return; }
+    const latest = res.ok ? latestDraftFrom(res.data) : null;
+    if (!latest) { setStatus({ text: res.message || 'Không đọc được bản mới nhất', error: true }); return; }
     setConflict(null);
-    await save(res.data.revision);
+    // The stored draft may have been replaced by one that needs recovery: warn and confirm against it.
+    setEditing(e => (e ? { ...e, recovery: latest.recovery } : e));
+    await save(latest);
   };
 
   const switchLocale = async (locale: Locale) => {

@@ -29,6 +29,23 @@ export function parseDraftRecovery(v: unknown): DraftRecovery | null {
   return r.unreadable || r.droppedBlocks > 0 || r.degradedEmbeds > 0 ? r : null;
 }
 
+/** Latest stored state of the edition being edited, re-read before overwriting after a revision conflict. */
+export interface LatestDraft {
+  revision: number;
+  recovery: DraftRecovery | null;
+}
+
+/**
+ * Reads the revision and the stored draft's recovery from a fresh admin draft read. The recovery
+ * must come from this read, not the first load: the draft may have been replaced by a recovered one since.
+ * A locale fallback means the edition does not exist yet, so another edition's recovery does not apply.
+ */
+export function latestDraftFrom(data: unknown): LatestDraft | null {
+  if (typeof data !== 'object' || data === null || !('revision' in data) || typeof data.revision !== 'number') return null;
+  const fallback = 'locale_fallback' in data && data.locale_fallback === true;
+  return { revision: data.revision, recovery: fallback || !('recovery' in data) ? null : parseDraftRecovery(data.recovery) };
+}
+
 /** Saving would write a document the editor could not show as stored. */
 export function needsOverwriteConfirm(r: DraftRecovery | null): boolean {
   return r !== null && (r.unreadable || r.droppedBlocks > 0 || r.degradedEmbeds > 0);

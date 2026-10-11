@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import {
-  needsOverwriteConfirm, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage,
+  latestDraftFrom, needsOverwriteConfirm, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage,
 } from '../src/components/studio/recovered-draft';
 
 // Studio warns about a recovered draft and asks before a save writes the recovered document back.
@@ -68,5 +68,24 @@ describe('restoring a recovered History revision', () => {
   it('warns while the restored revision is in the editor', () => {
     expect(restoredRevisionWarning({ revision: 3, recovery: lossy }, 'vi')).toContain('Revision r3 (bản vi) không còn hợp lệ hoàn toàn');
     expect(restoredRevisionWarning({ revision: 5, recovery: { droppedBlocks: 0, degradedEmbeds: 0, unreadable: true } }, 'ja')).toContain('không đọc được nên được nạp dạng trống');
+  });
+});
+describe('overwrite after a revision conflict', () => {
+  it('confirms against the recovery of the re-read draft, not the first load', () => {
+    // First load: clean draft. Meanwhile someone stored a draft that now needs recovery.
+    const latest = latestDraftFrom({ revision: 7, recovery: { dropped_blocks: 2, degraded_embeds: 0, unreadable: false } });
+    expect(latest).toEqual({ revision: 7, recovery: { droppedBlocks: 2, degradedEmbeds: 0, unreadable: false } });
+    expect(saveConfirmMessage(latest?.recovery ?? null, null, 'vi')).toContain('2 block không hợp lệ');
+  });
+
+  it('drops a recovery that the re-read no longer reports', () => {
+    expect(latestDraftFrom({ revision: 3, recovery: null })).toEqual({ revision: 3, recovery: null });
+  });
+
+  it('ignores another edition shown as a locale fallback and rejects a read without a revision', () => {
+    expect(latestDraftFrom({ revision: 4, locale_fallback: true, recovery: { dropped_blocks: 1, degraded_embeds: 0, unreadable: false } }))
+      .toEqual({ revision: 4, recovery: null });
+    expect(latestDraftFrom({ recovery: null })).toBeNull();
+    expect(latestDraftFrom(null)).toBeNull();
   });
 });
