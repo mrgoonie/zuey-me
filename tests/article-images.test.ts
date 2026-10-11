@@ -42,8 +42,15 @@ describe('article images are horizontally centred', () => {
       id: 'g1', type: 'gallery', caption: 'Bộ ảnh',
       images: [{ url: 'https://cdn.test/a.png', alt: 'A', caption: 'Một' }],
     }]);
-    expect(html).toContain('<figure class="zb-figure zb-figure-center"><ul class="zb-gallery">');
+    expect(html).toContain('<figure class="zb-figure zb-figure-center"><ul class="zb-gallery" data-count="1">');
     expect(html).toContain('<figcaption>Bộ ảnh</figcaption>');
+  });
+
+  it('tags galleries with their image count, capped at 4 ("4 or more")', () => {
+    const images = (n: number) => Array.from({ length: n }, (_, i) => ({ url: `https://cdn.test/${i}.png`, alt: `${i}` }));
+    for (const [n, tag] of [[2, '2'], [3, '3'], [4, '4'], [9, '4']] as const) {
+      expect(render([{ id: 'g', type: 'gallery', images: images(n) }])).toContain(`<ul class="zb-gallery" data-count="${tag}">`);
+    }
   });
 
   it('keeps the natural ratio and never overflows the column', () => {
@@ -59,11 +66,15 @@ describe('article images are horizontally centred', () => {
     expect(rule(blocksCss, '.zb-figure-center img')).toContain('margin-inline: auto');
   });
 
-  it('keeps short galleries centred without stretching tiles', () => {
-    const gallery = rule(mediaCss, '.zb-gallery');
-    expect(gallery).toContain('repeat(auto-fit,');
-    const tile = rule(mediaCss, '.zb-gallery > li');
-    expect(tile).toContain('justify-self: center');
-    expect(tile).toMatch(/max-width:\s*\d+px/);
+  it('keeps large galleries on an auto-fill grid whose tile size ignores the image count', () => {
+    expect(rule(mediaCss, '.zb-gallery')).toContain('repeat(auto-fill, minmax(min(100%, 160px), 1fr))');
+    expect(mediaCss).not.toContain('.zb-gallery[data-count="4"]');
+  });
+
+  it('centres short galleries as a group with one capped track per image', () => {
+    expect(rule(mediaCss, '.zb-gallery[data-count="1"]')).toMatch(/grid-template-columns: minmax\(0, 320px\);\s*justify-content: center/);
+    expect(rule(mediaCss, '.zb-gallery[data-count="2"]')).toMatch(/grid-template-columns: repeat\(2, minmax\(0, 320px\)\);\s*justify-content: center/);
+    // Three tiles only once the viewport is wide enough; narrower screens keep the auto-fill grid.
+    expect(mediaCss).toMatch(/@media \(min-width: 640px\) \{\s*\.zb-gallery\[data-count="3"\] \{ grid-template-columns: repeat\(3, minmax\(0, 240px\)\); justify-content: center; \}/);
   });
 });

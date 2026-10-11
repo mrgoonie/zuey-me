@@ -64,7 +64,7 @@ export function MediaBlockView({ block, renderBlocks, renderInline }: MediaBlock
     case 'gallery':
       return (
         <figure className="zb-figure zb-figure-center">
-          <ul className="zb-gallery">
+          <ul className="zb-gallery" data-count={Math.min(block.images.length, 4)}>
             {block.images.map((img, i) => (
               <li key={i}>
                 <figure>
