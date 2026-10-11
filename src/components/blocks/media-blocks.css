@@ -8,21 +8,35 @@
 .zb-math code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92rem; white-space: pre; color: #292524; }
 .zb-math-tag { display: block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #a8a29e; margin-bottom: 0.35rem; }
 
-.zb-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
-/* Short galleries get exactly one track per image, centred as a group with the normal gap, so they never
-   leave empty auto-fill tracks on one side. The switch keys off the gallery's own width (container query,
-   so it also holds inside narrow layout cells) and only kicks in once every tile keeps the 160px minimum:
-   2 x 160 + gap = 329.6px, 3 x 160 + 2 gaps = 499.2px. Narrower galleries use the auto-fill grid (1-up).
-   Galleries of four or more always use the auto-fill grid: tile size does not depend on the image count
-   and a partial last row stays left-aligned on purpose, like any grid. */
-.zb-gallery-wrap { container-type: inline-size; }
-.zb-gallery[data-count="1"] { grid-template-columns: minmax(0, 320px); justify-content: center; }
-@container (min-width: 330px) {
-  .zb-gallery[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 320px)); justify-content: center; }
+/* Galleries wrap equal tiles and centre every row, including an incomplete last row, so the empty space
+   is the same on both sides. The column count is the most tiles of at least 160px that fit the gallery's
+   own width (container query, so it also holds inside narrow layout cells), never more than the number of
+   images (`data-count`, capped at 6):
+     1 column below 329.6px, 2 from 329.6px (2 x 160 + gap), 3 from 499.2px, 4 from 668.8px,
+     5 from 838.4px, 6 from 1008px.
+   Tiles share the row width; one or two images stay at most 320px wide and three at most 240px. */
+.zb-gallery {
+  --zb-gallery-gap: 0.6rem;
+  --zb-gallery-cols: 1;
+  --zb-gallery-tile-max: 100%;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: var(--zb-gallery-gap);
+  margin: 0; padding: 0; list-style: none;
 }
-@container (min-width: 500px) {
-  .zb-gallery[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 240px)); justify-content: center; }
+.zb-gallery > li {
+  flex: 0 0 min(var(--zb-gallery-tile-max), (100% - (var(--zb-gallery-cols) - 1) * var(--zb-gallery-gap)) / var(--zb-gallery-cols));
+  min-width: 0;
 }
+.zb-gallery:is([data-count="1"], [data-count="2"]) { --zb-gallery-tile-max: 320px; }
+.zb-gallery[data-count="3"] { --zb-gallery-tile-max: 240px; }
+/* An inline-size container has no intrinsic width of its own, so inside a parent that sizes to its content
+   (inline-block, fit-content, a flex row) it would collapse to 0px. Filling the parent and falling back to
+   one minimum tile as the intrinsic width keeps the gallery visible there. */
+.zb-gallery-wrap { container-type: inline-size; width: 100%; contain-intrinsic-inline-size: 160px; }
+@container (min-width: 329.6px) { .zb-gallery:not([data-count="1"]) { --zb-gallery-cols: 2; } }
+@container (min-width: 499.2px) { .zb-gallery:is([data-count="3"], [data-count="4"], [data-count="5"], [data-count="6"]) { --zb-gallery-cols: 3; } }
+@container (min-width: 668.8px) { .zb-gallery:is([data-count="4"], [data-count="5"], [data-count="6"]) { --zb-gallery-cols: 4; } }
+@container (min-width: 838.4px) { .zb-gallery:is([data-count="5"], [data-count="6"]) { --zb-gallery-cols: 5; } }
+@container (min-width: 1008px) { .zb-gallery[data-count="6"] { --zb-gallery-cols: 6; } }
 .zb-gallery figure { margin: 0; }
 .zb-gallery img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.8rem; background: #e7e5e4; }
 .zb-gallery figcaption { font-size: 0.78rem; color: #78716c; margin-top: 0.25rem; }

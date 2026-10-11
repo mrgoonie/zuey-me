@@ -63,13 +63,6 @@ describe('article images are horizontally centred', () => {
     expect(html).toContain('<figcaption>Bộ ảnh</figcaption>');
   });
 
-  it('tags galleries with their image count, capped at 4 ("4 or more")', () => {
-    const images = (n: number) => Array.from({ length: n }, (_, i) => ({ url: `https://cdn.test/${i}.png`, alt: `${i}` }));
-    for (const [n, tag] of [[2, '2'], [3, '3'], [4, '4'], [9, '4']] as const) {
-      expect(render([{ id: 'g', type: 'gallery', images: images(n) }])).toContain(`<ul class="zb-gallery" data-count="${tag}">`);
-    }
-  });
-
   it('keeps the natural ratio and never overflows the column', () => {
     const img = rule(blocksCss, '.zb-figure img').decls;
     expect(img.get('max-width')).toBe('100%');
@@ -83,28 +76,86 @@ describe('article images are horizontally centred', () => {
     expect(rule(blocksCss, '.zb-figure-center img').decls.get('margin-inline')).toBe('auto');
   });
 
-  it('keeps large galleries on an auto-fill grid whose tile size ignores the image count', () => {
-    expect(rule(mediaCss, '.zb-gallery').decls.get('grid-template-columns')).toBe(`repeat(auto-fill,minmax(min(100%,${TILE_MIN}px),1fr))`);
-    expect(mediaCss).not.toMatch(/data-count="4"/);
+  it('wraps gallery tiles and centres every row, including an incomplete last row', () => {
+    const gallery = rule(mediaCss, '.zb-gallery').decls;
+    expect(gallery.get('display')).toBe('flex');
+    expect(gallery.get('flex-wrap')).toBe('wrap');
+    expect(gallery.get('justify-content')).toBe('center');
+    expect(gallery.get('--zb-gallery-gap')).toBe('0.6rem');
+    // Fixed tile basis (no grow): a short last row keeps the tile size and is centred, not stretched.
+    const flex = rule(mediaCss, '.zb-gallery > li').decls.get('flex') ?? '';
+    expect(flex.startsWith('0 0 ')).toBe(true);
+    expect(flex.slice(4).replace(/\s+/g, '')).toBe(
+      'min(var(--zb-gallery-tile-max),(100%-(var(--zb-gallery-cols)-1)*var(--zb-gallery-gap))/var(--zb-gallery-cols))',
+    );
   });
 
-  it('sizes short galleries by their own width (container query), never below the tile minimum', () => {
-    expect(rule(mediaCss, '.zb-gallery-wrap').decls.get('container-type')).toBe('inline-size');
+  it('keeps the gallery from collapsing in parents that size to their content', () => {
+    const wrap = rule(mediaCss, '.zb-gallery-wrap').decls;
+    expect(wrap.get('container-type')).toBe('inline-size');
+    expect(wrap.get('width')).toBe('100%');
+    expect(wrap.get('contain-intrinsic-inline-size')).toBe(`${TILE_MIN}px`);
+  });
 
-    const one = rule(mediaCss, '.zb-gallery[data-count="1"]');
-    expect(one.decls.get('grid-template-columns')).toBe('minmax(0,320px)');
-    expect(one.decls.get('justify-content')).toBe('center');
-    expect(one.containerMinWidth).toBeNull();
-
-    for (const n of [2, 3]) {
-      const r = rule(mediaCss, `.zb-gallery[data-count="${n}"]`);
-      expect(r.decls.get('justify-content')).toBe('center');
-      expect(r.decls.get('grid-template-columns')).toMatch(new RegExp(`^repeat\\(${n},minmax\\(0,\\d+px\\)\\)$`));
-      // The switch must only happen once n tiles of at least TILE_MIN fit next to each other.
-      expect(r.containerMinWidth).not.toBeNull();
-      expect(r.containerMinWidth ?? 0).toBeGreaterThanOrEqual(n * TILE_MIN + (n - 1) * GAP);
+  it('tags galleries with their image count, capped at 6 (the widest row)', () => {
+    const images = (n: number) => Array.from({ length: n }, (_, i) => ({ url: `https://cdn.test/${i}.png`, alt: `${i}` }));
+    for (const [n, tag] of [[2, '2'], [3, '3'], [4, '4'], [6, '6'], [9, '6']] as const) {
+      expect(render([{ id: 'g', type: 'gallery', images: images(n) }])).toContain(`<ul class="zb-gallery" data-count="${tag}">`);
     }
-    // Viewport media queries would ignore narrow layout cells.
-    expect(mediaCss).not.toMatch(/@media[^{]*\{[^}]*data-count/);
+  });
+
+  describe('column model from the stylesheet', () => {
+    const MAX_COUNT = 6;
+    const counts = (selector: string): number[] => {
+      const listed = [...selector.matchAll(/data-count="(\d)"/g)].map(m => Number(m[1]));
+      const all = Array.from({ length: MAX_COUNT }, (_, i) => i + 1);
+      return selector.includes(':not(') ? all.filter(n => !listed.includes(n)) : listed;
+    };
+    // `@container (min-width: Xpx) { <selector> { --zb-gallery-cols: N; } }`
+    const colRules = [...mediaCss.matchAll(/@container\s*\(\s*min-width:\s*([\d.]+)px\s*\)\s*\{\s*([^{]+)\{\s*--zb-gallery-cols:\s*(\d)\s*;\s*\}\s*\}/g)]
+      .map(m => ({ minWidth: Number(m[1]), counts: counts(m[2]), cols: Number(m[3]) }));
+    // Top-level tile caps: `<selector> { --zb-gallery-tile-max: Npx; }`
+    const capRules = [...mediaCss.matchAll(/\n(\.zb-gallery[^{\n]*)\{\s*--zb-gallery-tile-max:\s*(\d+)px;\s*\}/g)]
+      .map(m => ({ counts: counts(m[1]), cap: Number(m[2]) }));
+
+    /** Columns the stylesheet gives `count` images in a gallery `width` px wide (later rules win, as in CSS). */
+    const colsFor = (width: number, count: number) =>
+      colRules.filter(r => width >= r.minWidth && r.counts.includes(count)).reduce((cols, r) => r.cols, 1);
+    const tileFor = (width: number, count: number) => {
+      const cols = colsFor(width, count);
+      const cap = capRules.find(r => r.counts.includes(count))?.cap ?? Infinity;
+      return Math.min(cap, (width - (cols - 1) * GAP) / cols);
+    };
+
+    it('parses every column step and tile cap', () => {
+      expect(colRules.map(r => r.cols)).toEqual([2, 3, 4, 5, 6]);
+      expect(capRules).toEqual([{ counts: [1, 2], cap: 320 }, { counts: [3], cap: 240 }]);
+      // Viewport media queries would ignore narrow layout cells.
+      expect(mediaCss).not.toMatch(/@media[^{]*\{[^}]*data-count/);
+    });
+
+    it('fits as many tiles of at least 160px as the width allows, never more than the images', () => {
+      for (let count = 1; count <= MAX_COUNT; count++) {
+        for (let width = 120; width <= 1200; width += 0.5) {
+          const cols = colsFor(width, count);
+          const fit = Math.max(1, Math.floor((width + GAP) / (TILE_MIN + GAP) + 1e-9));
+          expect({ width, count, cols }).toEqual({ width, count, cols: Math.min(count, fit) });
+          // Tiles keep the minimum unless the gallery itself is narrower, and a row never overflows.
+          const tile = tileFor(width, count);
+          expect(tile).toBeGreaterThanOrEqual(Math.min(TILE_MIN, width) - 1e-9);
+          expect(cols * tile + (cols - 1) * GAP).toBeLessThanOrEqual(width + 1e-9);
+        }
+      }
+    });
+
+    it('fills incomplete rows symmetrically: the leftover width is split evenly by justify-content', () => {
+      // 3 images in a 376px gallery (430px phone): 2 tiles, then 1 centred tile with equal space either side.
+      const width = 376;
+      const cols = colsFor(width, 3);
+      const tile = tileFor(width, 3);
+      expect(cols).toBe(2);
+      const side = (width - tile) / 2;
+      expect(side).toBeCloseTo(96.4, 1);
+    });
   });
 });
