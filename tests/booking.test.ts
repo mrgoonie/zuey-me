@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
+import { beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { generateSlots } from '../src/lib/booking/availability';
 import { zonedTimeToUtc } from '../src/lib/booking/timezone';
@@ -15,6 +16,7 @@ import { POST as checkoutApi } from '../src/pages/api/v1/booking/[id]/checkout';
 import { POST as rescheduleApi } from '../src/pages/api/v1/booking/[id]/reschedule';
 import { PUT as putAvailabilityApi } from '../src/pages/api/v1/booking/availability';
 import { GET as adminListApi, POST as adminActionApi } from '../src/pages/api/v1/booking/admin';
+import { POST as promoCreate } from '../src/pages/api/v1/admin/promo-codes/index';
 import { POST as paypalWebhook } from '../src/pages/api/webhooks/paypal';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
 import { bookingMcpModule } from '../src/lib/booking/mcp';
@@ -489,6 +491,171 @@ describe('reschedule and admin', () => {
     const r = await row(b.id);
     expect(r.status).toBe('cancelled');
     expect(r.admin_note).toBe('Guest asked; refund manually');
+  });
+
+  describe('purchase on admin resolve', () => {
+    const auth = (): Record<string, string> => ({ Authorization: `Bearer ${adminKey}` });
+    const admin = async (env: RuntimeEnv, id: string, action: string): Promise<Response> =>
+      adminActionApi(ctx({ env, method: 'POST', body: { id, action }, headers: auth() }));
+    const sepay = async (env: RuntimeEnv, code: string, amount: number, id: number): Promise<Response> => sepayWebhook(ctx({
+      env, method: 'POST', headers: { Authorization: 'Apikey sepay-key' },
+      body: { id, gateway: 'MBBank', transactionDate: '2026-10-05 07:05:00', accountNumber: '0123456789', content: `CK ZBK${code}`, transferType: 'in', transferAmount: amount, referenceCode: `FT${id}` },
+    }));
+    const purchases = () => d1.raw.query<{ distinct_id: string; dedupe_key: string; properties: string }, []>(
+      "SELECT distinct_id, dedupe_key, properties FROM analytics_outbox WHERE event = 'purchase'",
+    ).all();
+    /** What the outbox looks like once delivered rows are purged (30 days after delivery): no dedupe key is left. */
+    const purgeOutbox = (): void => { d1.raw.run('DELETE FROM analytics_outbox'); };
+
+    it('webhook then resolve: counts the flagged transfers once, under the webhook key', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env, method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      expect((await read(await sepay(env, b.code, 50000000, 7001))).data?.outcome).toBe('needs_attention');
+      expect((await read(await sepay(env, b.code, 2000000, 7002))).data?.outcome).toBe('needs_attention');
+      expect(purchases()).toHaveLength(0);
+
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe('purchase:sepay:7001');
+      expect(outbox[0].distinct_id).toMatch(/^guest_[0-9a-f]{24}$/);
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+      expect(JSON.stringify(outbox)).not.toContain('lan@example.com');
+    });
+
+    it('webhook then resolve: a booking the webhook already counted is not counted again', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT7);
+      await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-paid' });
+      expect(purchases()).toHaveLength(1);
+      expect((await admin(env, b.id, 'mark_attention')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect(purchases().map(p => p.dedupe_key)).toEqual(['purchase:paypal:CAP-paid']);
+
+      // Even after the outbox forgot the key, neither a flag-and-resolve nor a cancel-and-resolve counts it again.
+      purgeOutbox();
+      expect((await admin(env, b.id, 'mark_attention')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect((await admin(env, b.id, 'cancel')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect(purchases()).toHaveLength(0);
+    });
+
+    it('resolve then webhook: the later transfer adds no second purchase', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env, method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      // Payment verified by hand (e.g. a transfer without the booking code) before any webhook matched it.
+      expect((await admin(env, b.id, 'mark_attention')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect((await read(await sepay(env, b.code, 52000000, 7101))).data?.outcome).toBe('already_confirmed');
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe(`purchase:sepay:booking:${b.id}`);
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+
+      // A re-resolve after the transfer was recorded does not switch to the transfer's key and count it again.
+      purgeOutbox();
+      expect((await admin(env, b.id, 'cancel')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect(purchases()).toHaveLength(0);
+    });
+
+    it('resolve twice: one purchase, also across a cancel and a second resolve', async () => {
+      const env = fullEnv();
+      const b = await holdOk(env, SLOT_OCT7);
+      now += 20 * 60 * 1000;
+      await paypalEvent(env, { bookingId: b.id, amount: 199900, captureId: 'CAP-late' });
+      expect((await row(b.id)).attention_reason).toBe('late_payment');
+
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      const again = await admin(env, b.id, 'resolve');
+      expect(again.status).toBe(409);
+      expect((await read(again)).error?.code).toBe('already_confirmed');
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe('purchase:paypal:CAP-late');
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false });
+
+      purgeOutbox();
+      expect((await admin(env, b.id, 'cancel')).status).toBe(200);
+      expect((await admin(env, b.id, 'resolve')).status).toBe(200);
+      expect(purchases()).toHaveLength(0);
+    });
+
+    it('resolve while the webhook is in flight (transfer recorded, confirm not yet applied): one purchase', async () => {
+      const b = await holdOk(fullEnv(), SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env: fullEnv(), method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      let resolved: Response | null = null;
+      const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+        bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
+        first: () => stmt.first(),
+        all: () => stmt.all(),
+        run: async () => {
+          resolved = await admin(fullEnv(), b.id, 'resolve');
+          return stmt.run();
+        },
+      });
+      // The admin resolves the held booking between the webhook's payment_events INSERT and its confirm UPDATE.
+      const interleaved: D1DatabaseLike = {
+        prepare: (query: string) => query.includes("SET status = 'confirmed', amount_paid") ? wrap(d1.prepare(query)) : d1.prepare(query),
+        batch: statements => d1.batch(statements),
+      };
+      const res = await sepay({ ...fullEnv(), DB: interleaved }, b.code, 52000000, 7301);
+      expect((await read(res)).data?.outcome).toBe('already_confirmed');
+      expect(resolved).not.toBeNull();
+      expect((await row(b.id)).status).toBe('confirmed');
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe('purchase:sepay:7301');
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+    });
+
+    it('resolving a free booking queues no purchase', async () => {
+      const env = fullEnv();
+      const promo = await promoCreate(ctx({ env, method: 'POST', body: { code: 'GIFTCALL', percent: 100, products: ['booking'] }, headers: auth() }));
+      expect(promo.status).toBe(201);
+      const res = await holdApi(ctx({
+        env, method: 'POST',
+        body: { slot_start: SLOT_OCT7, name: 'Lan', email: 'lan@example.com', payment_method: 'sepay', discount_code: 'GIFTCALL' },
+      }));
+      const booking = (await read(res)).data?.booking;
+      if (typeof booking !== 'object' || booking === null || !('id' in booking) || typeof booking.id !== 'string') throw new Error('unexpected hold response');
+      expect((await row(booking.id)).status).toBe('confirmed');
+      expect((await admin(env, booking.id, 'mark_attention')).status).toBe(200);
+      expect((await admin(env, booking.id, 'resolve')).status).toBe(200);
+      expect(purchases()).toHaveLength(0);
+    });
+
+    it('a failing analytics read never blocks the resolve: the booking is confirmed and fulfilled', async () => {
+      const failing: D1DatabaseLike = {
+        prepare: (query: string) => {
+          if (query.includes('FROM payment_events WHERE booking_id')) throw new Error('D1_ERROR: storage unavailable');
+          return d1.prepare(query);
+        },
+        batch: statements => d1.batch(statements),
+      };
+      const b = await holdOk(fullEnv(), SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env: fullEnv(), method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      await sepay(fullEnv(), b.code, 50000000, 7201);
+      calls = [];
+      const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const res = await admin({ ...fullEnv(), DB: failing }, b.id, 'resolve');
+        expect(res.status).toBe(200);
+        expect((await read(res)).data?.status).toBe('confirmed');
+        expect(warn).toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+      const r = await row(b.id);
+      expect(r.status).toBe('confirmed');
+      expect(r.meet_status).toBe('sent');
+      expect(r.email_status).toBe('sent');
+      expect(calls.filter(c => c.url === 'https://api.resend.com/emails').length).toBe(1);
+      expect(purchases()).toHaveLength(0);
+    });
   });
 
   it('exposes MCP tools and an OpenAPI fragment', async () => {
