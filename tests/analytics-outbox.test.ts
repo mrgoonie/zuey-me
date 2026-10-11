@@ -291,6 +291,37 @@ describe('Dodo card events', () => {
     const refunds = rows('refund');
     expect(refunds).toHaveLength(1);
     expect(props(refunds[0])).toEqual({ provider: 'dodo', order_type: 'membership', reason: 'refund', amount: 9, currency: 'USD', partial: false, plan: 'knowledges' });
+    const logged = d1.raw.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM user_activity WHERE user_id = ? AND action = 'billing.card_reversal'").get(userId);
+    expect(logged?.n).toBe(1);
+  });
+
+  it('matches a refund or lost dispute of a renewal charge to its card, once per refund however often it is delivered', async () => {
+    await seedCard();
+    await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', new Date(T0).toISOString()));
+    now += 30 * DAY;
+    await applyDodoEvent(d1, env(), 'wh_2', payment('payment.succeeded', 'pay_2', new Date(now).toISOString()));
+    // The same renewal under another webhook id still maps to one card.
+    await applyDodoEvent(d1, env(), 'wh_3', payment('payment.succeeded', 'pay_2', new Date(now).toISOString()));
+
+    const refund = { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_2', paymentId: 'pay_2', amount: 400, currency: 'USD', isPartial: true } as const;
+    expect(await applyDodoReversal(d1, refund)).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    expect(await applyDodoReversal(d1, refund)).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    const refunds = rows('refund');
+    expect(refunds.map(r => r.dedupe_key)).toEqual(['refund:dodo:refund:ref_2']);
+    expect(refunds[0].distinct_id).toBe(userId);
+    expect(props(refunds[0])).toEqual({ provider: 'dodo', order_type: 'membership', reason: 'refund', amount: 4, currency: 'USD', partial: true, plan: 'knowledges' });
+
+    const lost = { type: 'dispute.lost', kind: 'dispute_lost', objectId: 'dsp_2', paymentId: 'pay_2', amount: 500, currency: 'USD', isPartial: false } as const;
+    expect((await applyDodoReversal(d1, lost)).outcome).toBe('renewal');
+    expect((await applyDodoReversal(d1, lost)).outcome).toBe('renewal');
+    expect(rows('refund').map(r => r.dedupe_key).sort()).toEqual(['refund:dodo:dispute_lost:dsp_2', 'refund:dodo:refund:ref_2']);
+
+    const logged = d1.raw.query<{ detail: string }, [string]>("SELECT detail FROM user_activity WHERE user_id = ? AND action = 'billing.card_reversal' ORDER BY id")
+      .all(userId).map(r => JSON.parse(r.detail));
+    expect(logged).toHaveLength(2);
+    expect(logged[0]).toMatchObject({ card_subscription_id: 'csub_1', kind: 'refund', payment_id: 'pay_2', amount: 400, partial: true, renewal: true });
+    // A payment this site never recorded stays unmatched.
+    expect(await applyDodoReversal(d1, { ...refund, objectId: 'ref_x', paymentId: 'pay_unknown' })).toEqual({ outcome: 'ignored', card_subscription_id: null });
   });
 
   it('counts a collected charge held for review as a flagged purchase, once', async () => {
