@@ -231,6 +231,7 @@ Dewee hỏi zuey.me trước khi agent trả lời một tin nhắn Telegram (Ch
 1. Tạo bot bằng @BotFather, lưu token vào `TELEGRAM_BOT_TOKEN`.
 2. Thêm bot làm admin của hai nhóm kín (tiếng Anh, tiếng Việt) với quyền *Invite users via link* và *Ban users*. Lưu ID nhóm (dạng `-100…`) vào `TELEGRAM_GROUP_EN_ID` và `TELEGRAM_GROUP_VI_ID`.
 3. Tạo chuỗi ngẫu nhiên cho `TELEGRAM_WEBHOOK_SECRET`, rồi đăng ký webhook một lần theo lệnh `setWebhook` ghi trong `.env.example` (URL `https://zuey.me/api/v1/community/telegram-webhook`, `allowed_updates=["chat_member"]`).
+   - Khi có người vào nhóm bằng link mời, webhook gắn tài khoản Telegram với thành viên đã nhận link. Người không có gói $29 bị mời ra ngay (`joined_then_removed`), trừ admin (email đã xác minh nằm trong `ADMIN_EMAILS`), giống quy tắc của sweep ở mục 5. Email trong `ADMIN_EMAILS` nhưng chưa xác minh không được miễn.
 4. Thiếu biến nào thì các endpoint cộng đồng trả `503 community_unconfigured`; thành viên vẫn thấy thẻ cộng đồng trong `/account#community` nhưng chưa nhận được link mời.
 5. **Dọn thành viên hết hạn (sweep):** `POST /api/v1/community/sweep` (admin, hoặc worker `zuey-me-scheduler` bằng `CRON_SECRET`, 5 phút một lần; MCP `community_sweep`) mời ra khỏi nhóm người đã hết gói $29 và huỷ link mời đã hết hạn hoặc của người hết gói.
    - **Admin không bao giờ bị mời ra:** người có email đã xác minh nằm trong `ADMIN_EMAILS` được giữ lại dù không có gói (đếm ở `exempt_admins`). Link mời đã hết hạn của admin vẫn bị dọn.
