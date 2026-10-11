@@ -35,6 +35,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const method = typeof body.method === 'string' ? body.method : '';
   const id = body.id !== undefined ? body.id : null;
 
+  // Notifications (e.g. notifications/initialized from Streamable HTTP clients such as dewee) carry no id and get no body.
+  if (body.id === undefined && method.startsWith('notifications/')) return new Response(null, { status: 202 });
+
   if (method === 'initialize') {
     return rpc({
       jsonrpc: '2.0',

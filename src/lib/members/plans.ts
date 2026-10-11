@@ -1,10 +1,11 @@
 import type { RuntimeEnv } from '../../env';
 
 export type PlanId = 'knowledges' | 'ai' | 'combo' | 'community';
-export type Entitlement = 'read_full' | 'ai_chat' | 'community';
+/** `agent_chat`: talk to the Zuey AI agent on external channels (Telegram @ZueyOSBot) through the dewee access gate. */
+export type Entitlement = 'read_full' | 'ai_chat' | 'agent_chat' | 'community';
 
 export const PLAN_IDS: PlanId[] = ['knowledges', 'ai', 'combo', 'community'];
-export const ENTITLEMENTS: Entitlement[] = ['read_full', 'ai_chat', 'community'];
+export const ENTITLEMENTS: Entitlement[] = ['read_full', 'ai_chat', 'agent_chat', 'community'];
 /** SePay prepay terms. Longer prepayments get the discount in PREPAY_DISCOUNT_PERCENT. */
 export const BILLING_MONTHS = [1, 3, 6, 12] as const;
 export type BillingMonths = (typeof BILLING_MONTHS)[number];
@@ -32,17 +33,17 @@ export const PLANS: Plan[] = [
   },
   {
     id: 'ai', name: 'Zuey AI', tagline: 'Cùng suy nghĩ', price_usd_cents: 900, interval: 'month', ai_budget_usd_cents: 300,
-    entitlements: ['ai_chat'],
+    entitlements: ['ai_chat', 'agent_chat'],
     features: ['Chat với Zuey AI', 'Hỏi đáp trên toàn kho kiến thức', 'Bài trả phí chỉ đọc phần preview'],
   },
   {
     id: 'combo', name: 'Kết hợp', tagline: 'Đọc & hỏi', price_usd_cents: 1900, interval: 'month', ai_budget_usd_cents: 500,
-    entitlements: ['read_full', 'ai_chat'],
+    entitlements: ['read_full', 'ai_chat', 'agent_chat'],
     features: ['Toàn bộ Knowledges + Zuey AI', 'Đọc bài rồi cùng AI thực hành', 'MCP / API tìm, hỏi và đọc nguyên bài'],
   },
   {
     id: 'community', name: 'Cộng đồng', tagline: 'Kết nối sâu hơn', price_usd_cents: 2900, interval: 'month', ai_budget_usd_cents: 500,
-    entitlements: ['read_full', 'ai_chat', 'community'],
+    entitlements: ['read_full', 'ai_chat', 'agent_chat', 'community'],
     features: ['Toàn bộ gói kết hợp', 'Nhóm kín với Duy thật', 'Nhóm tiếng Anh & tiếng Việt'],
   },
 ];

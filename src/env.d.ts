@@ -131,6 +131,13 @@ export interface RuntimeEnv {
   AI_MONTHLY_REQUEST_LIMIT?: string;
   /** Optional blended USD per million tokens used for chat cost estimates. */
   AI_EST_COST_USD_PER_MTOK?: string;
+  // Dewee Channel Access Gate (Zuey AI on Telegram): zuey.me is the external entitlement verifier.
+  /** Service credential (scope channel_access:check) dewee sends as Bearer; accepted only by the channel access check. */
+  CHANNEL_ACCESS_SERVICE_KEY?: string;
+  /** HMAC-SHA256 secret shared with dewee that signs /connect?token=… account-link tokens. */
+  CHANNEL_LINK_TOKEN_SECRET?: string;
+  /** Dewee channel instance id of the gated bot; with DEWEE_GATEWAY_URL/TOKEN enables access/invalidate pushes. */
+  DEWEE_CHANNEL_INSTANCE_ID?: string;
   /** Comma-separated hosts (`api.example.com` or `*.example.com`) interactive blocks may GET via /api/v1/sandbox/fetch. */
   SANDBOX_FETCH_ALLOWLIST?: string;
   // Telegram community ($29 plan): bot must be an admin of both groups with invite + ban rights.

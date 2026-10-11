@@ -1,6 +1,8 @@
 import type { D1DatabaseLike } from '../../db/store';
+import type { RuntimeEnv } from '../../env';
+import { channelAccessPushConfigured, deferChannelAccessPush, invalidateUserChannelAccess } from '../channel-access/invalidate';
 import type { Entitlement, PlanId } from './plans';
-import { entitlementsForPlans, isPlanId } from './plans';
+import { entitlementsForPlans, getPlan, isPlanId } from './plans';
 import type { Row } from './runtime';
 import { iso, membersRuntime, num, randomId, str } from './runtime';
 
@@ -68,12 +70,37 @@ async function cardAccessEnd(d1: D1DatabaseLike, userId: string, plan: PlanId): 
   return end;
 }
 
+export interface RecomputeOptions {
+  /**
+   * When given, a flip of the plan's active status caused by this recompute (payment, reversal, card change) on a plan
+   * that grants `agent_chat` is pushed to dewee so the channel gate re-checks the member at once (best effort; skipped
+   * when the push env is incomplete). Plain clock expiry needs no push: dewee re-checks live once its cache expires.
+   */
+  env?: RuntimeEnv;
+  /** Cloudflare `ctx.waitUntil`: the push runs after the response; without it the push runs inline (bounded). */
+  waitUntil?: (promise: Promise<unknown>) => void;
+}
+
 /**
  * Rebuilds a plan's period end from every paid SePay order (each extends from max(paid_at, previous
  * end) by its months) and from active card subscriptions (provider period end). Deterministic, so
  * re-running is idempotent; when nothing grants the plan any more, access ends now.
  */
-export async function recomputeSubscription(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<SubscriptionView | null> {
+export async function recomputeSubscription(
+  d1: D1DatabaseLike, userId: string, plan: PlanId, opts: RecomputeOptions = {}
+): Promise<SubscriptionView | null> {
+  const env = opts.env;
+  const watch = env !== undefined && getPlan(plan).entitlements.includes('agent_chat') && channelAccessPushConfigured(env);
+  const before = watch ? ((await listSubscriptions(d1, userId)).find(v => v.plan === plan)?.status ?? 'expired') : null;
+  const view = await rebuildSubscription(d1, userId, plan);
+  if (env && watch && (view?.status ?? 'expired') !== before) {
+    // Billing never waits on or fails because of the push: errors are swallowed inside.
+    await deferChannelAccessPush(invalidateUserChannelAccess(d1, env, userId), opts.waitUntil);
+  }
+  return view;
+}
+
+async function rebuildSubscription(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<SubscriptionView | null> {
   const { results } = await d1.prepare(
     "SELECT months, paid_at FROM billing_orders WHERE user_id = ? AND plan = ? AND status = 'paid' AND paid_at IS NOT NULL ORDER BY paid_at, id"
   ).bind(userId, plan).all<Row>();

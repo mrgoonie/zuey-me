@@ -390,7 +390,7 @@ async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: st
 
 /** Extends the plan from paid orders, then records and emails a receipt (email failure never undoes payment). */
 export async function fulfilOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder): Promise<SubscriptionView | null> {
-  const sub = await recomputeSubscription(d1, order.user_id, order.plan);
+  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { env });
   try {
     if (order.promo_code_id) await redeemPromo(d1, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
     await activateInvoiceRequest(d1, env, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);

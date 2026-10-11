@@ -237,7 +237,7 @@ describe('resolving a flagged order', () => {
 
     const reopened = await read(await resolve(code, { action: 'activate' }, auth));
     expect(field(reopened.data, 'outcome')).toBe('activated');
-    expect(await entitlements(lan)).toEqual(['read_full', 'ai_chat']);
+    expect(await entitlements(lan)).toEqual(['read_full', 'ai_chat', 'agent_chat']);
   });
 
   it('validates the body, rejects unknown and non-flagged orders, and enforces CSRF for member admins', async () => {

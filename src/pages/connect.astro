@@ -1,0 +1,71 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { ChannelConnect } from '../components/members/ChannelConnect';
+import type { ChannelConnectProps } from '../components/members/ChannelConnect';
+import { linkPreview, readLinkToken } from '../lib/channel-access/identities';
+import { MAX_LINK_TOKEN_LENGTH } from '../lib/channel-access/link-token';
+import { AppError } from '../lib/http';
+import { isAdminIdentity } from '../lib/members/admins';
+import { safeNextPath } from '../lib/members/runtime';
+import { resolveMemberSession } from '../lib/members/session';
+import { getEntitlements } from '../lib/members/subscriptions';
+
+// Account-link landing for the dewee Channel Access Gate: /connect?token=<dewee-signed token>.
+const env = Astro.locals.runtime?.env ?? {};
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+// The token is in the URL: never leak it through the Referer header.
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+
+/** Keeps the token across sign-in when it is too long for the login `next` path (or the magic link opens elsewhere). */
+const TOKEN_COOKIE = 'zuey_channel_link';
+const queryToken = Astro.url.searchParams.get('token');
+const cookieToken = Astro.cookies.get(TOKEN_COOKIE)?.value ?? null;
+const rawToken = queryToken || cookieToken;
+const token = rawToken && rawToken.length <= MAX_LINK_TOKEN_LENGTH ? rawToken : null;
+
+const current = await resolveMemberSession(Astro.request, env.DB).catch(() => null);
+if (!current) {
+  if (token) {
+    Astro.cookies.set(TOKEN_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'lax', path: '/connect', maxAge: 30 * 60 });
+  }
+  const withToken = token ? `/connect?token=${encodeURIComponent(token)}` : '/connect';
+  return Astro.redirect(`/login?next=${encodeURIComponent(safeNextPath(withToken) === withToken ? withToken : '/connect')}`, 302);
+}
+
+let props: ChannelConnectProps = {
+  state: 'error', token: null, provider: null, senderId: null, senderUsername: null, entitled: false, errorCode: 'missing_token',
+};
+if (token && env.DB) {
+  try {
+    const payload = await readLinkToken(env, token);
+    const state = await linkPreview(env.DB, payload, current.user.id);
+    const entitled = state === 'linked_to_you'
+      && (isAdminIdentity(current.user.email, current.user.email_verified_at, env)
+        || (await getEntitlements(env.DB, current.user.id)).entitlements.includes('agent_chat'));
+    props = {
+      state,
+      token: state === 'ready' ? token : null,
+      provider: payload.channel_type,
+      senderId: payload.sender_id,
+      senderUsername: payload.sender_username,
+      entitled,
+      errorCode: null,
+    };
+  } catch (err) {
+    props = { ...props, errorCode: err instanceof AppError ? err.code : 'invalid_link_token' };
+    if (!(err instanceof AppError)) console.error('connect page failed:', err instanceof Error ? err.message : 'unknown');
+  }
+} else if (token) {
+  props = { ...props, errorCode: 'database_unavailable' };
+}
+---
+
+<Layout title="Liên kết Telegram — Zuey" description="Liên kết tài khoản Telegram với tài khoản zuey.me để chat với Zuey AI." url="https://zuey.me/connect" lang="vi">
+  <main class="relative min-h-screen w-full flex flex-col items-center gap-4 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
+    <div class="w-full max-w-[720px] min-w-0">
+      <a href="/" class="mb-3 inline-block text-xs font-semibold text-stone-200 hover:text-white underline">← zuey.me</a>
+      <ChannelConnect client:load {...props} />
+    </div>
+  </main>
+</Layout>

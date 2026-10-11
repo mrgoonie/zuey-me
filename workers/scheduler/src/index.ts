@@ -20,7 +20,13 @@ interface ExecutionContextLike {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-const JOBS = ['/api/v1/articles/notifications/dispatch', '/api/v1/referrals/jobs/run', '/api/v1/courses/jobs/github-invites'];
+const JOBS = [
+  '/api/v1/articles/notifications/dispatch',
+  '/api/v1/referrals/jobs/run',
+  '/api/v1/courses/jobs/github-invites',
+  // Removes Telegram community members whose plan lapsed (the agent gate itself is checked live per message).
+  '/api/v1/community/sweep',
+];
 
 async function runJob(env: Env, path: string): Promise<string> {
   const base = (env.SITE_URL || 'https://zuey.me').replace(/\/+$/, '');

@@ -11,9 +11,11 @@ import { taxonomyMcpModule } from '../taxonomy/mcp';
 import { promosMcpModule } from '../promos/promo-mcp';
 import { referralsMcpModule } from '../referrals/mcp';
 import { videosMcpModule } from '../videos/mcp';
+import { channelAccessMcpModule } from '../channel-access/mcp';
 
 /** Feature tool modules served by /api/mcp and /mcp in addition to the built-in profile/link tools. */
 export const MCP_FEATURE_MODULES: McpToolModule[] = [
   readsMcpModule, coursesMcpModule, bookingMcpModule, articlesMcpModule, taxonomyMcpModule, membersMcpModule,
   chatMcpModule, accountMcpModule, experienceMcpModule, videosMcpModule, referralsMcpModule, promosMcpModule,
+  channelAccessMcpModule,
 ];

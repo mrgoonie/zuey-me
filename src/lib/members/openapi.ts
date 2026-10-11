@@ -244,7 +244,7 @@ export const membersOpenApi: OpenApiFragment = {
 export const billingOpenApi: OpenApiFragment = {
   tag: {
     name: BILLING_TAG,
-    description: 'Monthly plans: Knowledges $9 (read_full), Zuey AI $9 (ai_chat, $3/month AI budget), Kết hợp $19 (read_full + ai_chat, $5 AI budget), Cộng đồng $29 (+ community, $5 AI budget). SePay bank transfer prepays 1, 3, 6 or 12 months at USD × USD_VND_RATE rounded up to 1,000 VND per month, with 5/10/20% off for 3/6/12-month prepayments. When Dodo Payments is configured, a plan can also be a monthly USD card subscription that renews automatically and is cancellable from the account page. Plans are activated only by a verified SePay or Dodo webhook (or admin reconciliation), never by a checkout redirect.',
+    description: 'Monthly plans: Knowledges $9 (read_full), Zuey AI $9 (ai_chat + agent_chat, $3/month AI budget), Kết hợp $19 (read_full + ai_chat + agent_chat, $5 AI budget), Cộng đồng $29 (+ community, $5 AI budget). agent_chat lets the member chat with the Zuey AI agent on Telegram (dewee channel access gate). SePay bank transfer prepays 1, 3, 6 or 12 months at USD × USD_VND_RATE rounded up to 1,000 VND per month, with 5/10/20% off for 3/6/12-month prepayments. When Dodo Payments is configured, a plan can also be a monthly USD card subscription that renews automatically and is cancellable from the account page. Plans are activated only by a verified SePay or Dodo webhook (or admin reconciliation), never by a checkout redirect.',
   },
   paths: {
     '/api/v1/plans': {
