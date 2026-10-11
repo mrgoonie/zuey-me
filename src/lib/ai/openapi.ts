@@ -142,11 +142,12 @@ export const chatOpenApi: OpenApiFragment = {
         tags, summary: 'Admin: append a chat artifact to an article draft (publish separately)', security: adminSecurity, parameters: [idParam],
         requestBody: {
           required: true,
-          content: json({ type: 'object', required: ['article_slug', 'expected_revision'], properties: { article_slug: { type: 'string' }, expected_revision: { type: 'integer' }, reason: { type: 'string', description: 'Required (and audited) for another member\'s artifact' } } }),
+          content: json({ type: 'object', required: ['article_slug', 'expected_revision'], properties: { article_slug: { type: 'string' }, expected_revision: { type: 'integer' }, reason: { type: 'string', description: 'Required (and audited) for another member\'s artifact' }, confirm_recovered_draft: { type: 'boolean', description: 'Accept saving a draft that needed recovery (its dropped blocks and degraded embeds are lost for good). Never overrides an unreadable draft.' } } }),
         },
         responses: {
           '200': ok('Attached', { type: 'object', properties: { artifact_id: { type: 'string' }, block_id: { type: 'string' }, article: ref('ArticleSummary') } }),
-          '404': err('Artifact or article not found'), '409': err('`revision_conflict`'), '422': err('`invalid_document`'), ...errorResponses,
+          '404': err('Artifact or article not found'),
+          '409': err('`revision_conflict`; `draft_needs_recovery` (the stored draft needed recovery; `error.recovery` tells what would be lost; fix it in Studio or resend with `confirm_recovered_draft: true`); `draft_unreadable` (never overwritten)'), '422': err('`invalid_document`'), ...errorResponses,
         },
       },
     },

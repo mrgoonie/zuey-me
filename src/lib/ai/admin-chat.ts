@@ -4,7 +4,7 @@
  */
 import type { D1DatabaseLike } from '../../db/store';
 import { getArticle, toSummary, updateArticle } from '../blocks/articles';
-import type { ArticleSummary } from '../blocks/articles';
+import type { ArticleSummary, DocumentRecovery } from '../blocks/articles';
 import { validateDocument } from '../blocks/validate';
 import { AppError } from '../http';
 import type { Principal } from '../members/policy';
@@ -35,6 +35,26 @@ export async function adminChatRead(d1: D1DatabaseLike, p: Principal, sessionId:
 }
 
 /**
+ * Attaching saves the whole draft as read, so a draft that needed recovery would lose its dropped
+ * blocks and degraded embeds for good. That needs an explicit confirmation; an unreadable draft
+ * (read as empty) is never overwritten.
+ */
+function refuseLossyDraft(recovery: DocumentRecovery | null, confirmed: boolean): void {
+  if (!recovery) return;
+  const details = { recovery };
+  if (recovery.unreadable) {
+    throw new AppError(409, 'draft_unreadable',
+      'The stored draft is unreadable, so attaching would replace it entirely. Fix the draft in Studio first.', details);
+  }
+  if (confirmed) return;
+  const losses: string[] = [];
+  if (recovery.dropped_blocks > 0) losses.push(`${recovery.dropped_blocks} invalid block(s) would be dropped`);
+  if (recovery.degraded_embeds > 0) losses.push(`${recovery.degraded_embeds} embed(s) would be saved as plain links`);
+  throw new AppError(409, 'draft_needs_recovery',
+    `The stored draft needed recovery: ${losses.join(', ')}. Fix the draft in Studio first, or resend with confirm_recovered_draft: true to accept the loss.`, details);
+}
+
+/**
  * Appends a chat artifact to an article draft (revision-checked). Publishing still goes through the
  * normal article publish flow. Attaching another member's artifact requires a reason and is audited.
  */
@@ -55,6 +75,7 @@ export async function attachArtifact(
   }
   const article = await getArticle(d1, slug);
   if (!article) throw new AppError(404, 'not_found', 'Article not found');
+  refuseLossyDraft(article.draft_recovery, body.confirm_recovered_draft === true);
   const blockId = `ai_${artifactId.replace(/[^A-Za-z0-9_-]/g, '').slice(-20)}_${crypto.randomUUID().slice(0, 6)}`;
   const draft = { version: 1, blocks: [...article.draft.blocks, { ...artifact.block, id: blockId }] };
   const checked = validateDocument(draft);
