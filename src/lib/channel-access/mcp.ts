@@ -1,12 +1,33 @@
 import { AppError } from '../http';
-import type { McpToolModule } from '../mcp/types';
+import type { McpContext, McpToolModule } from '../mcp/types';
+import { adminLabel } from '../members/billing-attention';
+import type { Principal } from '../members/policy';
+import { requireCan, resolvePrincipal } from '../members/policy';
+import { MAX_UNLINK_REASON_LENGTH, adminGetChannelIdentity, adminUnlinkChannelIdentity, parseChannelRef, parseUnlinkReason } from './admin';
 import { CHANNEL_ACCESS_SCOPE, handleChannelAccessCheck } from './check';
 import { SUPPORTED_CHANNEL_TYPES } from './link-token';
+
+async function principalOf(ctx: McpContext): Promise<Principal> {
+  return ctx.principal ? ctx.principal() : resolvePrincipal(ctx.request, { ...ctx.env, DB: ctx.d1 ?? ctx.env.DB });
+}
+
+function requireDb(ctx: McpContext): NonNullable<McpContext['d1']> {
+  const d1 = ctx.d1 ?? ctx.env.DB;
+  if (!d1) throw new AppError(503, 'database_unavailable', 'Membership requires the D1 database binding (DB)');
+  return d1;
+}
+
+const refProperties = {
+  provider: { type: 'string', enum: [...SUPPORTED_CHANNEL_TYPES], description: 'Chat channel (dewee channel_type)' },
+  external_id: { type: 'string', description: 'Platform sender id (Telegram numeric user id)' },
+};
 
 /**
  * `channel_access_check`: the dewee Channel Access Gate verifier tool. Callable only with the dedicated
  * service key (CHANNEL_ACCESS_SERVICE_KEY) on the JSON-RPC endpoint `/api/mcp`; every other credential is
  * rejected inside the tool. The OAuth endpoint `/mcp` never accepts the service key.
+ * `channel_identity_get` / `channel_identity_unlink`: admin recovery for a chat account linked to the wrong
+ * member; read-only admin keys are refused.
  */
 export const channelAccessMcpModule: McpToolModule = {
   tools: [
@@ -30,9 +51,38 @@ export const channelAccessMcpModule: McpToolModule = {
         },
       },
     },
+    {
+      name: 'channel_identity_get',
+      description: 'Admin: which member (id, email, name) holds a linked chat account, with linked_at and source (link_token or community_backfill). 404 not_found when the sender id is not linked.',
+      inputSchema: { type: 'object', required: ['provider', 'external_id'], properties: refProperties },
+    },
+    {
+      name: 'channel_identity_unlink',
+      description: 'Admin: unlink a chat account from whichever member holds it (e.g. a wrong community backfill or a link made on someone else\'s device), so the real owner can link it at /connect. Logs channel.unlinked on the affected member with you as actor and the optional reason, and tells dewee to drop its cached gate decision for that sender. Read-only keys are refused; 404 not_found when the sender id is not linked.',
+      inputSchema: {
+        type: 'object',
+        required: ['provider', 'external_id'],
+        properties: { ...refProperties, reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Why it was unlinked (written to the member activity log)' } },
+      },
+    },
   ],
   async call(name, args, ctx) {
-    if (name !== 'channel_access_check') throw new AppError(404, 'unknown_tool', `Unknown tool ${name}`);
-    return handleChannelAccessCheck(ctx.request, { ...ctx.env, DB: ctx.d1 ?? ctx.env.DB }, args);
+    switch (name) {
+      case 'channel_access_check':
+        return handleChannelAccessCheck(ctx.request, { ...ctx.env, DB: ctx.d1 ?? ctx.env.DB }, args);
+      case 'channel_identity_get': {
+        requireCan(await principalOf(ctx), 'admin');
+        return adminGetChannelIdentity(requireDb(ctx), parseChannelRef(args.provider, args.external_id));
+      }
+      case 'channel_identity_unlink': {
+        const p = await principalOf(ctx);
+        requireCan(p, 'admin');
+        const ref = parseChannelRef(args.provider, args.external_id);
+        const reason = parseUnlinkReason(args.reason);
+        return adminUnlinkChannelIdentity(requireDb(ctx), ctx.env, ref, { admin: adminLabel(p), reason, request: ctx.request, waitUntil: ctx.waitUntil });
+      }
+      default:
+        throw new AppError(404, 'unknown_tool', `Unknown tool ${name}`);
+    }
   },
 };
