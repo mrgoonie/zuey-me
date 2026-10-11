@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
 import { BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, consentState, setOptOut, type ConsentEnvironment } from '../src/lib/analytics/consent';
 import {
-  DEFAULT_POSTHOG_KEY, createPostHogServerDestination, isSensitivePath, resolvePostHogConfig, scrubCaptureResult,
+  DEFAULT_POSTHOG_KEY, createPostHogServerDestination, getPostHog, isSensitivePath, postHogClientDestination, resolvePostHogConfig, scrubCaptureResult,
 } from '../src/lib/analytics/destinations/posthog';
 import type { ClientDestination, ServerDestination } from '../src/lib/analytics/destinations/types';
 import { validateEvent, type Taxonomy } from '../src/lib/analytics/events';
@@ -489,5 +489,52 @@ describe('blocked storage', () => {
     const env: ConsentEnvironment = { navigator: {}, storage: BLOCKED_STORAGE };
     expect(consentState(env)).toBe('opted_out');
     expect(setOptOut(false, env)).toBe(false);
+  });
+});
+
+describe('PostHog snippet stub', () => {
+  /** Mirrors the official loader snippet: before init() the array stub only has `init` and `__SV`. */
+  function snippetStub() {
+    const stub = Object.assign([] as unknown[], { __SV: 1, _i: [] as unknown[] });
+    Reflect.set(stub, 'init', (key: string, config: Record<string, unknown>) => {
+      for (const method of ['capture', 'identify', 'reset', 'opt_out_capturing', 'opt_in_capturing']) {
+        Reflect.set(stub, method, (...args: unknown[]) => { stub.push([method, ...args]); });
+      }
+      stub._i.push([key, config]);
+    });
+    return stub;
+  }
+
+  function withWindow<T>(posthog: unknown, run: () => T): T {
+    const hadWindow = 'window' in globalThis;
+    const previous: unknown = Reflect.get(globalThis, 'window');
+    Reflect.set(globalThis, 'window', { posthog });
+    try {
+      return run();
+    } finally {
+      if (hadWindow) Reflect.set(globalThis, 'window', previous);
+      else Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+
+  test('the pre-init stub is accepted so boot can call init()', () => {
+    const stub = snippetStub();
+    withWindow(stub, () => {
+      const ph = getPostHog();
+      expect(ph).not.toBeNull();
+      postHogClientDestination.capture('before_init', {});
+      expect(stub.length).toBe(0);
+      ph?.init('phc_test', { api_host: 'https://us.i.posthog.com' });
+      postHogClientDestination.capture('after_init', { a: 1 });
+      postHogClientDestination.identify('mem_1');
+      expect([...stub]).toEqual([['capture', 'after_init', { a: 1 }], ['identify', 'mem_1']]);
+      expect(stub._i.length).toBe(1);
+    });
+  });
+
+  test('values without an init function are rejected', () => {
+    for (const value of [null, undefined, 'posthog', {}, [], { capture: () => undefined }]) {
+      withWindow(value, () => expect(getPostHog()).toBeNull());
+    }
   });
 });

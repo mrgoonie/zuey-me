@@ -78,23 +78,25 @@ export function isProductionBuild(): boolean {
 // ---------------------------------------------------------------------------------------------------
 // Browser adapter
 
-/** The subset of posthog-js (or its queueing snippet stub) this app calls. */
+/**
+ * The subset of posthog-js (or its queueing snippet stub) this app calls. Before `init()` the snippet
+ * stub only exposes `init`; it attaches `capture`, `identify` and the rest when `init()` runs, and the
+ * loaded library replaces them later. So only `init` is guaranteed and every other method is optional.
+ */
 export interface PostHogLike {
   init(key: string, config: Record<string, unknown>): unknown;
   get_distinct_id?(): unknown;
-  capture(event: string, properties?: Record<string, unknown>): unknown;
-  identify(distinctId: string): unknown;
-  reset(): unknown;
-  opt_out_capturing(): unknown;
-  opt_in_capturing(): unknown;
+  capture?(event: string, properties?: Record<string, unknown>): unknown;
+  identify?(distinctId: string): unknown;
+  reset?(): unknown;
+  opt_out_capturing?(): unknown;
+  opt_in_capturing?(): unknown;
 }
-
-const POSTHOG_METHODS = ['init', 'capture', 'identify', 'reset', 'opt_out_capturing', 'opt_in_capturing'] as const;
 
 function isPostHogLike(value: unknown): value is PostHogLike {
   if (typeof value !== 'object' && typeof value !== 'function') return false;
   if (value === null) return false;
-  return POSTHOG_METHODS.every(m => m in value && typeof Reflect.get(value, m) === 'function');
+  return 'init' in value && typeof Reflect.get(value, 'init') === 'function';
 }
 
 /** `window.posthog` when the snippet has run, else null (server, blocked script, tests). */
@@ -183,11 +185,11 @@ function safely(run: () => unknown): void {
 /** Browser adapter over `window.posthog`. Every call is a silent no-op when PostHog is absent. */
 export const postHogClientDestination: ClientDestination = {
   name: 'posthog',
-  capture: (event, properties) => safely(() => getPostHog()?.capture(event, properties)),
-  identify: memberId => safely(() => getPostHog()?.identify(memberId)),
-  reset: () => safely(() => getPostHog()?.reset()),
-  optOut: () => safely(() => getPostHog()?.opt_out_capturing()),
-  optIn: () => safely(() => getPostHog()?.opt_in_capturing()),
+  capture: (event, properties) => safely(() => getPostHog()?.capture?.(event, properties)),
+  identify: memberId => safely(() => getPostHog()?.identify?.(memberId)),
+  reset: () => safely(() => getPostHog()?.reset?.()),
+  optOut: () => safely(() => getPostHog()?.opt_out_capturing?.()),
+  optIn: () => safely(() => getPostHog()?.opt_in_capturing?.()),
   distinctId: () => {
     try {
       const id: unknown = getPostHog()?.get_distinct_id?.();
