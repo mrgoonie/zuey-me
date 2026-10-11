@@ -64,6 +64,11 @@ function safeStorage(): ConsentStorage | null {
   return pageStorage;
 }
 
+/** Forgets the per-page probe result so the next read probes again (tests that swap browser globals). */
+export function resetConsentStorageProbe(): void {
+  pageStorage = undefined;
+}
+
 /**
  * Builds an environment whose storage is resolved only when first read. `consentState` checks Do Not
  * Track and Global Privacy Control before reading storage, so those visitors get no storage probe at all.
@@ -105,12 +110,6 @@ function readOptOut(env: ConsentEnvironment): boolean | 'blocked' {
   }
 }
 
-/** True when analytics must stay off for this browser's own choice, including when storage is blocked. */
-export function isOptedOut(env: ConsentEnvironment): boolean {
-  // Storage blocked: treat as opted out rather than tracking someone who may have opted out.
-  return readOptOut(env) !== false;
-}
-
 export function consentState(env: ConsentEnvironment = browserConsentEnvironment()): ConsentState {
   if (hasDoNotTrack(env)) return 'do_not_track';
   const optOut = readOptOut(env);
@@ -137,8 +136,12 @@ export function canTrack(env: ConsentEnvironment = browserConsentEnvironment()):
   return consentState(env) === 'granted';
 }
 
-/** Stores the opt-out flag. Returns false when storage is unavailable (the choice cannot persist). */
+/**
+ * Stores the opt-out flag. Returns false when storage is unavailable (the choice cannot persist) and,
+ * without touching storage, when the browser sends Do Not Track or Global Privacy Control.
+ */
 export function setOptOut(optOut: boolean, env: ConsentEnvironment = browserConsentEnvironment()): boolean {
+  if (hasDoNotTrack(env)) return false;
   try {
     if (!env.storage) return false;
     if (optOut) env.storage.setItem(OPT_OUT_STORAGE_KEY, '1');

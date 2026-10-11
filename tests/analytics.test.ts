@@ -1,9 +1,9 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { PROVIDER_LABELS } from '../src/lib/blocks/embed';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
 import {
-  BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, lazyConsentEnvironment,
-  resolveConsentStorage, setOptOut, type ConsentEnvironment,
+  BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, canTrack, consentControlView, consentState, lazyConsentEnvironment,
+  resetConsentStorageProbe, resolveConsentStorage, setOptOut, type ConsentEnvironment,
 } from '../src/lib/analytics/consent';
 import { CONSENT_CONTROL_COPY, renderConsentControl } from '../src/lib/analytics/consent-control';
 import {
@@ -127,7 +127,7 @@ describe('consent', () => {
   test('storage that throws on read reports storage_blocked and never tracks', () => {
     const throwing = { getItem: (): string | null => { throw new Error('blocked'); }, setItem: () => undefined, removeItem: () => undefined };
     expect(consentState(env({ storage: throwing }))).toBe('storage_blocked');
-    expect(isOptedOut(env({ storage: throwing }))).toBe(true);
+    expect(canTrack(env({ storage: throwing }))).toBe(false);
   });
 
   test('Do Not Track still wins over blocked storage', () => {
@@ -572,6 +572,70 @@ describe('blocked storage', () => {
     client.track('social_clicked', { platform: 'github' });
     expect(client.optIn()).toBe('storage_blocked');
     expect(calls.filter(c => c.method === 'capture' || c.method === 'optIn')).toEqual([]);
+  });
+});
+
+describe('browser consent environment', () => {
+  const GLOBALS = ['window', 'navigator', 'localStorage'] as const;
+  let saved: Map<string, PropertyDescriptor | undefined>;
+
+  beforeEach(() => {
+    saved = new Map(GLOBALS.map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
+    resetConsentStorageProbe();
+  });
+
+  afterEach(() => {
+    for (const k of GLOBALS) {
+      const descriptor = saved.get(k);
+      if (descriptor) Object.defineProperty(globalThis, k, descriptor);
+      else Reflect.deleteProperty(globalThis, k);
+    }
+    resetConsentStorageProbe();
+  });
+
+  /** Stubs the browser globals; returns every touch of `localStorage` (the getter and each method). */
+  function stubBrowser(nav: { doNotTrack?: string; globalPrivacyControl?: boolean }): string[] {
+    const touched: string[] = [];
+    const local = new MemoryStorage();
+    const spy = {
+      getItem: (k: string) => { touched.push(`getItem:${k}`); return local.getItem(k); },
+      setItem: (k: string, v: string) => { touched.push(`setItem:${k}`); local.setItem(k, v); },
+      removeItem: (k: string) => { touched.push(`removeItem:${k}`); local.removeItem(k); },
+    };
+    Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { doNotTrack: null } });
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: nav });
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => { touched.push('localStorage'); return spy; } });
+    return touched;
+  }
+
+  test('the real consentState() never touches localStorage when DNT or GPC is on', () => {
+    for (const nav of [{ doNotTrack: '1' }, { globalPrivacyControl: true }]) {
+      resetConsentStorageProbe();
+      const touched = stubBrowser(nav);
+      expect(consentState()).toBe('do_not_track');
+      expect(canTrack()).toBe(false);
+      expect(setOptOut(true)).toBe(false);
+      expect(setOptOut(false)).toBe(false);
+      expect(touched).toEqual([]);
+    }
+  });
+
+  test('the real consentState() probes localStorage once when no DNT or GPC is sent', () => {
+    const touched = stubBrowser({});
+    expect(consentState()).toBe('granted');
+    expect(consentState()).toBe('granted');
+    expect(touched.filter(t => t === `setItem:${STORAGE_PROBE_KEY}`)).toEqual([`setItem:${STORAGE_PROBE_KEY}`]);
+  });
+
+  test('client opt-out and opt-in never read consent storage for a DNT or GPC visitor', () => {
+    for (const nav of [{ doNotTrack: '1' }, { globalPrivacyControl: true }]) {
+      let reads = 0;
+      const consent = lazyConsentEnvironment(nav, null, () => { reads += 1; return new MemoryStorage(); });
+      const { client } = fakeClient({}, consent);
+      client.optOut();
+      expect(client.optIn()).toBe('do_not_track');
+      expect(reads).toBe(0);
+    }
   });
 });
 
