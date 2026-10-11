@@ -334,7 +334,7 @@ function intOrNull(v: unknown): number | null {
 }
 
 /** Minor units sent as an integer or, as Dodo's `Dispute.amount`, a string of digits; null for anything else. */
-function minorUnitsOrNull(v: unknown): number | null {
+export function minorUnitsOrNull(v: unknown): number | null {
   if (typeof v !== 'string') return intOrNull(v);
   const s = v.trim();
   return /^\d+$/.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : null;
