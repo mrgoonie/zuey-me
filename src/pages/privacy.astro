@@ -26,6 +26,7 @@ interface AnalyticsCopy {
   granted: string;
   optedOut: string;
   dnt: string;
+  storageOff: string;
   noScript: string;
   optOut: string;
   optIn: string;
@@ -140,6 +141,7 @@ const content: Record<'vi' | 'en', {
       granted: 'Đang bật thống kê sử dụng trên trình duyệt này.',
       optedOut: 'Bạn đã tắt thống kê sử dụng trên trình duyệt này.',
       dnt: 'Trình duyệt của bạn đang bật Do Not Track hoặc Global Privacy Control, nên thống kê luôn tắt.',
+      storageOff: 'Trình duyệt của bạn đang chặn lưu trữ cục bộ, nên thống kê sử dụng luôn tắt và không cần lưu lựa chọn. Cho phép lưu trữ cho zuey.me nếu bạn muốn bật lại.',
       noScript: 'Cần bật JavaScript để thay đổi lựa chọn này.',
       optOut: 'Tắt thống kê',
       optIn: 'Bật lại thống kê',
@@ -263,6 +265,7 @@ const content: Record<'vi' | 'en', {
       granted: 'Usage analytics is on in this browser.',
       optedOut: 'You turned usage analytics off in this browser.',
       dnt: 'Your browser sends Do Not Track or Global Privacy Control, so analytics is always off.',
+      storageOff: 'Your browser blocks local storage, so usage analytics stays off and no choice needs saving. Allow storage for zuey.me if you want to turn it back on.',
       noScript: 'JavaScript is needed to change this choice.',
       optOut: 'Turn analytics off',
       optIn: 'Turn analytics back on',
@@ -378,6 +381,7 @@ const fallback = lang !== locale;
           data-granted={c.analytics.granted}
           data-opted-out={c.analytics.optedOut}
           data-dnt={c.analytics.dnt}
+          data-storage-off={c.analytics.storageOff}
           data-opt-out={c.analytics.optOut}
           data-opt-in={c.analytics.optIn}
           data-saved={c.analytics.saved}
@@ -389,7 +393,7 @@ const fallback = lang !== locale;
             type="button"
             hidden
             data-consent-toggle
-            class="mt-3 inline-flex items-center rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-stone-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+            class="mt-3 inline-flex items-center [&[hidden]]:hidden rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-stone-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
           ></button>
         </div>
       </section>
@@ -441,6 +445,7 @@ const fallback = lang !== locale;
 
 <script>
   import { currentConsent, optIn, optOut } from '../lib/analytics/client';
+  import { consentControlView } from '../lib/analytics/consent';
 
   const root = document.getElementById('analytics-consent');
   const status = root?.querySelector<HTMLElement>('[data-consent-status]');
@@ -448,11 +453,11 @@ const fallback = lang !== locale;
   if (root && status && toggle) {
     const label = (name: string): string => root.dataset[name] ?? '';
     const render = (note?: string): void => {
-      const state = currentConsent();
-      const text = state === 'do_not_track' ? label('dnt') : state === 'opted_out' ? label('optedOut') : label('granted');
+      const view = consentControlView(currentConsent());
+      const text = label(view.status);
       status.textContent = note ? `${text} ${note}` : text;
-      toggle.hidden = state === 'do_not_track';
-      toggle.textContent = state === 'opted_out' ? label('optIn') : label('optOut');
+      toggle.hidden = view.toggle === null;
+      toggle.textContent = view.toggle ? label(view.toggle) : '';
     };
     toggle.addEventListener('click', () => {
       const before = currentConsent();

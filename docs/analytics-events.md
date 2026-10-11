@@ -10,7 +10,7 @@ Destination today: PostHog project **Zuey.me** (env setup: [env-setup.vi.md §14
 |---|---|
 | `src/lib/analytics/events.ts` | Typed taxonomy (name → version, source, owner, trigger, allowed properties) and `validateEvent()` |
 | `src/lib/analytics/pii.ts` | PII guard: URL parameter stripping, email/JWT/secret redaction, deep scrubbing |
-| `src/lib/analytics/consent.ts` | Do Not Track, Global Privacy Control and the local opt-out flag |
+| `src/lib/analytics/consent.ts` | Do Not Track, Global Privacy Control, the local opt-out flag and blocked-storage detection |
 | `src/lib/analytics/identity.ts` | Identity lifecycle rules (`planIdentity`), distinct-id validation, identity endpoint parsing |
 | `src/lib/analytics/client.ts` | Browser API: `track()`, `identify()`, `reset()`, `optOut()`, `optIn()`, `bootAnalytics()` |
 | `src/lib/analytics/server.ts` | Server API: `captureServerEvent()` (typed), `sendServerEvent()` (by name, for the outbox), `serverDestinations()` |
@@ -46,7 +46,7 @@ Autocapture is off on `/account`, `/login`, `/billing`, `/booking`, `/chat`, `/o
 - Key and host come from `PUBLIC_POSTHOG_KEY` / `PUBLIC_POSTHOG_HOST` (runtime binding first, currently the `[vars]` of `wrangler.toml`, then build-time env). The built-in key of project Zuey.me is used only by production builds without a configured key.
 - The browser captures only on `zuey.me` and `www.zuey.me` in production builds. Preview deployments (`*.pages.dev`) are production builds and receive the same key from `wrangler.toml`, but their hostname is not allowlisted, so they stay silent; so do `localhost` and dev builds. `PUBLIC_ANALYTICS_DEBUG=1` lifts the hostname/dev check.
 - The server sends nothing outside production builds unless `PUBLIC_ANALYTICS_DEBUG=1`. It has no hostname to check, so server events emitted by a preview deployment would reach the production project; no server event exists yet, and the outbox must gate on the request host before adding one.
-- PostHog is not even initialised (no network request) when the browser sends Do Not Track (`1`/`yes`) or Global Privacy Control, when the visitor turned analytics off at `/privacy#analytics` (localStorage `zuey_analytics_opt_out=1`), or when the browser blocks localStorage (treated as opted out). Opting out also calls PostHog `opt_out_capturing()` and `reset()`.
+- PostHog is not even initialised (no network request) when the browser sends Do Not Track (`1`/`yes`) or Global Privacy Control, when the visitor turned analytics off at `/privacy#analytics` (localStorage `zuey_analytics_opt_out=1`), or when the browser blocks localStorage. Blocked storage (reading or writing throws; probed once per page with the temporary key `zuey_analytics_storage_probe`) gives the consent state `storage_blocked`: `/privacy#analytics` then says storage is blocked and shows no toggle, because no choice could be saved. Opting out also calls PostHog `opt_out_capturing()` and `reset()`.
 
 ## Identity lifecycle
 

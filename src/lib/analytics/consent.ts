@@ -5,13 +5,22 @@
 
 export const OPT_OUT_STORAGE_KEY = 'zuey_analytics_opt_out';
 
-export type ConsentState = 'granted' | 'opted_out' | 'do_not_track';
+/** Written and removed once per page to prove the browser lets this site save a choice. */
+export const STORAGE_PROBE_KEY = 'zuey_analytics_storage_probe';
+
+/**
+ * `storage_blocked`: the browser refuses localStorage, so no choice can be read or saved and analytics
+ * stays off. Distinct from `opted_out`, which the visitor chose and can undo.
+ */
+export type ConsentState = 'granted' | 'opted_out' | 'do_not_track' | 'storage_blocked';
+
+type ConsentStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 /** The browser surface consent reads; injectable so tests can run without a DOM. */
 export interface ConsentEnvironment {
   navigator?: { doNotTrack?: string | null; globalPrivacyControl?: boolean } | null;
   windowDoNotTrack?: string | null;
-  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
+  storage?: ConsentStorage | null;
 }
 
 const blocked = (): never => {
@@ -20,23 +29,39 @@ const blocked = (): never => {
 
 /**
  * Stand-in for a localStorage the browser refuses to expose (privacy mode, blocked cookies). Every call
- * throws, so `isOptedOut` reports opted out and `setOptOut` reports that the choice cannot be saved.
+ * throws, so consent reads as `storage_blocked` and `setOptOut` reports that the choice cannot be saved.
  */
-export const BLOCKED_STORAGE: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = {
+export const BLOCKED_STORAGE: ConsentStorage = {
   getItem: blocked,
   setItem: blocked,
   removeItem: blocked,
 };
 
-function safeStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
+/**
+ * Resolves the storage consent should use. Returns null when there is none (server), and
+ * `BLOCKED_STORAGE` when touching it, reading it or writing to it throws (blocked or full storage).
+ */
+export function resolveConsentStorage(get: () => ConsentStorage | undefined): ConsentStorage | null {
   try {
-    if (typeof localStorage === 'undefined') return null;
-    const storage = localStorage;
+    const storage = get();
+    if (!storage) return null;
     storage.getItem(OPT_OUT_STORAGE_KEY);
+    storage.setItem(STORAGE_PROBE_KEY, '1');
+    storage.removeItem(STORAGE_PROBE_KEY);
     return storage;
   } catch {
     return BLOCKED_STORAGE;
   }
+}
+
+// Probed once per page: the write probe would otherwise fire `storage` events in other tabs on every check.
+let pageStorage: ConsentStorage | null | undefined;
+
+function safeStorage(): ConsentStorage | null {
+  if (pageStorage === undefined) {
+    pageStorage = resolveConsentStorage(() => (typeof localStorage === 'undefined' ? undefined : localStorage));
+  }
+  return pageStorage;
 }
 
 /** Reads the live browser globals (or nothing on the server). */
@@ -58,19 +83,40 @@ export function hasDoNotTrack(env: ConsentEnvironment): boolean {
   return nav?.globalPrivacyControl === true;
 }
 
-export function isOptedOut(env: ConsentEnvironment): boolean {
+function readOptOut(env: ConsentEnvironment): boolean | 'blocked' {
   try {
     return env.storage?.getItem(OPT_OUT_STORAGE_KEY) === '1';
   } catch {
-    // Storage blocked: treat as opted out rather than tracking someone who may have opted out.
-    return true;
+    return 'blocked';
   }
+}
+
+/** True when analytics must stay off for this browser's own choice, including when storage is blocked. */
+export function isOptedOut(env: ConsentEnvironment): boolean {
+  // Storage blocked: treat as opted out rather than tracking someone who may have opted out.
+  return readOptOut(env) !== false;
 }
 
 export function consentState(env: ConsentEnvironment = browserConsentEnvironment()): ConsentState {
   if (hasDoNotTrack(env)) return 'do_not_track';
-  if (isOptedOut(env)) return 'opted_out';
-  return 'granted';
+  const optOut = readOptOut(env);
+  if (optOut === 'blocked') return 'storage_blocked';
+  return optOut ? 'opted_out' : 'granted';
+}
+
+/** What the `/privacy` consent control shows for a state; `null` toggle means no button. */
+export interface ConsentControlView {
+  status: 'granted' | 'optedOut' | 'dnt' | 'storageOff';
+  toggle: 'optOut' | 'optIn' | null;
+}
+
+export function consentControlView(state: ConsentState): ConsentControlView {
+  switch (state) {
+    case 'granted': return { status: 'granted', toggle: 'optOut' };
+    case 'opted_out': return { status: 'optedOut', toggle: 'optIn' };
+    case 'do_not_track': return { status: 'dnt', toggle: null };
+    case 'storage_blocked': return { status: 'storageOff', toggle: null };
+  }
 }
 
 export function canTrack(env: ConsentEnvironment = browserConsentEnvironment()): boolean {

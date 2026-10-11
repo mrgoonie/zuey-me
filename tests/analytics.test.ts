@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
-import { BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, consentState, setOptOut, type ConsentEnvironment } from '../src/lib/analytics/consent';
+import {
+  BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, resolveConsentStorage,
+  setOptOut, type ConsentEnvironment,
+} from '../src/lib/analytics/consent';
 import {
   DEFAULT_POSTHOG_KEY, createPostHogServerDestination, isSensitivePath, resolvePostHogConfig, scrubCaptureResult,
 } from '../src/lib/analytics/destinations/posthog';
@@ -118,9 +121,14 @@ describe('consent', () => {
     expect(consentState(e)).toBe('granted');
   });
 
-  test('blocked storage is treated as opted out', () => {
+  test('storage that throws on read reports storage_blocked and never tracks', () => {
     const throwing = { getItem: (): string | null => { throw new Error('blocked'); }, setItem: () => undefined, removeItem: () => undefined };
-    expect(consentState(env({ storage: throwing }))).toBe('opted_out');
+    expect(consentState(env({ storage: throwing }))).toBe('storage_blocked');
+    expect(isOptedOut(env({ storage: throwing }))).toBe(true);
+  });
+
+  test('Do Not Track still wins over blocked storage', () => {
+    expect(consentState(env({ navigator: { doNotTrack: '1' }, storage: BLOCKED_STORAGE }))).toBe('do_not_track');
   });
 });
 
@@ -485,9 +493,57 @@ describe('identity across tabs and redirects', () => {
 });
 
 describe('blocked storage', () => {
-  test('counts as opted out and cannot record a choice', () => {
+  const throws = (): never => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+
+  test('reports storage_blocked and cannot record a choice', () => {
     const env: ConsentEnvironment = { navigator: {}, storage: BLOCKED_STORAGE };
-    expect(consentState(env)).toBe('opted_out');
+    expect(consentState(env)).toBe('storage_blocked');
     expect(setOptOut(false, env)).toBe(false);
+    expect(setOptOut(true, env)).toBe(false);
+  });
+
+  test('a localStorage getter that throws resolves to blocked storage', () => {
+    const storage = resolveConsentStorage(throws);
+    expect(storage).toBe(BLOCKED_STORAGE);
+    expect(consentState({ navigator: {}, storage })).toBe('storage_blocked');
+  });
+
+  test('storage that reads but refuses writes resolves to blocked storage', () => {
+    const readOnly = new MemoryStorage();
+    readOnly.setItem = throws;
+    expect(resolveConsentStorage(() => readOnly)).toBe(BLOCKED_STORAGE);
+  });
+
+  test('working storage passes the probe and keeps no probe key behind', () => {
+    const storage = new MemoryStorage();
+    expect(resolveConsentStorage(() => storage)).toBe(storage);
+    expect(storage.getItem(STORAGE_PROBE_KEY)).toBeNull();
+    expect(resolveConsentStorage(() => undefined)).toBeNull();
+  });
+
+  test('the privacy control hides the toggle when storage is blocked or DNT is on', () => {
+    expect(consentControlView('storage_blocked')).toEqual({ status: 'storageOff', toggle: null });
+    expect(consentControlView('do_not_track')).toEqual({ status: 'dnt', toggle: null });
+    expect(consentControlView('opted_out')).toEqual({ status: 'optedOut', toggle: 'optIn' });
+    expect(consentControlView('granted')).toEqual({ status: 'granted', toggle: 'optOut' });
+  });
+
+  test('the browser client stays silent and opt-in reports storage_blocked', () => {
+    const { client, calls } = fakeClient({}, { navigator: {}, storage: BLOCKED_STORAGE });
+    client.activate(false);
+    expect(client.isActive()).toBe(false);
+    client.track('social_clicked', { platform: 'github' });
+    expect(client.optIn()).toBe('storage_blocked');
+    expect(calls.filter(c => c.method === 'capture' || c.method === 'optIn')).toEqual([]);
+  });
+});
+
+describe('privacy page consent copy', () => {
+  test('both languages carry the blocked-storage status text', async () => {
+    const source = await Bun.file(new URL('../src/pages/privacy.astro', import.meta.url)).text();
+    expect(source.match(/storageOff: '/g)?.length).toBe(2);
+    expect(source).toContain('data-storage-off={c.analytics.storageOff}');
+    // `inline-flex` would otherwise override the `hidden` attribute and leave an empty button on screen.
+    expect(source).toContain('inline-flex items-center [&[hidden]]:hidden');
   });
 });
