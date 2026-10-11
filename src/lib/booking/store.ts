@@ -966,9 +966,11 @@ interface BookingPaymentEvent { provider: string; event_id: string; amount: numb
  *   confirmed has none before the confirming one, since any earlier one would have flagged it). Without a recorded
  *   transaction (a transfer the admin matched by hand) it is the booking id, and the amount is the price due.
  * - Amount: everything recorded for the booking in its currency, across providers (an underpayment plus its top-up).
- * - Counted before: a booking with recorded transactions whose `attention_reason` was NULL or `admin` before this
- *   resolve was already confirmed with money (by the webhook or an earlier resolve). A payment that flags a booking
- *   always overwrites the reason with its own, so nothing is queued again even after the outbox forgot the key.
+ * - Counted before: a cancelled or flagged booking with recorded transactions whose `attention_reason` was NULL or
+ *   `admin` before this resolve was already confirmed with money (by the webhook or an earlier resolve). A payment
+ *   that flags a booking always overwrites the reason with its own, so nothing is queued again even after the outbox
+ *   forgot the key. A held or expired booking was never counted: its webhook may still be in flight (transaction
+ *   recorded, confirm not yet applied), and that webhook then ends as `already_confirmed`.
  */
 async function queueResolvedPurchase(d1: D1DatabaseLike, env: RuntimeEnv, before: BookingRow, nowIso: string): Promise<void> {
   try {
@@ -988,7 +990,9 @@ async function queueResolvedPurchase(d1: D1DatabaseLike, env: RuntimeEnv, before
       });
       return;
     }
-    if (before.attention_reason === null || before.attention_reason === 'admin') return;
+    const countedBefore = (before.status === 'cancelled' || before.status === 'needs_attention')
+      && (before.attention_reason === null || before.attention_reason === 'admin');
+    if (countedBefore) return;
     const provider = PAYMENT_METHODS.find(m => m === first.provider);
     const currency = events.some(e => e.currency === before.currency) ? before.currency : first.currency;
     if (!provider || !currency) return;

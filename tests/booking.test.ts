@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
-import type { D1DatabaseLike } from '../src/db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { generateSlots } from '../src/lib/booking/availability';
 import { zonedTimeToUtc } from '../src/lib/booking/timezone';
@@ -582,6 +582,34 @@ describe('reschedule and admin', () => {
       expect((await admin(env, b.id, 'cancel')).status).toBe(200);
       expect((await admin(env, b.id, 'resolve')).status).toBe(200);
       expect(purchases()).toHaveLength(0);
+    });
+
+    it('resolve while the webhook is in flight (transfer recorded, confirm not yet applied): one purchase', async () => {
+      const b = await holdOk(fullEnv(), SLOT_OCT8, 'sepay');
+      await checkoutApi(ctx({ env: fullEnv(), method: 'POST', body: { token: b.token }, params: { id: b.id } }));
+      let resolved: Response | null = null;
+      const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+        bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
+        first: () => stmt.first(),
+        all: () => stmt.all(),
+        run: async () => {
+          resolved = await admin(fullEnv(), b.id, 'resolve');
+          return stmt.run();
+        },
+      });
+      // The admin resolves the held booking between the webhook's payment_events INSERT and its confirm UPDATE.
+      const interleaved: D1DatabaseLike = {
+        prepare: (query: string) => query.includes("SET status = 'confirmed', amount_paid") ? wrap(d1.prepare(query)) : d1.prepare(query),
+        batch: statements => d1.batch(statements),
+      };
+      const res = await sepay({ ...fullEnv(), DB: interleaved }, b.code, 52000000, 7301);
+      expect((await read(res)).data?.outcome).toBe('already_confirmed');
+      expect(resolved).not.toBeNull();
+      expect((await row(b.id)).status).toBe('confirmed');
+      const outbox = purchases();
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0].dedupe_key).toBe('purchase:sepay:7301');
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
     });
 
     it('resolving a free booking queues no purchase', async () => {
