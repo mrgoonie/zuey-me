@@ -10,7 +10,7 @@ import { getPlan, isPlanId } from '../members/plans';
 import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, numOrNull, randomId, siteUrl, str, strOrNull } from '../members/runtime';
 import { recomputeSubscription } from '../members/subscriptions';
-import { getUserById, logActivity } from '../members/users';
+import { getUserById, insertActivity, logActivity } from '../members/users';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { captureReferralCommission } from '../referrals/commissions';
 import type { ReversalOutcome } from '../referrals/refunds';
@@ -22,7 +22,8 @@ import { applyPercent } from '../referrals/rates';
 import { allowedSubscriptionAmounts, discountNotApplied, minimumChargeCents } from './dodo-card-referral-pricing';
 import type { DodoEvent, DodoMetadata, DodoReversalEvent } from './dodo';
 import {
-  cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, planForDodoProduct, requireDodoPlan,
+  cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, getDodoPaymentSubscriptionId, planForDodoProduct,
+  requireDodoPlan,
 } from './dodo';
 
 /**
@@ -604,6 +605,25 @@ async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Ro
   ).bind(chargeKey(paymentId)).first<Row>();
 }
 
+/** The card of a payment with no recorded charge, through Dodo's payment lookup; null when it fails or matches no card. */
+async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId: string): Promise<Row | null> {
+  let subscriptionId: string | null;
+  try {
+    subscriptionId = await getDodoPaymentSubscriptionId(env, paymentId, membersRuntime.fetch);
+  } catch (err) {
+    console.warn(`dodo reversal: payment lookup failed (${err instanceof Error ? err.message : 'unknown'}); ignored`);
+    return null;
+  }
+  if (!subscriptionId) return null;
+  const row = await d1.prepare("SELECT id, user_id, plan, first_payment_id FROM card_subscriptions WHERE provider = 'dodo' AND provider_subscription_id = ?")
+    .bind(subscriptionId).first<Row>();
+  if (row && strOrNull(row, 'first_payment_id') === null) {
+    // The reversal may be of the first payment, whose referral commission is captured when it is recorded.
+    throw new AppError(409, 'payment_not_recorded', 'The reversed payment is not recorded yet; retry after its payment.succeeded webhook', { payment_id: paymentId });
+  }
+  return row;
+}
+
 /**
  * Refund or chargeback on a Dodo payment of a card subscription, first charge or renewal. Only the first
  * payment carries a referral commission, so only its reversal reverses the commission (idempotently); a
@@ -611,25 +631,17 @@ async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Ro
  * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
  * `payment_events` row keyed by the refund or dispute id gates them across webhook retries.
  *
- * A reversal can arrive before the `payment.succeeded` of its renewal charge. When the payment is unknown but the
- * payload names a Dodo customer that owns a card subscription here, this throws a 409 so Dodo redelivers it (Dodo
- * stops after its last scheduled attempt, about a day later). Any other unknown payment is `ignored`.
+ * A payment with no recorded charge (a reversal that beats its `payment.succeeded`, or a renewal charged before
+ * charge rows existed) is looked up at Dodo (`GET /payments/{id}`, with `env`). If it charged a card subscription that
+ * already has a first payment, it is that card's renewal and is applied now. If the card has no first payment yet,
+ * this throws a 409 so Dodo redelivers the reversal after the charge is recorded (Dodo's 8 attempts span about 28
+ * hours). A failed lookup or a payment of no card here is `ignored`, as before.
  */
 export async function applyDodoReversal(
-  d1: D1DatabaseLike, event: DodoReversalEvent
+  d1: D1DatabaseLike, event: DodoReversalEvent, env?: RuntimeEnv,
 ): Promise<{ outcome: ReversalOutcome | 'renewal' | 'ignored'; card_subscription_id: string | null }> {
-  const row = await cardForPayment(d1, event.paymentId);
-  if (!row) {
-    const known = event.customerId
-      ? await d1.prepare("SELECT id FROM card_subscriptions WHERE provider = 'dodo' AND provider_customer_id = ? LIMIT 1").bind(event.customerId).first<Row>()
-      : null;
-    if (known) {
-      throw new AppError(409, 'payment_not_recorded', 'The reversed payment is not recorded yet; retry after its payment.succeeded webhook', {
-        payment_id: event.paymentId,
-      });
-    }
-    return { outcome: 'ignored', card_subscription_id: null };
-  }
+  const row = (await cardForPayment(d1, event.paymentId)) ?? (env ? await cardFromDodoLookup(d1, env, event.paymentId) : null);
+  if (!row) return { outcome: 'ignored', card_subscription_id: null };
   const cardId = str(row, 'id');
   const renewal = strOrNull(row, 'first_payment_id') !== event.paymentId;
   const outcome = renewal ? 'renewal' : (await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind)).outcome;
@@ -639,8 +651,8 @@ export async function applyDodoReversal(
     return { outcome, card_subscription_id: cardId };
   }
   try {
-    // The analytics event is deduped by its key, so it goes first; the activity log is the last write, so a failure
-    // before it releases the gate without anything logged and the retry writes it once.
+    // The analytics event is deduped by its key, so it goes first; the activity log is the last write and throws on
+    // failure, which releases the gate with nothing logged, so the retry writes it once.
     // An opened dispute may still be won; only money that actually went back is a refund.
     if (event.kind !== 'dispute_opened') {
       await queueRefund(d1, {
@@ -648,7 +660,7 @@ export async function applyDodoReversal(
         reason: event.kind === 'refund' ? 'refund' : 'chargeback', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
       });
     }
-    await logActivity(d1, userId, 'billing.card_reversal', {
+    await insertActivity(d1, userId, 'billing.card_reversal', {
       card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
     });
   } catch (err) {

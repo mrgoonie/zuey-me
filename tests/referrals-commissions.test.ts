@@ -328,20 +328,42 @@ describe('Dodo commission and refunds', () => {
     expect(parseDodoReversalEvent({ type: 'refund.succeeded', data: {} })).toBeNull();
   });
 
-  it('answers 409 to a signed refund of a not yet recorded payment of a known Dodo customer, so Dodo redelivers it', async () => {
-    await paidCard();
-    expect(parseDodoReversalEvent({ type: 'refund.succeeded', data: { payment_id: 'p', customer: { customer_id: 'cus_1' } } })?.customerId).toBe('cus_1');
-    const body = JSON.stringify({
-      business_id: 'bus_test', type: 'refund.succeeded', timestamp: new Date(T0).toISOString(),
-      data: { payload_type: 'Refund', refund_id: 'rfd_early', payment_id: 'pay_next', amount: 2090, currency: 'USD', customer: { customer_id: 'cus_1' } },
-    });
+  async function signedDodo(id: string, type: string, data: Record<string, unknown>): Promise<Response> {
+    const body = JSON.stringify({ business_id: 'bus_test', type, timestamp: new Date(T0).toISOString(), data });
     const ts = String(Math.floor(T0 / 1000));
-    const signature = await signDodoPayload(DODO_SECRET, 'msg_early', ts, body);
-    const res = await dodoWebhook(ctx({ method: 'POST', rawBody: body, headers: { 'webhook-id': 'msg_early', 'webhook-timestamp': ts, 'webhook-signature': signature } }));
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ success: false, error: { code: 'payment_not_recorded' } });
+    const signature = await signDodoPayload(DODO_SECRET, id, ts, body);
+    return dodoWebhook(ctx({ method: 'POST', rawBody: body, headers: { 'webhook-id': id, 'webhook-timestamp': ts, 'webhook-signature': signature } }));
+  }
+
+  it('matches a signed dispute of an unrecorded renewal through the Dodo payment lookup, and answers 409 before the first charge', async () => {
+    await paidCard();
+    const lookups: string[] = [];
+    membersRuntime.fetch = async (input: string) => {
+      if (!input.startsWith(`${DODO_BASE}/payments/`)) return fakeFetch(input);
+      lookups.push(input);
+      return input.endsWith('/pay_next') ? json({ payment_id: 'pay_next', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' } })
+        : input.endsWith('/pay_pending') ? json({ payment_id: 'pay_pending', subscription_id: 'sub_pending', customer: { customer_id: 'cus_2' } })
+          : json({ code: 'NOT_FOUND' }, 404);
+    };
+    // Dodo's dispute object: no customer, amount as a string.
+    const dispute = {
+      payload_type: 'Dispute', dispute_id: 'dsp_next', payment_id: 'pay_next', business_id: 'bus_test', amount: '2090', currency: 'USD',
+      created_at: new Date(T0).toISOString(), dispute_stage: 'chargeback', dispute_status: 'dispute_lost',
+    };
+    const matched = await signedDodo('msg_dsp', 'dispute.lost', dispute);
+    expect(matched.status).toBe(200);
+    expect(await dataOf(matched)).toMatchObject({ outcome: 'renewal' });
+    expect(lookups).toEqual([`${DODO_BASE}/payments/pay_next`]);
+
+    const m = await member('pending@example.com');
+    const res = await ordersApi(ctx({ method: 'POST', body: { plan: 'ai', provider: 'dodo' }, headers: { cookie: m.cookie, Origin: ORIGIN } }));
+    const pendingId = String(field(await dataOf(res), 'id'));
+    d1.raw.run("UPDATE card_subscriptions SET provider_subscription_id = 'sub_pending' WHERE id = ?", [pendingId]);
+    const early = await signedDodo('msg_early', 'refund.succeeded', { payload_type: 'Refund', refund_id: 'rfd_early', payment_id: 'pay_pending', amount: 900, currency: 'USD' });
+    expect(early.status).toBe(409);
+    expect(await early.json()).toMatchObject({ success: false, error: { code: 'payment_not_recorded' } });
     // The signature is still checked first.
-    const forged = await dodoWebhook(ctx({ method: 'POST', rawBody: body, headers: { 'webhook-id': 'msg_early', 'webhook-timestamp': ts, 'webhook-signature': 'v1,AAAA' } }));
+    const forged = await dodoWebhook(ctx({ method: 'POST', rawBody: '{}', headers: { 'webhook-id': 'msg_x', 'webhook-timestamp': String(Math.floor(T0 / 1000)), 'webhook-signature': 'v1,AAAA' } }));
     expect(forged.status).toBe(401);
   });
 });

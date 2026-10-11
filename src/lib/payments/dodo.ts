@@ -231,6 +231,12 @@ export async function cancelDodoSubscription(env: RuntimeEnv, subscriptionId: st
   return parseSubscriptionData(body);
 }
 
+/** The subscription a Dodo payment charged (`GET /payments/{id}`); null for a one-time payment. Throws when the lookup fails. */
+export async function getDodoPaymentSubscriptionId(env: RuntimeEnv, paymentId: string, fetchImpl: FetchLike): Promise<string | null> {
+  const body = await dodoRequest(env, `/payments/${encodeURIComponent(paymentId)}`, { method: 'GET' }, fetchImpl, 'payment lookup');
+  return strOrNull(body, 'subscription_id');
+}
+
 // ---------------------------------------------------------------------------
 // Webhook payloads
 // ---------------------------------------------------------------------------
@@ -368,8 +374,6 @@ export interface DodoReversalEvent {
   objectId: string | null;
   /** The charged payment; refunds and disputes carry no subscription id. */
   paymentId: string;
-  /** The paying Dodo customer (`customer.customer_id`), when the payload names one. */
-  customerId?: string | null;
   amount: number | null;
   currency: string | null;
   isPartial: boolean;
@@ -387,7 +391,6 @@ export function parseDodoReversalEvent(payload: unknown): DodoReversalEvent | nu
     kind,
     objectId: strOrNull(d, kind === 'refund' ? 'refund_id' : 'dispute_id'),
     paymentId,
-    customerId: (isRecord(d.customer) ? strOrNull(d.customer, 'customer_id') : null) ?? strOrNull(d, 'customer_id'),
     amount: intOrNull(d.amount),
     currency: strOrNull(d, 'currency')?.toUpperCase() ?? null,
     isPartial: d.is_partial === true,
