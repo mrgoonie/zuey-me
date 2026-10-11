@@ -233,6 +233,10 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
   await d1.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(user.id).run();
   const { results: channelRows } = await d1.prepare('SELECT external_id FROM channel_identities WHERE user_id = ?').bind(user.id).all<Row>();
   await d1.prepare('DELETE FROM channel_identities WHERE user_id = ?').bind(user.id).run();
+  // Used /connect link tokens: expired rows go (an expired token is rejected anyway). The member's unexpired
+  // rows keep only the nonce, so the token still cannot be replayed, but no longer name the chat id or user.
+  await d1.prepare('DELETE FROM channel_link_nonces WHERE expires_at < ?').bind(now).run();
+  await d1.prepare("UPDATE channel_link_nonces SET external_id = '', user_id = '' WHERE user_id = ?").bind(user.id).run();
   await d1.prepare('UPDATE user_api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, user.id).run();
   await d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email).run();
   await d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id).run();
