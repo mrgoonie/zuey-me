@@ -12,6 +12,9 @@ crons = ["*/5 * * * *"]
 
 [vars]
 SITE_URL = "https://zuey.me"
+# Community sweep: "dry_run" only reports who would be removed (worker logs); "live" removes lapsed members.
+# Switch to "live" in a reviewed PR once the dry-run reports look right.
+COMMUNITY_SWEEP_MODE = "dry_run"
 
 [observability]
 enabled = true

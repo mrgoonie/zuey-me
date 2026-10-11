@@ -12,6 +12,7 @@ import { countEventsByDay } from '../src/lib/experience/activity-days';
 import { sanitizeEvent } from '../src/lib/experience/github-activity';
 import { conditionFromCode } from '../src/lib/experience/weather';
 import { experienceMcpModule } from '../src/lib/experience/mcp';
+import { SWEEP_DEFAULT_LIMIT, SWEEP_MAX_LIMIT, SWEEP_TELEGRAM_BUDGET, parseSweepOptions } from '../src/lib/experience/community';
 import { experienceOpenApi } from '../src/lib/experience/openapi';
 import { MCP_FEATURE_MODULES } from '../src/lib/mcp/registry';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
@@ -643,6 +644,139 @@ describe('Telegram community', () => {
     const res = await read(await invite(tgEnv(), browser(reader.cookie)));
     expect(res.code).toBe('telegram_error');
     expect(JSON.stringify(res)).not.toContain('secret-token');
+  });
+
+  describe('sweep safeguards', () => {
+    const CRON = 'cron-secret';
+    const cron = async (query = '', env: RuntimeEnv = tgEnv({ CRON_SECRET: CRON })) => read(await communitySweepApi(ctx({
+      env, method: 'POST', path: `/api/v1/community/sweep${query}`, headers: { Authorization: `Bearer ${CRON}` },
+    })));
+    const addMembership = async (id: string, userId: string, status: 'invited' | 'joined', opts: { tg?: string; expiresMs?: number } = {}) => {
+      const ts = new Date(now).toISOString();
+      await d1.prepare(
+        'INSERT INTO community_memberships (id, user_id, chat, invite_link, invite_expires_at, telegram_user_id, status, created_at, updated_at, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(id, userId, 'vi', `https://t.me/+${id}`, new Date(opts.expiresMs ?? now - HOUR).toISOString(), opts.tg ?? null, status, ts, ts, status === 'joined' ? ts : null).run();
+    };
+    const statusOf = async (id: string) => field(await d1.prepare('SELECT status FROM community_memberships WHERE id = ?').bind(id).first(), 'status');
+    const storedCursors = async () => (await d1.prepare('SELECT job, cursor FROM job_cursors ORDER BY job').all()).results ?? [];
+
+    it('never removes admins or revokes their live invites, even without a plan', async () => {
+      const admin = await memberCookie('boss@example.com');
+      const reader = await memberCookie('reader@example.com');
+      await addMembership('cm_a1', admin.userId, 'joined', { tg: '501' });
+      await addMembership('cm_a2', admin.userId, 'invited', { expiresMs: now + HOUR });
+      await addMembership('cm_a3', admin.userId, 'invited');
+      await addMembership('cm_r1', reader.userId, 'joined', { tg: '502' });
+
+      const res = await cron();
+      expect(res.status).toBe(200);
+      expect(field(res.data, 'removed')).toBe(1);
+      expect(field(res.data, 'exempt_admins')).toBe(2);
+      // Expired links are housekeeping and retired for admins too.
+      expect(field(res.data, 'revoked')).toBe(1);
+      expect([await statusOf('cm_a1'), await statusOf('cm_a2'), await statusOf('cm_a3'), await statusOf('cm_r1')]).toEqual(['joined', 'invited', 'revoked', 'removed']);
+      expect(telegramCalls().map(c => field(c.body, 'user_id'))).toEqual([502, 502]);
+    });
+
+    it('pages by id with a stored cursor so lapsed members past the first page are reached', async () => {
+      const reader = await memberCookie('reader@example.com');
+      const paid = await memberCookie('paid@example.com');
+      await grantPlan(paid.userId, 'community', now + 10 * 24 * HOUR);
+      // Entitled members sort first and must not starve the lapsed ones behind them.
+      for (let i = 0; i < 4; i += 1) await addMembership(`cm_0${i}`, paid.userId, 'joined', { tg: `60${i}` });
+      for (let i = 0; i < 5; i += 1) await addMembership(`cm_1${i}`, reader.userId, 'joined', { tg: `70${i}` });
+
+      const first = await cron('?limit=4');
+      expect([field(first.data, 'checked'), field(first.data, 'removed'), field(first.data, 'next_cursor'), field(first.data, 'complete')]).toEqual([4, 0, 'cm_03', false]);
+      expect(await storedCursors()).toEqual([{ job: 'community_sweep', cursor: 'cm_03' }]);
+      const second = await cron('?limit=4');
+      expect([field(second.data, 'checked'), field(second.data, 'removed'), field(second.data, 'next_cursor')]).toEqual([4, 4, 'cm_13']);
+      const third = await cron('?limit=4');
+      expect([field(third.data, 'checked'), field(third.data, 'removed'), field(third.data, 'next_cursor'), field(third.data, 'complete')]).toEqual([1, 1, null, true]);
+      expect(await storedCursors()).toEqual([]);
+      for (let i = 0; i < 5; i += 1) expect(await statusOf(`cm_1${i}`)).toBe('removed');
+      // The next run starts a new pass from the beginning (only the four entitled members are left).
+      const restart = await cron('?limit=4');
+      expect([field(restart.data, 'checked'), field(restart.data, 'complete')]).toEqual([4, true]);
+    });
+
+    it('stops at the per-run Telegram budget and resumes where it stopped', async () => {
+      const reader = await memberCookie('reader@example.com');
+      const total = SWEEP_TELEGRAM_BUDGET / 2 + 5;
+      for (let i = 0; i < total; i += 1) await addMembership(`cm_${String(i).padStart(3, '0')}`, reader.userId, 'joined', { tg: String(900 + i) });
+
+      const first = await cron();
+      expect(field(first.data, 'removed')).toBe(SWEEP_TELEGRAM_BUDGET / 2);
+      expect(field(first.data, 'complete')).toBe(false);
+      expect(field(first.data, 'next_cursor')).toBe(`cm_${String(SWEEP_TELEGRAM_BUDGET / 2 - 1).padStart(3, '0')}`);
+      expect(telegramCalls().length).toBe(SWEEP_TELEGRAM_BUDGET);
+      const second = await cron();
+      expect(field(second.data, 'removed')).toBe(5);
+      expect(field(second.data, 'complete')).toBe(true);
+    });
+
+    it('dry run reports who would be removed and why, without Telegram calls or writes', async () => {
+      const admin = await memberCookie('boss@example.com');
+      const reader = await memberCookie('reader@example.com');
+      await addMembership('cm_d1', reader.userId, 'joined', { tg: '801' });
+      await addMembership('cm_d2', reader.userId, 'invited', { expiresMs: now + HOUR });
+      await addMembership('cm_d3', reader.userId, 'invited');
+      await addMembership('cm_d4', admin.userId, 'joined', { tg: '802' });
+
+      const dry = await cron('?dry_run=1');
+      expect(dry.status).toBe(200);
+      expect([field(dry.data, 'dry_run'), field(dry.data, 'removed'), field(dry.data, 'revoked'), field(dry.data, 'exempt_admins')]).toEqual([true, 0, 0, 1]);
+      expect(list(field(dry.data, 'actions')).map(a => [field(a, 'id'), field(a, 'user_id'), field(a, 'action'), field(a, 'reason')])).toEqual([
+        ['cm_d1', reader.userId, 'remove', 'entitlement_lapsed'],
+        ['cm_d2', reader.userId, 'revoke', 'entitlement_lapsed'],
+        ['cm_d3', reader.userId, 'revoke', 'invite_expired'],
+      ]);
+      expect(telegramCalls().length).toBe(0);
+      expect([await statusOf('cm_d1'), await statusOf('cm_d2'), await statusOf('cm_d3'), await statusOf('cm_d4')]).toEqual(['joined', 'invited', 'invited', 'joined']);
+
+      // An explicit cursor pages without touching stored points; a dry-run resume point never moves the live pass.
+      const page = await cron('?dry_run=1&limit=1&cursor=cm_d1');
+      expect(list(field(page.data, 'actions')).map(a => field(a, 'id'))).toEqual(['cm_d2']);
+      expect(await storedCursors()).toEqual([]);
+      await cron('?dry_run=true&limit=1');
+      expect(await storedCursors()).toEqual([{ job: 'community_sweep_dry_run', cursor: 'cm_d1' }]);
+
+      const live = await cron();
+      expect([field(live.data, 'dry_run'), field(live.data, 'checked'), field(live.data, 'removed'), field(live.data, 'revoked')]).toEqual([false, 4, 1, 2]);
+      expect(telegramCalls().map(c => c.method)).toEqual(['banChatMember', 'unbanChatMember', 'revokeChatInviteLink']);
+    });
+
+    it('answers 503 community_unconfigured without Telegram env and validates input and caller', async () => {
+      const unconfigured = await cron('?dry_run=1', baseEnv({ CRON_SECRET: CRON }));
+      expect(unconfigured.status).toBe(503);
+      expect(unconfigured.code).toBe('community_unconfigured');
+      expect((await cron('?limit=0')).code).toBe('invalid_field');
+      expect((await cron(`?limit=${SWEEP_MAX_LIMIT + 1}`)).code).toBe('invalid_field');
+      expect((await cron('?dry_run=maybe')).code).toBe('invalid_field');
+      const wrongSecret = await read(await communitySweepApi(ctx({ env: tgEnv({ CRON_SECRET: CRON }), method: 'POST', headers: { Authorization: 'Bearer nope' } })));
+      expect(wrongSecret.status).toBe(401);
+      const noSecretConfigured = await read(await communitySweepApi(ctx({ env: tgEnv(), method: 'POST', headers: { Authorization: `Bearer ${CRON}` } })));
+      expect(noSecretConfigured.status).toBe(401);
+      expect(parseSweepOptions({})).toEqual({ dryRun: false, limit: SWEEP_DEFAULT_LIMIT });
+      expect(parseSweepOptions({ dry_run: true, limit: 5, cursor: '' })).toEqual({ dryRun: true, limit: 5, cursor: '' });
+      expect(() => parseSweepOptions({ cursor: 5 })).toThrow(AppError);
+    });
+
+    it('accepts dry_run, limit and cursor over MCP for admins', async () => {
+      const reader = await memberCookie('reader@example.com');
+      await addMembership('cm_m1', reader.userId, 'joined', { tg: '811' });
+      const { key } = await createApiKey('ops', 'admin', d1);
+      const mcp = (headers: Record<string, string>): McpContext => ({
+        request: new Request(`${ORIGIN}/api/mcp`, { method: 'POST', headers }), env: tgEnv(), d1,
+        async requireAdmin() { /* unused by this module */ },
+        async isAdmin() { return false; },
+      });
+      const denied = await experienceMcpModule.call('community_sweep', { dry_run: true }, mcp({})).then(() => null, (e: unknown) => e);
+      expect(denied).toBeInstanceOf(AppError);
+      const report = await experienceMcpModule.call('community_sweep', { dry_run: true, limit: 10, cursor: '' }, mcp({ Authorization: `Bearer ${key}` }));
+      expect(list(field(report, 'actions')).map(a => field(a, 'id'))).toEqual(['cm_m1']);
+      expect(telegramCalls().length).toBe(0);
+    });
   });
 });
 

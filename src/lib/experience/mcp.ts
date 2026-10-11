@@ -4,7 +4,7 @@ import { PLAN_IDS } from '../members/plans';
 import type { Principal } from '../members/policy';
 import { requireCan, resolvePrincipal } from '../members/policy';
 import { LOCALES } from '../i18n/locales';
-import { sweepCommunity } from './community';
+import { SWEEP_DEFAULT_LIMIT, SWEEP_MAX_LIMIT, SWEEP_TELEGRAM_BUDGET, parseSweepOptions, sweepCommunity } from './community';
 import { getGithubActivity, githubAppAuth } from './github-activity';
 import { NOTICE_EXPRESSIONS, NOTICE_MAX_WINDOW_DAYS, NOTICE_TARGETS, createNotice, expireNotice, listNotices, parseNoticeInput, principalLabel } from './notices';
 import { getWeather, parseWeatherQuery } from './weather';
@@ -59,8 +59,15 @@ export const experienceMcpModule: McpToolModule = {
     },
     {
       name: 'community_sweep',
-      description: 'Admin: remove Telegram community members whose $29 plan lapsed and retire stale invite links.',
-      inputSchema: { type: 'object', properties: {} },
+      description: `Admin: remove Telegram community members whose $29 plan lapsed and retire stale invite links. Admins (verified email in ADMIN_EMAILS) are never removed. Use dry_run first: it lists who would be removed or revoked and why, without calling Telegram. Each call examines up to limit memberships (default ${SWEEP_DEFAULT_LIMIT}) and at most ${SWEEP_TELEGRAM_BUDGET} Telegram calls, then returns next_cursor; without cursor it resumes where the previous run of the same mode stopped.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          dry_run: { type: 'boolean', description: 'Report only; no Telegram calls and no membership changes' },
+          limit: { type: 'integer', minimum: 1, maximum: SWEEP_MAX_LIMIT, description: `Memberships to examine (default ${SWEEP_DEFAULT_LIMIT})` },
+          cursor: { type: 'string', description: 'Start after this membership id ("" = from the beginning); the stored resume point is left unchanged' },
+        },
+      },
     },
     {
       name: 'github_activity_get',
@@ -95,7 +102,7 @@ export const experienceMcpModule: McpToolModule = {
       }
       case 'community_sweep': {
         await requireAdminPrincipal(ctx);
-        return sweepCommunity(requireDb(ctx), ctx.env);
+        return sweepCommunity(requireDb(ctx), ctx.env, parseSweepOptions(args));
       }
       case 'github_activity_get':
         return getGithubActivity(githubAppAuth(ctx.env));

@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
+import { isAdminIdentity } from '../members/admins';
 import type { Principal } from '../members/policy';
 import { can, requireCan } from '../members/policy';
 import type { Row } from '../members/runtime';
@@ -253,25 +254,132 @@ export async function handleTelegramUpdate(d1: D1DatabaseLike, env: RuntimeEnv, 
   return 'joined';
 }
 
+/** Memberships examined per run unless the caller asks for another page size. */
+export const SWEEP_DEFAULT_LIMIT = 100;
+export const SWEEP_MAX_LIMIT = 500;
+/**
+ * Telegram calls one run may make (a removal costs 2, revoking a live invite 1). Keeps a run well under the
+ * Worker subrequest limit (50 on the free plan); the rest of the page is picked up by the next run.
+ */
+export const SWEEP_TELEGRAM_BUDGET = 40;
+const SWEEP_CURSOR_MAX_LENGTH = 100;
+/** Persisted resume points; dry runs page separately so a review pass never skips rows of the live pass. */
+const SWEEP_JOB = { live: 'community_sweep', dryRun: 'community_sweep_dry_run' } as const;
+
+export interface SweepOptions {
+  /** Report what would change without calling Telegram or writing memberships. */
+  dryRun: boolean;
+  /** Memberships to examine in this run (1..SWEEP_MAX_LIMIT). */
+  limit: number;
+  /**
+   * Start after this membership id ('' = from the beginning) and leave the stored resume point untouched.
+   * Undefined resumes from the stored point and saves the next one, which is how the scheduler drains a
+   * backlog over several runs.
+   */
+  cursor?: string;
+}
+
+export type SweepActionKind = 'remove' | 'revoke';
+export type SweepReason = 'entitlement_lapsed' | 'invite_expired';
+
+export interface SweepAction {
+  id: string;
+  user_id: string;
+  chat: CommunityChat;
+  telegram_user_id: string | null;
+  action: SweepActionKind;
+  reason: SweepReason;
+}
+
 export interface SweepResult {
+  dry_run: boolean;
   checked: number;
+  /** Members removed from a group (always 0 in a dry run). */
   removed: number;
+  /** Invite links retired (always 0 in a dry run). */
   revoked: number;
+  /** Lapsed memberships kept because the user is an admin (verified email in ADMIN_EMAILS). */
+  exempt_admins: number;
+  /** What was done, or in a dry run what would be done. Failed actions are listed in `errors` instead. */
+  actions: SweepAction[];
   errors: { id: string; code: string; message: string }[];
+  /** Pass as `cursor` to continue; null when this run reached the end of the candidates. */
+  next_cursor: string | null;
+  complete: boolean;
+}
+
+function readBool(v: unknown, field: string): boolean {
+  if (v === undefined || v === null || v === false || v === '' || v === '0' || v === 'false') return false;
+  if (v === true || v === '1' || v === 'true') return true;
+  throw new AppError(400, 'invalid_field', `${field} must be a boolean`, { field });
+}
+
+/** Validates sweep input from the REST query string or MCP arguments. */
+export function parseSweepOptions(raw: { dry_run?: unknown; limit?: unknown; cursor?: unknown }): SweepOptions {
+  const dryRun = readBool(raw.dry_run, 'dry_run');
+  let limit = SWEEP_DEFAULT_LIMIT;
+  if (raw.limit !== undefined && raw.limit !== null && raw.limit !== '') {
+    const n = typeof raw.limit === 'number' ? raw.limit : typeof raw.limit === 'string' && /^\d+$/.test(raw.limit) ? Number(raw.limit) : NaN;
+    if (!Number.isInteger(n) || n < 1 || n > SWEEP_MAX_LIMIT) {
+      throw new AppError(400, 'invalid_field', `limit must be an integer from 1 to ${SWEEP_MAX_LIMIT}`, { field: 'limit' });
+    }
+    limit = n;
+  }
+  if (raw.cursor === undefined || raw.cursor === null) return { dryRun, limit };
+  if (typeof raw.cursor !== 'string' || raw.cursor.length > SWEEP_CURSOR_MAX_LENGTH) {
+    throw new AppError(400, 'invalid_field', `cursor must be a string of at most ${SWEEP_CURSOR_MAX_LENGTH} characters`, { field: 'cursor' });
+  }
+  return { dryRun, limit, cursor: raw.cursor };
+}
+
+async function readSweepCursor(d1: D1DatabaseLike, job: string): Promise<string> {
+  const row = await d1.prepare('SELECT cursor FROM job_cursors WHERE job = ?').bind(job).first<Row>();
+  return row ? str(row, 'cursor') : '';
+}
+
+async function saveSweepCursor(d1: D1DatabaseLike, job: string, cursor: string | null, nowIso: string): Promise<void> {
+  if (cursor === null) {
+    await d1.prepare('DELETE FROM job_cursors WHERE job = ?').bind(job).run();
+    return;
+  }
+  await d1.prepare(
+    'INSERT INTO job_cursors (job, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT (job) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at'
+  ).bind(job, cursor, nowIso).run();
+}
+
+/** Telegram calls an action needs: removal is ban + unban, a live invite needs one revoke, an expired one none. */
+function telegramCost(action: SweepActionKind, reason: SweepReason): number {
+  if (action === 'remove') return 2;
+  return reason === 'invite_expired' ? 0 : 1;
 }
 
 /**
- * Admin/cron: removes joined members whose `community` entitlement lapsed and retires invite
- * links that expired or belong to lapsed members. Safe to re-run.
+ * Admin/cron: removes joined members whose `community` entitlement lapsed and retires invite links that
+ * expired or belong to lapsed members. Admins are never removed. Pages through memberships by id with a
+ * per-run row and Telegram budget, resuming from the stored cursor, so a backlog drains over several runs.
+ * Safe to re-run; a dry run makes no Telegram calls and no membership writes.
  */
-export async function sweepCommunity(d1: D1DatabaseLike, env: RuntimeEnv): Promise<SweepResult> {
+export async function sweepCommunity(d1: D1DatabaseLike, env: RuntimeEnv, opts: SweepOptions): Promise<SweepResult> {
   const cfg = requireConfig(env);
   const now = experienceRuntime.now();
   const nowIso = new Date(now).toISOString();
-  const { results } = await d1.prepare("SELECT * FROM community_memberships WHERE status IN ('invited', 'joined') ORDER BY created_at LIMIT 500").all<Row>();
-  const rows = results ?? [];
+  const job = opts.dryRun ? SWEEP_JOB.dryRun : SWEEP_JOB.live;
+  const start = opts.cursor ?? (await readSweepCursor(d1, job));
+  const { results } = await d1.prepare(
+    `SELECT m.*, u.email AS user_email, u.email_verified_at AS user_email_verified_at
+     FROM community_memberships m LEFT JOIN users u ON u.id = m.user_id
+     WHERE m.status IN ('invited', 'joined') AND m.id > ? ORDER BY m.id LIMIT ?`
+  ).bind(start, opts.limit + 1).all<Row>();
+  const page = results ?? [];
+  const rows = page.slice(0, opts.limit);
+  const out: SweepResult = {
+    dry_run: opts.dryRun, checked: 0, removed: 0, revoked: 0, exempt_admins: 0, actions: [], errors: [], next_cursor: null, complete: false,
+  };
   const entitledCache = new Map<string, boolean>();
-  const out: SweepResult = { checked: rows.length, removed: 0, revoked: 0, errors: [] };
+  let telegramCalls = 0;
+  let lastId: string | null = null;
+  let budgetExhausted = false;
+
   for (const row of rows) {
     const id = str(row, 'id');
     const userId = str(row, 'user_id');
@@ -282,27 +390,70 @@ export async function sweepCommunity(d1: D1DatabaseLike, env: RuntimeEnv): Promi
       entitled = (await getEntitlements(d1, userId)).entitlements.includes('community');
       entitledCache.set(userId, entitled);
     }
+    const admin = isAdminIdentity(str(row, 'user_email'), strOrNull(row, 'user_email_verified_at'), env);
+
+    let action: SweepActionKind | null = null;
+    let reason: SweepReason = 'entitlement_lapsed';
+    if (str(row, 'status') === 'invited') {
+      const expired = Date.parse(str(row, 'invite_expires_at')) <= now;
+      if (expired) {
+        action = 'revoke';
+        reason = 'invite_expired';
+      } else if (!entitled) {
+        action = 'revoke';
+      }
+    } else if (!entitled) {
+      action = 'remove';
+    }
+    // Expired links are retired for everyone; anything else an admin holds is kept.
+    if (action && admin && reason === 'entitlement_lapsed') {
+      out.exempt_admins += 1;
+      action = null;
+    }
+
+    const cost = action && !opts.dryRun ? telegramCost(action, reason) : 0;
+    if (cost > 0 && telegramCalls + cost > SWEEP_TELEGRAM_BUDGET) {
+      budgetExhausted = true;
+      break;
+    }
+    out.checked += 1;
+    lastId = id;
+    if (!action) continue;
+
+    const telegramUserId = strOrNull(row, 'telegram_user_id');
+    const item: SweepAction = { id, user_id: userId, chat: isCommunityChat(chat) ? chat : 'en', telegram_user_id: telegramUserId, action, reason };
+    if (action === 'remove' && (!chatId || !telegramUserId)) {
+      out.errors.push({ id, code: 'community_unconfigured', message: `No configured group or Telegram user for membership ${id}` });
+      continue;
+    }
+    if (opts.dryRun) {
+      out.actions.push(item);
+      continue;
+    }
     try {
-      if (str(row, 'status') === 'invited') {
-        const expired = Date.parse(str(row, 'invite_expires_at')) <= now;
-        if (!expired && entitled) continue;
-        if (!expired && chatId) await telegram(cfg, 'revokeChatInviteLink', { chat_id: chatId, invite_link: str(row, 'invite_link') });
+      if (action === 'remove' && chatId && telegramUserId) {
+        telegramCalls += cost;
+        await removeFromChat(cfg, chatId, telegramUserId);
+        await d1.prepare("UPDATE community_memberships SET status = 'removed', removed_at = ?, updated_at = ? WHERE id = ?").bind(nowIso, nowIso, id).run();
+        out.removed += 1;
+      } else {
+        if (reason === 'entitlement_lapsed' && chatId) {
+          telegramCalls += cost;
+          await telegram(cfg, 'revokeChatInviteLink', { chat_id: chatId, invite_link: str(row, 'invite_link') });
+        }
         await d1.prepare("UPDATE community_memberships SET status = 'revoked', updated_at = ? WHERE id = ?").bind(nowIso, id).run();
         out.revoked += 1;
-        continue;
       }
-      if (entitled) continue;
-      const telegramUserId = strOrNull(row, 'telegram_user_id');
-      if (!chatId || !telegramUserId) {
-        out.errors.push({ id, code: 'community_unconfigured', message: `No configured group or Telegram user for membership ${id}` });
-        continue;
-      }
-      await removeFromChat(cfg, chatId, telegramUserId);
-      await d1.prepare("UPDATE community_memberships SET status = 'removed', removed_at = ?, updated_at = ? WHERE id = ?").bind(nowIso, nowIso, id).run();
-      out.removed += 1;
+      out.actions.push(item);
     } catch (err) {
       out.errors.push({ id, code: err instanceof AppError ? err.code : 'internal_error', message: err instanceof Error ? err.message : 'unknown error' });
     }
   }
+
+  const more = budgetExhausted || page.length > opts.limit;
+  // When the budget stops a run before its first row, keep the starting point so nothing is skipped.
+  out.next_cursor = more ? (lastId ?? start) : null;
+  out.complete = !more;
+  if (opts.cursor === undefined) await saveSweepCursor(d1, job, out.next_cursor, nowIso);
   return out;
 }
