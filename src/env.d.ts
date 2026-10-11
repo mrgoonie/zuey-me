@@ -30,8 +30,12 @@ export interface RuntimeEnv {
   /** Private R2 bucket with course audio and downloadable files (never public). */
   COURSE_FILES?: R2BucketLike;
   PUBLIC_SITE_URL?: string;
+  /** PostHog project API key (project "Zuey.me"); production builds fall back to the built-in key. */
   PUBLIC_POSTHOG_KEY?: string;
+  /** PostHog ingestion host (default https://us.i.posthog.com). */
   PUBLIC_POSTHOG_HOST?: string;
+  /** "1" captures on localhost/dev builds and logs analytics calls to the console. */
+  PUBLIC_ANALYTICS_DEBUG?: string;
   ADMIN_MASTER_TOKEN?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

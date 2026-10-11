@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { KeyboardEvent } from 'react';
 import { Sparkles } from 'lucide-react';
 import type { Locale } from '../../lib/i18n/locales';
-import { trackEvent } from '../../lib/posthog';
+import { track } from '../../lib/analytics/client';
 import type { ArticleChatContext } from './article-chat-context';
 import { MAX_SELECTION_CHARS, MIN_SELECTION_CHARS, OPEN_ARTICLE_AI_EVENT, normalizeQuote, readPendingQuote, savePendingQuote } from './article-chat-context';
 import './article-ask-ai.css';
@@ -74,7 +74,7 @@ export function ArticleAskAi({ locale, slug, title, url, scopeSelector, labels }
 
   // The action bar's "Zuey AI" button opens the drawer for a general question about the article.
   useEffect(() => {
-    const onOpen = () => { trackEvent('article_ask_ai_opened', { slug }); openWith(null); };
+    const onOpen = () => { track('article_ask_ai_opened', { slug }); openWith(null); };
     window.addEventListener(OPEN_ARTICLE_AI_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_ARTICLE_AI_EVENT, onOpen);
   }, [slug, openWith]);
@@ -112,7 +112,7 @@ export function ArticleAskAi({ locale, slug, title, url, scopeSelector, labels }
   const ask = () => {
     const text = selected.current;
     if (!text) return;
-    trackEvent('article_ask_ai_clicked', { slug, chars: text.length });
+    track('article_ask_ai_clicked', { slug, chars: text.length });
     savePendingQuote(slug, text);
     window.getSelection()?.removeAllRanges();
     selected.current = null;

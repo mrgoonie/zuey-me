@@ -13,7 +13,7 @@ import { AI_COPY, errorCopy } from './copy';
 import { InteractiveFrame } from './InteractiveFrame';
 import type { ArticleChatContext } from './article-chat-context';
 import { MAX_CHAT_MESSAGE_CHARS, QUOTE_RESERVED_CHARS, composeQuotedQuestion, quotePreview, rememberArticleSession, sessionForArticle } from './article-chat-context';
-import { trackEvent } from '../../lib/posthog';
+import { track } from '../../lib/analytics/client';
 
 // ---------------------------------------------------------------------------
 // Data shapes (validated from untrusted JSON)
@@ -399,7 +399,7 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
     setMessages(prev => [...prev, userLocal, aiLocal]);
     setInput('');
     if (sentQuote) changeQuote(null);
-    if (articleSlug) trackEvent('article_ask_ai_sent', { slug: articleSlug, quoted: Boolean(sentQuote) });
+    if (articleSlug) track('article_ask_ai_sent', { slug: articleSlug, quoted: Boolean(sentQuote) });
     lastQuestion.current = question;
     liveBuffer.current = '';
     stickToBottom.current = true;
@@ -796,7 +796,8 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
   }
 
   return (
-    <section className={`zai${isChatPage ? ' zai-page' : ''}`} aria-labelledby={titleId} onKeyDown={onRootKey}>
+    // ph-no-capture: autocapture must never record chat text; the panel reports through typed events only.
+    <section className={`zai ph-no-capture${isChatPage ? ' zai-page' : ''}`} aria-labelledby={titleId} onKeyDown={onRootKey}>
       <div className="zai-head">
         <div style={{ minWidth: 0 }}>
           <div className="zai-eyebrow">{t.eyebrow}</div>

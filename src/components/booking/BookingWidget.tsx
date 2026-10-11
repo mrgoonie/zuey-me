@@ -396,7 +396,7 @@ export function BookingWidget({ methods }: { methods: Method[] }) {
   const expired = hold !== null && remaining === 0;
 
   return (
-    <section className={card} aria-labelledby="booking-title">
+    <section className={`${card} ph-no-capture`} aria-labelledby="booking-title">
       <h2 id="booking-title" className="text-xl sm:text-2xl font-bold font-serif">Đặt lịch tư vấn</h2>
       <ol className="mt-3 mb-5 grid grid-cols-4 gap-1 text-[11px] sm:text-xs" aria-label="Các bước">
         {STEP_LABELS.map((label, i) => (

@@ -5,7 +5,7 @@ import {
 } from '../../lib/lab200/courses';
 import { LAB200_AUTHOR, lab200Copy } from '../../lib/lab200/copy';
 import type { Lab200Snapshot } from '../../lib/lab200/store';
-import { trackEvent } from '../../lib/posthog';
+import { track } from '../../lib/analytics/client';
 import './lab200.css';
 
 /** Where a click came from: the Zuey OS window, the /200lab page, or the "Duy's picks" section of either. */
@@ -34,7 +34,7 @@ const CourseCard: React.FC<{ course: Lab200Course; source: ClickSource; locale: 
     href: courseLink(course.slug),
     target: '_blank',
     rel: 'sponsored noopener',
-    onClick: () => trackEvent('200lab_course_click', { slug: course.slug, source }),
+    onClick: () => track('200lab_course_click', { slug: course.slug, source }),
   };
   return (
     <li className="lab200-tile">

@@ -72,7 +72,7 @@ export const membersOpenApi: OpenApiFragment = {
     },
     '/api/members/auth/magic-link': {
       post: {
-        tags: [ACCOUNT_TAG], summary: 'Email a 15-minute single-use sign-in link',
+        tags: [ACCOUNT_TAG], summary: 'Email a 15-minute single-use sign-in link', security: [{}],
         requestBody: body({ type: 'object', properties: { email: { type: 'string', format: 'email' }, next: { type: 'string', description: 'Same-site path to open after sign-in' } }, required: ['email'] }),
         responses: {
           '202': ok('Link sent', { type: 'object', properties: { sent: { type: 'boolean' }, expires_in_minutes: { type: 'integer' } } }),
@@ -104,6 +104,16 @@ export const membersOpenApi: OpenApiFragment = {
     },
     '/api/members/auth/logout': {
       post: { tags: [ACCOUNT_TAG], summary: 'Sign out the current session', security: sessionOnly, responses: { '200': ok('Signed out', { type: 'object' }) } },
+    },
+    '/api/members/auth/identity': {
+      get: {
+        tags: [ACCOUNT_TAG], summary: 'Analytics identity of this browser: the signed-in member id or null (session cookie only)',
+        security: [{}, { MemberSession: [] }],
+        responses: {
+          '200': ok('Member id (no email or name)', { type: 'object', properties: { member_id: { type: ['string', 'null'] } }, required: ['member_id'] }),
+          '503': { description: '`database_unavailable`', ...errorRef },
+        },
+      },
     },
     '/api/v1/me': {
       get: { tags: [ACCOUNT_TAG], summary: 'Your profile, plans and entitlements (account:read)', security: memberSecurity, responses: { '200': ok('Member', ref('Member')), ...denied } },

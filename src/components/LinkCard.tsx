@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { MoreVertical, ExternalLink, Copy, Share2, Check } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import type { LinkItem } from '../db/types';
-import { trackEvent } from '../lib/posthog';
+import { track } from '../lib/analytics/client';
 
 interface LinkCardProps {
   item: LinkItem;
@@ -21,7 +21,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
   const subtitle = lang === 'vi' ? item.subtitle_vi || item.subtitle_en : item.subtitle_en;
 
   const handleCardClick = () => {
-    trackEvent('link_clicked', {
+    track('link_clicked', {
       id: item.id,
       section: item.section,
       title: item.title_en,

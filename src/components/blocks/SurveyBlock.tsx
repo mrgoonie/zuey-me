@@ -107,7 +107,7 @@ export function SurveyBlock({ block, articleSlug, interactive = true }: Props) {
   };
 
   return (
-    <div className="zb-survey">
+    <div className="zb-survey ph-no-capture">
       {results ? (
         <div>
           <p style={{ fontWeight: 800, fontSize: '1.05rem', margin: 0 }}>{block.question}</p>

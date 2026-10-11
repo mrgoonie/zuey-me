@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { ApiKeysPanel } from './ApiKeysPanel';
 import { MyLearningSection } from '../courses/MyLearningSection';
 import { MemberDialog } from './MemberDialog';
+import { reset as resetAnalytics } from '../../lib/analytics/client';
 import type { SubmitLike } from './member-ui';
 import {
   alertError, alertOk, btnDanger, btnGhost, btnPrimary, callApi, card, fmtDate, fmtDateTime, fmtVnd, input, isRecord, jsonBody, loginUrl,
@@ -420,7 +421,10 @@ function PrivacySection({ me }: { me: Me }) {
     setBusy(true); setError(null);
     const res = await callApi('/api/v1/me', { method: 'DELETE', body: jsonBody({ confirm_email: confirm }) });
     setBusy(false);
-    if (res.ok) window.location.assign('/?account=deleted');
+    if (res.ok) {
+      resetAnalytics();
+      window.location.assign('/?account=deleted');
+    }
     else setError(res.message);
   }
 
@@ -466,8 +470,10 @@ export function AccountApp({ keyScopes }: { keyScopes: readonly string[] }) {
   async function logout() {
     setSigningOut(true);
     const res = await callApi('/api/members/auth/logout', { method: 'POST' });
-    if (res.ok) window.location.assign('/');
-    else { setSigningOut(false); setError(res.message); }
+    if (res.ok) {
+      resetAnalytics();
+      window.location.assign('/');
+    } else { setSigningOut(false); setError(res.message); }
   }
 
   if (!me) {
