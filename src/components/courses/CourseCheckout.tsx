@@ -86,7 +86,7 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
   ];
 
   return (
-    <form className="grid gap-4" onSubmit={submit} noValidate aria-describedby={error ? errId : undefined}>
+    <form className="grid gap-4 ph-no-capture" onSubmit={submit} noValidate aria-describedby={error ? errId : undefined}>
       <fieldset className="grid gap-2 min-w-0">
         <legend className="text-sm font-semibold mb-1">Phương thức thanh toán</legend>
         {options.filter(o => o.available).map(o => (

@@ -3,6 +3,7 @@
  * run from the layout. Nothing here ever throws into the caller; when consent is missing, the
  * environment is local/dev, or PostHog failed to load, every call is a silent no-op.
  */
+import { CONFIG_ELEMENT_ID, PRODUCTION_HOSTNAMES } from './constants';
 import { browserConsentEnvironment, consentState, setOptOut, type ConsentEnvironment, type ConsentState } from './consent';
 import {
   getPostHog, postHogClientDestination, postHogInitOptions, resolvePostHogConfig, type PostHogConfig,
@@ -104,9 +105,13 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
           return;
         }
         const previous = read(deps.local(), IDENTITY_STORAGE_KEY);
-        if (previous === memberId) return;
+        // Only the destinations know whether they already attribute events to this member.
+        if (deps.destinations.length > 0 && deps.destinations.every(d => d.distinctId() === memberId)) {
+          if (previous !== memberId) write(deps.local(), IDENTITY_STORAGE_KEY, memberId);
+          return;
+        }
         // Never let a second person inherit the first one's identity on a shared device.
-        if (previous !== null) each(d => d.reset());
+        if (previous !== null && previous !== memberId) each(d => d.reset());
         each(d => d.identify(memberId));
         write(deps.local(), IDENTITY_STORAGE_KEY, memberId);
       } catch (err) {
@@ -127,26 +132,29 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
       try {
         if (!live()) return;
         const now = deps.now();
-        const cached = isAuthPath(pathname) ? null : parseIdentityCache(read(deps.session(), IDENTITY_CACHE_KEY), now);
+        const authPage = isAuthPath(pathname);
+        // The member may have just changed on sign-in pages: never answer from (or keep) the tab cache there.
+        if (authPage) write(deps.session(), IDENTITY_CACHE_KEY, null);
+        const previous = read(deps.local(), IDENTITY_STORAGE_KEY);
+        const cached = authPage ? null : parseIdentityCache(read(deps.session(), IDENTITY_CACHE_KEY), now);
         let current: string | null;
-        if (cached) {
+        // sessionStorage is per tab while the identity key is shared by all tabs: another tab may have
+        // signed out or in since this tab cached its answer, so the cache counts only while both agree.
+        if (cached && cached.memberId === previous) {
           current = cached.memberId;
         } else {
           const fetched = parseIdentityResponse(await deps.fetchIdentity());
           // Unknown (network error, odd response): leave the identity as it is.
           if (fetched === undefined) return;
           current = fetched;
-          write(deps.session(), IDENTITY_CACHE_KEY, JSON.stringify({ memberId: current, at: now }));
+          if (!authPage) write(deps.session(), IDENTITY_CACHE_KEY, JSON.stringify({ memberId: current, at: now }));
         }
-        const previous = read(deps.local(), IDENTITY_STORAGE_KEY);
-        for (const step of planIdentity(previous, current)) {
-          if (step === 'reset') {
-            write(deps.local(), IDENTITY_STORAGE_KEY, null);
-            each(d => d.reset());
-          } else if (current !== null) {
-            client.identify(current);
-          }
+        if (planIdentity(previous, current).includes('reset')) {
+          write(deps.local(), IDENTITY_STORAGE_KEY, null);
+          each(d => d.reset());
         }
+        // identify() is a no-op when the destinations already attribute events to this member.
+        if (current !== null) client.identify(current);
       } catch (err) {
         deps.debug('analytics: identity sync failed', err instanceof Error ? err.message : err);
       }
@@ -236,19 +244,14 @@ export function currentConsent(): ConsentState {
   return consentState(browserConsentEnvironment());
 }
 
-const LOCAL_HOST_RE = /^(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?|0\.0\.0\.0|.+\.local|.+\.localhost)$/i;
-
-export function isLocalHostname(hostname: string): boolean {
-  return LOCAL_HOST_RE.test(hostname);
-}
-
-/** Capture only on real hosts in production builds, unless PUBLIC_ANALYTICS_DEBUG is set. */
+/**
+ * Capture only on the production hostnames in production builds, unless PUBLIC_ANALYTICS_DEBUG is set.
+ * Localhost, `*.pages.dev` previews and any other host stay silent even though they share the key.
+ */
 export function shouldCaptureOn(hostname: string, config: PostHogConfig, devBuild: boolean): boolean {
   if (config.debug) return true;
-  return !devBuild && !isLocalHostname(hostname);
+  return !devBuild && PRODUCTION_HOSTNAMES.includes(hostname.toLowerCase());
 }
-
-export const CONFIG_ELEMENT_ID = 'zuey-analytics';
 
 function readConfig(): PostHogConfig | null {
   const el = document.getElementById(CONFIG_ELEMENT_ID);

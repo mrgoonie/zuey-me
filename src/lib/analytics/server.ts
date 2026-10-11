@@ -125,12 +125,19 @@ export async function sendServerEvent(
 }
 
 /** Typed server capture for events whose taxonomy source is `server`. */
-export function captureServerEvent<E extends ServerEventName>(
+export async function captureServerEvent<E extends ServerEventName>(
   env: AnalyticsEnv,
   event: E,
   distinctId: string,
   properties: EventProperties<E>,
   options: ServerCaptureOptions = {},
 ): Promise<ServerDeliveryResult> {
-  return sendServerEvent({ event, distinctId, properties }, serverDestinations(env), options);
+  try {
+    return await sendServerEvent({ event, distinctId, properties }, serverDestinations(env), options);
+  } catch (err) {
+    return {
+      delivered: false, uuid: options.uuid ?? '',
+      results: [{ destination: 'all', ok: false, reason: 'invalid', message: err instanceof Error ? err.message : 'unknown' }],
+    };
+  }
 }

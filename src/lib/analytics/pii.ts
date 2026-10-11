@@ -9,7 +9,7 @@ export const REDACTED = '[redacted]';
 const SENSITIVE_PARAMS = new Set([
   'token', 'code', 'email', 'key', 'secret', 'sig', 'signature', 'state', 'session', 'password', 'pass', 'pwd',
   'auth', 'otp', 'api_key', 'apikey', 'access_token', 'refresh_token', 'id_token', 'client_secret',
-  'confirm_email', 'new_email', 'jwt', 'hmac', 'nonce', 'ticket',
+  'confirm_email', 'new_email', 'jwt', 'hmac', 'nonce', 'ticket', 'manage', 'payerid',
 ]);
 /** Any parameter whose name contains one of these fragments is also removed (e.g. `reset_token`). */
 const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'email', 'session', 'signature'];
@@ -20,6 +20,38 @@ const JWT_RE = /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g;
 const SECRET_RE = /\b(?:zm|zoa|zor|zk|sk|rk|whsec|ghp|gho|github_pat|xox[abpr])_[A-Za-z0-9_-]{12,}/g;
 /** `name=value` pairs of sensitive parameters embedded in free text such as autocapture's `$elements_chain`. */
 const INLINE_PARAM_RE = /([?&#;]\s*)([A-Za-z0-9_.-]+)=([^&#\s"'<>]*)/g;
+
+/**
+ * Paths whose pages show account, billing, booking or AI data. Their URLs lose the whole query string
+ * and fragment (booking manage tokens, PayPal return parameters) and autocapture is off there.
+ */
+const SENSITIVE_PATH_RE = /^\/(?:account|login|billing|booking|chat|oauth|studio|courses\/orders)(?:\/|$)/;
+
+export function isSensitivePath(pathname: string): boolean {
+  return SENSITIVE_PATH_RE.test(pathname);
+}
+
+/**
+ * Order codes and booking ids in paths are replaced by placeholders: the order code is also the SePay
+ * transfer memo, which is never sent to analytics.
+ */
+const PATH_TEMPLATES: ReadonlyArray<[RegExp, string]> = [
+  [/(\/billing\/card\/)[A-Za-z0-9_-]+/g, '$1:id'],
+  [/(\/billing\/)(?!card\/|card$|:)[A-Za-z0-9_-]+/g, '$1:code'],
+  [/(\/courses\/orders\/)[A-Za-z0-9_-]+/g, '$1:code'],
+  [/(\/booking\/)(?!:)[A-Za-z0-9_-]+/g, '$1:id'],
+];
+
+/** True when a path carries an order code or booking id (its page title may name the order too). */
+export function hasPrivateIdentifier(pathname: string): boolean {
+  return /^\/(?:billing|courses\/orders|booking)\/[^/]/.test(pathname);
+}
+
+export function templatePaths(value: string): string {
+  let out = value;
+  for (const [re, replacement] of PATH_TEMPLATES) out = out.replace(re, replacement);
+  return out;
+}
 
 export function isSensitiveParam(name: string): boolean {
   const n = name.toLowerCase();
@@ -72,6 +104,10 @@ export function scrubUrl(input: string): string {
   } catch {
     return redactString(input);
   }
+  if (isSensitivePath(parsed.pathname)) {
+    parsed.search = '';
+    parsed.hash = '';
+  }
   scrubParams(parsed.searchParams);
   if (parsed.hash.includes('=')) {
     const hashParams = new URLSearchParams(parsed.hash.slice(1));
@@ -88,9 +124,12 @@ export function scrubUrl(input: string): string {
   return redactString(out);
 }
 
-/** Replaces emails, JWTs, secret tokens and sensitive `name=value` pairs inside arbitrary text. */
+/**
+ * Replaces emails, JWTs, secret tokens, sensitive `name=value` pairs, order codes and booking ids in
+ * paths inside arbitrary text.
+ */
 export function redactString(value: string): string {
-  return value
+  return templatePaths(value)
     .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match))
     .replace(JWT_RE, REDACTED)
     .replace(SECRET_RE, REDACTED)

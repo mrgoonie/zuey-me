@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { createAnalyticsClient, isLocalHostname, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
-import { OPT_OUT_STORAGE_KEY, consentState, setOptOut, type ConsentEnvironment } from '../src/lib/analytics/consent';
+import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
+import { BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, consentState, setOptOut, type ConsentEnvironment } from '../src/lib/analytics/consent';
 import {
   DEFAULT_POSTHOG_KEY, createPostHogServerDestination, isSensitivePath, resolvePostHogConfig, scrubCaptureResult,
 } from '../src/lib/analytics/destinations/posthog';
@@ -24,7 +24,8 @@ class MemoryStorage {
 
 describe('PII guard', () => {
   test('strips sensitive query and fragment parameters from absolute and relative URLs', () => {
-    expect(scrubUrl('https://zuey.me/login/verify?token=abc123&next=%2Faccount')).toBe('https://zuey.me/login/verify?next=%2Faccount');
+    expect(scrubUrl('https://zuey.me/articles/x?token=abc123&next=%2Faccount')).toBe('https://zuey.me/articles/x?next=%2Faccount');
+    expect(scrubUrl('https://zuey.me/login/verify?token=abc123&next=%2Faccount')).toBe('https://zuey.me/login/verify');
     expect(scrubUrl('/api/auth/google/callback?code=4%2F0Ab&state=xyz&utm_source=x')).toBe('/api/auth/google/callback?utm_source=x');
     expect(scrubUrl('https://zuey.me/#access_token=abc&tab=1')).toBe('https://zuey.me/#tab=1');
     expect(scrubUrl('https://zuey.me/?Email=a@b.co&reset_token=1&session_id=2&key=3&sig=4&secret=5')).toBe('https://zuey.me/');
@@ -125,17 +126,28 @@ describe('consent', () => {
 
 interface Call { method: string; args: unknown[] }
 
-function fakeClient(over: Partial<AnalyticsClientDeps> = {}, consent: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() }) {
-  const calls: Call[] = [];
-  const dest: ClientDestination = {
+/** A PostHog-like destination whose distinct id follows identify/reset; `shared` models one browser profile. */
+function fakeDestination(calls: Call[], shared: { distinctId: string }): ClientDestination {
+  let anon = 0;
+  return {
     name: 'fake',
     capture: (...args) => { calls.push({ method: 'capture', args }); },
-    identify: (...args) => { calls.push({ method: 'identify', args }); },
-    reset: () => { calls.push({ method: 'reset', args: [] }); },
+    identify: (...args) => { calls.push({ method: 'identify', args }); shared.distinctId = args[0]; },
+    reset: () => { calls.push({ method: 'reset', args: [] }); anon += 1; shared.distinctId = `anon-${anon}`; },
     optOut: () => { calls.push({ method: 'optOut', args: [] }); },
     optIn: () => { calls.push({ method: 'optIn', args: [] }); },
+    distinctId: () => shared.distinctId,
   };
-  const local = new MemoryStorage();
+}
+
+function fakeClient(
+  over: Partial<AnalyticsClientDeps> = {},
+  consent: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() },
+  browser: { local: MemoryStorage; posthog: { distinctId: string } } = { local: new MemoryStorage(), posthog: { distinctId: 'anon-0' } },
+) {
+  const calls: Call[] = [];
+  const dest = fakeDestination(calls, browser.posthog);
+  const local = browser.local;
   const session = new MemoryStorage();
   const client = createAnalyticsClient({
     destinations: [dest],
@@ -178,7 +190,7 @@ describe('browser client', () => {
 
   test('track never throws, even when a destination does', () => {
     const { client } = fakeClient({
-      destinations: [{ name: 'broken', capture: () => { throw new Error('boom'); }, identify: () => undefined, reset: () => undefined, optOut: () => undefined, optIn: () => undefined }],
+      destinations: [{ name: 'broken', capture: () => { throw new Error('boom'); }, identify: () => undefined, reset: () => undefined, optOut: () => undefined, optIn: () => undefined, distinctId: () => null }],
     });
     client.activate(false);
     expect(() => client.track('social_clicked', { platform: 'x' })).not.toThrow();
@@ -291,10 +303,10 @@ describe('PostHog configuration', () => {
 
   test('capture is off on localhost and dev builds unless debug is set', () => {
     const config = { key: KEY, host: 'https://us.i.posthog.com', debug: false };
-    expect(isLocalHostname('localhost')).toBe(true);
-    expect(isLocalHostname('127.0.0.1')).toBe(true);
-    expect(isLocalHostname('zuey.me')).toBe(false);
     expect(shouldCaptureOn('zuey.me', config, false)).toBe(true);
+    expect(shouldCaptureOn('www.zuey.me', config, false)).toBe(true);
+    expect(shouldCaptureOn('feature-x.zuey-me.pages.dev', config, false)).toBe(false);
+    expect(shouldCaptureOn('127.0.0.1', config, false)).toBe(false);
     expect(shouldCaptureOn('localhost', config, false)).toBe(false);
     expect(shouldCaptureOn('zuey.me', config, true)).toBe(false);
     expect(shouldCaptureOn('localhost', { ...config, debug: true }, true)).toBe(true);
@@ -375,5 +387,107 @@ describe('server capture', () => {
     expect(serverDestinations({ PUBLIC_POSTHOG_KEY: KEY }, { production: false })).toEqual([]);
     expect(serverDestinations({ PUBLIC_POSTHOG_KEY: KEY, PUBLIC_ANALYTICS_DEBUG: '1' }, { production: false }).map(d => d.name)).toEqual(['posthog']);
     expect(serverDestinations({}, { production: true }).map(d => d.name)).toEqual(['posthog']);
+  });
+});
+
+describe('private pages and identifiers', () => {
+  const paypalReturn = 'https://zuey.me/booking/bk_8f2a91c3?manage=mt_7d1e2f3a4b5c6d7e8f9a&paypal=return&token=5O190127TN364715T&PayerID=QYR5Z8XDVJNXQ';
+
+  test('the PayPal booking return URL loses the manage token and PayPal parameters everywhere', () => {
+    const out = scrubCaptureResult({
+      event: '$pageview',
+      properties: {
+        $current_url: paypalReturn,
+        $pathname: '/booking/bk_8f2a91c3',
+        $referrer: 'https://www.paypal.com/checkoutnow?token=5O190127TN364715T',
+        title: 'Booking ZB-4821 — zuey.me',
+      },
+      $set_once: { $initial_current_url: paypalReturn, $initial_pathname: '/booking/bk_8f2a91c3' },
+    });
+    const text = JSON.stringify(out);
+    for (const secret of ['mt_7d1e2f3a4b5c6d7e8f9a', '5O190127TN364715T', 'QYR5Z8XDVJNXQ', 'bk_8f2a91c3', 'ZB-4821']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(out?.properties).toEqual({
+      $current_url: 'https://zuey.me/booking/:id',
+      $pathname: '/booking/:id',
+      $referrer: 'https://www.paypal.com/checkoutnow',
+      title: '',
+    });
+    expect(out?.$set_once).toEqual({ $initial_current_url: 'https://zuey.me/booking/:id', $initial_pathname: '/booking/:id' });
+  });
+
+  test('the manage and PayerID parameters are stripped on any page', () => {
+    expect(scrubUrl('https://zuey.me/articles?manage=abc&PayerID=Q1&ref=x')).toBe('https://zuey.me/articles?ref=x');
+  });
+
+  test('order codes (the SePay transfer memo) are templated in paths and referrers', () => {
+    expect(scrubUrl('https://zuey.me/billing/ZM8K2Q4?x=1')).toBe('https://zuey.me/billing/:code');
+    expect(scrubUrl('https://zuey.me/billing/card/cs_123abc')).toBe('https://zuey.me/billing/card/:id');
+    expect(scrubUrl('/courses/orders/ZSC9X7Y')).toBe('/courses/orders/:code');
+    expect(scrubUrl('https://zuey.me/account?tab=billing#x')).toBe('https://zuey.me/account');
+    expect(scrubUrl('https://zuey.me/pricing?plan=ai')).toBe('https://zuey.me/pricing?plan=ai');
+    const out = scrubCaptureResult({ properties: { $current_url: 'https://zuey.me/pricing', $referrer: 'https://zuey.me/billing/ZM8K2Q4', title: 'Pricing' } });
+    expect(out?.properties).toEqual({ $current_url: 'https://zuey.me/pricing', $referrer: 'https://zuey.me/billing/:code', title: 'Pricing' });
+  });
+});
+
+describe('identity across tabs and redirects', () => {
+  test('a tab cache from before a sign-out in another tab does not re-identify the old member', async () => {
+    const browser = { local: new MemoryStorage(), posthog: { distinctId: 'anon-0' } };
+    const tabA = fakeClient({ fetchIdentity: async () => ({ data: { member_id: 'usr_a' } }) }, undefined, browser);
+    tabA.client.activate(false);
+    await tabA.client.syncIdentity('/articles');
+    expect(browser.posthog.distinctId).toBe('usr_a');
+
+    // Tab B signs out: reset clears the shared identity key, and the session cookie is gone.
+    const tabB = fakeClient({}, undefined, browser);
+    tabB.client.reset();
+
+    // Tab A navigates again with its own (stale) sessionStorage cache still saying usr_a.
+    let fetched = 0;
+    const tabA2 = fakeClient({ fetchIdentity: async () => { fetched += 1; return { data: { member_id: null } }; } }, undefined, browser);
+    tabA2.session.setItem(IDENTITY_CACHE_KEY, tabA.session.getItem(IDENTITY_CACHE_KEY) ?? '');
+    tabA2.client.activate(false);
+    await tabA2.client.syncIdentity('/articles');
+    expect(fetched).toBe(1);
+    expect(tabA2.calls.filter(c => c.method === 'identify')).toEqual([]);
+    expect(browser.posthog.distinctId).not.toBe('usr_a');
+  });
+
+  test('auth pages drop the tab cache so the sign-in redirect identifies at once', async () => {
+    let member: string | null = null;
+    const { client, session, calls } = fakeClient({ fetchIdentity: async () => ({ data: { member_id: member } }) });
+    client.activate(false);
+    await client.syncIdentity('/articles');
+    expect(JSON.parse(session.getItem(IDENTITY_CACHE_KEY) ?? '{}')).toMatchObject({ memberId: null });
+    await client.syncIdentity('/login');
+    expect(session.getItem(IDENTITY_CACHE_KEY)).toBeNull();
+    member = 'usr_a';
+    await client.syncIdentity('/articles');
+    expect(calls).toEqual([{ method: 'identify', args: ['usr_a'] }]);
+  });
+
+  test('an anonymous answer is cached only briefly', () => {
+    expect(parseIdentityCache(JSON.stringify({ memberId: null, at: 0 }), 60 * 1000)).toEqual({ memberId: null, at: 0 });
+    expect(parseIdentityCache(JSON.stringify({ memberId: null, at: 0 }), 3 * 60 * 1000)).toBeNull();
+    expect(parseIdentityCache(JSON.stringify({ memberId: 'usr_a', at: 0 }), 3 * 60 * 1000)).toEqual({ memberId: 'usr_a', at: 0 });
+  });
+
+  test('identify re-runs when PostHog lost the member even if the local key still has it', () => {
+    const browser = { local: new MemoryStorage(), posthog: { distinctId: 'anon-9' } };
+    browser.local.setItem(IDENTITY_STORAGE_KEY, 'usr_a');
+    const { client, calls } = fakeClient({}, undefined, browser);
+    client.activate(false);
+    client.identify('usr_a');
+    expect(calls).toEqual([{ method: 'identify', args: ['usr_a'] }]);
+  });
+});
+
+describe('blocked storage', () => {
+  test('counts as opted out and cannot record a choice', () => {
+    const env: ConsentEnvironment = { navigator: {}, storage: BLOCKED_STORAGE };
+    expect(consentState(env)).toBe('opted_out');
+    expect(setOptOut(false, env)).toBe(false);
   });
 });

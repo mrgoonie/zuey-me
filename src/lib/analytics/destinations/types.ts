@@ -14,6 +14,8 @@ export interface ClientDestination {
   reset(): void;
   optOut(): void;
   optIn(): void;
+  /** The id the destination currently attributes events to, or null when unknown. */
+  distinctId(): string | null;
 }
 
 /** A validated server event, ready for delivery. `uuid` lets destinations de-duplicate retries. */

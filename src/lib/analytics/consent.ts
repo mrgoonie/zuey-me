@@ -14,11 +14,28 @@ export interface ConsentEnvironment {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
 }
 
+const blocked = (): never => {
+  throw new Error('localStorage is blocked');
+};
+
+/**
+ * Stand-in for a localStorage the browser refuses to expose (privacy mode, blocked cookies). Every call
+ * throws, so `isOptedOut` reports opted out and `setOptOut` reports that the choice cannot be saved.
+ */
+export const BLOCKED_STORAGE: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = {
+  getItem: blocked,
+  setItem: blocked,
+  removeItem: blocked,
+};
+
 function safeStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
   try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
+    if (typeof localStorage === 'undefined') return null;
+    const storage = localStorage;
+    storage.getItem(OPT_OUT_STORAGE_KEY);
+    return storage;
   } catch {
-    return null;
+    return BLOCKED_STORAGE;
   }
 }
 

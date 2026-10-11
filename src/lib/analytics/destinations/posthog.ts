@@ -2,7 +2,7 @@
  * PostHog destination: environment-driven configuration, the browser adapter over the `window.posthog`
  * snippet, and the server adapter over the HTTP capture API (web-standard `fetch` only).
  */
-import { scrubValue } from '../pii';
+import { hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
 import type { ClientDestination, DestinationResult, ServerAnalyticsEvent, ServerDestination } from './types';
 
 /** Project "Zuey.me". Used only by production builds that have no PUBLIC_POSTHOG_KEY configured. */
@@ -42,8 +42,9 @@ function normaliseHost(raw: string | undefined, debug: boolean): string | null {
 
 /**
  * Resolves the PostHog project from the environment. The built-in key is a fallback for production
- * builds only, so development and preview builds never write to the production project by accident.
- * Returns null when analytics must stay off (no key, malformed key or host).
+ * builds only, so `astro dev` without a key stays off. Production builds (including `*.pages.dev`
+ * previews) do resolve a key; the browser then captures only on the production hostnames
+ * (`shouldCaptureOn`). Returns null when analytics must stay off (no key, malformed key or host).
  */
 export function resolvePostHogConfig(env: AnalyticsEnv, options: { production: boolean }): PostHogConfig | null {
   const debug = isTruthyFlag(env.PUBLIC_ANALYTICS_DEBUG);
@@ -80,6 +81,7 @@ export function isProductionBuild(): boolean {
 /** The subset of posthog-js (or its queueing snippet stub) this app calls. */
 export interface PostHogLike {
   init(key: string, config: Record<string, unknown>): unknown;
+  get_distinct_id?(): unknown;
   capture(event: string, properties?: Record<string, unknown>): unknown;
   identify(distinctId: string): unknown;
   reset(): unknown;
@@ -113,10 +115,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function pathOf(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    return new URL(value, 'https://relative.invalid').pathname;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * `before_send` hook: strips sensitive URL parameters and redacts emails, JWTs and secret tokens from
- * every property PostHog attaches automatically (current URL, referrer, autocapture element chain).
- * Drops the event if scrubbing itself fails, so an unexpected shape can never leak raw data.
+ * `before_send` hook: strips sensitive URL parameters (the whole query on account, billing and booking
+ * pages), replaces order codes and booking ids in paths, and redacts emails, JWTs and secret tokens
+ * from every property PostHog attaches automatically (current URL, referrer, `$initial_*`, autocapture
+ * element chain). The page title is blanked on order and booking pages. Drops the event if scrubbing
+ * itself fails, so an unexpected shape can never leak raw data.
  */
 export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null): T | null {
   if (!result) return result;
@@ -129,18 +142,18 @@ export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null
       if (!isRecord(clean)) return null;
       scrubbed[field] = clean;
     }
+    const raw = result.properties;
+    const path = raw ? pathOf(raw.$current_url) ?? pathOf(raw.$pathname) : null;
+    if (path && hasPrivateIdentifier(path) && scrubbed.properties) {
+      scrubbed.properties = { ...scrubbed.properties, title: '' };
+    }
     return scrubbed;
   } catch {
     return null;
   }
 }
 
-/** Paths whose pages show account, billing, booking or AI data; autocapture is never trusted there. */
-const SENSITIVE_PATH_RE = /^\/(?:account|login|billing|booking|chat|oauth|studio|courses\/orders)(?:\/|$)/;
-
-export function isSensitivePath(pathname: string): boolean {
-  return SENSITIVE_PATH_RE.test(pathname);
-}
+export { isSensitivePath };
 
 /** posthog-js init options. Session replay stays off until a masking review enables it explicitly. */
 export function postHogInitOptions(config: PostHogConfig, pathname: string): Record<string, unknown> {
@@ -175,6 +188,14 @@ export const postHogClientDestination: ClientDestination = {
   reset: () => safely(() => getPostHog()?.reset()),
   optOut: () => safely(() => getPostHog()?.opt_out_capturing()),
   optIn: () => safely(() => getPostHog()?.opt_in_capturing()),
+  distinctId: () => {
+    try {
+      const id: unknown = getPostHog()?.get_distinct_id?.();
+      return typeof id === 'string' ? id : null;
+    } catch {
+      return null;
+    }
+  },
 };
 
 // ---------------------------------------------------------------------------------------------------

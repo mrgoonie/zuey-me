@@ -303,8 +303,8 @@ wrangler d1 execute zuey_me_db --remote --file=./migrations/0020_promo_codes_and
 
 Project đích: PostHog **Zuey.me**. Danh mục sự kiện, quy tắc PII và consent: [analytics-events.md](analytics-events.md).
 
-- `PUBLIC_POSTHOG_KEY`: project API key (`phc_…`, là key công khai, không phải secret). Hiện được khai báo trong `[vars]` của `wrangler.toml` (cùng `PUBLIC_POSTHOG_HOST`); thiếu thì **chỉ bản build production** dùng key mặc định trong `src/lib/analytics/destinations/posthog.ts`, bản dev/preview tắt analytics.
+- `PUBLIC_POSTHOG_KEY`: project API key (`phc_…`, là key công khai, không phải secret). Hiện được khai báo trong `[vars]` của `wrangler.toml` (cùng `PUBLIC_POSTHOG_HOST`); thiếu thì **chỉ bản build production** dùng key mặc định trong `src/lib/analytics/destinations/posthog.ts`. Bản preview (`*.pages.dev`) cũng là build production và nhận cùng key từ `wrangler.toml`, nhưng trình duyệt chỉ gửi sự kiện trên `zuey.me` và `www.zuey.me` (`src/lib/analytics/constants.ts`), nên preview, `localhost` và bản dev không gửi gì.
 - `PUBLIC_POSTHOG_HOST` (tuỳ chọn): mặc định `https://us.i.posthog.com`. Phải là `https://`.
-- `PUBLIC_ANALYTICS_DEBUG` (tuỳ chọn): `1` để gửi sự kiện cả khi chạy `localhost`/`bun run dev` và in lời gọi analytics ra console. Bình thường để trống: localhost và bản dev không gửi gì.
+- `PUBLIC_ANALYTICS_DEBUG` (tuỳ chọn): `1` để gửi sự kiện trên mọi hostname (kể cả `localhost`, `bun run dev`, preview) và in lời gọi analytics ra console. Bình thường để trống. Lưu ý: sự kiện server (khi có) chưa kiểm tra hostname, nên preview deployment sẽ gửi vào project production.
 
 **Kiểm tra sau khi deploy:** mở zuey.me (không bật Do Not Track), PostHog → *Activity → Live events* phải thấy `$pageview` với `$current_url` không chứa `token`/`code`/`email`. Đăng nhập rồi tải lại trang: sự kiện mang `distinct_id` là member ID (không phải email). Đăng xuất: sự kiện kế tiếp có `distinct_id` ẩn danh mới. Bấm "Tắt thống kê" ở `/privacy#analytics`: không còn sự kiện mới từ trình duyệt đó.

@@ -125,8 +125,8 @@ const content: Record<'vi' | 'en', {
       paras: [
         'zuey.me dùng PostHog (project riêng của zuey.me, máy chủ tại Mỹ) để hiểu ở mức tổng hợp trang nào được xem và tính năng nào được dùng. Mỗi trình duyệt có một mã ẩn danh ngẫu nhiên lưu trong cookie/localStorage của PostHog.',
         'Khi bạn đăng nhập, mã ẩn danh đó được gắn với mã thành viên nội bộ của bạn (một chuỗi ngẫu nhiên, không phải email hay tên) để thống kê không bị đếm trùng giữa các trang. Khi đăng xuất hoặc xoá tài khoản, liên kết này bị xoá khỏi trình duyệt và một mã ẩn danh mới được tạo, nên người dùng chung máy không bị gộp vào nhau.',
-        'Mỗi sự kiện chỉ được gửi các thuộc tính đã khai báo trước. Địa chỉ trang và nguồn giới thiệu được lọc bỏ các tham số nhạy cảm (ví dụ token, code, email, key, secret, state, session) trước khi gửi. Không ghi lại phiên màn hình (session replay).',
-        'Analytics không chạy khi trình duyệt bật Do Not Track hoặc Global Privacy Control, hoặc khi bạn tắt ở đây. Lựa chọn được lưu trong trình duyệt này; xoá dữ liệu trình duyệt sẽ xoá lựa chọn.',
+        'Mỗi sự kiện chỉ được gửi các thuộc tính đã khai báo trước. Địa chỉ trang và nguồn giới thiệu được lọc bỏ các tham số nhạy cảm (ví dụ token, code, email, key, secret, state, session) trước khi gửi; trên các trang tài khoản, thanh toán và đặt lịch, toàn bộ tham số bị bỏ, mã đơn hàng và mã lịch hẹn trong đường dẫn được thay bằng ký hiệu chung và tiêu đề trang không được gửi. Biểu mẫu khảo sát, đặt lịch, thanh toán và khung chat không bị ghi lại thao tác bấm. Không ghi lại phiên màn hình (session replay).',
+        'Analytics không chạy khi trình duyệt bật Do Not Track hoặc Global Privacy Control, hoặc khi bạn tắt ở đây. Lựa chọn được lưu trong trình duyệt này; xoá dữ liệu trình duyệt sẽ xoá lựa chọn. Nếu trình duyệt chặn lưu trữ cục bộ, analytics cũng tắt.',
       ],
       neverTitle: 'Không bao giờ gửi sang analytics',
       never: [
@@ -248,8 +248,8 @@ const content: Record<'vi' | 'en', {
       paras: [
         'zuey.me uses PostHog (a project dedicated to zuey.me, hosted in the US) to understand in aggregate which pages are viewed and which features are used. Each browser gets a random anonymous id stored in PostHog’s cookie/localStorage.',
         'When you sign in, that anonymous id is linked to your internal member id (a random string, never your email or name) so usage is not double-counted across pages. Signing out or deleting your account removes the link from the browser and starts a new anonymous id, so people sharing a device are never merged.',
-        'Each event carries only properties declared in advance. Page addresses and referrers are stripped of sensitive parameters (such as token, code, email, key, secret, state, session) before sending. Session replay is not recorded.',
-        'Analytics does not run when your browser sends Do Not Track or Global Privacy Control, or when you turn it off here. The choice is stored in this browser; clearing browser data clears it.',
+        'Each event carries only properties declared in advance. Page addresses and referrers are stripped of sensitive parameters (such as token, code, email, key, secret, state, session) before sending; on account, payment and booking pages the whole query is dropped, order and booking codes in the path are replaced by a placeholder and the page title is not sent. Clicks inside survey, booking, checkout and chat forms are not recorded. Session replay is not recorded.',
+        'Analytics does not run when your browser sends Do Not Track or Global Privacy Control, or when you turn it off here. The choice is stored in this browser; clearing browser data clears it. If your browser blocks local storage, analytics stays off too.',
       ],
       neverTitle: 'Never sent to analytics',
       never: [

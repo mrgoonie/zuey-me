@@ -11,6 +11,8 @@ export const IDENTITY_STORAGE_KEY = 'zuey_analytics_member';
 /** sessionStorage key caching the server's answer to "who is signed in" for this tab. */
 export const IDENTITY_CACHE_KEY = 'zuey_analytics_identity';
 export const IDENTITY_CACHE_TTL_MS = 10 * 60 * 1000;
+/** A cached "signed out" answer expires quickly so a sign-in in another tab or flow is picked up. */
+export const ANONYMOUS_CACHE_TTL_MS = 2 * 60 * 1000;
 /** Same-origin endpoint returning `{ member_id }` for the session cookie (never email or name). */
 export const IDENTITY_ENDPOINT = '/api/members/auth/identity';
 
@@ -50,8 +52,9 @@ export function parseIdentityCache(raw: string | null, now: number): IdentityCac
     if (typeof parsed !== 'object' || parsed === null) return null;
     const memberId = 'memberId' in parsed ? parsed.memberId : undefined;
     const at = 'at' in parsed ? parsed.at : undefined;
-    if (typeof at !== 'number' || now - at > IDENTITY_CACHE_TTL_MS || now < at) return null;
     if (memberId !== null && typeof memberId !== 'string') return null;
+    const ttl = memberId === null ? ANONYMOUS_CACHE_TTL_MS : IDENTITY_CACHE_TTL_MS;
+    if (typeof at !== 'number' || now - at > ttl || now < at) return null;
     return { memberId, at };
   } catch {
     return null;

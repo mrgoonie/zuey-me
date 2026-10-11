@@ -43,7 +43,7 @@ interface Props {
 export function InvoiceRequestFields({ state, className = '' }: Props) {
   const id = useId();
   return (
-    <div className={`rounded-2xl border border-stone-200/90 bg-[#F5EFEB] p-3 sm:p-4 text-stone-900 min-w-0 ${className}`}>
+    <div className={`ph-no-capture rounded-2xl border border-stone-200/90 bg-[#F5EFEB] p-3 sm:p-4 text-stone-900 min-w-0 ${className}`}>
       <label className="flex items-start gap-2 text-sm cursor-pointer">
         <input type="checkbox" className="mt-0.5" checked={state.enabled} onChange={e => state.setEnabled(e.target.checked)} />
         <span>

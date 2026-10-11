@@ -33,27 +33,34 @@ Email, name, avatar, phone number; passwords, sign-in links, tokens, API keys, O
 
 PostHog still records `$pageview`, `$pageleave` and autocapture clicks. Before anything leaves the browser, `before_send` (`scrubCaptureResult`) deep-scrubs `properties`, `$set` and `$set_once`:
 
-- URLs (`$current_url`, `$referrer`, `$initial_*`, `href` attributes) lose these parameters (case-insensitive): `token`, `code`, `email`, `key`, `secret`, `sig`, `signature`, `state`, `session`, `password`, `pass`, `pwd`, `auth`, `otp`, `api_key`, `apikey`, `access_token`, `refresh_token`, `id_token`, `client_secret`, `confirm_email`, `new_email`, `jwt`, `hmac`, `nonce`, `ticket`, plus any name containing `token`, `secret`, `password`, `email`, `session` or `signature`. URL user-info is removed.
+- URLs (`$current_url`, `$referrer`, `$initial_*`, `href` attributes) lose these parameters (case-insensitive): `token`, `code`, `email`, `key`, `secret`, `sig`, `signature`, `state`, `session`, `password`, `pass`, `pwd`, `auth`, `otp`, `api_key`, `apikey`, `access_token`, `refresh_token`, `id_token`, `client_secret`, `confirm_email`, `new_email`, `jwt`, `hmac`, `nonce`, `ticket`, `manage` (booking manage token), `payerid` (PayPal), plus any name containing `token`, `secret`, `password`, `email`, `session` or `signature`. URL user-info is removed.
+- URLs of private pages (`/account`, `/login`, `/billing`, `/booking`, `/chat`, `/oauth`, `/studio`, `/courses/orders`) lose the whole query string and fragment, e.g. the PayPal booking return `/booking/{id}?manage=…&paypal=return&token=…&PayerID=…`.
+- Order codes and booking ids in paths become placeholders everywhere (`/billing/:code`, `/billing/card/:id`, `/courses/orders/:code`, `/booking/:id`), in `$current_url`, `$pathname`, `$referrer`, `$initial_*` and any other string: the order code is the SePay transfer memo. On those pages the `title` property is blanked.
 - Every other string has emails, JWTs, secret tokens and inline `name=value` pairs of those parameters replaced with `[redacted]`.
 - If scrubbing fails, the event is dropped.
 
-Autocapture is off on `/account`, `/login`, `/billing`, `/booking`, `/chat`, `/oauth`, `/studio` and `/courses/orders`, and the Zuey AI panel carries `ph-no-capture` wherever it is embedded. Session replay is disabled in code (`disable_session_recording: true`); enabling it later needs a masking review for auth, billing, AI and booking screens first.
+Autocapture is off on `/account`, `/login`, `/billing`, `/booking`, `/chat`, `/oauth`, `/studio` and `/courses/orders`, and these components carry `ph-no-capture` wherever they are embedded: the Zuey AI panel, survey blocks (vote labels are private), the booking widget, the course checkout form and the company-invoice fields. Session replay is disabled in code (`disable_session_recording: true`); enabling it later needs a masking review for auth, billing, AI and booking screens first.
 
 ## Environments and consent
 
 - Key and host come from `PUBLIC_POSTHOG_KEY` / `PUBLIC_POSTHOG_HOST` (runtime binding first, currently the `[vars]` of `wrangler.toml`, then build-time env). The built-in key of project Zuey.me is used only by production builds without a configured key.
-- The browser captures nothing on `localhost`, `127.0.0.1`, `*.local` or in dev builds, and the server sends nothing outside production builds, unless `PUBLIC_ANALYTICS_DEBUG=1`.
-- PostHog is not even initialised (no network request) when the browser sends Do Not Track (`1`/`yes`) or Global Privacy Control, or when the visitor turned analytics off at `/privacy#analytics` (localStorage `zuey_analytics_opt_out=1`). Opting out also calls PostHog `opt_out_capturing()` and `reset()`.
+- The browser captures only on `zuey.me` and `www.zuey.me` in production builds. Preview deployments (`*.pages.dev`) are production builds and receive the same key from `wrangler.toml`, but their hostname is not allowlisted, so they stay silent; so do `localhost` and dev builds. `PUBLIC_ANALYTICS_DEBUG=1` lifts the hostname/dev check.
+- The server sends nothing outside production builds unless `PUBLIC_ANALYTICS_DEBUG=1`. It has no hostname to check, so server events emitted by a preview deployment would reach the production project; no server event exists yet, and the outbox must gate on the request host before adding one.
+- PostHog is not even initialised (no network request) when the browser sends Do Not Track (`1`/`yes`) or Global Privacy Control, when the visitor turned analytics off at `/privacy#analytics` (localStorage `zuey_analytics_opt_out=1`), or when the browser blocks localStorage (treated as opted out). Opting out also calls PostHog `opt_out_capturing()` and `reset()`.
 
 ## Identity lifecycle
 
 | Situation | What happens |
 |---|---|
 | Anonymous visitor | PostHog anonymous id; `person_profiles: 'identified_only'`, so no person profile is created |
-| Page load with a verified member session | `bootAnalytics()` asks `/api/members/auth/identity` (cached per tab for 10 minutes, always re-checked on `/login`, `/account`, `/oauth`) and calls `identify(member_id)` |
+| Page load with a verified member session | `bootAnalytics()` asks `/api/members/auth/identity` and calls `identify(member_id)`. The answer is cached in the tab (sessionStorage) for 10 minutes, or 2 minutes when signed out; the cache is used only while it matches the browser-wide identity key (localStorage), and it is removed, never written, on `/login`, `/account`, `/oauth`, so the page after a sign-in redirect identifies at once |
+| Already identified | `identify()` is skipped only when PostHog's `get_distinct_id()` already equals the member id |
 | Member signs out (`/account`, Studio member session) or deletes the account | `reset()` before navigating: clears the stored member and starts a new anonymous id |
 | Session expired or ended on another device | The next identity check returns `null` and the browser is reset |
 | A different member signs in on the same browser | `reset()` first, then `identify()`; the two people are never merged |
+| Sign-out in another tab | That tab's `reset()` clears the shared identity key; other tabs ignore their now-stale cache and re-check the server |
+
+Known limit: if the previous member's session ended without this browser running `reset()` (expired, signed out on another device, cookies cleared by hand), the first `$pageview` of the next visit is still attributed to that member, because PostHog sends it before the identity check answers. The browser is reset right after, so later events are not.
 
 Only the opaque member id (`users.id`) is ever used as `distinct_id`. `identify()` refuses anything that is not an id-shaped string (`[A-Za-z0-9_.:-]{1,200}`, no email/JWT/secret). No person properties (`$set`) are sent with identify.
 
