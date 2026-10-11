@@ -213,8 +213,8 @@ export type WebhookOutcome = 'joined' | 'joined_then_removed' | 'left' | 'ignore
 
 /**
  * Handles a Bot API `chat_member` update (webhook registered with secret_token and
- * allowed_updates ["chat_member"]). Links the joining Telegram user to the member who received
- * the single-use invite; a member whose entitlement lapsed before joining is removed at once,
+ * allowed_updates ["chat_member"]). Records the joining Telegram user id on the membership of the
+ * member who received the single-use invite (it does not link a channel identity); a member whose entitlement lapsed before joining is removed at once,
  * unless they are an admin (verified email in ADMIN_EMAILS) joining with their own linked Telegram account.
  */
 export async function handleTelegramUpdate(d1: D1DatabaseLike, env: RuntimeEnv, secretHeader: string | null, update: unknown): Promise<WebhookOutcome> {
