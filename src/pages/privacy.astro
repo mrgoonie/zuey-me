@@ -7,7 +7,7 @@ const locale = resolveLocale(Astro.request);
 const lang: 'vi' | 'en' = locale === 'vi' ? 'vi' : 'en';
 Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
 
-const EFFECTIVE = '2026-10-02';
+const EFFECTIVE = '2026-10-11';
 const CONTACT = 'hi@zuey.me';
 
 interface Section {
@@ -110,11 +110,14 @@ const content: Record<'vi' | 'en', {
       { name: 'Cloudflare', purpose: 'Lưu trữ trang, cơ sở dữ liệu (D1), CDN, bảo mật', data: 'Toàn bộ dữ liệu được lưu, nhật ký yêu cầu' },
       { name: 'Resend', purpose: 'Gửi email giao dịch', data: 'Email, nội dung email giao dịch' },
       { name: 'SePay', purpose: 'Thanh toán chuyển khoản ngân hàng Việt Nam', data: 'Số tiền, nội dung chuyển khoản, mã giao dịch' },
-      { name: 'Polar', purpose: 'Thanh toán thẻ quốc tế', data: 'Email, thông tin thanh toán do Polar thu thập' },
+      { name: 'Dodo Payments', purpose: 'Thanh toán thẻ (USD) cho gói thành viên và khoá học', data: 'Email, tên, mã khách hàng và trạng thái gói; thông tin thẻ do Dodo Payments thu thập' },
+      { name: 'PayPal', purpose: 'Thanh toán buổi tư vấn (USD)', data: 'Mã lịch, số tiền, tên và email người thanh toán; thông tin thanh toán do PayPal thu thập' },
       { name: 'Dewee gateway và nhà cung cấp mô hình AI', purpose: 'Tạo câu trả lời của Zuey AI', data: 'Câu hỏi, ngữ cảnh nội dung liên quan' },
+      { name: 'TypeSafe AI', purpose: 'Xếp hạng độ liên quan cho tìm kiếm và Zuey AI', data: 'Từ khoá tìm kiếm hoặc câu hỏi, đoạn nội dung liên quan mà bạn được xem' },
       { name: 'Google', purpose: 'Đăng nhập; Google Calendar/Meet cho lịch tư vấn; Google Fonts', data: 'Hồ sơ đăng nhập cơ bản; tên, email người đặt lịch; địa chỉ IP khi tải font' },
       { name: 'GitHub', purpose: 'Đăng nhập; hiển thị hoạt động công khai của @mrgoonie', data: 'Hồ sơ đăng nhập cơ bản. Mục hoạt động chỉ dùng sự kiện công khai, không dùng dữ liệu của bạn' },
-      { name: 'Telegram', purpose: 'Nhóm cộng đồng của gói Cộng đồng', data: 'Link mời, Telegram user ID, trạng thái thành viên' },
+      { name: 'Telegram', purpose: 'Nhóm cộng đồng của gói Cộng đồng; thông báo đơn hàng cho quản trị viên', data: 'Link mời, Telegram user ID, trạng thái thành viên; mã đơn, số tiền, kênh và mã giao dịch' },
+      { name: 'Discord', purpose: 'Thông báo đơn hàng cho quản trị viên', data: 'Mã đơn, số tiền, kênh và mã giao dịch' },
       { name: 'Open-Meteo', purpose: 'Thời tiết cho hiệu ứng nền (tuỳ chọn)', data: 'Tên thành phố hoặc toạ độ đã làm tròn' },
       { name: 'PostHog', purpose: 'Thống kê sử dụng', data: 'Lượt xem trang, sự kiện thao tác, định danh thiết bị' },
     ],
@@ -204,11 +207,14 @@ const content: Record<'vi' | 'en', {
       { name: 'Cloudflare', purpose: 'Hosting, database (D1), CDN, security', data: 'All stored data, request logs' },
       { name: 'Resend', purpose: 'Transactional email', data: 'Email address, transactional email content' },
       { name: 'SePay', purpose: 'Vietnamese bank-transfer payments', data: 'Amount, transfer memo, transaction reference' },
-      { name: 'Polar', purpose: 'International card payments', data: 'Email, payment details collected by Polar' },
+      { name: 'Dodo Payments', purpose: 'Card payments (USD) for membership plans and courses', data: 'Email, name, customer ID and subscription status; card details collected by Dodo Payments' },
+      { name: 'PayPal', purpose: 'Consultation payments (USD)', data: 'Booking reference, amount, payer name and email; payment details collected by PayPal' },
       { name: 'Dewee gateway and AI model provider', purpose: 'Generating Zuey AI answers', data: 'Questions, relevant content context' },
+      { name: 'TypeSafe AI', purpose: 'Relevance ranking for search and Zuey AI', data: 'Search query or question, relevant content excerpts you can already read' },
       { name: 'Google', purpose: 'Sign-in; Google Calendar/Meet for consultations; Google Fonts', data: 'Basic sign-in profile; booker name and email; IP address when fonts load' },
       { name: 'GitHub', purpose: 'Sign-in; showing public activity of @mrgoonie', data: 'Basic sign-in profile. The activity section uses public events only, not your data' },
-      { name: 'Telegram', purpose: 'Community plan groups', data: 'Invite links, Telegram user ID, membership status' },
+      { name: 'Telegram', purpose: 'Community plan groups; order alerts to the admin', data: 'Invite links, Telegram user ID, membership status; order reference, amount, channel and transaction reference' },
+      { name: 'Discord', purpose: 'Order alerts to the admin', data: 'Order reference, amount, channel and transaction reference' },
       { name: 'Open-Meteo', purpose: 'Weather for background effects (optional)', data: 'City name or rounded coordinates' },
       { name: 'PostHog', purpose: 'Usage analytics', data: 'Page views, interaction events, device identifier' },
     ],
