@@ -86,9 +86,9 @@ export const channelAccessOpenApi: OpenApiFragment = {
         tags: [TAG], summary: 'Unlink one of your chat accounts (browser session); the agent stops answering it', security: sessionAuth,
         parameters: [
           { name: 'provider', in: 'path', required: true, schema: channelType },
-          { name: 'external_id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'external_id', in: 'path', required: true, schema: { type: 'string' }, description: 'Platform sender id; percent-encoding such as `%3A` for `:` is decoded once, malformed encoding is a 400 `invalid_field`' },
         ],
-        responses: { '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean' } } }), '401': errorResponses['401'], '403': errorResponses['403'], '404': err('`not_found`') },
+        responses: { '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean' } } }), '400': err('`invalid_field` (malformed percent-encoding)'), '401': errorResponses['401'], '403': errorResponses['403'], '404': err('`not_found`') },
       },
     },
     '/api/v1/admin/channel-identities/{provider}/{external_id}': {

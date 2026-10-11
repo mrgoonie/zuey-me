@@ -1,4 +1,5 @@
 import { runtimeWaitUntil } from '../../../../../../lib/blocks/articles';
+import { decodePathParam } from '../../../../../../lib/channel-access/admin';
 import { unlinkChannelIdentity } from '../../../../../../lib/channel-access/identities';
 import { deferChannelAccessPush, invalidateSenders } from '../../../../../../lib/channel-access/invalidate';
 import { AppError, jsonOk } from '../../../../../../lib/http';
@@ -11,7 +12,7 @@ export const DELETE = memberRoute(async ({ params, request, locals }, { d1, env,
   requireCan(principal, 'account:security');
   const user = requireUser(principal);
   const provider = params.provider ?? '';
-  const externalId = params.externalId ?? '';
+  const externalId = decodePathParam(params.externalId, 'external_id') ?? '';
   if (!(await unlinkChannelIdentity(d1, user.id, provider, externalId))) {
     throw new AppError(404, 'not_found', 'Linked chat account not found');
   }
