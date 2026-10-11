@@ -816,3 +816,39 @@ describe('community sweep caller auth', () => {
     expect(src).not.toContain('/api/v1/community/sweep');
   });
 });
+
+describe('account deletion clears link nonces', () => {
+  interface NonceRow { nonce: string; external_id: string; user_id: string }
+  const nonceRows = async (): Promise<NonceRow[]> =>
+    (await d1.prepare('SELECT nonce, external_id, user_id FROM channel_link_nonces ORDER BY nonce').all<NonceRow>()).results ?? [];
+
+  it('drops expired rows and anonymises the member\'s live rows without reopening the token', async () => {
+    const alice = await member('alice@example.com');
+    const bob = await member('bob@example.com');
+    const payload = tokenPayload();
+    const token = await signLinkToken(payload, LINK_SECRET);
+    expect((await link(alice.cookie, token)).status).toBe(200);
+    // Bob's used token expired an hour ago and no link has been redeemed since.
+    await d1.prepare("INSERT INTO channel_link_nonces (nonce, provider, external_id, user_id, used_at, expires_at) VALUES ('old-nonce-bob', 'telegram', '555', ?, ?, ?)")
+      .bind(bob.userId, new Date(now - 2 * HOUR).toISOString(), new Date(now - HOUR).toISOString()).run();
+
+    const user = await getUserById(d1, alice.userId);
+    if (!user) throw new Error('missing user');
+    await deleteAccount(d1, user, baseEnv());
+
+    expect(await nonceRows()).toEqual([{ nonce: String(payload.nonce), external_id: '', user_id: '' }]);
+    const leftovers = await d1.prepare("SELECT COUNT(*) AS n FROM channel_link_nonces WHERE user_id = ? OR external_id IN ('777001', '555')").bind(alice.userId).first<{ n: number }>();
+    expect(leftovers?.n).toBe(0);
+
+    // The still-valid token cannot link the sender to another account.
+    const carol = await member('carol@example.com');
+    expect((await link(carol.cookie, token)).code).toBe('link_token_used');
+
+    // Once it expires, the anonymised row is pruned by the next deletion too.
+    now += 2 * HOUR;
+    const bobUser = await getUserById(d1, bob.userId);
+    if (!bobUser) throw new Error('missing user');
+    await deleteAccount(d1, bobUser, baseEnv());
+    expect(await nonceRows()).toEqual([]);
+  });
+});
