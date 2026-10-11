@@ -25,6 +25,7 @@ import { ArticleLabelsPanel } from './ArticleLabelsPanel';
 import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
+import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
 import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../../lib/blocks/icons';
 import type { IconSize } from '../../lib/blocks/icons';
 
@@ -348,7 +349,9 @@ function GalleryFields({ images, onChange }: { images: GalleryImage[]; onChange:
     <div className="space-y-2">
       {images.map((img, i) => (
         <div key={i} className="grid grid-cols-1 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end">
-          <Text label={`Ảnh ${i + 1} (https://)`} value={img.url} onChange={url => set(i, { url })} />
+          <Text label={`Ảnh ${i + 1} (https://)`} value={img.url}
+            onChange={url => onChange(images.map((x, j) => (j === i ? { ...withoutImageSize(x), url } : x)))} />
+          <ImageSizeProbe url={img.url} known={hasImageSize(img)} onSize={size => set(i, size)} />
           <Text label="Alt" value={img.alt} onChange={alt => set(i, { alt })} />
           <Text label="Chú thích" value={img.caption ?? ''} onChange={caption => set(i, { caption: opt(caption) })} />
           <button type="button" className={btnCls} disabled={images.length <= 1} onClick={() => onChange(images.filter((_, j) => j !== i))}>Xoá</button>
@@ -475,7 +478,8 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
     case 'image':
       return (
         <div className="space-y-2">
-          <Text label="URL ảnh (https://)" value={block.url} onChange={url => onChange({ ...block, url })} />
+          <Text label="URL ảnh (https://)" value={block.url} onChange={url => onChange({ ...withoutImageSize(block), url })} />
+          <ImageSizeProbe url={block.url} known={hasImageSize(block)} onSize={size => onChange({ ...block, ...size })} />
           <Text label="Alt (mô tả cho trình đọc màn hình)" value={block.alt} onChange={alt => onChange({ ...block, alt })} />
           <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
         </div>

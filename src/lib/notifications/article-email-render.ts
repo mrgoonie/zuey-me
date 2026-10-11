@@ -1,4 +1,4 @@
-import type { ArticleAccess, ArticleDocument, Block } from '../blocks/schema';
+import type { ArticleAccess, ArticleDocument, Block, ImageSize } from '../blocks/schema';
 import { parseInline } from '../blocks/inline';
 import type { InlineNode } from '../blocks/inline';
 import { inlineToPlain } from '../blocks/inline';
@@ -113,9 +113,29 @@ function inlineHtml(text: string): string {
   return walk(parseInline(text));
 }
 
-function image(url: string, alt: string, caption: string | undefined, siteUrl: string): string {
+/** Content column width (560px container minus 2 x 20px padding). */
+const EMAIL_IMAGE_MAX_WIDTH = 520;
+/** Mail clients have no viewport units: a tall portrait is capped at this height instead of 80vh. */
+const EMAIL_IMAGE_MAX_HEIGHT = 640;
+
+interface EmailImage extends ImageSize { url: string; alt: string; caption?: string }
+
+/**
+ * Centred image and caption. Centring uses `align="center"` on a presentation table plus `text-align:center`
+ * and auto margins, since Outlook (Word engine) ignores auto margins and Gmail strips unknown CSS.
+ * With a recorded size the image keeps its natural size, never wider than the column, and a tall portrait
+ * shrinks in proportion to fit EMAIL_IMAGE_MAX_HEIGHT; without one it fills the column (previous behaviour).
+ */
+function image({ url, alt, caption, width, height }: EmailImage, siteUrl: string): string {
   const cap = caption ? `<p style="font-size:13px;color:#78716c;margin:6px 0 0;text-align:center">${inlineHtml(caption)}</p>` : '';
-  return `<div style="margin:0 0 20px"><img src="${escapeHtml(absoluteUrl(url, siteUrl))}" alt="${escapeHtml(alt)}" width="520" style="display:block;width:100%;max-width:520px;height:auto;border-radius:10px">${cap}</div>`;
+  let size = `width="${EMAIL_IMAGE_MAX_WIDTH}" style="display:block;margin:0 auto;width:100%;max-width:${EMAIL_IMAGE_MAX_WIDTH}px;height:auto;border-radius:10px"`;
+  if (width && height) {
+    const w = Math.max(1, Math.min(width, EMAIL_IMAGE_MAX_WIDTH, Math.floor(EMAIL_IMAGE_MAX_HEIGHT * width / height)));
+    const h = Math.min(EMAIL_IMAGE_MAX_HEIGHT, Math.max(1, Math.round(w * height / width)));
+    size = `width="${w}" height="${h}" style="display:block;margin:0 auto;width:${w}px;max-width:100%;height:auto;border-radius:10px"`;
+  }
+  const img = `<img src="${escapeHtml(absoluteUrl(url, siteUrl))}" alt="${escapeHtml(alt)}" ${size}>`;
+  return `<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center">${img}${cap}</td></tr></table>`;
 }
 
 function webLink(what: string, input: ArticleEmailInput, block: Block): string {
@@ -144,9 +164,9 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
     case 'code':
       return `<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.code)}</pre>`;
     case 'divider': return '<hr style="border:none;border-top:1px solid #e7e0d8;margin:24px 0">';
-    case 'image': return image(block.url, block.alt, block.caption, input.siteUrl);
+    case 'image': return image(block, input.siteUrl);
     case 'gallery':
-      return block.images.map(img => image(img.url, img.alt, img.caption, input.siteUrl)).join('')
+      return block.images.map(img => image(img, input.siteUrl)).join('')
         + (block.caption ? `<p style="font-size:13px;color:#78716c;margin:-8px 0 16px;text-align:center">${inlineHtml(block.caption)}</p>` : '');
     case 'table': {
       const cell = 'padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top';
@@ -212,7 +232,7 @@ export function renderArticleEmail(input: ArticleEmailInput): ArticleEmailBody {
   }
 
   const preheader = input.excerpt || copy.preheaderPaid;
-  const cover = input.coverUrl ? image(input.coverUrl, input.title, undefined, input.siteUrl) : '';
+  const cover = input.coverUrl ? image({ url: input.coverUrl, alt: input.title }, input.siteUrl) : '';
   const ending = locked
     ? `<div style="margin:24px 0 0;padding:20px;border-radius:14px;background:#fbf3e8;text-align:center"><p style="font-family:Georgia,serif;font-size:19px;margin:0 0 8px;color:#1c1917">${escapeHtml(copy.lockedTitle)}</p><p style="font-size:15px;line-height:1.6;margin:0;color:#44403c">${escapeHtml(copy.lockedBody)}</p>${button(input.pricingUrl, copy.subscribe)}</div>`
     : clipped

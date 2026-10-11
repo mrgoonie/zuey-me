@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import './media-blocks.css';
 import type { Block, FileBlock, KnowledgeMediaBlock } from '../../lib/blocks/schema';
-import { isPdfUrl } from '../../lib/blocks/schema';
+import { imageSizeAttrs, isPdfUrl } from '../../lib/blocks/schema';
 import { formatBytes } from '../../lib/blocks/markdown';
 
 function hostOf(url: string): string {
@@ -70,7 +70,7 @@ export function MediaBlockView({ block, renderBlocks, renderInline }: MediaBlock
               <li key={i}>
                 <figure>
                   <a href={img.url} target="_blank" rel="noopener noreferrer nofollow">
-                    <img src={img.url} alt={img.alt} loading="lazy" decoding="async" />
+                    <img src={img.url} alt={img.alt} loading="lazy" decoding="async" {...imageSizeAttrs(img)} />
                   </a>
                   {img.caption && <figcaption>{img.caption}</figcaption>}
                 </figure>

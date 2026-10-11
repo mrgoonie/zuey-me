@@ -95,6 +95,12 @@
 /* Article images (single and gallery) sit on the column's centre line at their natural size, caption included. */
 .zb-figure-center { text-align: center; }
 .zb-figure-center img { margin-inline: auto; }
+/* A tall portrait never takes more than 80% of the viewport height. With a recorded size (width/height
+   attributes, which also reserve the box before the image loads) the width shrinks in proportion, so the
+   image keeps its shape with no letterbox; without one, the browser scales both sides from the natural size
+   and `contain` guards against any distortion. */
+.zb-figure-center > img { max-height: 80vh; object-fit: contain; }
+.zb-figure-center > img[width][height] { max-width: min(100%, 80vh * var(--zb-img-ratio, 1000)); }
 
 /* Tables (also chart fallbacks) scroll inside their own wrapper, never the page. */
 .zb-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 0.85rem; border: 1px solid #e7e5e4; }
