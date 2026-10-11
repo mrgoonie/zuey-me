@@ -607,8 +607,8 @@ async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Ro
 
 /**
  * The card of a payment with no recorded charge, through Dodo's payment lookup; null when the lookup cannot run (no API
- * key), Dodo rejects it (4xx, such as an unknown payment) or it matches no card. A network error, timeout or Dodo 5xx
- * propagates as 502 so Dodo redelivers the reversal; nothing has been written yet.
+ * key), Dodo rejects it (4xx other than 408/429, such as an unknown payment) or it matches no card. A network error, timeout,
+ * Dodo 408/429 or 5xx propagates as 502 so Dodo redelivers the reversal; nothing has been written yet.
  */
 async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId: string): Promise<Row | null> {
   if (!env.DODO_API_KEY) {
@@ -620,7 +620,8 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
     subscriptionId = await getDodoPaymentSubscriptionId(env, paymentId, membersRuntime.fetch);
   } catch (err) {
     const status = err instanceof DodoApiError ? err.upstreamStatus : null;
-    if (!(err instanceof DodoApiError) || status === null || status < 400 || status >= 500) throw err;
+    // Only a definite rejection is ignored; a rate limit (429) or request timeout (408) is transient, like a 5xx.
+    if (!(err instanceof DodoApiError) || status === null || status < 400 || status >= 500 || status === 408 || status === 429) throw err;
     console.warn(`dodo reversal: payment lookup rejected (${err.message}); ignored`);
     return null;
   }
@@ -645,8 +646,8 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
  * charge rows existed) is looked up at Dodo (`GET /payments/{id}`, with `env`). If it charged a card subscription that
  * already has a first payment, it is that card's renewal and is applied now. If the card has no first payment yet,
  * this throws a 409 so Dodo redelivers the reversal after the charge is recorded (Dodo's 8 attempts span about 28
- * hours). A lookup Dodo rejects (4xx), one that cannot run (no API key) or a payment of no card here is `ignored`; a lookup that
- * fails on a network error, timeout or Dodo 5xx answers 502 so Dodo redelivers the reversal.
+ * hours). A lookup Dodo rejects (4xx other than 408/429), one that cannot run (no API key) or a payment of no card here is `ignored`; a lookup that
+ * fails on a network error, timeout, Dodo 408/429 or 5xx answers 502 so Dodo redelivers the reversal.
  */
 export async function applyDodoReversal(
   d1: D1DatabaseLike, event: DodoReversalEvent, env?: RuntimeEnv,

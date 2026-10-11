@@ -454,6 +454,8 @@ describe('Dodo card events', () => {
     const refund = { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_9', paymentId: 'pay_9', amount: PRICE, currency: 'USD', isPartial: false } as const;
     const outages: Array<[string, () => Promise<Response>]> = [
       ['Dodo Payments payment lookup failed (HTTP 503)', async () => json({ code: 'UNAVAILABLE' }, 503)],
+      ['Dodo Payments payment lookup failed (HTTP 429)', async () => json({ code: 'RATE_LIMITED' }, 429)],
+      ['Dodo Payments payment lookup failed (HTTP 408)', async () => json({ code: 'REQUEST_TIMEOUT' }, 408)],
       ['Could not reach Dodo Payments (payment lookup)', async () => { throw new TypeError('fetch failed'); }],
       ['Dodo Payments did not answer in time (payment lookup)', async () => { throw new DOMException('The operation timed out.', 'TimeoutError'); }],
     ];
@@ -467,7 +469,7 @@ describe('Dodo card events', () => {
       expect(err instanceof AppError ? [err.status, err.code, err.message] : err).toEqual([502, 'payment_provider_error', message]);
     }
     // Every Dodo call is bounded by a timeout signal.
-    expect(signals.length).toBe(3);
+    expect(signals.length).toBe(outages.length);
     expect(signals.every(s => s instanceof AbortSignal)).toBe(true);
     expect(reversalLogs()).toBe(0);
     expect(rows('refund')).toHaveLength(0);

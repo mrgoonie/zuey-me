@@ -89,7 +89,7 @@ export const DODO_REQUEST_TIMEOUT_MS = 10_000;
  * or null when Dodo was not reached (network error or timeout), so callers can tell a rejection from an outage.
  */
 export class DodoApiError extends AppError {
-  constructor(public upstreamStatus: number | null, message: string) {
+  constructor(public readonly upstreamStatus: number | null, message: string) {
     super(502, 'payment_provider_error', message);
   }
 }
