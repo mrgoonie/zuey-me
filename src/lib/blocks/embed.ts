@@ -37,10 +37,12 @@ export function detectProvider(url: string): EmbedProvider {
 /**
  * Iframe URL for a provider, or null when the content cannot be embedded safely
  * (generic links and unrecognised URLs fall back to a plain link).
+ * The stored provider must match the one detected from the URL's host, so a provider override can
+ * never turn an arbitrary host into an iframe.
  */
 export function embedSrc(url: string, provider: EmbedProvider): string | null {
   const u = parseUrl(url);
-  if (!u) return null;
+  if (!u || detectProvider(url) !== provider) return null;
   const path = u.pathname;
   switch (provider) {
     case 'youtube': {
@@ -79,7 +81,8 @@ export function embedSrc(url: string, provider: EmbedProvider): string | null {
       return id ? `https://www.tiktok.com/embed/v2/${id}` : null;
     }
     case 'linkedin': {
-      if (path.startsWith('/embed/')) return u.toString();
+      // An existing embed URL passes through only from LinkedIn's own host, rebuilt on that fixed origin.
+      if (path.startsWith('/embed/')) return u.hostname === 'www.linkedin.com' ? `https://www.linkedin.com${path}` : null;
       const urn = path.match(/(urn:li:(?:share|ugcPost|activity):\d+)/)?.[1];
       return urn ? `https://www.linkedin.com/embed/feed/update/${urn}` : null;
     }

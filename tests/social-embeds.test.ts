@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { BlockRenderer } from '../src/components/blocks/BlockRenderer';
-import { embedFrame, embedFromPastedText, embedResizeHeight, recognizeEmbed } from '../src/lib/blocks/embed';
+import { embedFrame, embedFromPastedText, embedResizeHeight, embedSrc, recognizeEmbed } from '../src/lib/blocks/embed';
 import { documentToMarkdown } from '../src/lib/blocks/markdown';
 import { validateDocument } from '../src/lib/blocks/validate';
 import type { Block, EmbedProvider } from '../src/lib/blocks/schema';
@@ -51,6 +51,49 @@ describe('provider resolver: common social URL shapes', () => {
     expect(embedFrame('facebook', 'https://www.facebook.com/reel/1')).toBe('vertical');
     expect(embedFrame('tiktok', 'https://www.tiktok.com/@a/video/1')).toBe('vertical');
     expect(embedFrame('youtube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('video');
+  });
+});
+
+describe('a stored provider never frames a host it does not own', () => {
+  const mismatches: Array<[string, EmbedProvider]> = [
+    ['https://example.com/embed/x', 'linkedin'],
+    ['https://example.com/watch?v=dQw4w9WgXcQ', 'youtube'],
+    ['https://evil.example/status/1234567890123', 'x'],
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'vimeo'],
+    ['https://x.com/someone/status/1234567890123', 'facebook'],
+  ];
+  for (const [url, provider] of mismatches) {
+    it(`${provider} override on ${url} gives no iframe`, () => {
+      expect(embedSrc(url, provider)).toBeNull();
+      const html = render([embed(url, provider)]);
+      expect(html).not.toContain('zb-embed-frame');
+      expect(html).toContain('zb-embed-fallback');
+    });
+  }
+
+  it('passes LinkedIn embed URLs through only from www.linkedin.com, on a fixed origin', () => {
+    expect(embedSrc('https://www.linkedin.com/embed/feed/update/urn:li:share:123?x=1', 'linkedin'))
+      .toBe('https://www.linkedin.com/embed/feed/update/urn:li:share:123');
+    expect(embedSrc('https://evil.linkedin.com/embed/feed/update/urn:li:share:123', 'linkedin')).toBeNull();
+    expect(embedSrc('https://linkedin.com/feed/update/urn:li:activity:456', 'linkedin'))
+      .toBe('https://www.linkedin.com/embed/feed/update/urn:li:activity:456');
+  });
+
+  it('rejects a conflicting provider at validation with a clear error', () => {
+    const res = validateDocument({ version: 1, blocks: [{ id: 'e1', type: 'embed', url: 'https://example.com/embed/x', provider: 'linkedin' }] });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0].path).toEndWith('.provider');
+    expect(res.errors[0].message).toContain('does not match the URL host (detected "generic")');
+  });
+
+  it('accepts the detected provider and a downgrade to a plain link', () => {
+    const url = 'https://x.com/someone/status/1234567890123';
+    for (const provider of ['x', 'generic']) {
+      const res = validateDocument({ version: 1, blocks: [{ id: 'e1', type: 'embed', url, provider }] });
+      expect(res.ok).toBe(true);
+    }
   });
 });
 
@@ -114,7 +157,9 @@ describe('embed rendering', () => {
     expect(html).toContain('class="zb-embed-frame zb-ratio-post"');
     expect(html).not.toContain('<iframe');
     expect(html).not.toContain('platform.twitter.com');
-    expect(html).toContain('sẽ tự tải khi bạn cuộn tới');
+    // Without JavaScript nothing will load, so the server markup promises nothing and offers the original post.
+    expect(html).not.toContain('sẽ tự tải khi bạn cuộn tới');
+    expect(html).toMatch(/<noscript>[^]*cần JavaScript[^]*href="https:\/\/x\.com\/someone\/status\/1234567890123"[^]*<\/noscript>/);
     expect(html).toContain('<figcaption>Bài đăng gốc</figcaption>');
     expect(html).toContain('<a href="https://x.com/someone/status/1234567890123" target="_blank" rel="noopener noreferrer nofollow">Mở bài gốc trên <!-- -->X</a>');
   });
@@ -148,9 +193,9 @@ describe('embed rendering', () => {
     expect(render([embed('https://www.facebook.com/reel/1234567890', 'facebook')])).toContain('zb-embed zb-embed-vertical zb-embed-facebook');
   });
 
-  it('keeps the iframe sandbox no looser than before', () => {
+  it('keeps the iframe sandbox to the flags embeds need (no top navigation, forms or modals)', () => {
     const sandboxes = [...embedViewSource.matchAll(/sandbox="([^"]*)"/g)].map(m => m[1]);
-    expect(sandboxes).toEqual(['allow-scripts allow-same-origin allow-popups allow-presentation']);
+    expect(sandboxes).toEqual(['allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation']);
     expect(embedViewSource).toContain('referrerPolicy="strict-origin-when-cross-origin"');
   });
 });

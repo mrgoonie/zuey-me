@@ -194,9 +194,16 @@ class Validator {
       case 'embed': {
         const url = this.url(v, 'url', path);
         if (!url) return undefined;
-        let provider: EmbedProvider = detectProvider(url);
+        const detected = detectProvider(url);
+        let provider: EmbedProvider = detected;
         if (v.provider !== undefined) {
           if (!isOneOf(EMBED_PROVIDERS, v.provider)) { this.err(`${path}.provider`, `must be one of ${EMBED_PROVIDERS.join(', ')}`); return undefined; }
+          // The provider decides which player host is framed, so it must come from the URL itself.
+          // `generic` stays allowed: it only downgrades the embed to a plain link.
+          if (v.provider !== detected && v.provider !== 'generic') {
+            this.err(`${path}.provider`, `"${v.provider}" does not match the URL host (detected "${detected}"); omit provider or use "${detected}"`);
+            return undefined;
+          }
           provider = v.provider;
         }
         const caption = this.str(v, 'caption', path, S, { optional: true });
