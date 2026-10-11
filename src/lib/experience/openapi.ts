@@ -150,7 +150,7 @@ export const experienceOpenApi: OpenApiFragment = {
     '/api/v1/community/telegram-webhook': {
       post: {
         tags: [TAG], summary: 'Telegram Bot API webhook (chat_member updates)',
-        description: 'Register with setWebhook secret_token=TELEGRAM_WEBHOOK_SECRET and allowed_updates ["chat_member"]. Authenticated by the X-Telegram-Bot-Api-Secret-Token header.',
+        description: 'Register with setWebhook secret_token=TELEGRAM_WEBHOOK_SECRET and allowed_updates ["chat_member"]. Authenticated by the X-Telegram-Bot-Api-Secret-Token header. A joiner without the `community` entitlement is removed at once (`joined_then_removed`) unless they are an admin (verified email in ADMIN_EMAILS).',
         parameters: [{ name: 'X-Telegram-Bot-Api-Secret-Token', in: 'header', required: true, schema: { type: 'string' } }],
         responses: {
           '200': ok('Processed', { type: 'object', properties: { outcome: { type: 'string', enum: ['joined', 'joined_then_removed', 'left', 'ignored'] } } }),

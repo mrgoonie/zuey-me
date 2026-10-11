@@ -637,6 +637,37 @@ describe('Telegram community', () => {
     expect(field(late.data, 'outcome')).toBe('ignored');
   });
 
+  it('lets verified admins join without a plan but removes unverified and unpaid joiners', async () => {
+    const admin = await memberCookie('boss@example.com');
+    const unverified = await memberCookie('boss2@example.com');
+    await d1.prepare('UPDATE users SET email_verified_at = NULL WHERE id = ?').bind(unverified.userId).run();
+    const reader = await memberCookie('reader@example.com');
+    const env = tgEnv({ ADMIN_EMAILS: 'boss@example.com,boss2@example.com' });
+    const ts = new Date(now).toISOString();
+    const expires = new Date(now + HOUR).toISOString();
+    for (const [id, userId] of [['cm_j1', admin.userId], ['cm_j2', unverified.userId], ['cm_j3', reader.userId]]) {
+      await d1.prepare(
+        "INSERT INTO community_memberships (id, user_id, chat, invite_link, invite_expires_at, status, created_at, updated_at) VALUES (?, ?, 'en', ?, ?, 'invited', ?, ?)"
+      ).bind(id, userId, `https://t.me/+${id}`, expires, ts, ts).run();
+    }
+    const join = async (id: string, tgUser: number) => field((await read(await telegramWebhookApi(ctx({
+      env, method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': 'hook-secret' },
+      body: { chat_member: { chat: { id: -1001 }, new_chat_member: { status: 'member', user: { id: tgUser } }, invite_link: { invite_link: `https://t.me/+${id}` } } },
+    })))).data, 'outcome');
+    const statusOf = async (id: string) => field(await d1.prepare('SELECT status FROM community_memberships WHERE id = ?').bind(id).first(), 'status');
+
+    expect(await join('cm_j1', 401)).toBe('joined');
+    expect(await statusOf('cm_j1')).toBe('joined');
+    expect(telegramCalls().length).toBe(0);
+
+    expect(await join('cm_j2', 402)).toBe('joined_then_removed');
+    expect(await join('cm_j3', 403)).toBe('joined_then_removed');
+    expect([await statusOf('cm_j2'), await statusOf('cm_j3')]).toEqual(['removed', 'removed']);
+    expect(telegramCalls().map(c => [c.method, field(c.body, 'user_id')])).toEqual([
+      ['banChatMember', 402], ['unbanChatMember', 402], ['banChatMember', 403], ['unbanChatMember', 403],
+    ]);
+  });
+
   it('never leaks the bot token in errors', async () => {
     routes.unshift(url => (url.includes('createChatInviteLink') ? json({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }, 400) : null));
     const reader = await memberCookie('reader@example.com');

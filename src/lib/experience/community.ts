@@ -204,7 +204,8 @@ export type WebhookOutcome = 'joined' | 'joined_then_removed' | 'left' | 'ignore
 /**
  * Handles a Bot API `chat_member` update (webhook registered with secret_token and
  * allowed_updates ["chat_member"]). Links the joining Telegram user to the member who received
- * the single-use invite; a member whose entitlement lapsed before joining is removed at once.
+ * the single-use invite; a member whose entitlement lapsed before joining is removed at once,
+ * unless they are an admin (verified email in ADMIN_EMAILS).
  */
 export async function handleTelegramUpdate(d1: D1DatabaseLike, env: RuntimeEnv, secretHeader: string | null, update: unknown): Promise<WebhookOutcome> {
   const cfg = requireConfig(env);
@@ -238,12 +239,18 @@ export async function handleTelegramUpdate(d1: D1DatabaseLike, env: RuntimeEnv, 
   const inviteObj = isRecord(cm.invite_link) ? cm.invite_link : null;
   const link = inviteObj ? readString(inviteObj, 'invite_link') : null;
   if (!link) return 'ignored';
-  const row = await d1.prepare("SELECT * FROM community_memberships WHERE invite_link = ? AND chat = ? AND status = 'invited'").bind(link, chat).first<Row>();
+  const row = await d1.prepare(
+    `SELECT m.*, u.email AS user_email, u.email_verified_at AS user_email_verified_at
+     FROM community_memberships m LEFT JOIN users u ON u.id = m.user_id
+     WHERE m.invite_link = ? AND m.chat = ? AND m.status = 'invited'`
+  ).bind(link, chat).first<Row>();
   if (!row) return 'ignored';
   const userId = str(row, 'user_id');
   await d1.prepare(
     "UPDATE community_memberships SET status = 'joined', telegram_user_id = ?, joined_at = ?, updated_at = ? WHERE id = ?"
   ).bind(telegramUserId, nowIso, nowIso, str(row, 'id')).run();
+  // Admins (verified email in ADMIN_EMAILS) may join without a plan, matching the sweep exemption.
+  if (isAdminIdentity(str(row, 'user_email'), strOrNull(row, 'user_email_verified_at'), env)) return 'joined';
   const { entitlements } = await getEntitlements(d1, userId);
   if (!entitlements.includes('community')) {
     const chatId = cfg.chats[chat];
