@@ -218,7 +218,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'divider': return <hr className="zb-divider" />;
     case 'image':
       return (
-        <figure className="zb-figure">
+        <figure className="zb-figure zb-figure-center">
           <img src={block.url} alt={block.alt} loading="lazy" decoding="async" />
           {block.caption && <figcaption>{block.caption}</figcaption>}
         </figure>

@@ -92,6 +92,9 @@
 .zb-figure { margin: 0; }
 .zb-figure img { display: block; max-width: 100%; height: auto; border-radius: 1rem; }
 .zb-figure figcaption, .zb-caption { font-size: 0.85rem; color: #78716c; margin-top: 0.4rem; }
+/* Article images (single and gallery) sit on the column's centre line at their natural size, caption included. */
+.zb-figure-center { text-align: center; }
+.zb-figure-center img { margin-inline: auto; }
 
 /* Tables (also chart fallbacks) scroll inside their own wrapper, never the page. */
 .zb-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 0.85rem; border: 1px solid #e7e5e4; }

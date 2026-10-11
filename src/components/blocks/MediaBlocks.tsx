@@ -63,7 +63,7 @@ export function MediaBlockView({ block, renderBlocks, renderInline }: MediaBlock
       );
     case 'gallery':
       return (
-        <figure className="zb-figure">
+        <figure className="zb-figure zb-figure-center">
           <ul className="zb-gallery">
             {block.images.map((img, i) => (
               <li key={i}>

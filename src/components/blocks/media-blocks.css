@@ -8,7 +8,10 @@
 .zb-math code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92rem; white-space: pre; color: #292524; }
 .zb-math-tag { display: block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #a8a29e; margin-bottom: 0.35rem; }
 
-.zb-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
+/* auto-fit collapses unused tracks and the per-tile cap keeps a short gallery (1-2 images) centred instead of
+   stretched or pinned to the left; full rows keep the same tile sizes as before. */
+.zb-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
+.zb-gallery > li { width: 100%; max-width: 320px; justify-self: center; min-width: 0; }
 .zb-gallery figure { margin: 0; }
 .zb-gallery img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.8rem; background: #e7e5e4; }
 .zb-gallery figcaption { font-size: 0.78rem; color: #78716c; margin-top: 0.25rem; }
