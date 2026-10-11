@@ -1,7 +1,8 @@
 import type { OpenApiFragment } from '../openapi/types';
-import { errorResponses } from '../openapi/types';
+import { adminSecurity, errorResponses } from '../openapi/types';
+import { MAX_UNLINK_REASON_LENGTH } from './admin';
 import { ALLOW_TTL_SECONDS, CHANNEL_ACCESS_SCOPE, DENY_TTL_SECONDS } from './check';
-import { SUPPORTED_CHANNEL_TYPES } from './link-token';
+import { SENDER_ID_RE, SUPPORTED_CHANNEL_TYPES } from './link-token';
 
 const TAG = 'Channel access (dewee gate)';
 
@@ -16,7 +17,12 @@ const err = (description: string) => ({ description, ...errorRef });
 
 const serviceAuth = [{ BearerAuth: [] }];
 const sessionAuth = [{ MemberSession: [] }];
+const adminAuth = [...adminSecurity, { MemberSession: [] }];
 const channelType = { type: 'string', enum: [...SUPPORTED_CHANNEL_TYPES] };
+const identityParams = [
+  { name: 'provider', in: 'path', required: true, schema: channelType },
+  { name: 'external_id', in: 'path', required: true, schema: { type: 'string', pattern: SENDER_ID_RE.source }, description: 'Platform sender id (Telegram numeric user id)' },
+];
 
 export const channelAccessOpenApi: OpenApiFragment = {
   tag: {
@@ -85,6 +91,34 @@ export const channelAccessOpenApi: OpenApiFragment = {
         responses: { '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean' } } }), '401': errorResponses['401'], '403': errorResponses['403'], '404': err('`not_found`') },
       },
     },
+    '/api/v1/admin/channel-identities/{provider}/{external_id}': {
+      get: {
+        tags: [TAG], summary: 'Admin: which member holds a linked chat account (MCP channel_identity_get)', security: adminAuth, parameters: identityParams,
+        responses: {
+          '200': ok('Linked chat account and its member', ref('AdminChannelIdentity')),
+          '400': err('`unsupported_channel` or `invalid_field`'), '401': errorResponses['401'], '403': errorResponses['403'],
+          '404': err('`not_found` (the sender id is not linked)'), '503': err('`database_unavailable`'),
+        },
+      },
+      delete: {
+        tags: [TAG], summary: 'Admin: unlink a chat account from whichever member holds it (MCP channel_identity_unlink)', security: adminAuth, parameters: identityParams,
+        description: [
+          'Recovery for a chat account linked to the wrong member (mistaken community backfill, a link made on someone else\'s device, a support request',
+          'from the real owner): the sender id is freed so its owner can link it at /connect. `channel.unlinked` is logged on the affected member with the',
+          'admin as actor and the optional reason, and dewee is told to drop its cached gate decision for that sender. Read-only keys are refused.',
+          'The JSON body is optional; scripted calls must still send `Content-Type: application/json` (the origin check rejects body-less unsafe requests).',
+        ].join(' '),
+        requestBody: {
+          required: false,
+          content: json({ type: 'object', properties: { reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Written to the member activity log' } } }),
+        },
+        responses: {
+          '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean', enum: [true] }, identity: ref('AdminChannelIdentity') } }),
+          '400': err('`unsupported_channel`, `invalid_field` or `invalid_json`'), '401': errorResponses['401'], '403': errorResponses['403'],
+          '404': err('`not_found` (the sender id is not linked)'), '503': err('`database_unavailable`'),
+        },
+      },
+    },
   },
   schemas: {
     ChannelAccessCheckInput: {
@@ -121,6 +155,20 @@ export const channelAccessOpenApi: OpenApiFragment = {
         external_id: { type: 'string' },
         linked_at: { type: 'string', format: 'date-time' },
         source: { type: 'string', enum: ['link_token', 'community_backfill'] },
+      },
+    },
+    AdminChannelIdentity: {
+      type: 'object',
+      properties: {
+        provider: channelType,
+        external_id: { type: 'string' },
+        user_id: { type: 'string' },
+        linked_at: { type: 'string', format: 'date-time' },
+        source: { type: 'string', enum: ['link_token', 'community_backfill'] },
+        member: {
+          type: ['object', 'null'],
+          properties: { id: { type: 'string' }, email: { type: 'string' }, name: { type: ['string', 'null'] } },
+        },
       },
     },
   },

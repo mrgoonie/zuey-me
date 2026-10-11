@@ -143,6 +143,8 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   // dewee Channel Access Gate verifier: callable only with CHANNEL_ACCESS_SERVICE_KEY on /api/mcp (checked in
   // the tool); /mcp never accepts that key, so the tool stays out of member catalogues there.
   channel_access_check: ADMIN,
+  channel_identity_get: ADMIN,
+  channel_identity_unlink: ADMIN,
 };
 
 export function toolAccess(name: string): ToolAccess {
