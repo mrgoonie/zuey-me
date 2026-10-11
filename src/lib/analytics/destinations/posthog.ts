@@ -2,6 +2,7 @@
  * PostHog destination: environment-driven configuration, the browser adapter over the `window.posthog`
  * snippet, and the server adapter over the HTTP capture API (web-standard `fetch` only).
  */
+import { canTrack } from '../consent';
 import { isGuestDistinctId } from '../identity';
 import { hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
 import type { ClientDestination, DestinationResult, ServerAnalyticsEvent, ServerDestination } from './types';
@@ -158,8 +159,22 @@ export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null
 
 export { isSensitivePath };
 
-/** posthog-js init options. Session replay stays off until a masking review enables it explicitly. */
-export function postHogInitOptions(config: PostHogConfig, pathname: string): Record<string, unknown> {
+/** The members of the loaded posthog-js instance the `loaded` callback touches. */
+interface LoadedPostHogLike {
+  debug?: (on?: boolean) => void;
+  opt_out_capturing?: () => unknown;
+}
+
+/**
+ * posthog-js init options. Session replay stays off until a masking review enables it explicitly.
+ * `canCapture` is re-read in `loaded`, which posthog-js runs before its automatic `$pageview`: a visitor
+ * who opted out while `array.js` was still downloading is opted out there, so nothing is ever sent.
+ */
+export function postHogInitOptions(
+  config: PostHogConfig,
+  pathname: string,
+  canCapture: () => boolean = () => canTrack(),
+): Record<string, unknown> {
   return {
     api_host: config.host,
     person_profiles: 'identified_only',
@@ -169,8 +184,9 @@ export function postHogInitOptions(config: PostHogConfig, pathname: string): Rec
     disable_session_recording: true,
     respect_dnt: true,
     before_send: scrubCaptureResult,
-    loaded: (ph: { debug?: (on?: boolean) => void }) => {
+    loaded: (ph: LoadedPostHogLike) => {
       if (config.debug && typeof ph.debug === 'function') ph.debug(true);
+      if (!canCapture() && typeof ph.opt_out_capturing === 'function') ph.opt_out_capturing();
     },
   };
 }

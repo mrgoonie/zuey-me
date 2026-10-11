@@ -5,7 +5,8 @@ import {
   setOptOut, type ConsentEnvironment,
 } from '../src/lib/analytics/consent';
 import {
-  DEFAULT_POSTHOG_KEY, createPostHogServerDestination, getPostHog, isSensitivePath, postHogClientDestination, resolvePostHogConfig, scrubCaptureResult,
+  DEFAULT_POSTHOG_KEY, createPostHogServerDestination, getPostHog, isSensitivePath, postHogClientDestination, postHogInitOptions, resolvePostHogConfig,
+  scrubCaptureResult,
 } from '../src/lib/analytics/destinations/posthog';
 import type { ClientDestination, ServerDestination } from '../src/lib/analytics/destinations/types';
 import { validateEvent, type Taxonomy } from '../src/lib/analytics/events';
@@ -193,7 +194,8 @@ describe('browser client', () => {
     opted.client.activate(false);
     opted.client.optOut();
     opted.client.track('social_clicked', { platform: 'x' });
-    expect(opted.calls.map(c => c.method)).toEqual(['optOut', 'reset']);
+    // posthog-js reset() clears its opt-out, so the opt-out must be the last call.
+    expect(opted.calls.map(c => c.method)).toEqual(['reset', 'optOut']);
   });
 
   test('track never throws, even when a destination does', () => {
@@ -609,6 +611,87 @@ describe('PostHog snippet stub', () => {
       postHogClientDestination.identify('mem_1');
       expect([...stub]).toEqual([['capture', 'after_init', { a: 1 }], ['identify', 'mem_1']]);
       expect(stub._i.length).toBe(1);
+    });
+  });
+
+  describe('opting out while array.js is still loading', () => {
+    /**
+     * Mirrors posthog-js when array.js arrives: it runs the `loaded` callback, replays the calls the stub
+     * queued (its `reset()` also clears the opt-out), then sends the automatic `$pageview` unless opted out.
+     */
+    function loadLibrary(stub: ReturnType<typeof snippetStub>) {
+      const sent: string[] = [];
+      let optedOut = false;
+      const instance: Record<string, (...args: unknown[]) => void> = {
+        opt_out_capturing: () => { optedOut = true; },
+        opt_in_capturing: () => { optedOut = false; },
+        reset: () => { optedOut = false; },
+        capture: (event: unknown) => { if (!optedOut && typeof event === 'string') sent.push(event); },
+        identify: () => undefined,
+      };
+      const queuedInit: unknown = stub._i[0];
+      const options: unknown = Array.isArray(queuedInit) ? queuedInit[1] : undefined;
+      if (typeof options !== 'object' || options === null) throw new Error('init() was not queued');
+      const loaded: unknown = Reflect.get(options, 'loaded');
+      if (typeof loaded === 'function') loaded(instance);
+      for (const entry of [...stub]) {
+        if (!Array.isArray(entry)) continue;
+        const [method, ...args] = entry;
+        if (typeof method === 'string') instance[method]?.(...args);
+      }
+      if (Reflect.get(options, 'capture_pageview') === true && !optedOut) sent.push('$pageview');
+      return { sent, optedOut: () => optedOut };
+    }
+
+    function bootWith(stub: ReturnType<typeof snippetStub>, env: ConsentEnvironment) {
+      const client = createAnalyticsClient({
+        destinations: [postHogClientDestination],
+        consent: () => env,
+        local: () => new MemoryStorage(),
+        session: () => new MemoryStorage(),
+        fetchIdentity: async () => undefined,
+        now: () => 1_000_000,
+        debug: () => undefined,
+      });
+      // What bootAnalytics() does while consent is still granted.
+      const options = postHogInitOptions({ key: KEY, host: 'https://us.i.posthog.com', debug: false }, '/privacy', () => consentState(env) === 'granted');
+      getPostHog()?.init(KEY, options);
+      client.activate(false);
+      return client;
+    }
+
+    test('a visitor who opts out before the library loads sends no pageview', () => {
+      const stub = snippetStub();
+      withWindow(stub, () => {
+        const env: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() };
+        const client = bootWith(stub, env);
+        client.optOut();
+        const posthog = loadLibrary(stub);
+        expect(posthog.sent).toEqual([]);
+        expect(posthog.optedOut()).toBe(true);
+      });
+    });
+
+    test('an opt-out stored in another tab before the library loads is applied in loaded', () => {
+      const stub = snippetStub();
+      withWindow(stub, () => {
+        const env: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() };
+        bootWith(stub, env);
+        setOptOut(true, env);
+        const posthog = loadLibrary(stub);
+        expect(posthog.sent).toEqual([]);
+        expect(posthog.optedOut()).toBe(true);
+      });
+    });
+
+    test('a visitor who stays opted in still sends the automatic pageview', () => {
+      const stub = snippetStub();
+      withWindow(stub, () => {
+        bootWith(stub, { navigator: {}, storage: new MemoryStorage() });
+        const posthog = loadLibrary(stub);
+        expect(posthog.sent).toEqual(['$pageview']);
+        expect(posthog.optedOut()).toBe(false);
+      });
     });
   });
 

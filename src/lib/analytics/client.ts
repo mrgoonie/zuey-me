@@ -161,8 +161,10 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
     },
     optOut() {
       setOptOut(true, deps.consent());
-      each(d => d.optOut());
+      // Reset first: posthog-js reset() also clears its own opt-out, so an opt-out sent before it is lost
+      // (including the calls the snippet queues while array.js is still loading).
       client.reset();
+      each(d => d.optOut());
     },
     optIn() {
       setOptOut(false, deps.consent());
