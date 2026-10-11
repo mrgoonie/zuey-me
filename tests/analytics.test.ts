@@ -711,6 +711,12 @@ describe('privacy consent control', () => {
       .toBe(`${CONSENT_CONTROL_COPY.vi.granted} ${CONSENT_CONTROL_COPY.vi.notSaved}`);
   });
 
+  test('the hidden toggle stays hidden despite its inline-flex class', async () => {
+    const source = await Bun.file(new URL('../src/pages/privacy.astro', import.meta.url)).text();
+    // `inline-flex` would otherwise override the `hidden` attribute and leave an empty button on screen.
+    expect(source).toContain('inline-flex items-center [&[hidden]]:hidden');
+  });
+
   test('both languages fill every control string', () => {
     expect(Object.keys(CONSENT_CONTROL_COPY.vi).sort()).toEqual(Object.keys(CONSENT_CONTROL_COPY.en).sort());
     for (const copy of Object.values(CONSENT_CONTROL_COPY)) {
