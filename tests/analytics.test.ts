@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { PROVIDER_LABELS } from '../src/lib/blocks/embed';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
 import {
   BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, resolveConsentStorage,
@@ -569,6 +570,104 @@ describe('privacy page consent copy', () => {
     expect(source).toContain('data-storage-off={c.analytics.storageOff}');
     // `inline-flex` would otherwise override the `hidden` attribute and leave an empty button on screen.
     expect(source).toContain('inline-flex items-center [&[hidden]]:hidden');
+  });
+});
+
+describe('privacy page third-party processors', () => {
+  const read = (rel: string) => Bun.file(new URL(rel, import.meta.url)).text();
+
+  /** The `processors: [...]` rows of each language, as source text. */
+  async function processorRows(): Promise<Record<'vi' | 'en', string>> {
+    const source = await read('../src/pages/privacy.astro');
+    const [vi, en] = source.split('\n  en: {');
+    const rows = (block: string) => block.slice(block.indexOf('    processors: ['), block.indexOf('    processorsNote:'));
+    return { vi: rows(vi), en: rows(en) };
+  }
+
+  test('every embeddable provider is listed in both languages', async () => {
+    const rows = await processorRows();
+    const providers = Object.entries(PROVIDER_LABELS).filter(([id]) => id !== 'generic').map(([, label]) => label);
+    expect(providers.length).toBe(9);
+    for (const lang of ['vi', 'en'] as const) {
+      const names = [...rows[lang].matchAll(/name: '([^']+)'/g)].map(m => m[1]).join(' | ');
+      for (const label of providers) expect(names).toContain(label);
+      expect(rows[lang]).toContain('youtube-nocookie.com, i.ytimg.com');
+    }
+  });
+
+  test('jsDelivr is listed in both languages because /docs loads Scalar from it', async () => {
+    const docs = await read('../src/pages/docs/index.astro');
+    expect(docs).toContain('https://cdn.jsdelivr.net/');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'jsDelivr', purpose: '[^']*\/docs[^']*', data: '[^']*IP/);
+    expect(rows.en).toMatch(/name: 'jsDelivr', purpose: '[^']*\/docs[^']*', data: '[^']*IP/);
+  });
+
+  /** Each language's whole copy block (sections, analytics text and processors), as source text. */
+  async function languageBlocks(): Promise<Record<'vi' | 'en', string>> {
+    const [vi, en] = (await read('../src/pages/privacy.astro')).split('\n  en: {');
+    return { vi, en };
+  }
+
+  test('Cloudflare discloses Workers AI, the search query and members-only articles in both languages', async () => {
+    const indexer = await read('../src/lib/search/indexer.ts');
+    expect(indexer).toContain("tier: 'full'");
+    expect(indexer).toContain('embedTexts(backend.ai');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*nội dung từ khoá tìm kiếm \(tối đa 200 ký tự[^']*nội dung đã xuất bản \(kể cả bài viết dành cho thành viên\)/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*search query text \(up to 200 characters[^']*published content \(including members-only articles\)/);
+    expect(rows.vi).not.toContain('chữ của từ khoá');
+  });
+
+  test('Cloudflare discloses Stream lesson videos and their signed links in both languages', async () => {
+    const signing = await read('../src/lib/courses/course-media-signing.ts');
+    expect(signing).toContain('.cloudflarestream.com/');
+    expect(signing).toContain('MEDIA_TOKEN_MIN_TTL_SECONDS = 10 * 60');
+    expect(signing).toContain('MEDIA_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60');
+    const lesson = await read('../src/pages/courses/[slug]/[lesson].astro');
+    expect(lesson).toContain("'Referrer-Policy', 'no-referrer'");
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*Cloudflare Stream phát video bài học[^']*', data: '[^']*link Stream ký riêng hết hạn sau ít nhất 10 phút và tối đa 4 giờ[^']*gửi địa chỉ IP và user agent trực tiếp tới cloudflarestream\.com/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Cloudflare Stream plays course lesson videos[^']*', data: '[^']*signed Stream link that expires after 10 minutes to 4 hours[^']*IP address and user agent directly to cloudflarestream\.com/);
+  });
+
+  test('blocks that load from any https host are disclosed in both languages', async () => {
+    const validate = await read('../src/lib/blocks/validate.ts');
+    expect(validate).toContain("protocol === 'https:'");
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Máy chủ ảnh, media và tệp do tác giả chọn', purpose: '[^']*https:\/\/[^']*', data: '[^']*Địa chỉ IP và user agent/);
+    expect(rows.en).toMatch(/name: 'Image, media and file hosts chosen by the author', purpose: '[^']*https:\/\/[^']*', data: '[^']*IP address and user agent/);
+    const copy = await languageBlocks();
+    expect(copy.vi).toContain('có thể trỏ tới bất kỳ địa chỉ https:// nào do tác giả chọn');
+    expect(copy.en).toContain('can point to any https:// address the author chooses');
+  });
+
+  test('OpenRouter is listed as the transcript rewriter with no visitor data, and Workers AI only as its fallback', async () => {
+    const providers = await read('../src/lib/videos/video-transcript-rewrite-providers.ts');
+    expect(providers).toContain('https://openrouter.ai/api/v1/chat/completions');
+    const ingest = await read('../src/lib/videos/video-ingest-service.ts');
+    expect(ingest.indexOf('openRouterRewriter(')).toBeLessThan(ingest.indexOf('workersAiRewriter('));
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'OpenRouter', purpose: '[^']*phụ đề[^']*', data: 'Chỉ phụ đề công khai[^']*không có dữ liệu của người xem'/);
+    expect(rows.en).toMatch(/name: 'OpenRouter', purpose: '[^']*transcripts[^']*', data: 'Only the public video transcript[^']*no visitor data'/);
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*phụ đề Zueytube khi OpenRouter không được cấu hình hoặc bị lỗi/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Zueytube transcripts only when OpenRouter is not configured or fails/);
+  });
+
+  test('SePay discloses the qr.sepay.vn image in both languages', async () => {
+    expect(await read('../src/lib/payments/sepay.ts')).toContain('https://qr.sepay.vn/img?');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'SePay', purpose: '[^']*', data: '[^']*qr\.sepay\.vn/);
+    expect(rows.en).toMatch(/name: 'SePay', purpose: '[^']*', data: '[^']*qr\.sepay\.vn/);
+  });
+
+  test('the server-side analytics disclosure stays in both languages', async () => {
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'PostHog', purpose: '[^']*', data: '[^']*sự kiện tài khoản, mua hàng từ máy chủ[^']*\(không có email hay tên\)'/);
+    expect(rows.en).toMatch(/name: 'PostHog', purpose: '[^']*', data: '[^']*server-side account and purchase events[^']*\(no email or name\)'/);
+    const copy = await languageBlocks();
+    expect(copy.vi).toContain('các sự kiện này vẫn được gửi kể cả khi bạn tắt analytics trên trình duyệt');
+    expect(copy.en).toContain('they are sent even when browser analytics is off');
   });
 });
 
