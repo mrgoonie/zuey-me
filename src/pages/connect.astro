@@ -2,11 +2,12 @@
 import Layout from '../layouts/Layout.astro';
 import { ChannelConnect } from '../components/members/ChannelConnect';
 import type { ChannelConnectProps } from '../components/members/ChannelConnect';
+import {
+  CONNECT_LOGIN_REDIRECT, CONNECT_PATH, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, LINK_TOKEN_COOKIE_PATH, connectEntry, keepLinkTokenCookie,
+} from '../lib/channel-access/connect-flow';
 import { linkPreview, readLinkToken } from '../lib/channel-access/identities';
-import { MAX_LINK_TOKEN_LENGTH } from '../lib/channel-access/link-token';
 import { AppError } from '../lib/http';
 import { isAdminIdentity } from '../lib/members/admins';
-import { safeNextPath } from '../lib/members/runtime';
 import { resolveMemberSession } from '../lib/members/session';
 import { getEntitlements } from '../lib/members/subscriptions';
 
@@ -14,24 +15,19 @@ import { getEntitlements } from '../lib/members/subscriptions';
 const env = Astro.locals.runtime?.env ?? {};
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
-// The token is in the URL: never leak it through the Referer header.
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 
-/** Keeps the token across sign-in when it is too long for the login `next` path (or the magic link opens elsewhere). */
-const TOKEN_COOKIE = 'zuey_channel_link';
-const queryToken = Astro.url.searchParams.get('token');
-const cookieToken = Astro.cookies.get(TOKEN_COOKIE)?.value ?? null;
-const rawToken = queryToken || cookieToken;
-const token = rawToken && rawToken.length <= MAX_LINK_TOKEN_LENGTH ? rawToken : null;
+// The token never stays in a URL (page analytics, history, Referer): see connect-flow.ts.
+const entry = connectEntry(Astro.url, Astro.cookies.get(LINK_TOKEN_COOKIE)?.value ?? null);
+if (entry.kind === 'park') {
+  if (entry.token) Astro.cookies.set(LINK_TOKEN_COOKIE, entry.token, LINK_TOKEN_COOKIE_OPTIONS);
+  else Astro.cookies.delete(LINK_TOKEN_COOKIE, { path: LINK_TOKEN_COOKIE_PATH });
+  return Astro.redirect(CONNECT_PATH, 302);
+}
+const token = entry.token;
 
 const current = await resolveMemberSession(Astro.request, env.DB).catch(() => null);
-if (!current) {
-  if (token) {
-    Astro.cookies.set(TOKEN_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'lax', path: '/connect', maxAge: 30 * 60 });
-  }
-  const withToken = token ? `/connect?token=${encodeURIComponent(token)}` : '/connect';
-  return Astro.redirect(`/login?next=${encodeURIComponent(safeNextPath(withToken) === withToken ? withToken : '/connect')}`, 302);
-}
+if (!current) return Astro.redirect(CONNECT_LOGIN_REDIRECT, 302);
 
 let props: ChannelConnectProps = {
   state: 'error', token: null, provider: null, senderId: null, senderUsername: null, entitled: false, errorCode: 'missing_token',
@@ -59,6 +55,8 @@ if (token && env.DB) {
 } else if (token) {
   props = { ...props, errorCode: 'database_unavailable' };
 }
+// A spent or unusable token is dropped; a usable one stays until the member confirms the link.
+if (token && !keepLinkTokenCookie(props.state, props.errorCode)) Astro.cookies.delete(LINK_TOKEN_COOKIE, { path: LINK_TOKEN_COOKIE_PATH });
 ---
 
 <Layout title="Liên kết Telegram — Zuey" description="Liên kết tài khoản Telegram với tài khoản zuey.me để chat với Zuey AI." url="https://zuey.me/connect" lang="vi">

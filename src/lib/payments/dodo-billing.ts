@@ -1,4 +1,5 @@
 import type { D1DatabaseLike } from '../../db/store';
+import type { WaitUntil } from '../channel-access/invalidate';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { PlanId } from '../members/plans';
@@ -397,7 +398,8 @@ async function succeededCharges(d1: D1DatabaseLike, cardId: string): Promise<num
 }
 
 async function applySubscriptionEvent(
-  d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'subscription' }, identityOk: boolean
+  d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'subscription' }, identityOk: boolean,
+  waitUntil?: WaitUntil,
 ): Promise<CardOutcome> {
   if (card.last_event_at && event.occurredAt && event.occurredAt < card.last_event_at) return 'stale_event';
   const data = event.data;
@@ -433,7 +435,7 @@ async function applySubscriptionEvent(
   ).run();
 
   if (card.user_id && card.plan) {
-    const sub = await recomputeSubscription(d1, card.user_id, card.plan, { env });
+    const sub = await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
     if (status !== card.status || event.type === 'subscription.renewed') {
       const action = status === 'needs_attention' ? 'billing.needs_attention'
         : status === 'active' ? (event.type === 'subscription.renewed' && card.status === 'active' ? 'billing.card_renewed' : 'billing.card_active')
@@ -449,7 +451,8 @@ async function applySubscriptionEvent(
 }
 
 async function applyPaymentEvent(
-  d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'payment' }, identityOk: boolean
+  d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'payment' }, identityOk: boolean,
+  waitUntil?: WaitUntil,
 ): Promise<CardOutcome> {
   const data = event.data;
   const nowIso = iso(membersRuntime.now());
@@ -477,7 +480,7 @@ async function applyPaymentEvent(
   if (reason) {
     await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reason, nowIso, card.id).run();
     if (card.user_id && card.plan) {
-      await recomputeSubscription(d1, card.user_id, card.plan, { env });
+      await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
       await logActivity(d1, card.user_id, 'billing.needs_attention', { plan: card.plan, card_subscription_id: card.id, reason, amount: data.totalAmount, currency: data.currency });
     }
     return 'needs_attention';
@@ -499,7 +502,7 @@ async function applyPaymentEvent(
       const reasonText = card.promo_code_id ? 'promo_discount_not_applied' : 'referral_discount_not_applied';
       await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reasonText, nowIso, card.id).run();
       if (card.user_id) {
-        await recomputeSubscription(d1, card.user_id, card.plan, { env });
+        await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
         await logActivity(d1, card.user_id, 'billing.needs_attention', {
           plan: card.plan, card_subscription_id: card.id, reason: reasonText, amount: data.totalAmount, tax: data.tax ?? 0, currency: data.currency,
         });
@@ -515,7 +518,7 @@ async function applyPaymentEvent(
  * other rails); on any processing error the record is released so Dodo's retry is processed again.
  */
 export async function applyDodoEvent(
-  d1: D1DatabaseLike, env: RuntimeEnv, eventId: string, event: DodoEvent
+  d1: D1DatabaseLike, env: RuntimeEnv, eventId: string, event: DodoEvent, waitUntil?: WaitUntil,
 ): Promise<{ outcome: CardOutcome; card_subscription_id: string | null }> {
   const subscriptionId = event.data.subscriptionId;
   const { card, via } = await locateCard(d1, subscriptionId, event.data.metadata);
@@ -531,8 +534,8 @@ export async function applyDodoEvent(
     }
     const identityOk = via === 'subscription' || metadataMatches(card, event.data.metadata);
     const outcome = event.kind === 'subscription'
-      ? await applySubscriptionEvent(d1, env, card, event, identityOk)
-      : await applyPaymentEvent(d1, env, card, event, identityOk);
+      ? await applySubscriptionEvent(d1, env, card, event, identityOk, waitUntil)
+      : await applyPaymentEvent(d1, env, card, event, identityOk, waitUntil);
     return { outcome, card_subscription_id: card.id };
   } catch (err) {
     await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('dodo', eventId).run().catch(() => undefined);

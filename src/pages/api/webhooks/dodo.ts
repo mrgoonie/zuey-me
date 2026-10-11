@@ -3,6 +3,7 @@ import { errorResponse, jsonError, jsonOk } from '../../../lib/http';
 import { requireMembersDb, membersRuntime } from '../../../lib/members/runtime';
 import { parseDodoEvent, parseDodoReversalEvent, verifyDodoSignature } from '../../../lib/payments/dodo';
 import { applyDodoEvent, applyDodoReversal } from '../../../lib/payments/dodo-billing';
+import { runtimeWaitUntil } from '../../../lib/blocks/articles';
 import { standardWebhookHeaders } from '../../../lib/payments/standard-webhooks';
 import { applyDodoCourseWebhook } from '../../../lib/courses/course-payment-webhooks';
 import { announceOrder, shouldNotifyOrder } from '../../../lib/notifications/order-notify';
@@ -48,7 +49,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     if (reversal) return jsonOk(await applyDodoReversal(d1, reversal));
     const event = parseDodoEvent(payload);
     if (!event) return jsonOk({ outcome: 'ignored' });
-    const result = await applyDodoEvent(d1, env, headers.id, event);
+    const result = await applyDodoEvent(d1, env, headers.id, event, runtimeWaitUntil(locals.runtime));
     if (shouldNotifyOrder(result.outcome)) {
       const card = result.card_subscription_id
         ? await d1.prepare('SELECT plan FROM card_subscriptions WHERE id = ?').bind(result.card_subscription_id).first<Record<string, unknown>>()

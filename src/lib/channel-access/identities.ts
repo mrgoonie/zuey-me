@@ -66,6 +66,11 @@ export async function readLinkToken(env: RuntimeEnv, token: unknown): Promise<Li
     const e = TOKEN_ERRORS[result.error];
     throw new AppError(e.status, e.code, e.message);
   }
+  // With the gated bot's instance configured, a token minted for any other dewee channel instance is refused.
+  const instance = (env.DEWEE_CHANNEL_INSTANCE_ID ?? '').trim();
+  if (instance && result.payload.channel_instance !== instance) {
+    throw new AppError(400, 'invalid_link_token', 'This link was issued for a different bot');
+  }
   return result.payload;
 }
 
@@ -110,28 +115,33 @@ export async function redeemLinkToken(
   const now = membersRuntime.now();
   // Prune nonces of tokens that can no longer verify.
   await d1.prepare('DELETE FROM channel_link_nonces WHERE expires_at < ?').bind(iso(now)).run();
-  try {
-    await d1.prepare('INSERT INTO channel_link_nonces (nonce, provider, external_id, user_id, used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(payload.nonce, provider, externalId, userId, iso(now), iso(payload.exp * 1000)).run();
-  } catch (err) {
-    if (isUniqueViolation(err)) throw new AppError(409, 'link_token_used', 'This link was already used; ask the bot for a new link');
-    throw err;
-  }
-
+  const consumeNonce = d1.prepare('INSERT INTO channel_link_nonces (nonce, provider, external_id, user_id, used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(payload.nonce, provider, externalId, userId, iso(now), iso(payload.exp * 1000));
   let alreadyLinked = existing !== null;
-  if (!existing) {
-    try {
-      await d1.prepare("INSERT INTO channel_identities (provider, external_id, user_id, linked_at, source) VALUES (?, ?, ?, ?, 'link_token')")
-        .bind(provider, externalId, userId, iso(now)).run();
-    } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
-      // A concurrent request linked the sender first: succeed only if it was this member.
-      const winner = await findChannelIdentity(d1, provider, externalId);
-      if (!winner || winner.user_id !== userId) {
-        throw new AppError(409, 'channel_linked_elsewhere', 'This chat account is already linked to another zuey.me account');
-      }
-      alreadyLinked = true;
+  try {
+    if (existing) await consumeNonce.run();
+    // Nonce and link commit together: a failed link never burns the token, and a used token never links.
+    else {
+      await d1.batch([consumeNonce, d1.prepare("INSERT INTO channel_identities (provider, external_id, user_id, linked_at, source) VALUES (?, ?, ?, ?, 'link_token')")
+        .bind(provider, externalId, userId, iso(now))]);
     }
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const used = await d1.prepare('SELECT 1 AS used FROM channel_link_nonces WHERE nonce = ?').bind(payload.nonce).first<Row>();
+    if (used || existing) throw new AppError(409, 'link_token_used', 'This link was already used; ask the bot for a new link');
+    // A concurrent request linked the sender first: succeed only if it was this member (and still consume the token).
+    const winner = await findChannelIdentity(d1, provider, externalId);
+    if (!winner) throw err;
+    if (winner.user_id !== userId) {
+      throw new AppError(409, 'channel_linked_elsewhere', 'This chat account is already linked to another zuey.me account');
+    }
+    try {
+      await consumeNonce.run();
+    } catch (nonceErr) {
+      if (isUniqueViolation(nonceErr)) throw new AppError(409, 'link_token_used', 'This link was already used; ask the bot for a new link');
+      throw nonceErr;
+    }
+    alreadyLinked = true;
   }
   const entitled = isAdmin || (await getEntitlements(d1, userId)).entitlements.includes('agent_chat');
   return { provider, external_id: externalId, sender_username: payload.sender_username, already_linked: alreadyLinked, entitled };

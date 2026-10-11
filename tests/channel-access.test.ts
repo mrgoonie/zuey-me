@@ -7,6 +7,11 @@ import { createApiKey } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { signLinkToken, verifyLinkToken } from '../src/lib/channel-access/link-token';
 import { subjectRef } from '../src/lib/channel-access/check';
+import {
+  CLEAR_LINK_TOKEN_COOKIE, CONNECT_LOGIN_REDIRECT, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, connectEntry, keepLinkTokenCookie,
+} from '../src/lib/channel-access/connect-flow';
+import { invalidateSenders } from '../src/lib/channel-access/invalidate';
+import { applyBillingPayment } from '../src/lib/members/billing';
 import { channelAccessOpenApi } from '../src/lib/channel-access/openapi';
 import { channelAccessMcpModule } from '../src/lib/channel-access/mcp';
 import { MCP_FEATURE_MODULES } from '../src/lib/mcp/registry';
@@ -130,8 +135,12 @@ async function mcpCall(headers: Record<string, string>, name: string, args: Reco
   return { status: res.status, result: parsed, error: field(body, 'error') };
 }
 
+async function linkRaw(cookie: string, token: unknown, env = baseEnv()): Promise<Response> {
+  return linkApi(ctx({ env, method: 'POST', path: '/api/v1/channel-access/link', headers: browser(cookie), body: { token } }));
+}
+
 async function link(cookie: string, token: unknown, env = baseEnv()): Promise<Envelope> {
-  return read(await linkApi(ctx({ env, method: 'POST', path: '/api/v1/channel-access/link', headers: browser(cookie), body: { token } })));
+  return read(await linkRaw(cookie, token, env));
 }
 
 beforeEach(() => {
@@ -235,6 +244,28 @@ describe('channel access decisions', () => {
     expect(field(withToken.data, 'subject_ref')).toBeUndefined();
     const junk = await check(bearer(SERVICE_KEY), checkBody({ link_token: 'javascript:alert(1)' }));
     expect(field(junk.data, 'link_url')).toBeUndefined();
+  });
+
+  it('never hands a link token out in a group chat, where another member could redeem it', async () => {
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    const rest = await check(bearer(SERVICE_KEY), checkBody({ chat_type: 'group', chat_id: '-100123', link_token: token }));
+    expect(rest.status).toBe(200);
+    expect(field(rest.data, 'decision')).toBe('link_required');
+    expect(field(rest.data, 'link_url')).toBeUndefined();
+    expect(String(field(rest.data, 'reply'))).toContain('direct message');
+    expect(JSON.stringify(rest.data)).not.toContain(token);
+    expect(JSON.stringify(rest.data)).not.toContain('/connect');
+
+    const viaMcp = await mcpCall(bearer(SERVICE_KEY), 'channel_access_check', checkBody({ chat_type: 'group', link_token: token }));
+    expect(field(viaMcp.result, 'decision')).toBe('link_required');
+    expect(JSON.stringify(viaMcp.result)).not.toContain(token);
+    expect(field(viaMcp.result, 'link_url')).toBeUndefined();
+
+    // Linked senders get the same allow/deny in groups as in direct chats.
+    const alice = await member('alice@example.com');
+    await linkDirect(alice.userId, '777001');
+    await grantPlan(alice.userId, 'ai', now + DAY);
+    expect(field((await check(bearer(SERVICE_KEY), checkBody({ chat_type: 'group', link_token: token }))).data, 'decision')).toBe('allow');
   });
 
   it('allow for a linked member with an active agent plan; deny with the pricing link once it expires', async () => {
@@ -350,6 +381,63 @@ describe('link tokens', () => {
     expect(rows?.n).toBe(1);
   });
 
+  it('clears the /connect token cookie once the token is spent, and keeps it on configuration errors', async () => {
+    const alice = await member('alice@example.com');
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    const ok = await linkRaw(alice.cookie, token);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
+    const used = await linkRaw(alice.cookie, token);
+    expect(used.status).toBe(409);
+    expect(used.headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
+    expect((await linkRaw(alice.cookie, 'garbage')).headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
+    const unconfigured = await linkRaw(alice.cookie, await signLinkToken(tokenPayload(), LINK_SECRET), baseEnv({ CHANNEL_LINK_TOKEN_SECRET: undefined }));
+    expect(unconfigured.status).toBe(503);
+    expect(unconfigured.headers.get('set-cookie')).toBeNull();
+    expect(CLEAR_LINK_TOKEN_COOKIE).toBe(`${LINK_TOKEN_COOKIE}=; Path=/connect; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+  });
+
+  it('commits the nonce and the link together, so a refused link never burns the token', async () => {
+    const alice = await member('alice@example.com');
+    const mallory = await member('mallory@example.com');
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    // Another member holds the sender: refused, and neither the nonce nor a second link is written.
+    await linkDirect(mallory.userId, '777001');
+    expect((await link(alice.cookie, token)).code).toBe('channel_linked_elsewhere');
+    const nonces = await d1.prepare('SELECT COUNT(*) AS n FROM channel_link_nonces').first<{ n: number }>();
+    expect(nonces?.n).toBe(0);
+
+    // A failing identity insert inside the batch rolls the nonce back too.
+    await d1.prepare("DELETE FROM channel_identities WHERE external_id = '777001'").run();
+    await expect(d1.batch([
+      d1.prepare("INSERT INTO channel_link_nonces (nonce, provider, external_id, user_id, used_at, expires_at) VALUES ('n1', 'telegram', '1', ?, 'x', 'y')").bind(alice.userId),
+      d1.prepare("INSERT INTO channel_identities (provider, external_id, user_id, linked_at, source) VALUES ('telegram', '1', ?, 'x', 'bogus_source')").bind(alice.userId),
+    ])).rejects.toThrow();
+    expect((await d1.prepare('SELECT COUNT(*) AS n FROM channel_link_nonces').first<{ n: number }>())?.n).toBe(0);
+
+    // Once the sender is free, the same token still works.
+    expect((await link(alice.cookie, token)).status).toBe(200);
+  });
+
+  it('treats a verified admin identity as entitled when linking', async () => {
+    const boss = await member('boss@example.com');
+    expect(field((await link(boss.cookie, await signLinkToken(tokenPayload(), LINK_SECRET))).data, 'entitled')).toBe(true);
+    const reader = await member('reader@example.com');
+    expect(field((await link(reader.cookie, await signLinkToken(tokenPayload({ sender_id: '555' }), LINK_SECRET))).data, 'entitled')).toBe(false);
+  });
+
+  it('refuses tokens minted for another dewee channel instance once the instance is configured', async () => {
+    const alice = await member('alice@example.com');
+    const foreign = await signLinkToken(tokenPayload({ channel_instance: 'other-bot' }), LINK_SECRET);
+    const pinned = baseEnv({ DEWEE_CHANNEL_INSTANCE_ID: 'zuey-ai' });
+    const refused = await link(alice.cookie, foreign, pinned);
+    expect(refused.status).toBe(400);
+    expect(refused.code).toBe('invalid_link_token');
+    expect((await link(alice.cookie, await signLinkToken(tokenPayload(), LINK_SECRET), pinned)).status).toBe(200);
+    // Without a configured instance any instance is accepted (single-bot setups).
+    expect((await link(alice.cookie, await signLinkToken(tokenPayload({ channel_instance: 'other-bot', sender_id: '556' }), LINK_SECRET))).status).toBe(200);
+  });
+
   it('never maps one Telegram id to two members', async () => {
     const alice = await member('alice@example.com');
     const mallory = await member('mallory@example.com');
@@ -393,6 +481,37 @@ describe('link tokens', () => {
     expect(field(removed.data, 'unlinked')).toBe(true);
     expect(fetchLog.map(f => f.url)).toEqual(['https://dewee.test/v1/channels/instances/zuey-ai/access/invalidate']);
     expect(field((await check(bearer(SERVICE_KEY))).data, 'decision')).toBe('link_required');
+  });
+});
+
+describe('/connect token handling', () => {
+  it('parks a query token in the HttpOnly cookie and reloads the bare /connect', () => {
+    const token = 'eyJ2IjoxfQ.c2ln';
+    expect(connectEntry(new URL(`${ORIGIN}/connect?token=${token}`), null)).toEqual({ kind: 'park', token });
+    // A new link replaces an older parked token; an empty or oversized one clears it.
+    expect(connectEntry(new URL(`${ORIGIN}/connect?token=${token}`), 'older')).toEqual({ kind: 'park', token });
+    expect(connectEntry(new URL(`${ORIGIN}/connect?token=`), 'older')).toEqual({ kind: 'park', token: null });
+    expect(connectEntry(new URL(`${ORIGIN}/connect?token=${'a'.repeat(3000)}`), null)).toEqual({ kind: 'park', token: null });
+    expect(connectEntry(new URL(`${ORIGIN}/connect`), token)).toEqual({ kind: 'continue', token });
+    expect(connectEntry(new URL(`${ORIGIN}/connect`), null)).toEqual({ kind: 'continue', token: null });
+    expect(LINK_TOKEN_COOKIE_OPTIONS).toEqual({ httpOnly: true, secure: true, sameSite: 'lax', path: '/connect', maxAge: 1800 });
+  });
+
+  it('signs in through next=/connect, so no URL that analytics records carries the token', () => {
+    expect(CONNECT_LOGIN_REDIRECT).toBe('/login?next=%2Fconnect');
+    const page = fs.readFileSync(path.join(import.meta.dir, '..', 'src', 'pages', 'connect.astro'), 'utf8');
+    expect(page).toContain('connectEntry(Astro.url');
+    expect(page).toContain('Astro.redirect(CONNECT_PATH, 302)');
+    expect(page).toContain('Astro.redirect(CONNECT_LOGIN_REDIRECT, 302)');
+    expect(page).not.toContain('searchParams.get');
+    expect(page).not.toContain('next=');
+  });
+
+  it('keeps the cookie only while the token can still link', () => {
+    expect(keepLinkTokenCookie('ready', null)).toBe(true);
+    for (const state of ['linked_to_you', 'linked_elsewhere', 'used'] as const) expect(keepLinkTokenCookie(state, null)).toBe(false);
+    for (const code of ['invalid_link_token', 'link_token_expired', 'unsupported_channel', 'link_token_used']) expect(keepLinkTokenCookie('error', code)).toBe(false);
+    for (const code of ['channel_link_unconfigured', 'database_unavailable', 'missing_token']) expect(keepLinkTokenCookie('error', code)).toBe(true);
   });
 });
 
@@ -491,6 +610,53 @@ describe('access change push to dewee', () => {
     expect((await recomputeSubscription(d1, carol.userId, 'community', { env: pushEnv() }))?.status).toBe('active');
   });
 
+  it('sends pushes for several senders in parallel', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    fetchImpl = async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      inFlight -= 1;
+      return new Response('{}', { status: 200 });
+    };
+    expect(await invalidateSenders(pushEnv(), ['1', '2', '3'])).toEqual({ sent: 3, failed: 0 });
+    expect(peak).toBe(3);
+    for (const call of fetchLog) expect(call.init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('lets the SePay webhook answer without waiting for the dewee push', async () => {
+    const alice = await member('alice@example.com');
+    await linkDirect(alice.userId, '777001');
+    const ts = new Date(now).toISOString();
+    await d1.prepare(
+      "INSERT INTO billing_orders (id, code, user_id, plan, months, amount_usd_cents, usd_vnd_rate, amount_vnd, status, expires_at, created_at, updated_at) VALUES ('ord_x', 'ZMWAIT1', ?, 'ai', 1, 900, 26000, 234000, 'pending', ?, ?, ?)"
+    ).bind(alice.userId, new Date(now + DAY).toISOString(), ts, ts).run();
+    let release: () => void = () => undefined;
+    const hanging = new Promise<void>(r => { release = r; });
+    fetchImpl = async url => {
+      if (url.includes('/access/invalidate')) await hanging;
+      return new Response('{}', { status: 200 });
+    };
+    const deferred: Promise<unknown>[] = [];
+    const result = await applyBillingPayment(d1, pushEnv(), {
+      eventId: 'evt-wait-1', amount: 234000, orderCode: 'ZMWAIT1', paymentRef: 'FT1', rawType: 'transfer_in',
+    }, p => { deferred.push(p); });
+    // The payment is applied and answered while the push is still pending.
+    expect(result.outcome).toBe('paid');
+    expect(deferred.length).toBe(1);
+    release();
+    await Promise.all(deferred);
+    expect(fetchLog.filter(f => f.url.includes('/access/invalidate')).length).toBe(1);
+  });
+
+  it('threads the runtime waitUntil from both payment webhooks', () => {
+    for (const file of ['sepay.ts', 'dodo.ts']) {
+      const src = fs.readFileSync(path.join(import.meta.dir, '..', 'src', 'pages', 'api', 'webhooks', file), 'utf8');
+      expect(src).toContain('runtimeWaitUntil(locals.runtime)');
+    }
+  });
+
   it('hands the push to waitUntil when the runtime provides it', async () => {
     const alice = await member('alice@example.com');
     await linkDirect(alice.userId, '777001');
@@ -503,7 +669,7 @@ describe('access change push to dewee', () => {
   });
 });
 
-describe('community sweep scheduling', () => {
+describe('community sweep caller auth', () => {
   const tgEnv = (extra: Partial<RuntimeEnv> = {}) => baseEnv({
     TELEGRAM_BOT_TOKEN: '123:secret-token', TELEGRAM_GROUP_EN_ID: '-1001', TELEGRAM_GROUP_VI_ID: '-1002', TELEGRAM_WEBHOOK_SECRET: 'hook', CRON_SECRET, ...extra,
   });
@@ -521,8 +687,8 @@ describe('community sweep scheduling', () => {
     expect((await read(await sweep(browser(admin.cookie)))).status).toBe(200);
   });
 
-  it('is part of the scheduler worker jobs', () => {
+  it('is not scheduled until the sweep is safe to run unattended', () => {
     const src = fs.readFileSync(path.join(import.meta.dir, '..', 'workers', 'scheduler', 'src', 'index.ts'), 'utf8');
-    expect(src).toContain("'/api/v1/community/sweep'");
+    expect(src).not.toContain('/api/v1/community/sweep');
   });
 });

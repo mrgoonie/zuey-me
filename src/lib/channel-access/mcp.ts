@@ -12,7 +12,7 @@ export const channelAccessMcpModule: McpToolModule = {
   tools: [
     {
       name: 'channel_access_check',
-      description: `Service (scope ${CHANNEL_ACCESS_SCOPE}, dewee Channel Access Gate v1): may this chat sender talk to the Zuey AI agent? Returns decision allow (linked member with the agent_chat entitlement), deny (linked, no active plan; link_url = pricing) or link_required (sender not linked; link_url = /connect when link_token is given), plus ttl_seconds and an opaque subject_ref. Requires Authorization: Bearer <CHANNEL_ACCESS_SERVICE_KEY>; admin and personal keys are rejected.`,
+      description: `Service (scope ${CHANNEL_ACCESS_SCOPE}, dewee Channel Access Gate v1): may this chat sender talk to the Zuey AI agent? Returns decision allow (linked member with the agent_chat entitlement), deny (linked, no active plan; link_url = pricing) or link_required (sender not linked; link_url = /connect when link_token is given in a direct chat, never in a group), plus ttl_seconds and an opaque subject_ref. Requires Authorization: Bearer <CHANNEL_ACCESS_SERVICE_KEY>; admin and personal keys are rejected.`,
       inputSchema: {
         type: 'object',
         required: ['version', 'channel_type', 'sender_id', 'chat_type'],
@@ -26,7 +26,7 @@ export const channelAccessMcpModule: McpToolModule = {
           sender_username: { type: 'string' },
           chat_type: { type: 'string', enum: ['direct', 'group'] },
           chat_id: { type: 'string' },
-          link_token: { type: 'string', description: 'Signed dewee link token; echoed into the /connect link_url when the sender must link' },
+          link_token: { type: 'string', description: 'Signed dewee link token; echoed into the /connect link_url when the sender must link (direct chats only)' },
         },
       },
     },

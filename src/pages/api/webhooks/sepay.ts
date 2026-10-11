@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../lib/http';
 import { applyPayment, requireDb } from '../../../lib/booking/store';
 import { applyBillingPayment } from '../../../lib/members/billing';
+import { runtimeWaitUntil } from '../../../lib/blocks/articles';
 import { applyCourseSepayPayment } from '../../../lib/courses/course-payment-webhooks';
 import { parseSepayPayload, verifySepayAuthorization } from '../../../lib/payments/sepay';
 import { announceOrder } from '../../../lib/notifications/order-notify';
@@ -36,7 +37,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         rawType: 'transfer_in',
         payerText: transfer.content,
         transactedAt: transfer.transactedAt,
-      });
+      }, runtimeWaitUntil(locals.runtime));
       await announce('membership', transfer.billingCode, result.outcome);
       return jsonOk(result);
     }

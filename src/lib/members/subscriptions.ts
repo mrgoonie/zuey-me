@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { channelAccessPushConfigured, deferChannelAccessPush, invalidateUserChannelAccess } from '../channel-access/invalidate';
+import type { WaitUntil } from '../channel-access/invalidate';
 import type { Entitlement, PlanId } from './plans';
 import { entitlementsForPlans, getPlan, isPlanId } from './plans';
 import type { Row } from './runtime';
@@ -78,7 +79,7 @@ export interface RecomputeOptions {
    */
   env?: RuntimeEnv;
   /** Cloudflare `ctx.waitUntil`: the push runs after the response; without it the push runs inline (bounded). */
-  waitUntil?: (promise: Promise<unknown>) => void;
+  waitUntil?: WaitUntil;
 }
 
 /**

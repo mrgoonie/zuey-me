@@ -1,4 +1,5 @@
 import type { D1DatabaseLike } from '../../db/store';
+import type { WaitUntil } from '../channel-access/invalidate';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';
@@ -389,8 +390,10 @@ async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: st
 }
 
 /** Extends the plan from paid orders, then records and emails a receipt (email failure never undoes payment). */
-export async function fulfilOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder): Promise<SubscriptionView | null> {
-  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { env });
+export async function fulfilOrder(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder, waitUntil?: WaitUntil,
+): Promise<SubscriptionView | null> {
+  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { env, waitUntil });
   try {
     if (order.promo_code_id) await redeemPromo(d1, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
     await activateInvoiceRequest(d1, env, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
@@ -427,7 +430,9 @@ export async function fulfilOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: Bi
  * (idempotency gate shared with booking); full payment of a live pending order marks it paid,
  * anything else (underpaid, late, already paid) is flagged for the admin.
  */
-export async function applyBillingPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: BillingPaymentNotice): Promise<{ outcome: BillingOutcome; order_code: string | null }> {
+export async function applyBillingPayment(
+  d1: D1DatabaseLike, env: RuntimeEnv, n: BillingPaymentNotice, waitUntil?: WaitUntil,
+): Promise<{ outcome: BillingOutcome; order_code: string | null }> {
   const order = await getOrderByCode(d1, n.orderCode);
   const nowMs = membersRuntime.now();
   const nowIso = iso(nowMs);
@@ -463,7 +468,7 @@ export async function applyBillingPayment(d1: D1DatabaseLike, env: RuntimeEnv, n
        WHERE id = ? AND (status = 'pending' OR (status = 'expired' AND attention_reason IS NULL)) AND expires_at >= ?`
     ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id, paidIso).run();
     if (res.meta?.changes === 1) {
-      await fulfilOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount });
+      await fulfilOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount }, waitUntil);
       if (order.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'billing_order', id: order.id, payerText: n.payerText ?? null });
       return { outcome: 'paid', order_code: order.code };
     }

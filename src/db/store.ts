@@ -14,6 +14,8 @@ export interface D1RunResultLike {
 
 export interface D1DatabaseLike {
   prepare(query: string): D1PreparedStatementLike;
+  /** Runs the statements in one transaction (Cloudflare D1 `batch`): all apply or none do. */
+  batch(statements: D1PreparedStatementLike[]): Promise<D1RunResultLike[]>;
 }
 // In-memory fallback for local dev / tests when Cloudflare D1 is not present
 let memoryProfile: Profile = { ...initialProfile };

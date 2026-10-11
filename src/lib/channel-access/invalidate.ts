@@ -10,7 +10,11 @@ import { membersRuntime, str } from '../members/runtime';
  * TTL. Skipped silently when the env is incomplete; never throws and never logs the token.
  */
 
-const PUSH_TIMEOUT_MS = 5000;
+/** Kept short: pushes are best effort and may run inline when no `waitUntil` is available. */
+const PUSH_TIMEOUT_MS = 2000;
+
+/** Cloudflare `ctx.waitUntil`, so work continues after the response is sent. */
+export type WaitUntil = (promise: Promise<unknown>) => void;
 
 interface PushConfig {
   url: string;
@@ -40,24 +44,26 @@ export async function invalidateSenders(env: RuntimeEnv, senderIds: string[]): P
   const cfg = pushConfig(env);
   if (!cfg) return null;
   const endpoint = `${cfg.url}/v1/channels/instances/${encodeURIComponent(cfg.instance)}/access/invalidate`;
+  // One request per sender, all in parallel: the slowest push bounds the total wait at PUSH_TIMEOUT_MS.
+  const settled = await Promise.allSettled(senderIds.map(async senderId => {
+    const res = await membersRuntime.fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sender_id: senderId }),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`dewee access invalidate answered ${res.status}`);
+  }));
   const out: InvalidateResult = { sent: 0, failed: 0 };
-  for (const senderId of senderIds) {
-    try {
-      const res = await membersRuntime.fetch(endpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sender_id: senderId }),
-        signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
-      });
-      if (res.ok) out.sent += 1;
-      else {
-        out.failed += 1;
-        console.warn(`dewee access invalidate answered ${res.status}`);
-      }
-    } catch (err) {
-      out.failed += 1;
-      console.warn('dewee access invalidate failed:', err instanceof Error ? err.name : 'unknown');
+  for (const r of settled) {
+    if (r.status === 'fulfilled') {
+      out.sent += 1;
+      continue;
     }
+    out.failed += 1;
+    const reason: unknown = r.reason;
+    // Status text or error name only: never the request, so the token cannot reach the logs.
+    console.warn('dewee access invalidate failed:', reason instanceof Error ? (reason.name === 'Error' ? reason.message : reason.name) : 'unknown');
   }
   return out;
 }
@@ -77,7 +83,7 @@ export async function invalidateUserChannelAccess(d1: D1DatabaseLike, env: Runti
 
 /** Runs a push after the response when the runtime allows it (waitUntil), otherwise inline. Never rejects. */
 export async function deferChannelAccessPush(
-  work: Promise<InvalidateResult | null>, waitUntil?: (promise: Promise<unknown>) => void,
+  work: Promise<InvalidateResult | null>, waitUntil?: WaitUntil,
 ): Promise<void> {
   const safe = work.catch(() => null);
   if (waitUntil) waitUntil(safe);

@@ -35,7 +35,7 @@ export const channelAccessOpenApi: OpenApiFragment = {
       post: {
         tags: [TAG],
         summary: `Service: decide whether a chat sender may talk to the agent (scope ${CHANNEL_ACCESS_SCOPE})`,
-        description: `allow (ttl ${ALLOW_TTL_SECONDS}s) for a linked member with agent_chat (card renewals keep a 24-hour grace), deny + pricing link_url (ttl ${DENY_TTL_SECONDS}s) when linked without an active plan, link_required when the sender is not linked (link_url = /connect?token=… when link_token is given). Send Content-Type: application/json.`,
+        description: `allow (ttl ${ALLOW_TTL_SECONDS}s) for a linked member with agent_chat (card renewals keep a 24-hour grace), deny + pricing link_url (ttl ${DENY_TTL_SECONDS}s) when linked without an active plan, link_required when the sender is not linked (link_url = /connect?token=… when link_token is given in a direct chat; group chats get a reply asking the sender to message the bot directly, with no link). Send Content-Type: application/json.`,
         security: serviceAuth,
         requestBody: { required: true, content: json(ref('ChannelAccessCheckInput')) },
         responses: {
@@ -109,7 +109,7 @@ export const channelAccessOpenApi: OpenApiFragment = {
       properties: {
         decision: { type: 'string', enum: ['allow', 'deny', 'link_required'] },
         reply: { type: 'string', description: 'Suggested reply to the sender (Vietnamese + English)' },
-        link_url: { type: 'string', description: 'Pricing page (deny) or /connect link (link_required)' },
+        link_url: { type: 'string', description: 'Pricing page (deny) or /connect link (link_required, direct chats only)' },
         ttl_seconds: { type: 'integer' },
         subject_ref: { type: 'string', description: 'Opaque stable member reference (never an email)' },
       },

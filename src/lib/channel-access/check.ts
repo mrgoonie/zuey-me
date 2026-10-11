@@ -17,7 +17,8 @@ import { findChannelIdentity } from './identities';
  * inbound message (cached by dewee), whether a channel sender may talk to the Zuey AI agent:
  * - `allow`: the sender is linked to a member whose plans grant `agent_chat` (admins always);
  * - `deny` + pricing `link_url`: linked, but no active plan with `agent_chat`;
- * - `link_required` (+ `/connect` link when dewee sent `link_token`): the sender is not linked to any member.
+ * - `link_required` (+ `/connect` link when dewee sent `link_token` in a direct chat; never in a group): the sender
+ *   is not linked to any member.
  */
 
 export const CHANNEL_ACCESS_SCOPE = 'channel_access:check';
@@ -126,6 +127,15 @@ export async function checkChannelAccess(d1: D1DatabaseLike, env: RuntimeEnv, in
   const identity = await findChannelIdentity(d1, input.channel_type, input.sender_id);
   const user = identity ? await getUserById(d1, identity.user_id) : null;
   if (!identity || !user) {
+    // A link token names one sender: in a group anyone could open it and link that sender to their own account,
+    // so the token is only ever handed out in a direct chat with the bot.
+    if (input.chat_type !== 'direct') {
+      return {
+        decision: 'link_required',
+        reply: 'Nhắn riêng cho bot để liên kết tài khoản zuey.me và chat với Zuey AI.\nSend the bot a direct message to link your zuey.me account and chat with Zuey AI.',
+        ttl_seconds: LINK_REQUIRED_TTL_SECONDS,
+      };
+    }
     const linkUrl = input.link_token ? `${site}/connect?token=${encodeURIComponent(input.link_token)}` : undefined;
     return {
       decision: 'link_required',
