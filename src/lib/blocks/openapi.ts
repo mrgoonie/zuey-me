@@ -54,7 +54,7 @@ export const blockSchemas: Record<string, unknown> = {
   BlockImage: block('image', { url: httpsUrl, alt: short, caption: short }, ['url']),
   BlockEmbed: block('embed', {
     url: httpsUrl,
-    provider: { type: 'string', enum: [...EMBED_PROVIDERS], description: 'Detected from the URL when omitted. Rendered click-to-load for privacy.' },
+    provider: { type: 'string', enum: [...EMBED_PROVIDERS], description: 'Detected from the URL when omitted. Rendered as a centred embed that loads when scrolled into view (readers can switch to click-to-load per device), with a link to the original URL.' },
     caption: short,
   }, ['url']),
   BlockTable: block('table', {
