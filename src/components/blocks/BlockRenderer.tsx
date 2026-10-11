@@ -185,7 +185,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
           {block.caption && <figcaption>{block.caption}</figcaption>}
         </figure>
       );
-    case 'embed': return <EmbedView block={block} autoLoad={ctx.autoLoadEmbeds} />;
+    case 'embed': return <EmbedView key={block.url} block={block} autoLoad={ctx.autoLoadEmbeds} />;
     case 'table':
       return (
         <div className="zb-scroll">

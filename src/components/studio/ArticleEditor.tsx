@@ -95,7 +95,7 @@ function embedBlockFrom(text: string, id: string = newId()): Block | null {
   return embed ? { id, type: 'embed', url: embed.url, provider: embed.provider } : null;
 }
 
-const CREATABLE: BlockType[] =BLOCK_TYPES.filter(t => TYPE_LABELS[t] !== undefined);
+const CREATABLE: BlockType[] = BLOCK_TYPES.filter(t => TYPE_LABELS[t] !== undefined);
 
 interface ListCtx { layoutDepth: number; inToggle: boolean; slug: string }
 
@@ -142,7 +142,7 @@ function SlashList({ id, items, active, onPick }: { id: string; items: BlockType
 }
 
 /** Notion-style inserter: "/" opens the block menu; plain text + Enter adds a paragraph. */
-function BlockInserter({ allowed, onInsert, autoFocus, onDone }: { allowed: BlockType[]; onInsert: (b: Block) => void; autoFocus?: boolean; onDone?: () => void }) {
+export function BlockInserter({ allowed, onInsert, autoFocus, onDone }: { allowed: BlockType[]; onInsert: (b: Block) => void; autoFocus?: boolean; onDone?: () => void }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -256,7 +256,7 @@ function SurveyResultsView({ block, slug }: { block: SurveyBlock; slug: string }
 interface FieldsProps { block: Block; onChange: (b: Block) => void; ctx: ListCtx; allowed: BlockType[] }
 
 /** Paragraph textarea; typing "/" in an empty paragraph turns it into another block type. */
-function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; onChange: (b: Block) => void; allowed: BlockType[] }) {
+export function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; onChange: (b: Block) => void; allowed: BlockType[] }) {
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const listId = useId();
@@ -357,7 +357,7 @@ function GalleryFields({ images, onChange }: { images: GalleryImage[]; onChange:
   );
 }
 
-function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: (b: Block) => void }) {
+export function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: (b: Block) => void }) {
   const rec = recognizeEmbed(block.url);
   return (
     <div className="space-y-2">
@@ -371,6 +371,15 @@ function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed
       <p className="text-[11px] text-stone-400" aria-live="polite">
         Nhận diện: <b className="text-stone-200">{rec.label}</b> · {rec.src ? 'nhúng được (tự tải khi người đọc cuộn tới)' : 'hiển thị dạng liên kết'}
       </p>
+      {rec.provider === 'facebook' && !rec.src && (
+        <p className="text-[11px] text-amber-300">
+          Link chia sẻ Facebook (/share/…) không nhúng được. Mở link rồi dán URL gốc của bài (dạng /posts/, /reel/, /videos/).
+        </p>
+      )}
+      {/* Undo for a pasted link that became an embed: keep it as plain text instead. */}
+      <button type="button" className={btnCls} onClick={() => onChange({ id: block.id, type: 'paragraph', text: block.url })}>
+        Chuyển về đoạn văn
+      </button>
       <Select label="Nhà cung cấp" value={block.provider} options={EMBED_PROVIDERS} onChange={provider => onChange({ ...block, provider })} />
       <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
     </div>

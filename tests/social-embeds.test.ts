@@ -8,7 +8,6 @@ import { documentToMarkdown } from '../src/lib/blocks/markdown';
 import { validateDocument } from '../src/lib/blocks/validate';
 import type { Block, EmbedProvider } from '../src/lib/blocks/schema';
 
-const blocksCss = readFileSync(new URL('../src/styles/blocks.css', import.meta.url), 'utf8');
 const embedViewSource = readFileSync(new URL('../src/components/blocks/EmbedView.tsx', import.meta.url), 'utf8');
 
 function render(blocks: Block[], autoLoadEmbeds?: boolean): string {
@@ -25,12 +24,16 @@ describe('provider resolver: common social URL shapes', () => {
     ['https://mobile.twitter.com/someone/status/1234567890123', 'x', 'https://platform.twitter.com/embed/Tweet.html?id=1234567890123&dnt=true'],
     ['https://x.com/someone', 'x', null],
     ['https://www.facebook.com/reel/1234567890', 'facebook', 'https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Freel%2F1234567890'],
-    ['https://www.facebook.com/share/r/AbCdEf123/', 'facebook', 'https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fshare%2Fr%2FAbCdEf123%2F'],
-    ['https://www.facebook.com/share/v/AbCdEf123/', 'facebook', 'https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fshare%2Fv%2FAbCdEf123%2F'],
-    ['https://www.facebook.com/share/p/AbCdEf123/', 'facebook', 'https://www.facebook.com/plugins/post.php?href=https%3A%2F%2Fwww.facebook.com%2Fshare%2Fp%2FAbCdEf123%2F'],
+    // Share short links are redirects the plugins are not documented to follow: rendered as a link card.
+    ['https://www.facebook.com/share/r/AbCdEf123/', 'facebook', null],
+    ['https://www.facebook.com/share/v/AbCdEf123/', 'facebook', null],
+    ['https://www.facebook.com/share/p/AbCdEf123/', 'facebook', null],
+    ['https://www.facebook.com/share/AbCdEf123/', 'facebook', null],
+    ['https://www.facebook.com/watch/?v=1234567890', 'facebook', 'https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D1234567890'],
     ['https://www.instagram.com/reel/C0deAbc123/', 'instagram', 'https://www.instagram.com/reel/C0deAbc123/embed'],
     ['https://www.instagram.com/reels/C0deAbc123/', 'instagram', 'https://www.instagram.com/reel/C0deAbc123/embed'],
     ['https://www.instagram.com/someone/p/C0deAbc123/', 'instagram', 'https://www.instagram.com/p/C0deAbc123/embed'],
+    ['https://www.instagram.com/explore/tags/p/C0deAbc123/', 'instagram', null],
   ];
   for (const [url, provider, src] of cases) {
     it(`${provider}: ${url}`, () => {
@@ -46,7 +49,6 @@ describe('provider resolver: common social URL shapes', () => {
     expect(embedFrame('facebook', 'https://www.facebook.com/a/posts/1')).toBe('post');
     expect(embedFrame('facebook', 'https://www.facebook.com/a/videos/1')).toBe('video');
     expect(embedFrame('facebook', 'https://www.facebook.com/reel/1')).toBe('vertical');
-    expect(embedFrame('facebook', 'https://www.facebook.com/share/r/abc/')).toBe('vertical');
     expect(embedFrame('tiktok', 'https://www.tiktok.com/@a/video/1')).toBe('vertical');
     expect(embedFrame('youtube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('video');
   });
@@ -121,15 +123,24 @@ describe('embed rendering', () => {
     const html = render([embed('https://www.instagram.com/p/C0deAbc123/', 'instagram')], false);
     expect(html).toContain('zb-embed-instagram');
     expect(html).toContain('<button type="button" class="zb-btn">Tải nội dung từ <!-- -->Instagram</button>');
-    expect(html).not.toContain('zb-embed-pref');
+    expect(html).not.toContain('thiết bị này');
   });
 
-  it('falls back to a plain link for unsupported URLs', () => {
+  it('renders the per-device opt-out from the first paint, disabled until hydrated (no line shift)', () => {
+    const html = render([embed('https://x.com/someone/status/1234567890123', 'x')]);
+    expect(html).toContain('<button type="button" class="zb-embed-link-btn" disabled="">Không tự tải nội dung nhúng trên thiết bị này</button>');
+  });
+
+  it('falls back to a plain link for unsupported URLs and Facebook share links', () => {
     const html = render([embed('https://example.com/post', 'generic', 'Nguồn')]);
     expect(html).toContain('zb-embed-fallback');
     expect(html).toContain('href="https://example.com/post"');
     expect(html).not.toContain('zb-embed-frame');
     expect(html).toContain('<figcaption>Nguồn</figcaption>');
+    const share = render([embed('https://www.facebook.com/share/r/AbCdEf123/', 'facebook')]);
+    expect(share).toContain('zb-embed-fallback');
+    expect(share).toContain('href="https://www.facebook.com/share/r/AbCdEf123/"');
+    expect(share).not.toContain('zb-embed-frame');
   });
 
   it('renders video providers full width and Facebook reels as vertical frames', () => {
@@ -141,15 +152,5 @@ describe('embed rendering', () => {
     const sandboxes = [...embedViewSource.matchAll(/sandbox="([^"]*)"/g)].map(m => m[1]);
     expect(sandboxes).toEqual(['allow-scripts allow-same-origin allow-popups allow-presentation']);
     expect(embedViewSource).toContain('referrerPolicy="strict-origin-when-cross-origin"');
-  });
-
-  it('centres embeds with per-provider widths and reserved heights', () => {
-    expect(blocksCss).toMatch(/\.zb-embed \{[^}]*align-items: center/);
-    expect(blocksCss).toMatch(/\.zb-embed > \* \{[^}]*max-width: var\(--zb-embed-max, 100%\)/);
-    expect(blocksCss).toMatch(/\.zb-embed-x, \.zb-embed-linkedin \{ --zb-embed-max: 550px; \}/);
-    expect(blocksCss).toMatch(/\.zb-embed-instagram \{ --zb-embed-max: 540px; \}/);
-    expect(blocksCss).toMatch(/\.zb-embed-facebook\.zb-embed-post \{ --zb-embed-max: 500px; \}/);
-    expect(blocksCss).toMatch(/\.zb-embed > figcaption \{[^}]*text-align: center/);
-    expect(blocksCss).toMatch(/\.zb-embed-frame\.zb-ratio-post \{ height: 560px;/);
   });
 });

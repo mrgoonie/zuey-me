@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EmbedBlock } from '../../lib/blocks/schema';
-import { embedFrame, embedResizeHeight, embedSrc, PROVIDER_LABELS } from '../../lib/blocks/embed';
+import { embedAnnouncesHeight, embedFrame, embedResizeHeight, embedSrc, PROVIDER_LABELS } from '../../lib/blocks/embed';
 
 /** Per-device reader choice: `click` keeps every embed behind a button on this browser. */
 export type EmbedLoadPref = 'auto' | 'click';
@@ -8,9 +8,12 @@ export type EmbedLoadPref = 'auto' | 'click';
 export const EMBED_PREF_KEY = 'zuey:embeds';
 const EMBED_PREF_EVENT = 'zuey:embeds-pref';
 /** Start loading slightly before the frame scrolls into view so it is ready when the reader gets there. */
-const PRELOAD_MARGIN = '200px 0px';
-/** A frame that has not fired `load` by then is treated as blocked or broken and replaced by the link. */
-const LOAD_TIMEOUT_MS = 15000;
+export const EMBED_PRELOAD_MARGIN = '200px 0px';
+/**
+ * A frame that has not signalled readiness by then gets a non-blocking notice with the original link.
+ * The frame itself stays mounted: slow but working embeds still appear when they finish.
+ */
+export const EMBED_SLOW_MS = 15000;
 
 /** In-memory copy for browsers where localStorage throws (private mode, storage disabled). */
 let memoryPref: EmbedLoadPref | null = null;
@@ -58,35 +61,43 @@ interface EmbedViewProps {
   autoLoad: boolean;
 }
 
-type LoadStatus = 'pending' | 'loaded' | 'failed';
-
 /**
  * Third-party embed in a centred, provider-sized box. The frame's final shape is reserved before the
  * iframe exists (no layout shift); the original URL stays one click away in every state.
+ * Render with `key={block.url}` so a different URL starts from a clean state.
  */
 export function EmbedView({ block, autoLoad }: EmbedViewProps) {
   const src = embedSrc(block.url, block.provider);
   const label = PROVIDER_LABELS[block.provider];
   const shape = embedFrame(block.provider, block.url);
+  const announcesHeight = embedAnnouncesHeight(block.provider);
   const pref = useEmbedPref();
   const rootRef = useRef<HTMLElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [inView, setInView] = useState(false);
   const [requested, setRequested] = useState(false);
-  const [status, setStatus] = useState<LoadStatus>('pending');
+  const [attempt, setAttempt] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   const [height, setHeight] = useState<number | null>(null);
+  const [slow, setSlow] = useState(false);
 
   const auto = autoLoad && pref === 'auto';
   // Before hydration (pref null) a public embed shows the "loads when scrolled to" note, not a dead button.
   const clickMode = !autoLoad || pref === 'click';
-  const mounted = src !== null && status !== 'failed' && (requested || (auto && inView));
+  const mounted = src !== null && (requested || (auto && inView));
+  // `load` also fires for provider error pages, so frames that announce their height are ready only once they do.
+  const ready = announcesHeight ? height !== null : loaded;
 
-  // A different URL is a different embed: start over (and wait for a click again in click mode).
-  useEffect(() => {
-    setStatus('pending');
+  const resetFrame = () => {
+    setLoaded(false);
     setHeight(null);
-    setRequested(false);
-  }, [src]);
+    setSlow(false);
+  };
+
+  // An unmounted frame (reader switched to click-to-load) loads again from scratch when re-requested.
+  useEffect(() => {
+    if (!mounted) resetFrame();
+  }, [mounted]);
 
   useEffect(() => {
     if (!src || !auto || inView) return;
@@ -101,36 +112,35 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
         setInView(true);
         io.disconnect();
       }
-    }, { rootMargin: PRELOAD_MARGIN });
+    }, { rootMargin: EMBED_PRELOAD_MARGIN });
     io.observe(el);
     return () => io.disconnect();
   }, [src, auto, inView]);
 
-  // An unmounted frame (reader switched to click-to-load) must load again from scratch when re-requested.
   useEffect(() => {
-    if (!mounted) setStatus(s => (s === 'loaded' ? 'pending' : s));
-  }, [mounted]);
+    if (!mounted || ready) {
+      setSlow(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlow(true), EMBED_SLOW_MS);
+    return () => clearTimeout(timer);
+  }, [mounted, ready, attempt]);
 
   useEffect(() => {
-    if (!mounted || status === 'loaded') return;
-    const timer = window.setTimeout(() => setStatus('failed'), LOAD_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [mounted, status]);
-
-  useEffect(() => {
-    if (!mounted || shape !== 'post') return;
+    if (!mounted || !announcesHeight) return;
     const onMessage = (e: MessageEvent) => {
-      if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return;
       const next = embedResizeHeight(block.provider, e.origin, e.data);
       if (next !== null) setHeight(next);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [mounted, shape, block.provider]);
+  }, [mounted, announcesHeight, block.provider]);
 
   const retry = () => {
-    setStatus('pending');
-    setRequested(true);
+    resetFrame();
+    setAttempt(a => a + 1);
   };
 
   const original = (
@@ -149,12 +159,12 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
     );
   }
 
-  const frameState = status === 'failed' ? ' is-failed' : mounted && status !== 'loaded' ? ' is-loading' : '';
   return (
     <figure ref={rootRef} className={`zb-figure zb-embed zb-embed-${shape} zb-embed-${block.provider}`}>
-      <div className={`zb-embed-frame zb-ratio-${shape}${frameState}`} style={height !== null && status !== 'failed' ? { height } : undefined}>
+      <div className={`zb-embed-frame zb-ratio-${shape}${mounted && !loaded ? ' is-loading' : ''}`} style={height !== null ? { height } : undefined}>
         {mounted && (
           <iframe
+            key={attempt}
             ref={frameRef}
             src={src}
             title={block.caption || `${label} embed`}
@@ -163,19 +173,11 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
             sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
             allow="encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
-            onLoad={() => setStatus('loaded')}
+            onLoad={() => setLoaded(true)}
           />
         )}
-        {status === 'failed' ? (
-          <div className="zb-embed-placeholder" role="status">
-            <span>Không tải được nội dung từ {label}. Bài có thể đã bị xoá, ở chế độ riêng tư hoặc bị trình chặn quảng cáo chặn.</span>
-            <span className="zb-embed-actions">
-              {original}
-              <button type="button" className="zb-btn" onClick={retry}>Thử lại</button>
-            </span>
-          </div>
-        ) : mounted ? (
-          status !== 'loaded' && <div className="zb-embed-placeholder" aria-hidden="true">Đang tải nội dung từ {label}…</div>
+        {mounted ? (
+          !loaded && <div className="zb-embed-placeholder" aria-hidden="true">Đang tải nội dung từ {label}…</div>
         ) : (
           <div className="zb-embed-placeholder">
             {clickMode
@@ -184,12 +186,23 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
           </div>
         )}
       </div>
+      {slow && !ready && (
+        <p className="zb-embed-notice" role="status">
+          <span>{label} chưa hiển thị nội dung. Bài có thể đã bị xoá, ở chế độ riêng tư hoặc bị trình chặn quảng cáo chặn.</span>
+          <span className="zb-embed-actions">
+            {original}
+            <button type="button" className="zb-embed-link-btn" onClick={retry}>Thử lại</button>
+          </span>
+        </p>
+      )}
       {block.caption && <figcaption>{block.caption}</figcaption>}
       <div className="zb-embed-meta">
         {original}
-        {autoLoad && pref !== null && (
-          <button type="button" className="zb-embed-pref" onClick={() => writeEmbedPref(pref === 'auto' ? 'click' : 'auto')}>
-            {pref === 'auto' ? 'Không tự tải nội dung nhúng trên thiết bị này' : 'Tự tải nội dung nhúng trên thiết bị này'}
+        {autoLoad && (
+          // Rendered from the first paint (disabled until the stored choice is read) so it never shifts the line.
+          <button type="button" className="zb-embed-link-btn" disabled={pref === null}
+            onClick={() => writeEmbedPref(pref === 'click' ? 'auto' : 'click')}>
+            {pref === 'click' ? 'Tự tải nội dung nhúng trên thiết bị này' : 'Không tự tải nội dung nhúng trên thiết bị này'}
           </button>
         )}
       </div>

@@ -64,11 +64,14 @@ export function embedSrc(url: string, provider: EmbedProvider): string | null {
       return id ? `https://platform.twitter.com/embed/Tweet.html?id=${id}&dnt=true` : null;
     }
     case 'facebook': {
+      // `/share/…` short links are redirects the plugins are not documented to follow: show them as a link.
+      if (isFacebookShareLink(u)) return null;
       const isVideo = isFacebookVideo(u);
       return `https://www.facebook.com/plugins/${isVideo ? 'video' : 'post'}.php?href=${encodeURIComponent(u.toString())}`;
     }
     case 'instagram': {
-      const m = path.match(/\/(p|reels?|tv)\/([\w-]+)/);
+      // `/p|reel|tv/<code>`, optionally after the author's handle (`/<handle>/p/<code>`).
+      const m = path.match(/^\/(?:[\w.]+\/)?(p|reels?|tv)\/([\w-]+)/);
       return m ? `https://www.instagram.com/${m[1] === 'reels' ? 'reel' : m[1]}/${m[2]}/embed` : null;
     }
     case 'tiktok': {
@@ -85,13 +88,18 @@ export function embedSrc(url: string, provider: EmbedProvider): string | null {
   }
 }
 
-/** Facebook videos, reels and their `/share/v|r/` short links use the video plugin; everything else is a post. */
+/** Facebook's short share links (`/share/p|r|v/<id>`) from the app's "Copy link". */
+export function isFacebookShareLink(u: URL): boolean {
+  return /^\/share\/(?:[a-z]\/)?[\w-]+/.test(u.pathname);
+}
+
+/** Facebook videos and reels use the video plugin; everything else is a post. */
 function isFacebookVideo(u: URL): boolean {
-  return u.hostname.endsWith('fb.watch') || /\/(videos|watch|reel)\b/.test(u.pathname) || /^\/share\/[rv]\//.test(u.pathname);
+  return u.hostname.endsWith('fb.watch') || /\/(videos|watch|reel)\b/.test(u.pathname);
 }
 
 function isFacebookReel(u: URL): boolean {
-  return /\/reel\b/.test(u.pathname) || /^\/share\/r\//.test(u.pathname);
+  return /\/reel\b/.test(u.pathname);
 }
 
 export type EmbedFrame = 'video' | 'audio' | 'vertical' | 'post';
@@ -142,6 +150,11 @@ const RESIZE_ORIGINS: Partial<Record<EmbedProvider, string>> = {
   x: 'https://platform.twitter.com',
   instagram: 'https://www.instagram.com',
 };
+
+/** True when the provider's frame announces its height; that message doubles as the "content is ready" signal. */
+export function embedAnnouncesHeight(provider: EmbedProvider): boolean {
+  return RESIZE_ORIGINS[provider] !== undefined;
+}
 
 const MIN_EMBED_HEIGHT = 120;
 const MAX_EMBED_HEIGHT = 2400;

@@ -142,23 +142,31 @@
 .zb-embed-frame.zb-ratio-post { height: 560px; background: transparent; }
 .zb-embed-x .zb-embed-frame.zb-ratio-post { height: 480px; }
 .zb-embed-instagram .zb-embed-frame.zb-ratio-post { height: 680px; }
+/* Facebook's post plugin never reports its height (no postMessage), so the frame is square: 500px at the
+   500px cap, the column width on phones. That fits a text or square-image post; taller posts scroll
+   inside the frame and the original link sits right below. */
+.zb-embed-facebook .zb-embed-frame.zb-ratio-post { height: auto; aspect-ratio: 1 / 1; min-height: 320px; }
 .zb-embed-placeholder {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem;
   padding: 1rem; text-align: center; font-size: 0.85rem; color: #57534e; background: #f5f5f4; border: 1px solid #e7e5e4; border-radius: inherit;
 }
-.zb-embed-frame.is-loading .zb-embed-placeholder { animation: zb-embed-pulse 1.4s ease-in-out infinite; }
+/* While a frame loads, the overlay is decoration only: it never blocks the iframe underneath. */
+.zb-embed-frame.is-loading .zb-embed-placeholder { pointer-events: none; animation: zb-embed-pulse 1.4s ease-in-out infinite; }
 @keyframes zb-embed-pulse { 50% { opacity: 0.55; } }
-.zb-embed-frame.is-failed { height: auto; aspect-ratio: auto; background: transparent; }
-.zb-embed-frame.is-failed .zb-embed-placeholder { position: static; }
+.zb-embed-notice {
+  margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.35rem; padding: 0.6rem 0.9rem;
+  border: 1px solid #fcd34d; border-radius: 0.75rem; background: #fffbeb; font-size: 0.8rem; color: #57534e; text-align: center;
+}
 .zb-embed-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.6rem; }
 .zb-embed-fallback {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.6rem;
   padding: 0.9rem 1rem; border: 1px solid #e7e5e4; border-radius: 1rem; background: #fafaf9; text-align: center;
 }
 .zb-embed-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.25rem 1rem; font-size: 0.8rem; }
-.zb-embed-pref { border: 0; background: none; padding: 0; font: inherit; color: #78716c; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.zb-embed-pref:hover { color: #44403c; }
-.zb-embed-pref:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; border-radius: 0.25rem; }
+.zb-embed-link-btn { border: 0; background: none; padding: 0; font: inherit; color: #78716c; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.zb-embed-link-btn:hover:not(:disabled) { color: #44403c; }
+.zb-embed-link-btn:disabled { cursor: default; }
+.zb-embed-link-btn:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; border-radius: 0.25rem; }
 @media (prefers-reduced-motion: reduce) {
   .zb-embed-frame.is-loading .zb-embed-placeholder { animation: none; }
 }
