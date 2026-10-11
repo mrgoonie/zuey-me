@@ -2,7 +2,8 @@
 import Layout from '../layouts/Layout.astro';
 import { ChannelConnect } from '../components/members/ChannelConnect';
 import {
-  CONNECT_LOGIN_REDIRECT, CONNECT_PATH, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, LINK_TOKEN_COOKIE_PATH, connectEntry, keepLinkTokenCookie,
+  CONNECT_LOGIN_REDIRECT, CONNECT_PATH, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, LINK_TOKEN_COOKIE_PATH, connectEntry, connectRedirect,
+  keepLinkTokenCookie,
 } from '../lib/channel-access/connect-flow';
 import { buildConnectProps } from '../lib/channel-access/connect-page';
 import { resolveMemberSession } from '../lib/members/session';
@@ -18,14 +19,14 @@ const entry = connectEntry(Astro.url, Astro.cookies.get(LINK_TOKEN_COOKIE)?.valu
 if (entry.kind === 'park') {
   if (entry.token) Astro.cookies.set(LINK_TOKEN_COOKIE, entry.token, LINK_TOKEN_COOKIE_OPTIONS);
   else Astro.cookies.delete(LINK_TOKEN_COOKIE, { path: LINK_TOKEN_COOKIE_PATH });
-  return Astro.redirect(CONNECT_PATH, 302);
+  return connectRedirect(CONNECT_PATH);
 }
 const token = entry.token;
 
 const current = await resolveMemberSession(Astro.request, env.DB).catch(() => null);
-if (!current) return Astro.redirect(CONNECT_LOGIN_REDIRECT, 302);
+if (!current) return connectRedirect(CONNECT_LOGIN_REDIRECT);
 
-// Island props are serialised into the HTML: they carry masked preview data only, never the token.
+// Island props are serialised into the HTML: preview data (full sender handle for recognition), never the token.
 const props = await buildConnectProps(env, token, current.user);
 // A spent or unusable token is dropped; a usable one stays until the member confirms the link.
 if (token && !keepLinkTokenCookie(props.state, props.errorCode)) Astro.cookies.delete(LINK_TOKEN_COOKIE, { path: LINK_TOKEN_COOKIE_PATH });

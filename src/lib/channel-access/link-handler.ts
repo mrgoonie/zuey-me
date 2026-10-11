@@ -30,7 +30,12 @@ export async function linkChannelForMember(context: Pick<APIContext, 'request' |
     return res;
   }
   if (!outcome.already_linked) {
-    await logActivity(m.d1, user.id, 'channel.linked', { provider: outcome.provider, external_id: outcome.external_id }, context.request);
+    try {
+      await logActivity(m.d1, user.id, 'channel.linked', { provider: outcome.provider, external_id: outcome.external_id }, context.request);
+    } catch (err) {
+      // The link is committed: a missing activity row must not turn it into an error.
+      console.debug('channel.linked activity not recorded:', err instanceof Error ? err.message : 'unknown');
+    }
   }
   // dewee may have cached link_required for this sender: let it re-check now.
   await deferChannelAccessPush(invalidateSenders(m.env, [outcome.external_id]), runtimeWaitUntil(context.locals.runtime));

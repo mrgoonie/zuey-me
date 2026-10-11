@@ -51,6 +51,17 @@ function usableToken(raw: string | null): string | null {
   return raw && raw.length <= MAX_LINK_TOKEN_LENGTH ? raw : null;
 }
 
+/** Never cached and never leaks the URL it came from (the request URL may still hold `?token=`). */
+export const CONNECT_REDIRECT_HEADERS: Readonly<Record<string, string>> = {
+  'Cache-Control': 'private, no-store',
+  'Referrer-Policy': 'no-referrer',
+};
+
+/** 302 used by /connect. Astro attaches the cookie changes made during the request to this response. */
+export function connectRedirect(location: string): Response {
+  return new Response(null, { status: 302, headers: { Location: location, ...CONNECT_REDIRECT_HEADERS } });
+}
+
 /** First step of /connect: a token in the query string is only ever parked in the cookie, never rendered. */
 export function connectEntry(url: URL, cookieToken: string | null): ConnectEntry {
   if (url.searchParams.has('token')) return { kind: 'park', token: usableToken(url.searchParams.get('token')) };

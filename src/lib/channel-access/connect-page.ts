@@ -8,15 +8,17 @@ import { linkPreview, readLinkToken } from './identities';
 export type ChannelConnectState = LinkPreviewState | 'error';
 
 /**
- * Everything the /connect island receives. It is serialised into the page HTML (island props), where page
- * analytics may record it, so it holds only non-secret preview data: never the link token, never the full
- * sender id or username. The confirm button posts to `/connect/link`, which reads the token from the cookie.
+ * Everything the /connect island receives. It is serialised into the page HTML (island props), so it never
+ * holds the link token: the confirm button posts to `/connect/link`, which reads the token from the cookie.
+ * The sender handle is shown in full so the member can tell their own chat account from an attacker's (a
+ * phishing link would otherwise attach someone else's Telegram account to the member's plan). /connect is an
+ * analytics-sensitive path with no query string and the island sits inside `ph-no-capture`.
  */
 export interface ChannelConnectProps {
   state: ChannelConnectState;
   /** Channel type of the token, e.g. `telegram`. */
   provider: string | null;
-  /** Masked sender handle shown for recognition, e.g. `@al…e` or `ID …001`. */
+  /** Full sender handle the member must recognise before linking, e.g. `@alice` or `ID 777001`. */
   senderLabel: string | null;
   /** Whether the member's plans already allow chatting with the agent (shown once linked). */
   entitled: boolean;
@@ -24,13 +26,10 @@ export interface ChannelConnectProps {
   errorCode: string | null;
 }
 
-/** Enough of the handle for the member to recognise their own account, not enough to identify anyone. */
-export function maskSender(senderId: string, username: string | null): string {
-  if (username) {
-    const u = username.replace(/^@/, '');
-    return u.length <= 3 ? `@${u.slice(0, 1)}…` : `@${u.slice(0, 2)}…${u.slice(-1)}`;
-  }
-  return `ID …${senderId.slice(-3)}`;
+/** The sender as the member knows it: `@username`, or the numeric id when the account has no username. */
+export function senderLabel(senderId: string, username: string | null): string {
+  const u = (username ?? '').replace(/^@/, '');
+  return u ? `@${u}` : `ID ${senderId}`;
 }
 
 interface ConnectViewer {
@@ -52,9 +51,11 @@ export async function buildConnectProps(env: RuntimeEnv, token: string | null, v
     const entitled = state === 'linked_to_you'
       && (isAdminIdentity(viewer.email, viewer.email_verified_at, env)
         || (await getEntitlements(d1, viewer.id)).entitlements.includes('agent_chat'));
-    return { state, provider: payload.channel_type, senderLabel: maskSender(payload.sender_id, payload.sender_username), entitled, errorCode: null };
+    return { state, provider: payload.channel_type, senderLabel: senderLabel(payload.sender_id, payload.sender_username), entitled, errorCode: null };
   } catch (err) {
-    if (!(err instanceof AppError)) console.error('connect page failed:', err instanceof Error ? err.message : 'unknown');
-    return { ...NO_TOKEN, errorCode: err instanceof AppError ? err.code : 'invalid_link_token' };
+    if (err instanceof AppError) return { ...NO_TOKEN, errorCode: err.code };
+    // A database or runtime failure says nothing about the token: keep it (and its cookie) for a retry.
+    console.error('connect page failed:', err instanceof Error ? err.message : 'unknown');
+    return { ...NO_TOKEN, errorCode: 'database_unavailable' };
   }
 }

@@ -8,10 +8,10 @@ import type { RuntimeEnv } from '../src/env';
 import { signLinkToken, verifyLinkToken } from '../src/lib/channel-access/link-token';
 import { subjectRef } from '../src/lib/channel-access/check';
 import {
-  CLEAR_LINK_TOKEN_COOKIE, CONNECT_LOGIN_REDIRECT, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, connectEntry, keepLinkTokenCookie,
+  CLEAR_LINK_TOKEN_COOKIE, CONNECT_LOGIN_REDIRECT, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, connectEntry, connectRedirect, keepLinkTokenCookie,
 } from '../src/lib/channel-access/connect-flow';
 import { invalidateSenders } from '../src/lib/channel-access/invalidate';
-import { buildConnectProps, maskSender } from '../src/lib/channel-access/connect-page';
+import { buildConnectProps, senderLabel } from '../src/lib/channel-access/connect-page';
 import { isSensitivePath } from '../src/lib/analytics/pii';
 import { POST as connectLinkRoute } from '../src/pages/connect/link';
 import { POST as connectCancelRoute } from '../src/pages/connect/cancel';
@@ -505,8 +505,6 @@ describe('/connect token handling', () => {
     expect(CONNECT_LOGIN_REDIRECT).toBe('/login?next=%2Fconnect');
     const page = fs.readFileSync(path.join(import.meta.dir, '..', 'src', 'pages', 'connect.astro'), 'utf8');
     expect(page).toContain('connectEntry(Astro.url');
-    expect(page).toContain('Astro.redirect(CONNECT_PATH, 302)');
-    expect(page).toContain('Astro.redirect(CONNECT_LOGIN_REDIRECT, 302)');
     expect(page).not.toContain('searchParams.get');
     expect(page).not.toContain('next=');
   });
@@ -524,19 +522,20 @@ describe('/connect keeps the link token server-side', () => {
   const confirm = async (headers: Record<string, string>, env = baseEnv()) =>
     connectLinkRoute(ctx({ env, method: 'POST', path: '/connect/link', headers, body: {} }));
 
-  it('renders island props without the token or the full sender handle', async () => {
+  it('renders island props with the full sender handle but never the token', async () => {
     const alice = await member('alice@example.com');
     const user = await getUserById(d1, alice.userId);
     if (!user) throw new Error('missing user');
     const token = await signLinkToken(tokenPayload({ sender_id: '777001', sender_username: 'alice_tg' }), LINK_SECRET);
     const props = await buildConnectProps(baseEnv(), token, user);
-    expect(props).toEqual({ state: 'ready', provider: 'telegram', senderLabel: '@al…g', entitled: false, errorCode: null });
+    expect(props).toEqual({ state: 'ready', provider: 'telegram', senderLabel: '@alice_tg', entitled: false, errorCode: null });
     const html = JSON.stringify(props);
     expect(html).not.toContain(token);
+    expect(html).not.toContain(token.split('.')[0]);
     expect(html).not.toContain(token.split('.')[1]);
-    expect(html).not.toContain('777001');
-    expect(html).not.toContain('alice_tg');
     expect(Object.keys(props)).not.toContain('token');
+    const noUsername = await buildConnectProps(baseEnv(), await signLinkToken(tokenPayload({ sender_id: '424242', sender_username: undefined }), LINK_SECRET), user);
+    expect(noUsername.senderLabel).toBe('ID 424242');
 
     expect(await buildConnectProps(baseEnv(), null, user)).toMatchObject({ state: 'error', errorCode: 'missing_token' });
     expect(await buildConnectProps(baseEnv(), 'garbage', user)).toMatchObject({ state: 'error', errorCode: 'invalid_link_token' });
@@ -546,10 +545,45 @@ describe('/connect keeps the link token server-side', () => {
     expect(await buildConnectProps(baseEnv(), token, user)).toMatchObject({ state: 'linked_to_you', entitled: true });
   });
 
-  it('masks handles enough to recognise, not identify', () => {
-    expect(maskSender('777001', 'alice')).toBe('@al…e');
-    expect(maskSender('777001', '@bob')).toBe('@b…');
-    expect(maskSender('777001', null)).toBe('ID …001');
+  it('shows the handle in full so members can spot a link for someone else', () => {
+    expect(senderLabel('777001', 'alice')).toBe('@alice');
+    expect(senderLabel('777001', '@bob')).toBe('@bob');
+    expect(senderLabel('777001', null)).toBe('ID 777001');
+    expect(senderLabel('777001', '')).toBe('ID 777001');
+  });
+
+  it('maps database failures to database_unavailable and keeps the token cookie', async () => {
+    const alice = await member('alice@example.com');
+    const user = await getUserById(d1, alice.userId);
+    if (!user) throw new Error('missing user');
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    const broken = { prepare: () => { throw new Error('D1_ERROR: storage unavailable'); }, batch: () => Promise.reject(new Error('D1_ERROR')) };
+    const props = await buildConnectProps(baseEnv({ DB: broken }), token, user);
+    expect(props).toMatchObject({ state: 'error', errorCode: 'database_unavailable' });
+    expect(keepLinkTokenCookie(props.state, props.errorCode)).toBe(true);
+  });
+
+  it('sends no-store and no-referrer on its redirects', () => {
+    const res = connectRedirect('/connect');
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/connect');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    const page = fs.readFileSync(path.join(import.meta.dir, '..', 'src', 'pages', 'connect.astro'), 'utf8');
+    expect(page).toContain('return connectRedirect(CONNECT_PATH);');
+    expect(page).toContain('return connectRedirect(CONNECT_LOGIN_REDIRECT);');
+    expect(page).not.toContain('Astro.redirect(');
+  });
+
+  it('keeps a committed link successful when the activity log fails', async () => {
+    const alice = await member('alice@example.com');
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    await d1.prepare("CREATE TRIGGER fail_channel_activity BEFORE INSERT ON user_activity WHEN NEW.action = 'channel.linked' BEGIN SELECT RAISE(ABORT, 'activity log down'); END").run();
+    const res = await confirm(browser(parked(alice.cookie, token)));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
+    const linked = await d1.prepare("SELECT user_id FROM channel_identities WHERE external_id = '777001'").first<{ user_id: string }>();
+    expect(linked?.user_id).toBe(alice.userId);
   });
 
   it('wraps the island in ph-no-capture and never passes a token prop', () => {

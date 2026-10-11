@@ -40,7 +40,7 @@ export const channelAccessOpenApi: OpenApiFragment = {
         requestBody: { required: true, content: json(ref('ChannelAccessCheckInput')) },
         responses: {
           '200': ok('Decision', ref('ChannelAccessDecision')),
-          '400': err('`invalid_field`, `unsupported_version` or `unsupported_channel`'),
+          '400': err('`invalid_json` (body is not a JSON object), `invalid_field`, `unsupported_version` or `unsupported_channel`'),
           '401': err('`unauthorized` (no key) or `invalid_service_key` (any other credential)'),
           '503': err('`channel_access_unconfigured` or `database_unavailable`'),
         },
