@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import type { Row } from '../members/runtime';
 import { normalizeEmailForSelfCheck } from './codes';
@@ -52,8 +52,10 @@ export async function prepareReferralAccountDeletion(d1: D1DatabaseLike, env: Ru
   await env.REFERRAL_KYC.delete(keys);
 }
 
-/** Runs after the account row is scrubbed: removes the payout profile and the referee email on commissions. */
-export async function scrubReferralAccountData(d1: D1DatabaseLike, userId: string): Promise<void> {
-  await d1.prepare('DELETE FROM referral_payout_profiles WHERE user_id = ?').bind(userId).run();
-  await d1.prepare('UPDATE referral_commissions SET referee_email = NULL WHERE referee_user_id = ?').bind(userId).run();
+/** Statements for the account-deletion batch: remove the payout profile and the referee email on commissions. */
+export function referralAccountScrubStatements(d1: D1DatabaseLike, userId: string): D1PreparedStatementLike[] {
+  return [
+    d1.prepare('DELETE FROM referral_payout_profiles WHERE user_id = ?').bind(userId),
+    d1.prepare('UPDATE referral_commissions SET referee_email = NULL WHERE referee_user_id = ?').bind(userId),
+  ];
 }

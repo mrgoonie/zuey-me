@@ -3,7 +3,7 @@ import type { RuntimeEnv } from '../../env';
 import { deferChannelAccessPush, invalidateSenders } from '../channel-access/invalidate';
 import { AppError } from '../http';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
-import { exportReferralData, prepareReferralAccountDeletion, scrubReferralAccountData } from '../referrals/referral-account-data';
+import { exportReferralData, prepareReferralAccountDeletion, referralAccountScrubStatements } from '../referrals/referral-account-data';
 import type { Row } from './runtime';
 import { isUniqueViolation, nowIso, randomId, str, strOrNull, userAgent } from './runtime';
 
@@ -224,24 +224,30 @@ export async function exportAccount(d1: D1DatabaseLike, user: UserRecord): Promi
 export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: RuntimeEnv = {}): Promise<void> {
   await prepareReferralAccountDeletion(d1, env, user);
   const now = nowIso();
-  const res = await d1.prepare(
-    `UPDATE users SET email = ?, canonical_email = NULL, email_verified_at = NULL, name = NULL, avatar_url = NULL, deleted_at = ?, updated_at = ?
-     WHERE id = ? AND deleted_at IS NULL`
-  ).bind(`deleted+${user.id}@deleted.invalid`, now, now, user.id).run();
-  if (!res.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');
-  await d1.prepare('DELETE FROM member_sessions WHERE user_id = ?').bind(user.id).run();
-  await d1.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(user.id).run();
   const { results: channelRows } = await d1.prepare('SELECT external_id FROM channel_identities WHERE user_id = ?').bind(user.id).all<Row>();
-  await d1.prepare('DELETE FROM channel_identities WHERE user_id = ?').bind(user.id).run();
-  // Used /connect link tokens: expired rows go (an expired token is rejected anyway). The member's unexpired
-  // rows keep only the nonce, so the token still cannot be replayed, but no longer name the chat id or user.
-  await d1.prepare('DELETE FROM channel_link_nonces WHERE expires_at < ?').bind(now).run();
-  await d1.prepare("UPDATE channel_link_nonces SET external_id = '', user_id = '' WHERE user_id = ?").bind(user.id).run();
-  await d1.prepare('UPDATE user_api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, user.id).run();
-  await d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email).run();
-  await d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id).run();
-  await d1.prepare("UPDATE email_log SET to_email = '' WHERE user_id = ?").bind(user.id).run();
-  await scrubReferralAccountData(d1, user.id);
-  // The agent gate must stop answering the deleted member's chat accounts now, not when dewee's cache expires.
+  // One D1 batch is one transaction: the profile scrub and every cleanup statement apply together or not at
+  // all, so a failure leaves the account intact and a retry starts over instead of hitting a half-deleted row.
+  const [scrub] = await d1.batch([
+    d1.prepare(
+      `UPDATE users SET email = ?, canonical_email = NULL, email_verified_at = NULL, name = NULL, avatar_url = NULL, deleted_at = ?, updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL`
+    ).bind(`deleted+${user.id}@deleted.invalid`, now, now, user.id),
+    d1.prepare('DELETE FROM member_sessions WHERE user_id = ?').bind(user.id),
+    d1.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(user.id),
+    d1.prepare('DELETE FROM channel_identities WHERE user_id = ?').bind(user.id),
+    // Used /connect link tokens: expired rows go (an expired token is rejected anyway). The member's unexpired
+    // rows keep only the nonce, so the token still cannot be replayed, but no longer name the chat id or user.
+    d1.prepare('DELETE FROM channel_link_nonces WHERE expires_at < ?').bind(now),
+    d1.prepare("UPDATE channel_link_nonces SET external_id = '', user_id = '' WHERE user_id = ?").bind(user.id),
+    d1.prepare('UPDATE user_api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, user.id),
+    d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email),
+    d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id),
+    d1.prepare("UPDATE email_log SET to_email = '' WHERE user_id = ?").bind(user.id),
+    ...referralAccountScrubStatements(d1, user.id),
+  ]);
+  // Already deleted: the cleanup above only re-ran idempotent statements on rows that were already clean.
+  if (!scrub?.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');
+  // Outside the transaction and best-effort: the agent gate must stop answering the deleted member's chat
+  // accounts now, not when dewee's cache expires.
   await deferChannelAccessPush(invalidateSenders(env, (channelRows ?? []).map(r => str(r, 'external_id')).filter(Boolean)));
 }
