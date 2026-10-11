@@ -11,6 +11,10 @@ import {
   CLEAR_LINK_TOKEN_COOKIE, CONNECT_LOGIN_REDIRECT, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, connectEntry, keepLinkTokenCookie,
 } from '../src/lib/channel-access/connect-flow';
 import { invalidateSenders } from '../src/lib/channel-access/invalidate';
+import { buildConnectProps, maskSender } from '../src/lib/channel-access/connect-page';
+import { isSensitivePath } from '../src/lib/analytics/pii';
+import { POST as connectLinkRoute } from '../src/pages/connect/link';
+import { POST as connectCancelRoute } from '../src/pages/connect/cancel';
 import { applyBillingPayment } from '../src/lib/members/billing';
 import { channelAccessOpenApi } from '../src/lib/channel-access/openapi';
 import { channelAccessMcpModule } from '../src/lib/channel-access/mcp';
@@ -512,6 +516,92 @@ describe('/connect token handling', () => {
     for (const state of ['linked_to_you', 'linked_elsewhere', 'used'] as const) expect(keepLinkTokenCookie(state, null)).toBe(false);
     for (const code of ['invalid_link_token', 'link_token_expired', 'unsupported_channel', 'link_token_used']) expect(keepLinkTokenCookie('error', code)).toBe(false);
     for (const code of ['channel_link_unconfigured', 'database_unavailable', 'missing_token']) expect(keepLinkTokenCookie('error', code)).toBe(true);
+  });
+});
+
+describe('/connect keeps the link token server-side', () => {
+  const parked = (cookie: string, token: string) => `${cookie}; ${LINK_TOKEN_COOKIE}=${token}`;
+  const confirm = async (headers: Record<string, string>, env = baseEnv()) =>
+    connectLinkRoute(ctx({ env, method: 'POST', path: '/connect/link', headers, body: {} }));
+
+  it('renders island props without the token or the full sender handle', async () => {
+    const alice = await member('alice@example.com');
+    const user = await getUserById(d1, alice.userId);
+    if (!user) throw new Error('missing user');
+    const token = await signLinkToken(tokenPayload({ sender_id: '777001', sender_username: 'alice_tg' }), LINK_SECRET);
+    const props = await buildConnectProps(baseEnv(), token, user);
+    expect(props).toEqual({ state: 'ready', provider: 'telegram', senderLabel: '@al…g', entitled: false, errorCode: null });
+    const html = JSON.stringify(props);
+    expect(html).not.toContain(token);
+    expect(html).not.toContain(token.split('.')[1]);
+    expect(html).not.toContain('777001');
+    expect(html).not.toContain('alice_tg');
+    expect(Object.keys(props)).not.toContain('token');
+
+    expect(await buildConnectProps(baseEnv(), null, user)).toMatchObject({ state: 'error', errorCode: 'missing_token' });
+    expect(await buildConnectProps(baseEnv(), 'garbage', user)).toMatchObject({ state: 'error', errorCode: 'invalid_link_token' });
+    expect(await buildConnectProps(baseEnv({ DB: undefined }), token, user)).toMatchObject({ errorCode: 'database_unavailable' });
+    await linkDirect(alice.userId, '777001');
+    await grantPlan(alice.userId, 'ai', now + DAY);
+    expect(await buildConnectProps(baseEnv(), token, user)).toMatchObject({ state: 'linked_to_you', entitled: true });
+  });
+
+  it('masks handles enough to recognise, not identify', () => {
+    expect(maskSender('777001', 'alice')).toBe('@al…e');
+    expect(maskSender('777001', '@bob')).toBe('@b…');
+    expect(maskSender('777001', null)).toBe('ID …001');
+  });
+
+  it('wraps the island in ph-no-capture and never passes a token prop', () => {
+    const page = fs.readFileSync(path.join(import.meta.dir, '..', 'src', 'pages', 'connect.astro'), 'utf8');
+    expect(page).toContain('<div class="ph-no-capture">');
+    expect(page).toContain('buildConnectProps(env, token, current.user)');
+    const island = fs.readFileSync(path.join(import.meta.dir, '..', 'src', 'components', 'members', 'ChannelConnect.tsx'), 'utf8');
+    expect(island).toContain("callApi('/connect/link'");
+    expect(island).not.toContain('props.token');
+    expect(isSensitivePath('/connect')).toBe(true);
+    expect(isSensitivePath('/connect/link')).toBe(true);
+  });
+
+  it('links from the HttpOnly cookie and clears it', async () => {
+    const alice = await member('alice@example.com');
+    await grantPlan(alice.userId, 'combo', now + DAY);
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    const res = await confirm(browser(parked(alice.cookie, token)));
+    const body = await read(res);
+    expect(body.status).toBe(200);
+    expect(field(body.data, 'entitled')).toBe(true);
+    expect(res.headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
+    expect(field((await check(bearer(SERVICE_KEY))).data, 'decision')).toBe('allow');
+
+    const replay = await confirm(browser(parked(alice.cookie, token)));
+    expect(replay.status).toBe(409);
+    expect(replay.headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
+  });
+
+  it('rejects without the cookie, without a session, with an API key and cross-site', async () => {
+    const bob = await member('bob@example.com');
+    const token = await signLinkToken(tokenPayload(), LINK_SECRET);
+    const none = await read(await confirm(browser(bob.cookie)));
+    expect(none.status).toBe(400);
+    expect(none.code).toBe('missing_token');
+    // A token in the body is ignored here: only the cookie counts.
+    const bodyOnly = await read(await connectLinkRoute(ctx({ method: 'POST', path: '/connect/link', headers: browser(bob.cookie), body: { token } })));
+    expect(bodyOnly.code).toBe('missing_token');
+    expect((await read(await confirm({ cookie: `${LINK_TOKEN_COOKIE}=${token}`, Origin: ORIGIN }))).status).toBe(401);
+    const { secret } = await createUserKey(d1, bob.userId, { name: 'k', scopes: ['account:read', 'account:write'], expires_in_days: 30 });
+    expect((await read(await confirm({ ...bearer(secret), cookie: `${LINK_TOKEN_COOKIE}=${token}` }))).code).toBe('session_required');
+    const crossSite = await read(await confirm({ cookie: parked(bob.cookie, token), Origin: 'https://evil.example' }));
+    expect([401, 403]).toContain(crossSite.status);
+    const linked = await d1.prepare('SELECT COUNT(*) AS n FROM channel_identities').first<{ n: number }>();
+    expect(linked?.n).toBe(0);
+  });
+
+  it('cancel clears the parked token server-side', async () => {
+    const res = await connectCancelRoute(ctx({ method: 'POST', path: '/connect/cancel' }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/account#email');
+    expect(res.headers.get('set-cookie')).toBe(CLEAR_LINK_TOKEN_COOKIE);
   });
 });
 

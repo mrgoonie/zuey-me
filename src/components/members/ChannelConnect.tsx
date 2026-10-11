@@ -1,20 +1,9 @@
 import { useState } from 'react';
 import { alertError, alertInfo, alertOk, btnGhost, btnPrimary, callApi, card, isRecord, jsonBody } from './member-ui';
 
-export type ChannelConnectState = 'ready' | 'linked_to_you' | 'linked_elsewhere' | 'used' | 'error';
+import type { ChannelConnectProps } from '../../lib/channel-access/connect-page';
 
-export interface ChannelConnectProps {
-  state: ChannelConnectState;
-  /** Signed dewee token (only when state is ready). */
-  token: string | null;
-  provider: string | null;
-  senderId: string | null;
-  senderUsername: string | null;
-  /** Whether the member's plans already allow chatting with the agent. */
-  entitled: boolean;
-  /** Error code when state is error. */
-  errorCode: string | null;
-}
+export type { ChannelConnectProps };
 
 const PROVIDER_LABEL: Record<string, string> = { telegram: 'Telegram' };
 
@@ -59,15 +48,15 @@ export function ChannelConnect(props: ChannelConnectProps) {
   const [linked, setLinked] = useState<{ entitled: boolean } | null>(props.state === 'linked_to_you' ? { entitled: props.entitled } : null);
 
   async function link() {
-    if (!props.token) return;
     setBusy(true); setError(null);
-    const res = await callApi('/api/v1/channel-access/link', { method: 'POST', body: jsonBody({ token: props.token }) });
+    // The token stays in the HttpOnly cookie: /connect/link reads it server-side.
+    const res = await callApi('/connect/link', { method: 'POST', body: jsonBody({}) });
     setBusy(false);
     if (res.ok) setLinked({ entitled: isRecord(res.data) && res.data.entitled === true });
     else setError(errorCopy(res.code, res.message));
   }
 
-  const who = props.senderUsername ? `@${props.senderUsername}` : `ID ${props.senderId ?? ''}`;
+  const who = props.senderLabel ?? provider;
 
   return (
     <section className={card} aria-labelledby="connect-title">
@@ -86,10 +75,13 @@ export function ChannelConnect(props: ChannelConnectProps) {
             Chỉ tiếp tục nếu đây là tài khoản {provider} của bạn và liên kết này do chính bạn mở từ bot. Bạn có thể huỷ liên kết bất cứ lúc nào trong trang Tài khoản.
           </p>
           <div role="status" aria-live="polite" className="empty:hidden">{error && <p className={alertError}>{error}</p>}</div>
-          <p className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             <button type="button" className={btnPrimary} disabled={busy} onClick={link}>{busy ? 'Đang liên kết…' : 'Liên kết tài khoản'}</button>
-            <a className={btnGhost} href="/account#email">Huỷ</a>
-          </p>
+            {/* Clears the parked token server-side, then returns to the account page. */}
+            <form method="post" action="/connect/cancel">
+              <button type="submit" className={btnGhost}>Huỷ</button>
+            </form>
+          </div>
         </div>
       )}
     </section>

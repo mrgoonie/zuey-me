@@ -22,10 +22,11 @@ const SECRET_RE = /\b(?:zm|zoa|zor|zk|sk|rk|whsec|ghp|gho|github_pat|xox[abpr])_
 const INLINE_PARAM_RE = /([?&#;]\s*)([A-Za-z0-9_.-]+)=([^&#\s"'<>]*)/g;
 
 /**
- * Paths whose pages show account, billing, booking or AI data. Their URLs lose the whole query string
- * and fragment (booking manage tokens, PayPal return parameters) and autocapture is off there.
+ * Paths whose pages show account, billing, booking or AI data, or link a chat account (`/connect`). Their
+ * URLs lose the whole query string and fragment (booking manage tokens, PayPal return parameters, link tokens)
+ * and autocapture is off there.
  */
-const SENSITIVE_PATH_RE = /^\/(?:account|login|billing|booking|chat|oauth|studio|courses\/orders)(?:\/|$)/;
+const SENSITIVE_PATH_RE = /^\/(?:account|login|billing|booking|chat|connect|oauth|studio|courses\/orders)(?:\/|$)/;
 
 export function isSensitivePath(pathname: string): boolean {
   return SENSITIVE_PATH_RE.test(pathname);

@@ -1,15 +1,11 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { ChannelConnect } from '../components/members/ChannelConnect';
-import type { ChannelConnectProps } from '../components/members/ChannelConnect';
 import {
   CONNECT_LOGIN_REDIRECT, CONNECT_PATH, LINK_TOKEN_COOKIE, LINK_TOKEN_COOKIE_OPTIONS, LINK_TOKEN_COOKIE_PATH, connectEntry, keepLinkTokenCookie,
 } from '../lib/channel-access/connect-flow';
-import { linkPreview, readLinkToken } from '../lib/channel-access/identities';
-import { AppError } from '../lib/http';
-import { isAdminIdentity } from '../lib/members/admins';
+import { buildConnectProps } from '../lib/channel-access/connect-page';
 import { resolveMemberSession } from '../lib/members/session';
-import { getEntitlements } from '../lib/members/subscriptions';
 
 // Account-link landing for the dewee Channel Access Gate: /connect?token=<dewee-signed token>.
 const env = Astro.locals.runtime?.env ?? {};
@@ -29,32 +25,8 @@ const token = entry.token;
 const current = await resolveMemberSession(Astro.request, env.DB).catch(() => null);
 if (!current) return Astro.redirect(CONNECT_LOGIN_REDIRECT, 302);
 
-let props: ChannelConnectProps = {
-  state: 'error', token: null, provider: null, senderId: null, senderUsername: null, entitled: false, errorCode: 'missing_token',
-};
-if (token && env.DB) {
-  try {
-    const payload = await readLinkToken(env, token);
-    const state = await linkPreview(env.DB, payload, current.user.id);
-    const entitled = state === 'linked_to_you'
-      && (isAdminIdentity(current.user.email, current.user.email_verified_at, env)
-        || (await getEntitlements(env.DB, current.user.id)).entitlements.includes('agent_chat'));
-    props = {
-      state,
-      token: state === 'ready' ? token : null,
-      provider: payload.channel_type,
-      senderId: payload.sender_id,
-      senderUsername: payload.sender_username,
-      entitled,
-      errorCode: null,
-    };
-  } catch (err) {
-    props = { ...props, errorCode: err instanceof AppError ? err.code : 'invalid_link_token' };
-    if (!(err instanceof AppError)) console.error('connect page failed:', err instanceof Error ? err.message : 'unknown');
-  }
-} else if (token) {
-  props = { ...props, errorCode: 'database_unavailable' };
-}
+// Island props are serialised into the HTML: they carry masked preview data only, never the token.
+const props = await buildConnectProps(env, token, current.user);
 // A spent or unusable token is dropped; a usable one stays until the member confirms the link.
 if (token && !keepLinkTokenCookie(props.state, props.errorCode)) Astro.cookies.delete(LINK_TOKEN_COOKIE, { path: LINK_TOKEN_COOKIE_PATH });
 ---
@@ -63,7 +35,10 @@ if (token && !keepLinkTokenCookie(props.state, props.errorCode)) Astro.cookies.d
   <main class="relative min-h-screen w-full flex flex-col items-center gap-4 py-6 sm:py-12 px-2.5 sm:px-4 z-10">
     <div class="w-full max-w-[720px] min-w-0">
       <a href="/" class="mb-3 inline-block text-xs font-semibold text-stone-200 hover:text-white underline">← zuey.me</a>
-      <ChannelConnect client:load {...props} />
+      <!-- ph-no-capture wraps the island itself, so autocapture never records its props attribute. -->
+      <div class="ph-no-capture">
+        <ChannelConnect client:load {...props} />
+      </div>
     </div>
   </main>
 </Layout>

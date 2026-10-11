@@ -50,7 +50,7 @@ export const channelAccessOpenApi: OpenApiFragment = {
       post: {
         tags: [TAG],
         summary: 'Link the chat account named by a dewee link token to your account (browser session)',
-        description: 'Called by the /connect page after the member confirms. A chat account already linked to another member is refused; the same member gets an idempotent success. Replayed, tampered or expired tokens are rejected.',
+        description: 'Scripted linking with the token in the JSON body. The /connect page itself posts to POST /connect/link, which reads the token from its HttpOnly cookie so the page never sees it. A chat account already linked to another member is refused; the same member gets an idempotent success. Replayed, tampered or expired tokens are rejected.',
         security: sessionAuth,
         requestBody: { required: true, content: json({ type: 'object', required: ['token'], properties: { token: { type: 'string' } } }) },
         responses: {
