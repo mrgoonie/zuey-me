@@ -34,6 +34,8 @@ export const LIMITS = {
   interactiveHeightMax: 1_200,
   math: 10_000,
   galleryImages: 24,
+  /** Largest recorded image width or height, in pixels. */
+  imagePixels: 50_000,
   toggleChildren: 50,
   iconLabel: 120,
 } as const;
@@ -76,7 +78,12 @@ export interface CalloutBlock extends BlockBase {
 }
 export interface CodeBlock extends BlockBase { type: 'code'; language: string; code: string }
 export interface DividerBlock extends BlockBase { type: 'divider' }
-export interface ImageBlock extends BlockBase { type: 'image'; url: string; alt: string; caption?: string }
+/**
+ * Natural pixel size of an image, recorded when the URL is entered so readers reserve its box before it loads.
+ * Both or neither; images stored before sizes were recorded have none and keep their natural size on load.
+ */
+export interface ImageSize { width?: number; height?: number }
+export interface ImageBlock extends BlockBase, ImageSize { type: 'image'; url: string; alt: string; caption?: string }
 export interface EmbedBlock extends BlockBase { type: 'embed'; url: string; provider: EmbedProvider; caption?: string }
 export interface TableBlock extends BlockBase { type: 'table'; headers: string[]; rows: string[][] }
 export interface ChartSeries { name: string; data: number[] }
@@ -124,7 +131,7 @@ export interface LayoutBlock extends BlockBase {
 
 /** TeX source; rendered as accessible source text (no math engine is bundled). */
 export interface MathBlock extends BlockBase { type: 'math'; tex: string; caption?: string }
-export interface GalleryImage { url: string; alt: string; caption?: string }
+export interface GalleryImage extends ImageSize { url: string; alt: string; caption?: string }
 export interface GalleryBlock extends BlockBase { type: 'gallery'; images: GalleryImage[]; caption?: string }
 /** Direct https audio file (hosted players such as SoundCloud/Spotify use `embed`). */
 export interface AudioBlock extends BlockBase { type: 'audio'; url: string; title?: string; caption?: string }
@@ -190,6 +197,11 @@ export function isPdfUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** `width`/`height` attributes for a recorded image size (none when the size was not recorded). */
+export function imageSizeAttrs(size: ImageSize): { width: number; height: number } | Record<string, never> {
+  return size.width && size.height ? { width: size.width, height: size.height } : {};
 }
 
 export function findBlock(blocks: Block[], id: string): Block | null {

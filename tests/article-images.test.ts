@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { BlockRenderer } from '../src/components/blocks/BlockRenderer';
-import type { Block } from '../src/lib/blocks/schema';
+import type { Block, ImageBlock } from '../src/lib/blocks/schema';
+import { validateDocument } from '../src/lib/blocks/validate';
+import { renderArticleEmail } from '../src/lib/notifications/article-email-render';
 
 const blocksCss = readFileSync(new URL('../src/styles/blocks.css', import.meta.url), 'utf8');
 const mediaCss = readFileSync(new URL('../src/components/blocks/media-blocks.css', import.meta.url), 'utf8');
@@ -37,7 +39,7 @@ function rule(css: string, selector: string): CssRule {
 const TILE_MIN = 160;
 const GAP = 9.6; // 0.6rem
 
-const image: Block = { id: 'img1', type: 'image', url: 'https://cdn.test/portrait.png', alt: 'Portrait', caption: 'Ảnh dọc' };
+const image: ImageBlock = { id: 'img1', type: 'image', url: 'https://cdn.test/portrait.png', alt: 'Portrait', caption: 'Ảnh dọc' };
 
 describe('article images are horizontally centred', () => {
   it('renders a single image and its caption inside a centred figure', () => {
@@ -102,6 +104,85 @@ describe('article images are horizontally centred', () => {
     for (const [n, tag] of [[2, '2'], [3, '3'], [4, '4'], [6, '6'], [9, '6']] as const) {
       expect(render([{ id: 'g', type: 'gallery', images: images(n) }])).toContain(`<ul class="zb-gallery" data-count="${tag}">`);
     }
+  });
+
+  describe('recorded image size', () => {
+    const sized: ImageBlock = { ...image, width: 400, height: 700 };
+
+    it('declares width and height so the box is reserved before the image loads', () => {
+      const html = render([sized]);
+      expect(html).toContain('width="400" height="700"');
+      expect(html).toContain('--zb-img-ratio:400 / 700');
+    });
+
+    it('renders stored images without a size exactly as before', () => {
+      const html = render([image]);
+      expect(html).not.toMatch(/<img[^>]*\swidth=/);
+      expect(html).not.toContain('--zb-img-ratio');
+    });
+
+    it('sizes gallery tiles too, and leaves unsized tiles alone', () => {
+      const html = render([{
+        id: 'g', type: 'gallery',
+        images: [{ url: 'https://cdn.test/a.png', alt: 'A', width: 1600, height: 900 }, { url: 'https://cdn.test/b.png', alt: 'B' }],
+      }]);
+      expect(html).toMatch(/<img src="https:\/\/cdn\.test\/a\.png"[^>]*width="1600" height="900"/);
+      expect(html).toMatch(/<img src="https:\/\/cdn\.test\/b\.png"(?![^>]*width=)[^>]*>/);
+    });
+
+    it('caps a tall portrait at 80% of the viewport height without distorting it', () => {
+      const cap = rule(blocksCss, '.zb-figure-center > img').decls;
+      expect(cap.get('max-height')).toBe('80vh');
+      expect(cap.get('object-fit')).toBe('contain');
+      // With a recorded size the width shrinks in proportion, so the height limit is met with no letterbox.
+      expect(rule(blocksCss, '.zb-figure-center > img[width][height]').decls.get('max-width'))
+        .toBe('min(100%,80vh * var(--zb-img-ratio,1000))');
+      // Gallery tiles keep their fixed 4:3 crop and are not affected by the single-image cap.
+      expect(rule(mediaCss, '.zb-gallery img').decls.get('aspect-ratio')).toBe('4 / 3');
+    });
+
+    it('validates sizes: both or neither, positive integers within the limit', () => {
+      const doc = (extra: Record<string, unknown>) => ({ version: 1, blocks: [{ type: 'image', url: 'https://cdn.test/a.png', alt: '', ...extra }] });
+      const ok = validateDocument(doc({ width: 400, height: 700 }));
+      expect(ok.ok && ok.doc.blocks[0]).toMatchObject({ width: 400, height: 700 });
+      const legacy = validateDocument(doc({}));
+      expect(legacy.ok && 'width' in legacy.doc.blocks[0]).toBe(false);
+      for (const bad of [{ width: 400 }, { height: 700 }, { width: 0, height: 10 }, { width: 1.5, height: 10 }, { width: 10, height: '10' }, { width: 60_000, height: 10 }]) {
+        expect(validateDocument(doc(bad)).ok).toBe(false);
+      }
+      const gallery = validateDocument({ version: 1, blocks: [{ type: 'gallery', images: [{ url: 'https://cdn.test/a.png', width: 10 }] }] });
+      expect(gallery.ok).toBe(false);
+      if (!gallery.ok) expect(gallery.errors[0].path).toContain('images[0].height');
+    });
+  });
+
+  describe('new-article email', () => {
+    const email = (blocks: Block[]) => renderArticleEmail({
+      locale: 'vi', title: 'T', excerpt: '', access: 'free', coverUrl: null, document: { version: 1, blocks },
+      articleUrl: 'https://zuey.me/articles/t', pricingUrl: 'https://zuey.me/pricing', siteUrl: 'https://zuey.me', mode: 'full',
+    }).html;
+    const centred = '<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center">';
+
+    it('centres images and captions with attributes and inline styles mail clients honour', () => {
+      const html = email([image]);
+      expect(html).toContain(`${centred}<img src="https://cdn.test/portrait.png"`);
+      expect(html).toContain('margin:0 auto');
+      expect(html).toContain('text-align:center">Ảnh dọc</p></td></tr></table>');
+    });
+
+    it('keeps a sized image at its natural size and shrinks a tall portrait in proportion', () => {
+      expect(email([{ ...image, width: 400, height: 300 }])).toContain('width="400" height="300" style="display:block;margin:0 auto;width:400px;max-width:100%;height:auto');
+      // 400x700 would be 700px tall: capped at 640px high, so 365px wide.
+      expect(email([{ ...image, width: 400, height: 700 }])).toContain('width="365" height="639"');
+      // Wider than the column: 520px wide, height in proportion.
+      expect(email([{ ...image, width: 2000, height: 1000 }])).toContain('width="520" height="260"');
+    });
+
+    it('centres every gallery image', () => {
+      const html = email([{ id: 'g', type: 'gallery', caption: 'Bộ ảnh', images: [{ url: 'https://cdn.test/a.png', alt: 'A' }, { url: 'https://cdn.test/b.png', alt: 'B' }] }]);
+      expect(html.split(centred).length - 1).toBe(2);
+      expect(html).toContain('text-align:center">Bộ ảnh</p>');
+    });
   });
 
   describe('column model from the stylesheet', () => {

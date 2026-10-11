@@ -2,7 +2,7 @@ import {
   BLOCK_TYPES, BREAKPOINTS, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
 } from './schema';
 import type {
-  ArticleDocument, Block, BlockType, ChartSeries, ChecklistItem, EmbedProvider, GalleryImage, KnowledgeMediaBlock,
+  ArticleDocument, Block, BlockType, ChartSeries, ChecklistItem, EmbedProvider, GalleryImage, ImageSize, KnowledgeMediaBlock,
   LayoutChild, ResponsiveCols, ResponsiveSpan, SurveyOption,
 } from './schema';
 import { detectProvider } from './embed';
@@ -79,6 +79,19 @@ class Validator {
       else out.push(item);
     });
     return out.length === v.length ? out : undefined;
+  }
+
+  /** Optional natural size of an image: both `width` and `height` as positive integers, or neither. `null` = invalid. */
+  imageSize(o: Obj, path: string): ImageSize | null {
+    const absent = (v: unknown) => v === undefined || v === null;
+    if (absent(o.width) && absent(o.height)) return {};
+    const { width, height } = o;
+    if (!isInt(width, 1, LIMITS.imagePixels) || !isInt(height, 1, LIMITS.imagePixels)) {
+      this.err(`${path}.${isInt(width, 1, LIMITS.imagePixels) ? 'height' : 'width'}`,
+        `width and height must both be integers from 1 to ${LIMITS.imagePixels}, or both omitted`);
+      return null;
+    }
+    return { width, height };
   }
 
   id(o: Obj, path: string): string | undefined {
@@ -189,7 +202,8 @@ class Validator {
         const url = this.url(v, 'url', path);
         const alt = this.str(v, 'alt', path, S, { optional: true }) ?? '';
         const caption = this.str(v, 'caption', path, S, { optional: true });
-        return url ? { id, type, url, alt, ...(caption ? { caption } : {}) } : undefined;
+        const size = this.imageSize(v, path);
+        return url && size ? { id, type, url, alt, ...size, ...(caption ? { caption } : {}) } : undefined;
       }
       case 'embed': {
         const url = this.url(v, 'url', path);
@@ -320,11 +334,12 @@ class Validator {
         const images: GalleryImage[] = [];
         v.images.forEach((img: unknown, i: number) => {
           const p = `${path}.images[${i}]`;
-          if (!isObj(img)) { this.err(p, 'must be an object {url, alt, caption?}'); return; }
+          if (!isObj(img)) { this.err(p, 'must be an object {url, alt, caption?, width?, height?}'); return; }
           const url = this.url(img, 'url', p);
           const alt = this.str(img, 'alt', p, S, { optional: true }) ?? '';
           const imgCaption = this.str(img, 'caption', p, S, { optional: true });
-          if (url) images.push({ url, alt, ...(imgCaption ? { caption: imgCaption } : {}) });
+          const size = this.imageSize(img, p);
+          if (url && size) images.push({ url, alt, ...size, ...(imgCaption ? { caption: imgCaption } : {}) });
         });
         return images.length === v.images.length ? { id, type, images, ...withCaption } : undefined;
       }

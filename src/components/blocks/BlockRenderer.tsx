@@ -4,7 +4,7 @@ import '../../styles/blocks.css';
 import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
 import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
 import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
-import { resolveSpan } from '../../lib/blocks/schema';
+import { imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
 import { EmbedView } from './EmbedView';
@@ -178,13 +178,16 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     }
     case 'code': return <CodeView block={block} ctx={ctx} />;
     case 'divider': return <hr className="zb-divider" />;
-    case 'image':
+    case 'image': {
+      // The ratio lets the stylesheet cap a tall portrait's width so its height stays within the viewport.
+      const style: CssVars | undefined = block.width && block.height ? { '--zb-img-ratio': `${block.width} / ${block.height}` } : undefined;
       return (
         <figure className="zb-figure zb-figure-center">
-          <img src={block.url} alt={block.alt} loading="lazy" decoding="async" />
+          <img src={block.url} alt={block.alt} loading="lazy" decoding="async" {...imageSizeAttrs(block)} style={style} />
           {block.caption && <figcaption>{block.caption}</figcaption>}
         </figure>
       );
+    }
     case 'embed': return <EmbedView key={block.url} block={block} autoLoad={ctx.autoLoadEmbeds} />;
     case 'table':
       return (
