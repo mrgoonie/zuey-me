@@ -2,7 +2,7 @@ import type { OpenApiFragment } from '../openapi/types';
 import { errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
 import { PLAN_IDS } from '../members/plans';
-import { COMMUNITY_CHATS } from './community';
+import { COMMUNITY_CHATS, SWEEP_DEFAULT_LIMIT, SWEEP_MAX_LIMIT, SWEEP_TELEGRAM_BUDGET } from './community';
 import { NOTICE_EXPRESSIONS, NOTICE_MAX_WINDOW_DAYS, NOTICE_TARGETS } from './notices';
 
 const TAG = 'Homepage experience';
@@ -131,8 +131,20 @@ export const experienceOpenApi: OpenApiFragment = {
     '/api/v1/community/sweep': {
       post: {
         tags: [TAG], summary: 'Admin/cron: remove lapsed members, retire stale invites', security: adminAuth,
-        description: 'Idempotent. Admins run it; it also accepts `Authorization: Bearer <CRON_SECRET>` for a scheduled caller (not scheduled yet).',
-        responses: { '200': ok('Sweep result', ref('CommunitySweep')), ...denied, '503': communityMissing },
+        description: [
+          'Admins, or the scheduler worker with `Authorization: Bearer <CRON_SECRET>`. Removes joined members whose `community` entitlement lapsed and retires invite links that expired or belong to lapsed members.',
+          'Admins (verified email in ADMIN_EMAILS) are never removed, and their live invites are kept; they are counted in `exempt_admins`.',
+          `Memberships are paged by id: each run examines up to \`limit\` rows and makes at most ${SWEEP_TELEGRAM_BUDGET} Telegram calls, then returns \`next_cursor\`.`,
+          'Without `cursor` the run resumes from the stored point of the same mode (live or dry run) and saves the next one, so a backlog drains over several scheduled runs; a pass that reaches the end (`complete: true`) clears it.',
+          'With `cursor` the run starts after that id (`cursor=` for the beginning) and leaves the stored point alone.',
+          'The scheduler treats `503 community_unconfigured` as skipped, not failed. Idempotent.',
+        ].join(' '),
+        parameters: [
+          { name: 'dry_run', in: 'query', schema: { type: 'string', enum: ['1', 'true', '0', 'false'] }, description: 'Report who would be removed or revoked and why, without calling Telegram or changing memberships' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: SWEEP_MAX_LIMIT, default: SWEEP_DEFAULT_LIMIT } },
+          { name: 'cursor', in: 'query', schema: { type: 'string', maxLength: 100 }, description: 'Start after this membership id; empty = from the beginning' },
+        ],
+        responses: { '200': ok('Sweep result', ref('CommunitySweep')), '400': errorResponses['400'], ...denied, '503': communityMissing },
       },
     },
     '/api/v1/community/telegram-webhook': {
@@ -275,8 +287,26 @@ export const experienceOpenApi: OpenApiFragment = {
     CommunitySweep: {
       type: 'object',
       properties: {
-        checked: { type: 'integer' }, removed: { type: 'integer' }, revoked: { type: 'integer' },
+        dry_run: { type: 'boolean' },
+        checked: { type: 'integer', description: 'Memberships examined in this run' },
+        removed: { type: 'integer', description: 'Members removed (0 in a dry run)' },
+        revoked: { type: 'integer', description: 'Invite links retired (0 in a dry run)' },
+        exempt_admins: { type: 'integer', description: 'Lapsed memberships kept because the user is an admin' },
+        actions: {
+          type: 'array', description: 'Done, or in a dry run would be done; failures are in errors',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' }, user_id: { type: 'string' }, chat: { type: 'string', enum: [...COMMUNITY_CHATS] },
+              telegram_user_id: { type: 'string', nullable: true },
+              action: { type: 'string', enum: ['remove', 'revoke'] },
+              reason: { type: 'string', enum: ['entitlement_lapsed', 'invite_expired'] },
+            },
+          },
+        },
         errors: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, code: { type: 'string' }, message: { type: 'string' } } } },
+        next_cursor: { type: 'string', nullable: true, description: 'Continue from here; null when the run reached the end' },
+        complete: { type: 'boolean' },
       },
     },
   },
