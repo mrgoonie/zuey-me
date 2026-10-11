@@ -10,12 +10,17 @@
 
 .zb-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
 /* Short galleries get exactly one track per image, centred as a group with the normal gap, so they never
-   leave empty auto-fill tracks on one side (1-2 images always; 3 images once the column fits three tiles).
-   Larger galleries keep the auto-fill grid: tile size does not depend on the image count and a partial
-   last row stays left-aligned on purpose, like any grid. */
+   leave empty auto-fill tracks on one side. The switch keys off the gallery's own width (container query,
+   so it also holds inside narrow layout cells) and only kicks in once every tile keeps the 160px minimum:
+   2 x 160 + gap = 329.6px, 3 x 160 + 2 gaps = 499.2px. Narrower galleries use the auto-fill grid (1-up).
+   Galleries of four or more always use the auto-fill grid: tile size does not depend on the image count
+   and a partial last row stays left-aligned on purpose, like any grid. */
+.zb-gallery-wrap { container-type: inline-size; }
 .zb-gallery[data-count="1"] { grid-template-columns: minmax(0, 320px); justify-content: center; }
-.zb-gallery[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 320px)); justify-content: center; }
-@media (min-width: 640px) {
+@container (min-width: 330px) {
+  .zb-gallery[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 320px)); justify-content: center; }
+}
+@container (min-width: 500px) {
   .zb-gallery[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 240px)); justify-content: center; }
 }
 .zb-gallery figure { margin: 0; }
