@@ -486,6 +486,20 @@ describe('link tokens', () => {
     expect(fetchLog.map(f => f.url)).toEqual(['https://dewee.test/v1/channels/instances/zuey-ai/access/invalidate']);
     expect(field((await check(bearer(SERVICE_KEY))).data, 'decision')).toBe('link_required');
   });
+
+  it('decodes a percent-encoded sender id when unlinking and rejects malformed encoding', async () => {
+    const alice = await member('alice@example.com');
+    await linkDirect(alice.userId, '777:002');
+    const h = browser(alice.cookie);
+    for (const externalId of ['777%E0%A4%A', '%']) {
+      const bad = await read(await unlinkApi(ctx({ env: pushEnv(), method: 'DELETE', headers: h, params: { provider: 'telegram', externalId } })));
+      expect([bad.status, bad.code]).toEqual([400, 'invalid_field']);
+    }
+    const removed = await read(await unlinkApi(ctx({ env: pushEnv(), method: 'DELETE', headers: h, params: { provider: 'telegram', externalId: '777%3A002' } })));
+    expect(removed.status).toBe(200);
+    expect(field(removed.data, 'unlinked')).toBe(true);
+    expect((await read(await myChannelsApi(ctx({ headers: h })))).data).toEqual([]);
+  });
 });
 
 describe('/connect token handling', () => {

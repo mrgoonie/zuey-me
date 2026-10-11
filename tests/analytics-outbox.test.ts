@@ -22,7 +22,7 @@ import { POST as drainApi } from '../src/pages/api/v1/analytics/outbox/drain';
 import { POST as ordersApi } from '../src/pages/api/v1/billing/orders/index';
 import { POST as reconcileApi } from '../src/pages/api/v1/billing/reconcile';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
-import { analyticsDrainCheck } from '../workers/scheduler/src/analytics-drain-check';
+import { DRAIN_OUTAGE_MIN_CLAIMED, analyticsDrainCheck } from '../workers/scheduler/src/analytics-drain-check';
 import type { FetchLike } from '../workers/scheduler/src/jobs';
 import { runAll, scheduledJobs } from '../workers/scheduler/src/jobs';
 
@@ -721,6 +721,24 @@ describe('scheduler worker', () => {
     expect((await tick({ ...drained, status: 'skipped', skipped_reason: 'analytics_disabled', claimed: 0, sent: 0, pending: 4 })).failed).toBe(true);
     // Nothing queued: analytics being off is not an incident.
     expect((await tick({ ...drained, status: 'skipped', skipped_reason: 'analytics_disabled', claimed: 0, sent: 0, pending: 0 })).failed).toBe(false);
+  });
+
+  it('warns on a single transient retry and fails only on a systemic signal', async () => {
+    const transient = await tick({ ...drained, claimed: 1, sent: 0, retried: 1, pending: 1 });
+    expect(transient.failed).toBe(false);
+    expect(transient.warnings.some(w => w.includes(DRAIN) && w.includes('transient retry'))).toBe(true);
+
+    const level = (data: Record<string, unknown>) => analyticsDrainCheck({ data: { ...drained, ...data } }, '').level;
+    expect(DRAIN_OUTAGE_MIN_CLAIMED).toBe(3);
+    // Below the threshold, all-retried rows are a transient blip.
+    expect(level({ claimed: DRAIN_OUTAGE_MIN_CLAIMED - 1, sent: 0, retried: DRAIN_OUTAGE_MIN_CLAIMED - 1 })).toBe('warn');
+    // At the threshold, nothing delivered across that many rows is an outage.
+    expect(level({ claimed: DRAIN_OUTAGE_MIN_CLAIMED, sent: 0, retried: DRAIN_OUTAGE_MIN_CLAIMED })).toBe('fail');
+    // A dead-lettered row with nothing delivered fails even at low volume; with deliveries it only warns.
+    expect(level({ claimed: 1, sent: 0, retried: 0, dead: 1 })).toBe('fail');
+    expect(level({ claimed: 2, sent: 1, retried: 0, dead: 1 })).toBe('warn');
+    // Some delivered alongside retries is healthy.
+    expect(level({ claimed: 5, sent: 4, retried: 1 })).toBe('ok');
   });
 
   it('classifies drain summaries without throwing on unexpected bodies', () => {
