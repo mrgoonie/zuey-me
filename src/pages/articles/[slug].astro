@@ -13,6 +13,7 @@ import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articl
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
 import { readingMinutes } from '../../lib/search/text';
 import { hasHighlightableCode } from '../../lib/blocks/code-syntax';
+import { documentLanes } from '../../lib/blocks/schema';
 import { articleOgImage } from '../../lib/og/article-og-service';
 import { relatedVideosForArticle } from '../../lib/videos/related-content';
 import { formatDuration } from '../../lib/videos/youtube-url';
@@ -62,6 +63,8 @@ const articleBlocks = view?.document.blocks ?? [];
 const codeHighlights = hasHighlightableCode(articleBlocks)
   ? await import('../../lib/blocks/code-highlight').then(m => m.highlightBlocks(articleBlocks)).catch(() => undefined)
   : undefined;
+// Wide or full sections widen the page; everything else stays in the prose column (see .zb-article-lanes).
+const articleWidth = view && documentLanes(view.document).length > 0 ? 'max-w-[1240px] zb-article-lanes' : 'max-w-[860px]';
 const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.truncated && !view.preview && canReadFull(viewer));
 ---
 
@@ -75,7 +78,7 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
 >
   {jsonLd && <script is:inline type="application/ld+json" set:html={jsonLd} />}
   <main class="relative min-h-screen w-full flex flex-col items-center pt-3 pb-24 sm:pt-8 md:pt-12 px-2.5 sm:px-4 md:px-6">
-    <article class="w-full max-w-[860px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12">
+    <article class={`w-full ${articleWidth} min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12`}>
       <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap gap-3 justify-between items-center">
         <a href={`/articles?lang=${uiLocale}`} class="hover:text-stone-900">← {t.sectionTitle}</a>
         {view && <a href={articlePath(view.slug, view.locale, true)} class="hover:text-stone-900" type="text/markdown">{t.markdown}</a>}

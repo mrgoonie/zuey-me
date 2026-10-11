@@ -51,7 +51,7 @@ describe('schema v1 documents render unchanged', () => {
 
   it('kitchen sink: every v1 block type', () => {
     const doc = valid(KITCHEN_SINK);
-    expect(doc).toEqual(KITCHEN_SINK);
+    expect<unknown>(doc).toEqual(KITCHEN_SINK);
     expect(surfaces(doc)).toMatchSnapshot();
   });
 

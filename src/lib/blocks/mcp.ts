@@ -15,7 +15,7 @@ import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
 import type { ArticleDocument } from './schema';
 import { BLOCK_TYPES, LIMITS } from './schema';
-import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE, blockSchemas } from './openapi';
+import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
 import { iconCatalog } from './icons';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
@@ -181,7 +181,7 @@ export const articlesMcpModule: McpToolModule = {
       case 'block_schema':
         return {
           version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas,
-          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE },
+          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE, section: SECTION_EXAMPLE, card: CARD_EXAMPLE },
         };
       case 'article_list': {
         const query = discoveryFromArgs(args);

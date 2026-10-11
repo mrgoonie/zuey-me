@@ -38,6 +38,10 @@ export const LIMITS = {
   imagePixels: 50_000,
   toggleChildren: 50,
   iconLabel: 120,
+  sectionChildren: 200,
+  cardChildren: 50,
+  /** Section anchors become URL fragments (#anchor). */
+  anchor: 64,
 } as const;
 
 export const BLOCK_TYPES = [
@@ -46,6 +50,8 @@ export const BLOCK_TYPES = [
   // Knowledge media blocks
   'math', 'gallery', 'audio', 'video', 'file', 'bookmark', 'toggle',
   'icon',
+  // Composition containers
+  'section', 'card',
 ] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
 
@@ -60,6 +66,16 @@ export const LAYOUT_VARIANTS = ['columns', 'grid', 'bento'] as const;
 export const LAYOUT_GAPS = ['sm', 'md', 'lg'] as const;
 export const BREAKPOINTS = ['base', 'md', 'lg'] as const;
 export type Breakpoint = (typeof BREAKPOINTS)[number];
+/** Reading lanes on the article page: the prose column, a wider lane and the full content width. */
+export const SECTION_WIDTHS = ['prose', 'wide', 'full'] as const;
+export type SectionWidth = (typeof SECTION_WIDTHS)[number];
+export const SECTION_SURFACES = ['none', 'card', 'soft', 'contrast'] as const;
+export const SECTION_PADDINGS = ['none', 'sm', 'md', 'lg'] as const;
+export const CARD_VARIANTS = ['outline', 'soft', 'elevated', 'plain'] as const;
+export const CARD_ACCENTS = ['amber', 'emerald', 'sky', 'rose', 'violet', 'stone'] as const;
+export const CARD_ALIGNS = ['start', 'center'] as const;
+/** Section anchors: lowercase slug, used as the element id and URL fragment. */
+export const ANCHOR_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 interface BlockBase { id: string }
 
@@ -160,12 +176,54 @@ export interface IconBlock extends BlockBase {
   align?: IconAlign;
 }
 
+/**
+ * Top-level band of the article that groups blocks into one reading lane (`prose` by default, `wide` or
+ * `full`), optionally on a surface. Only allowed at the top level; never inside another container.
+ */
+export interface SectionBlock extends BlockBase {
+  type: 'section';
+  width: SectionWidth;
+  surface: (typeof SECTION_SURFACES)[number];
+  /** Inner padding; when omitted it is `md` on a surface and `none` without one. */
+  padding?: (typeof SECTION_PADDINGS)[number];
+  /** Fragment id for in-page links (#anchor); unique among sections. */
+  anchor?: string;
+  blocks: Block[];
+}
+
+export interface CardImage extends ImageSize { url: string; alt: string }
+/** Self-contained card: optional media and heading, nested blocks and an inline footer. Cards never nest. */
+export interface CardBlock extends BlockBase {
+  type: 'card';
+  title?: string;
+  icon?: IconName;
+  image?: CardImage;
+  blocks: Block[];
+  /** Inline text (links allowed) shown under the body, e.g. a call to action. */
+  footer?: string;
+  variant: (typeof CARD_VARIANTS)[number];
+  accent?: (typeof CARD_ACCENTS)[number];
+  align?: (typeof CARD_ALIGNS)[number];
+}
+
+export type ContainerBlock = SectionBlock | CardBlock;
+
 export type Block =
   | ParagraphBlock | HeadingBlock | ListBlock | ChecklistBlock | QuoteBlock | CalloutBlock | CodeBlock
   | DividerBlock | ImageBlock | EmbedBlock | TableBlock | ChartBlock | DiagramBlock | SurveyBlock | LayoutBlock
   | InteractiveBlock
   | KnowledgeMediaBlock
-  | IconBlock;
+  | IconBlock
+  | ContainerBlock;
+
+/** Block lists nested directly inside a block (layout cells, toggle, section and card bodies). */
+export function childBlockLists(block: Block): Block[][] {
+  switch (block.type) {
+    case 'layout': return block.children.map(child => child.blocks);
+    case 'toggle': case 'section': case 'card': return [block.blocks];
+    default: return [];
+  }
+}
 
 export interface ArticleDocument { version: 1; blocks: Block[] }
 
@@ -181,13 +239,19 @@ export function resolveSpan(span: LayoutChild['span'], cols: ResponsiveCols): Re
   return { base: pick('base'), md: pick('md'), lg: pick('lg') };
 }
 
-/** Depth-first walk over every block, including blocks nested in layouts and toggles. */
+/** Depth-first walk over every block, including blocks nested in layouts, toggles, sections and cards. */
 export function walkBlocks(blocks: Block[], visit: (block: Block) => void): void {
   for (const block of blocks) {
     visit(block);
-    if (block.type === 'layout') for (const child of block.children) walkBlocks(child.blocks, visit);
-    if (block.type === 'toggle') walkBlocks(block.blocks, visit);
+    for (const list of childBlockLists(block)) walkBlocks(list, visit);
   }
+}
+
+/** Wider-than-prose lanes a document uses; empty for documents that read entirely in the prose column. */
+export function documentLanes(doc: ArticleDocument): Exclude<SectionWidth, 'prose'>[] {
+  const lanes = new Set<Exclude<SectionWidth, 'prose'>>();
+  for (const b of doc.blocks) if (b.type === 'section' && b.width !== 'prose') lanes.add(b.width);
+  return [...lanes];
 }
 
 /** True for a PDF link (by path extension); readers may open those inline on request. */

@@ -1,38 +1,12 @@
-import type { ArticleDocument, Block } from '../blocks/schema';
+import type { ArticleDocument } from '../blocks/schema';
 import { walkBlocks } from '../blocks/schema';
-import { inlineToPlain } from '../blocks/inline';
-
-/** Visible text of one block (nested layout/toggle children are visited separately by walkBlocks). */
-function blockText(block: Block): string[] {
-  const p = (s: string | undefined): string => (s ? inlineToPlain(s) : '');
-  switch (block.type) {
-    case 'paragraph': case 'heading': case 'callout': return [p(block.text)];
-    case 'quote': return [p(block.text), p(block.cite)];
-    case 'list': return block.items.map(p);
-    case 'checklist': return block.items.map(i => p(i.text));
-    case 'code': return [block.code];
-    case 'image': return [block.alt, p(block.caption)];
-    case 'embed': return [p(block.caption)];
-    case 'table': return [...block.headers, ...block.rows.flat()].map(p);
-    case 'chart': return [block.title ?? '', ...block.labels, ...block.series.map(s => s.name)];
-    case 'diagram': return [p(block.caption)];
-    case 'survey': return [block.question, ...block.options.map(o => o.label)];
-    case 'math': return [block.tex, p(block.caption)];
-    case 'gallery': return [...block.images.flatMap(i => [i.alt, p(i.caption)]), p(block.caption)];
-    case 'audio': case 'video': return [block.title ?? '', p(block.caption)];
-    case 'file': return [block.name, p(block.caption)];
-    case 'bookmark': return [block.title ?? '', block.description ?? '', block.siteName ?? ''];
-    case 'toggle': return [p(block.summary)];
-    case 'icon': return [block.label ?? ''];
-    default: return [];
-  }
-}
+import { blockDefinition } from '../blocks/registry';
 
 /** Plain reading text of a document in reading order (used for search, embeddings and word counts). */
 export function documentText(doc: ArticleDocument): string {
   const parts: string[] = [];
   walkBlocks(doc.blocks, block => {
-    for (const t of blockText(block)) if (t && t.trim()) parts.push(t.trim());
+    for (const t of blockDefinition(block.type).searchText(block)) if (t && t.trim()) parts.push(t.trim());
   });
   return parts.join('\n');
 }

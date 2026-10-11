@@ -115,6 +115,8 @@ function inlineHtml(text: string): string {
 
 /** Content column width (560px container minus 2 x 20px padding). */
 const EMAIL_IMAGE_MAX_WIDTH = 520;
+/** Inside a card: the column minus the card's 2 x 16px padding and 2 x 1px border. */
+const CARD_IMAGE_MAX_WIDTH = EMAIL_IMAGE_MAX_WIDTH - 34;
 /** Mail clients have no viewport units: a tall portrait is capped at this height instead of 80vh. */
 const EMAIL_IMAGE_MAX_HEIGHT = 640;
 
@@ -126,11 +128,11 @@ interface EmailImage extends ImageSize { url: string; alt: string; caption?: str
  * With a recorded size the image keeps its natural size, never wider than the column, and a tall portrait
  * shrinks in proportion to fit EMAIL_IMAGE_MAX_HEIGHT; without one it fills the column (previous behaviour).
  */
-function image({ url, alt, caption, width, height }: EmailImage, siteUrl: string): string {
+function image({ url, alt, caption, width, height }: EmailImage, siteUrl: string, maxWidth: number = EMAIL_IMAGE_MAX_WIDTH): string {
   const cap = caption ? `<p style="font-size:13px;color:#78716c;margin:6px 0 0;text-align:center">${inlineHtml(caption)}</p>` : '';
-  let size = `width="${EMAIL_IMAGE_MAX_WIDTH}" style="display:block;margin:0 auto;width:100%;max-width:${EMAIL_IMAGE_MAX_WIDTH}px;height:auto;border-radius:10px"`;
+  let size = `width="${maxWidth}" style="display:block;margin:0 auto;width:100%;max-width:${maxWidth}px;height:auto;border-radius:10px"`;
   if (width && height) {
-    const w = Math.max(1, Math.min(width, EMAIL_IMAGE_MAX_WIDTH, Math.floor(EMAIL_IMAGE_MAX_HEIGHT * width / height)));
+    const w = Math.max(1, Math.min(width, maxWidth, Math.floor(EMAIL_IMAGE_MAX_HEIGHT * width / height)));
     const h = Math.min(EMAIL_IMAGE_MAX_HEIGHT, Math.max(1, Math.round(w * height / width)));
     size = `width="${w}" height="${h}" style="display:block;margin:0 auto;width:${w}px;max-width:100%;height:auto;border-radius:10px"`;
   }
@@ -180,6 +182,16 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
       return `<p style="${P}"><strong>${inlineHtml(block.summary)}</strong></p>${block.blocks.map(b => blockHtml(b, input)).join('')}`;
     case 'layout':
       return block.children.flatMap(c => c.blocks.map(b => blockHtml(b, input))).join('');
+    // Email keeps a single column: a section is its blocks; a card is a bordered box.
+    case 'section':
+      return block.blocks.map(b => blockHtml(b, input)).join('');
+    case 'card':
+      return '<div style="margin:0 0 16px;padding:16px;border:1px solid #e7e0d8;border-radius:12px">'
+        + (block.image ? image(block.image, input.siteUrl, CARD_IMAGE_MAX_WIDTH) : '')
+        + (block.title ? `<p style="${P};font-weight:bold;font-size:17px;margin:0 0 8px">${inlineHtml(block.title)}</p>` : '')
+        + block.blocks.map(b => blockHtml(b, input)).join('')
+        + (block.footer ? `<p style="${P};margin:0">${inlineHtml(block.footer)}</p>` : '')
+        + '</div>';
     // Email clients render inline SVG unreliably: a labelled icon keeps its label, a decorative one is dropped.
     case 'icon':
       return block.label ? `<p style="${P}">${escapeHtml(block.label)}</p>` : '';
@@ -201,6 +213,10 @@ function blockText(block: Block, input: ArticleEmailInput): string {
     case 'bookmark': return `${block.title || ''} ${block.url}`.trim();
     case 'toggle': return [inlineToPlain(block.summary), ...block.blocks.map(b => blockText(b, input))].join('\n\n');
     case 'layout': return block.children.flatMap(c => c.blocks.map(b => blockText(b, input))).filter(Boolean).join('\n\n');
+    case 'section': return block.blocks.map(b => blockText(b, input)).filter(Boolean).join('\n\n');
+    case 'card':
+      return [block.title ? inlineToPlain(block.title) : '', ...block.blocks.map(b => blockText(b, input)), block.footer ? inlineToPlain(block.footer) : '']
+        .filter(Boolean).join('\n\n');
     case 'image': case 'gallery': case 'file': return '';
     case 'icon': return block.label ?? '';
     default: return `[${labelsFor(input.locale)[block.type] ?? block.type}: ${input.articleUrl}]`;
@@ -222,7 +238,8 @@ export function renderArticleEmail(input: ArticleEmailInput): ArticleEmailBody {
   const textParts: string[] = [];
   let size = 0;
   let clipped = false;
-  for (const block of blocks) {
+  // A section renders as its blocks, so the body budget may stop between them (a section can hold a whole article).
+  for (const block of blocks.flatMap(b => (b.type === 'section' ? b.blocks : [b]))) {
     const html = blockHtml(block, input);
     if (size + html.length > HTML_BODY_BUDGET && parts.length > 0) { clipped = true; break; }
     parts.push(html);
