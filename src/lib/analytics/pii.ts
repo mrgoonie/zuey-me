@@ -67,8 +67,54 @@ function test(re: RegExp, value: string): boolean {
   return hit;
 }
 
+/** A run of characters between URL delimiters (query/fragment separators, path slashes, whitespace, quotes). */
+const SEGMENT_RE = /[^\s&#?=;/"'<>]+/g;
+/** Percent-decoding passes: enough for double (`%2540`) and triple encoding. */
+const MAX_DECODE_PASSES = 3;
+
+/**
+ * Decodes ASCII percent escapes (`%40`, `%2540`, `%20`, any hex case) up to three times. Malformed or
+ * non-ASCII escapes stay as they are, so this never throws. Emails are ASCII, so nothing they need is lost.
+ */
+function decodeAsciiEscapes(value: string): string {
+  let out = value;
+  for (let pass = 0; pass < MAX_DECODE_PASSES; pass++) {
+    const next = out.replace(/%([0-7][0-9A-Fa-f])/g, (_match: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function encodeSegment(value: string): string {
+  return value
+    .split(REDACTED)
+    .map(part => part.replace(/[^A-Za-z0-9._~+-]/gu, char => {
+      try {
+        return encodeURIComponent(char);
+      } catch {
+        return '';
+      }
+    }))
+    .join(REDACTED);
+}
+
+/**
+ * Redacts emails that only appear once percent-decoded (`john%40x.com`, `john%2540x.com`, `zuey%20john%40x.com`).
+ * A segment carrying one is decoded, its emails replaced, and re-encoded so the rest of the URL keeps its shape.
+ */
+function redactEncodedEmails(value: string): string {
+  if (!value.includes('%')) return value;
+  return value.replace(SEGMENT_RE, (segment: string) => {
+    if (!segment.includes('%')) return segment;
+    const decoded = decodeAsciiEscapes(segment);
+    return test(EMAIL_RE, decoded) ? encodeSegment(decoded.replace(EMAIL_RE, REDACTED)) : segment;
+  });
+}
+
+/** True when a string carries an email address, literally or percent-encoded. */
 export function looksLikeEmail(value: string): boolean {
-  return test(EMAIL_RE, value);
+  return test(EMAIL_RE, value) || (value.includes('%') && test(EMAIL_RE, decodeAsciiEscapes(value)));
 }
 
 export function looksLikeJwt(value: string): boolean {
@@ -126,15 +172,17 @@ export function scrubUrl(input: string): string {
 }
 
 /**
- * Replaces emails, JWTs, secret tokens, sensitive `name=value` pairs, order codes and booking ids in
- * paths inside arbitrary text.
+ * Replaces emails (literal or percent-encoded), JWTs, secret tokens, sensitive `name=value` pairs, order
+ * codes and booking ids in paths inside arbitrary text.
  */
 export function redactString(value: string): string {
-  return templatePaths(value)
-    .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match))
-    .replace(JWT_RE, REDACTED)
-    .replace(SECRET_RE, REDACTED)
-    .replace(EMAIL_RE, REDACTED);
+  return redactEncodedEmails(
+    templatePaths(value)
+      .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match))
+      .replace(JWT_RE, REDACTED)
+      .replace(SECRET_RE, REDACTED)
+      .replace(EMAIL_RE, REDACTED),
+  );
 }
 
 function scrubString(value: string): string {
