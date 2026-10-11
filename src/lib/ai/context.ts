@@ -11,9 +11,9 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { Locale } from '../i18n/locales';
 import { LOCALES } from '../i18n/locales';
-import { inlineToPlain } from '../blocks/inline';
 import { applyPaywall, canReadFull } from '../blocks/paywall';
-import type { ArticleAccess, ArticleDocument, Block } from '../blocks/schema';
+import type { ArticleAccess, ArticleDocument } from '../blocks/schema';
+import { blockDefinition } from '../blocks/registry';
 import { walkBlocks } from '../blocks/schema';
 import { readStoredDocument } from '../blocks/validate';
 import type { Principal } from '../members/policy';
@@ -83,38 +83,11 @@ export function tokenize(text: string): string[] {
     .filter(t => t.length > 1 || /\p{N}/u.test(t) || /[぀-ヿ㐀-鿿가-힯]/u.test(t));
 }
 
-function blockText(block: Block): string {
-  const t = (v: string | undefined) => (v ? inlineToPlain(v) : '');
-  switch (block.type) {
-    case 'paragraph': case 'heading': case 'callout': return t(block.text);
-    case 'quote': return [t(block.text), t(block.cite)].join(' ');
-    case 'list': return block.items.map(t).join('\n');
-    case 'checklist': return block.items.map(i => t(i.text)).join('\n');
-    case 'code': return block.code;
-    case 'image': return [block.alt, t(block.caption)].join(' ');
-    case 'embed': return t(block.caption);
-    case 'table': return [block.headers, ...block.rows].map(r => r.map(t).join(' | ')).join('\n');
-    case 'chart': return [block.title ?? '', block.labels.join(', ')].join(' ');
-    case 'diagram': return t(block.caption);
-    case 'survey': return [block.question, ...block.options.map(o => o.label)].join(' ');
-    case 'interactive': return [block.title, t(block.caption)].join(' ');
-    case 'math': return [block.tex, t(block.caption)].join(' ');
-    case 'gallery': return [...block.images.map(img => [img.alt, t(img.caption)].join(' ')), t(block.caption)].join(' ');
-    case 'audio': case 'video': return [block.title ?? '', t(block.caption)].join(' ');
-    case 'file': return [block.name, t(block.caption)].join(' ');
-    case 'bookmark': return [block.title ?? '', block.siteName ?? '', block.description ?? ''].join(' ');
-    // Toggle children are visited by walkBlocks.
-    case 'toggle': return t(block.summary);
-    case 'icon': return block.label ?? '';
-    case 'divider': case 'layout': return '';
-  }
-}
-
 /** Visible plain text of a document in reading order (layout children included). */
 export function documentText(doc: ArticleDocument): string {
   const parts: string[] = [];
   walkBlocks(doc.blocks, b => {
-    const text = blockText(b).trim();
+    const text = blockDefinition(b.type).aiText(b).trim();
     if (text) parts.push(text);
   });
   return parts.join('\n');

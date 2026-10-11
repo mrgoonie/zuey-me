@@ -1,5 +1,6 @@
-import type { ArticleAccess, ArticleDocument, Block } from './schema';
+import type { ArticleAccess, ArticleDocument, Block, CardBlock, LayoutBlock, LayoutChild, SectionBlock } from './schema';
 import { inlineToPlain } from './inline';
+import { blockDefinition } from './registry';
 import { documentText, wordCount } from '../search/text';
 
 export interface Viewer {
@@ -22,7 +23,7 @@ export interface LockedHeading { level: 1 | 2 | 3; text: string }
  */
 export interface LockedOutline {
   headings: LockedHeading[];
-  /** Number of withheld top-level blocks. */
+  /** Number of withheld top-level blocks (a block inside a top-level section counts on its own). */
   blocks: number;
   /** Approximate number of withheld words. */
   words: number;
@@ -58,51 +59,116 @@ export function readerCacheControl(viewer: Viewer): string {
 
 /** Approximate reading weight of a block (characters of visible text, at least 1). */
 export function blockWeight(block: Block): number {
-  const len = (s: string | undefined): number => (s ? inlineToPlain(s).length : 0);
-  let w: number;
-  switch (block.type) {
-    case 'paragraph': case 'heading': case 'callout': w = len(block.text); break;
-    case 'quote': w = len(block.text) + len(block.cite); break;
-    case 'list': w = block.items.reduce((n, s) => n + len(s), 0); break;
-    case 'checklist': w = block.items.reduce((n, s) => n + len(s.text), 0); break;
-    case 'code': w = block.code.length; break;
-    case 'divider': w = 1; break;
-    case 'image': w = 40 + len(block.alt) + len(block.caption); break;
-    case 'embed': w = 40 + len(block.caption); break;
-    case 'table': w = [block.headers, ...block.rows].flat().reduce((n, s) => n + len(s), 0); break;
-    case 'chart': w = 40 + block.labels.join('').length + block.series.length * block.labels.length * 3; break;
-    case 'diagram': w = block.source.length + len(block.caption); break;
-    case 'survey': w = len(block.question) + block.options.reduce((n, o) => n + o.label.length, 0); break;
-    case 'layout': w = block.children.reduce((n, c) => n + c.blocks.reduce((m, b) => m + blockWeight(b), 0), 0); break;
-    case 'interactive': w = 40 + len(block.title) + len(block.caption); break;
-    case 'math': w = block.tex.length + len(block.caption); break;
-    case 'gallery': w = block.images.reduce((n, img) => n + 40 + len(img.alt) + len(img.caption), 0) + len(block.caption); break;
-    case 'audio': case 'video': w = 40 + len(block.title) + len(block.caption); break;
-    case 'file': w = 20 + len(block.name) + len(block.caption); break;
-    case 'bookmark': w = 20 + len(block.title) + len(block.description); break;
-    case 'icon': w = 1 + (block.label ? block.label.length : 0); break;
-    case 'toggle': w = len(block.summary) + block.blocks.reduce((n, b) => n + blockWeight(b), 0); break;
+  return Math.max(1, blockDefinition(block.type).weight(block, nestedWeight));
+}
+
+function nestedWeight(blocks: Block[]): number {
+  return blocks.reduce((n, b) => n + blockWeight(b), 0);
+}
+
+/** One container a unit sits in: a section or card body, or one cell of a layout. */
+type UnitFrame = { kind: 'body'; block: SectionBlock | CardBlock } | { kind: 'cell'; block: LayoutBlock; cell: LayoutChild };
+
+/** A unit the paywall keeps or withholds: a top-level block, or a leaf block inside a top-level section. */
+interface PaywallUnit { block: Block; path: UnitFrame[] }
+
+/**
+ * Inside a top-level section, cards and layouts are split down to their blocks as well, so a section
+ * (or a landing-style section of cards) that holds the whole article cannot bypass the paywall.
+ * Top-level blocks outside sections stay whole, exactly as before sections existed.
+ */
+function sectionUnits(block: Block, path: UnitFrame[]): PaywallUnit[] {
+  if ((block.type === 'section' || block.type === 'card') && block.blocks.length > 0) {
+    const inner: UnitFrame[] = [...path, { kind: 'body', block }];
+    return block.blocks.flatMap(child => sectionUnits(child, inner));
   }
-  return Math.max(1, w);
+  if (block.type === 'layout') {
+    return block.children.flatMap(cell => cell.blocks.flatMap(child => sectionUnits(child, [...path, { kind: 'cell', block, cell }])));
+  }
+  return [{ block, path }];
+}
+
+function paywallUnits(blocks: Block[]): PaywallUnit[] {
+  return blocks.flatMap(block => (block.type === 'section' ? sectionUnits(block, []) : [{ block, path: [] }]));
+}
+
+/** Number of units inside each card body (at any depth), used to tell a whole card from a partly kept one. */
+function cardUnitCounts(units: PaywallUnit[]): Map<CardBlock, number> {
+  const counts = new Map<CardBlock, number>();
+  for (const { path } of units) {
+    for (const frame of path) {
+      if (frame.kind === 'body' && frame.block.type === 'card') counts.set(frame.block, (counts.get(frame.block) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
 /**
- * Keeps roughly the first third (by text weight) of top-level blocks for paid articles
- * when the viewer is not entitled. Always keeps at least one block and, when the article
- * has more than one block, always withholds at least one.
+ * Rebuilds top-level blocks from kept units. A partly kept container keeps its settings and only the
+ * kept blocks; a card that lost any unit (even deep inside a layout) also drops its footer, which
+ * belongs to the withheld end of the card.
+ */
+function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[] {
+  const out: Block[] = [];
+  const bodies = new Map<SectionBlock | CardBlock | LayoutChild, Block[]>();
+  const layouts = new Map<LayoutBlock, LayoutBlock>();
+  const cards: Array<[CardBlock, CardBlock]> = [];
+  for (const { block, path } of units) {
+    let list = out;
+    for (const frame of path) {
+      if (frame.kind === 'body') {
+        let body = bodies.get(frame.block);
+        if (!body) {
+          const copy: SectionBlock | CardBlock = { ...frame.block, blocks: [] };
+          if (copy.type === 'card' && frame.block.type === 'card') cards.push([frame.block, copy]);
+          list.push(copy);
+          body = copy.blocks;
+          bodies.set(frame.block, body);
+        }
+        list = body;
+        continue;
+      }
+      let layout = layouts.get(frame.block);
+      if (!layout) {
+        layout = { ...frame.block, children: [] };
+        list.push(layout);
+        layouts.set(frame.block, layout);
+      }
+      let body = bodies.get(frame.cell);
+      if (!body) {
+        const cell: LayoutChild = { ...frame.cell, blocks: [] };
+        layout.children.push(cell);
+        body = cell.blocks;
+        bodies.set(frame.cell, body);
+      }
+      list = body;
+    }
+    list.push(block);
+  }
+  const kept = cardUnitCounts(units);
+  for (const [source, copy] of cards) {
+    if ((kept.get(source) ?? 0) < (totals.get(source) ?? 0)) delete copy.footer;
+  }
+  return out;
+}
+
+/**
+ * Keeps roughly the first third (by text weight) of top-level blocks (blocks inside top-level sections,
+ * their cards and layouts count one by one) for paid articles when the viewer is not entitled. Always keeps at least one unit
+ * and, when the article has more than one, always withholds at least one.
  */
 export function applyPaywall(doc: ArticleDocument, access: ArticleAccess, viewer: Viewer): PaywallResult {
   if (access !== 'knowledges' || canReadFull(viewer)) return { doc, truncated: false };
-  const blocks = doc.blocks;
-  const total = blocks.reduce((n, b) => n + blockWeight(b), 0);
+  const units = paywallUnits(doc.blocks);
+  const total = units.reduce((n, u) => n + blockWeight(u.block), 0);
   let keep = 0;
   let acc = 0;
-  while (keep < blocks.length && (keep === 0 || acc < total / 3)) {
-    acc += blockWeight(blocks[keep]);
+  while (keep < units.length && (keep === 0 || acc < total / 3)) {
+    acc += blockWeight(units[keep].block);
     keep += 1;
   }
-  if (blocks.length > 1) keep = Math.min(keep, blocks.length - 1);
-  const kept: ArticleDocument = { version: 1, blocks: blocks.slice(0, keep) };
-  if (keep >= blocks.length) return { doc: kept, truncated: false };
-  return { doc: kept, truncated: true, outline: lockedOutline(blocks.slice(keep)) };
+  if (units.length > 1) keep = Math.min(keep, units.length - 1);
+  const kept: ArticleDocument = { version: 1, blocks: joinUnits(units.slice(0, keep), cardUnitCounts(units)) };
+  if (keep >= units.length) return { doc: kept, truncated: false };
+  return { doc: kept, truncated: true, outline: lockedOutline(units.slice(keep).map(u => u.block)) };
 }

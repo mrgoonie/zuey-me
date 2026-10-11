@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import './media-blocks.css';
 import type { Block, FileBlock, KnowledgeMediaBlock } from '../../lib/blocks/schema';
 import { imageSizeAttrs, isPdfUrl } from '../../lib/blocks/schema';
-import { formatBytes } from '../../lib/blocks/markdown';
+import { formatBytes } from '../../lib/blocks/markdown-format';
 
 function hostOf(url: string): string {
   try {
