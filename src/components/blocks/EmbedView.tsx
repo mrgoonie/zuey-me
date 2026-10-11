@@ -82,10 +82,14 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
   const [slow, setSlow] = useState(false);
 
   const auto = autoLoad && pref === 'auto';
-  // Before hydration (pref null) a public embed shows the "loads when scrolled to" note, not a dead button.
   const clickMode = !autoLoad || pref === 'click';
+  // Server markup and the first client render (pref null) promise nothing: without JavaScript nothing will
+  // ever load, so only a <noscript> note pointing to the original post is shown until the script runs.
+  const hydrated = pref !== null;
   const mounted = src !== null && (requested || (auto && inView));
   // `load` also fires for provider error pages, so frames that announce their height are ready only once they do.
+  // Other providers (Facebook included) send no height messages: for them `load` is the only signal, so a
+  // deleted or private Facebook post whose error page loads counts as ready and gets no slow notice.
   const ready = announcesHeight ? height !== null : loaded;
 
   const resetFrame = () => {
@@ -170,7 +174,9 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
             title={block.caption || `${label} embed`}
             loading="lazy"
             referrerPolicy="strict-origin-when-cross-origin"
-            sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
+            // Links in a post open the provider in a normal tab; without the escape flag that tab inherits
+            // this sandbox and the provider's own pages break.
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation"
             allow="encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
             onLoad={() => setLoaded(true)}
@@ -182,7 +188,9 @@ export function EmbedView({ block, autoLoad }: EmbedViewProps) {
           <div className="zb-embed-placeholder">
             {clickMode
               ? <button type="button" className="zb-btn" onClick={() => setRequested(true)}>Tải nội dung từ {label}</button>
-              : <span>Nội dung từ {label} sẽ tự tải khi bạn cuộn tới.</span>}
+              : hydrated
+                ? <span>Nội dung từ {label} sẽ tự tải khi bạn cuộn tới.</span>
+                : <noscript>Nội dung từ {label} cần JavaScript để hiển thị tại đây. {original}</noscript>}
           </div>
         )}
       </div>

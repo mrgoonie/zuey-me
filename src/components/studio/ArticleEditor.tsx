@@ -253,7 +253,10 @@ function SurveyResultsView({ block, slug }: { block: SurveyBlock; slug: string }
 
 // ---------- Per-type block fields ----------
 
-interface FieldsProps { block: Block; onChange: (b: Block) => void; ctx: ListCtx; allowed: BlockType[] }
+/** A field may replace its block with several (e.g. an embed turned back into text keeps its caption). */
+type BlockReplace = (b: Block | Block[]) => void;
+
+interface FieldsProps { block: Block; onChange: BlockReplace; ctx: ListCtx; allowed: BlockType[] }
 
 /** Paragraph textarea; typing "/" in an empty paragraph turns it into another block type. */
 export function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; onChange: (b: Block) => void; allowed: BlockType[] }) {
@@ -357,7 +360,7 @@ function GalleryFields({ images, onChange }: { images: GalleryImage[]; onChange:
   );
 }
 
-export function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: (b: Block) => void }) {
+export function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: BlockReplace }) {
   const rec = recognizeEmbed(block.url);
   return (
     <div className="space-y-2">
@@ -376,8 +379,11 @@ export function EmbedFields({ block, onChange }: { block: Extract<Block, { type:
           Link chia sẻ Facebook (/share/…) không nhúng được. Mở link rồi dán URL gốc của bài (dạng /posts/, /reel/, /videos/).
         </p>
       )}
-      {/* Undo for a pasted link that became an embed: keep it as plain text instead. */}
-      <button type="button" className={btnCls} onClick={() => onChange({ id: block.id, type: 'paragraph', text: block.url })}>
+      {/* Undo for a pasted link that became an embed: keep it as plain text instead, caption included. */}
+      <button type="button" className={btnCls} onClick={() => onChange([
+        { id: block.id, type: 'paragraph', text: block.url },
+        ...(block.caption ? [{ id: newId(), type: 'paragraph' as const, text: block.caption }] : []),
+      ])}>
         Chuyển về đoạn văn
       </button>
       <Select label="Nhà cung cấp" value={block.provider} options={EMBED_PROVIDERS} onChange={provider => onChange({ ...block, provider })} />
@@ -699,7 +705,7 @@ function BlockListEditor({ blocks, onChange, ctx }: { blocks: Block[]; onChange:
               </div>
               {isPreview
                 ? <BlockPreview block={block} slug={ctx.slug} />
-                : <BlockFields block={block} ctx={ctx} allowed={allowed} onChange={b => onChange(blocks.map((x, j) => (j === i ? b : x)))} />}
+                : <BlockFields block={block} ctx={ctx} allowed={allowed} onChange={b => onChange(blocks.flatMap((x, j) => (j === i ? b : [x])))} />}
             </div>
             {insertAt === i + 1 && i + 1 < blocks.length && (
               <div className="mt-2.5">
@@ -925,7 +931,7 @@ function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale
             <button type="button" className={btnCls} onClick={() => setViewing(null)}>Đóng</button>
           </div>
           <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight />
+            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight autoLoadEmbeds={false} />
           </div>
         </div>
       )}
@@ -1234,7 +1240,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       )}
       {tab === 'preview' && (
         <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
+          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight autoLoadEmbeds={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
         </div>
       )}
       {tab === 'json' && (

@@ -128,7 +128,7 @@ describe('embeds load when scrolled into view', () => {
     scrollIntoView();
     const frame = view.querySelector('iframe');
     expect(frame?.getAttribute('src')).toBe('https://platform.twitter.com/embed/Tweet.html?id=1234567890123&dnt=true');
-    expect(frame?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups allow-presentation');
+    expect(frame?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation');
     expect(FakeIntersectionObserver.instances[0].disconnected).toBe(true);
   });
 
@@ -153,6 +153,45 @@ describe('embeds load when scrolled into view', () => {
 
     click(byText(view, 'button', 'Tự tải nội dung nhúng'));
     expect(window.localStorage.getItem(embedView.EMBED_PREF_KEY)).toBeNull();
+  });
+
+  it('promises auto-loading only once the script runs (the server note is <noscript>)', () => {
+    const view = article(X_URL, 'x');
+    expect(view.querySelector('noscript')).toBeNull();
+    expect(byText(view, '.zb-embed-placeholder span', 'sẽ tự tải khi bạn cuộn tới')).not.toBeNull();
+  });
+
+  it('keeps working, and keeps the opt-out for this page, when localStorage throws', () => {
+    // Browsers with storage disabled throw on access to `localStorage` itself.
+    const storage = window.localStorage;
+    let accessed = 0;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() { accessed++; throw new window.DOMException('Storage disabled', 'SecurityError'); },
+    });
+    let view: HTMLElement | null = null;
+    try {
+      view = article(X_URL, 'x');
+      scrollIntoView();
+      expect(view.querySelector('iframe')).not.toBeNull();
+
+      click(byText(view, 'button', 'Không tự tải'));
+      expect(accessed).toBeGreaterThan(0);
+      expect(view.querySelector('iframe')).toBeNull();
+      expect(byText(view, 'button', 'Tự tải nội dung nhúng')).not.toBeNull();
+
+      // Another embed on the same page follows the in-memory choice.
+      const other = article('https://www.instagram.com/p/C0deAbc123/', 'instagram');
+      expect(byText(other, 'button', 'Tải nội dung từ')).not.toBeNull();
+
+      click(byText(view, 'button', 'Tự tải nội dung nhúng'));
+      expect(byText(view, 'button', 'Không tự tải')).not.toBeNull();
+    } finally {
+      // The in-memory choice outlives this test: put it back to auto before restoring storage.
+      const undo = view && byText(view, 'button', 'Tự tải nội dung nhúng');
+      if (undo) click(undo);
+      Object.defineProperty(window, 'localStorage', { configurable: true, get: () => storage });
+    }
   });
 });
 
@@ -233,19 +272,21 @@ describe('layout (computed styles from the real stylesheet)', () => {
     style.textContent = readFileSync(new URL('../src/styles/blocks.css', import.meta.url), 'utf8');
     document.head.appendChild(style);
     try {
-      const cases: Array<[string, EmbedProvider, string]> = [
-        [X_URL, 'x', '550px'],
-        ['https://www.instagram.com/p/C0deAbc123/', 'instagram', '540px'],
-        ['https://www.facebook.com/someone/posts/abc', 'facebook', '500px'],
-        ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'youtube', '100%'],
+      // [url, provider, provider cap (null: no cap, video players use the full column), resolved max-width]
+      const cases: Array<[string, EmbedProvider, string | null, string]> = [
+        [X_URL, 'x', '550px', '550px'],
+        ['https://www.instagram.com/p/C0deAbc123/', 'instagram', '540px', '540px'],
+        ['https://www.facebook.com/someone/posts/abc', 'facebook', '500px', '500px'],
+        ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'youtube', null, '100%'],
       ];
-      for (const [url, provider, maxWidth] of cases) {
+      for (const [url, provider, cap, maxWidth] of cases) {
         const view = article(url, provider);
         const figure = view.querySelector('figure.zb-embed');
         const frame = view.querySelector('.zb-embed-frame');
         if (!figure || !frame) throw new Error(`no embed rendered for ${provider}`);
         expect(getComputedStyle(figure).alignItems).toBe('center');
-        expect(getComputedStyle(figure).getPropertyValue('--zb-embed-max').trim() || '100%').toBe(maxWidth);
+        expect(getComputedStyle(figure).getPropertyValue('--zb-embed-max').trim()).toBe(cap ?? '');
+        expect(getComputedStyle(frame).maxWidth).toBe(maxWidth);
         expect(getComputedStyle(frame).width).toBe('100%');
       }
       const view = article('https://www.facebook.com/someone/posts/abc', 'facebook');
@@ -300,11 +341,25 @@ describe('Studio: pasted links become embed blocks', () => {
   });
 
   it('can turn an embed back into a paragraph (undo for a conversion)', () => {
-    const changes: Block[] = [];
+    const changes: Array<Block | Block[]> = [];
     const view = mount(React.createElement(editor.EmbedFields, {
-      block: { id: 'e1', type: 'embed', url: X_URL, provider: 'x' }, onChange: (b: Block) => { changes.push(b); },
+      block: { id: 'e1', type: 'embed', url: X_URL, provider: 'x' }, onChange: b => { changes.push(b); },
     }));
     click(byText(view, 'button', 'Chuyển về đoạn văn'));
-    expect(changes).toEqual([{ id: 'e1', type: 'paragraph', text: X_URL }]);
+    expect(changes).toEqual([[{ id: 'e1', type: 'paragraph', text: X_URL }]]);
+  });
+
+  it('keeps the caption as a second paragraph when turning an embed back into text', () => {
+    const changes: Array<Block | Block[]> = [];
+    const view = mount(React.createElement(editor.EmbedFields, {
+      block: { id: 'e1', type: 'embed', url: X_URL, provider: 'x', caption: 'Ghi chú của tác giả' }, onChange: b => { changes.push(b); },
+    }));
+    click(byText(view, 'button', 'Chuyển về đoạn văn'));
+    const [replacement] = changes;
+    if (!Array.isArray(replacement)) throw new Error('expected the embed to become several blocks');
+    expect(replacement).toHaveLength(2);
+    expect(replacement[0]).toEqual({ id: 'e1', type: 'paragraph', text: X_URL });
+    expect(replacement[1]).toMatchObject({ type: 'paragraph', text: 'Ghi chú của tác giả' });
+    expect(replacement[1].id).not.toBe('e1');
   });
 });

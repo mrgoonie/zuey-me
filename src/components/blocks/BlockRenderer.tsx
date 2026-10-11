@@ -238,7 +238,7 @@ interface BlockRendererProps {
   highlights?: CodeHighlights;
   /** Highlight code blocks on the client by lazy-loading the highlighter (Studio previews). */
   liveHighlight?: boolean;
-  /** Third-party embeds load by themselves when scrolled into view (default). False keeps them click-to-load. */
+  /** Third-party embeds load by themselves when scrolled into view (default). False keeps them click-to-load (every Studio preview). */
   autoLoadEmbeds?: boolean;
 }
 
