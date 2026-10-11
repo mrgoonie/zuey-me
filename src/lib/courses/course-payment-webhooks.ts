@@ -7,6 +7,7 @@ import type { RuntimeEnv } from '../../env';
 import { queuePaymentFailed } from '../analytics/commerce-events';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime } from '../members/runtime';
+import { minorUnitsOrNull } from '../payments/dodo';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import type { CoursePaymentOutcome } from './course-order-payments';
@@ -129,7 +130,7 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
     return null;
   }
 
-  const amount = typeof d.total_amount === 'number' ? d.total_amount : typeof d.amount === 'number' ? d.amount : null;
+  const amount = typeof d.total_amount === 'number' ? d.total_amount : minorUnitsOrNull(d.amount);
   const currency = text(d, 'currency')?.toUpperCase() ?? null;
   if (!(await recordCoursePaymentEvent(d1, 'dodo', eventId, order?.id ?? null, amount, currency, type))) {
     return { outcome: 'duplicate_event', order_code: order?.code ?? null };
