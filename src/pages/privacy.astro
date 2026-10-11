@@ -118,6 +118,7 @@ const content: Record<'vi' | 'en', {
         title: 'Zuey AI và nhà cung cấp mô hình',
         paras: [
           'Để tạo câu trả lời, câu hỏi của bạn cùng các đoạn nội dung liên quan được gửi qua Dewee gateway tới nhà cung cấp mô hình AI. Trước đó, TypeSafe AI có thể chấm điểm đoạn nội dung nào liên quan nhất tới câu hỏi. Các bên này xử lý dữ liệu để trả lời và có thể lưu giữ theo chính sách riêng của họ; zuey.me không cam kết rằng dữ liệu không bao giờ được lưu ở phía nhà cung cấp.',
+          'Tìm kiếm Knowledges (trên trang, qua API hoặc MCP) có thể dùng Workers AI của Cloudflare khi tìm kiếm ngữ nghĩa được bật: chữ của từ khoá (tối đa 200 ký tự) được gửi tới Workers AI để tạo vector, không kèm tài khoản hay email. zuey.me không lưu từ khoá đó vào cơ sở dữ liệu; Cloudflare xử lý theo điều khoản dịch vụ của mình.',
           'Không nhập mật khẩu, khoá bí mật hoặc thông tin nhạy cảm vào khung chat.',
         ],
       },
@@ -125,7 +126,7 @@ const content: Record<'vi' | 'en', {
         id: 'embeds',
         title: 'Nội dung nhúng từ nền tảng khác',
         paras: [
-          'Bài viết Knowledges và bài học trong khoá học có thể nhúng bài đăng hoặc video từ X, Facebook, Instagram, TikTok, LinkedIn, YouTube, Vimeo, SoundCloud và Spotify. Nội dung nhúng tự tải khi bạn cuộn tới vị trí của nó. Khi đó trình duyệt của bạn gửi yêu cầu trực tiếp tới nền tảng đó, kèm địa chỉ IP, user agent và cookie mà nền tảng đã đặt; nền tảng xử lý dữ liệu này theo chính sách riêng của họ. YouTube được nhúng qua youtube-nocookie.com và X được nhúng ở chế độ không theo dõi (dnt).',
+          'Bài viết Knowledges và bài học trong khoá học có thể nhúng bài đăng hoặc video từ X, Facebook, Instagram, TikTok, LinkedIn, YouTube, Vimeo, SoundCloud và Spotify. Nội dung nhúng tự tải khi bạn cuộn tới vị trí của nó. Khi đó trình duyệt của bạn gửi yêu cầu trực tiếp tới nền tảng đó, kèm địa chỉ IP, user agent và cookie mà nền tảng đã đặt; nền tảng xử lý dữ liệu này theo chính sách riêng của họ. YouTube được nhúng qua youtube-nocookie.com và X được nhúng ở chế độ không theo dõi (dnt). Trình phát Zueytube (/videos) cũng nhúng YouTube qua youtube-nocookie.com khi bạn mở một video, và ảnh thumbnail video được tải từ i.ytimg.com của YouTube.',
           'Bạn có thể tắt việc tự tải trên thiết bị đang dùng bằng nút “Không tự tải nội dung nhúng trên thiết bị này” bên dưới mỗi nội dung nhúng. Sau đó mỗi nội dung nhúng chỉ tải khi bạn bấm. Lựa chọn này được lưu trong localStorage của trình duyệt và không gắn với tài khoản. Liên kết tới bài gốc luôn hiển thị.',
         ],
       },
@@ -162,7 +163,7 @@ const content: Record<'vi' | 'en', {
     processorsIntro: 'zuey.me dùng các dịch vụ sau. Mỗi bên chỉ nhận phần dữ liệu cần cho chức năng tương ứng.',
     processorsHead: ['Bên xử lý', 'Mục đích', 'Dữ liệu liên quan'],
     processors: [
-      { name: 'Cloudflare', purpose: 'Lưu trữ trang, cơ sở dữ liệu (D1), CDN, bảo mật', data: 'Toàn bộ dữ liệu được lưu, nhật ký yêu cầu' },
+      { name: 'Cloudflare', purpose: 'Lưu trữ trang, cơ sở dữ liệu (D1), CDN, bảo mật; Workers AI tạo vector cho từ khoá tìm kiếm khi tìm kiếm ngữ nghĩa được bật, và tóm tắt, phân loại, làm sạch nội dung công khai (bài viết, Zuey Reads, phụ đề Zueytube)', data: 'Toàn bộ dữ liệu được lưu, nhật ký yêu cầu; Workers AI chỉ nhận chữ của từ khoá tìm kiếm (tối đa 200 ký tự, không kèm tài khoản hay email) và nội dung công khai đó; zuey.me không lưu từ khoá vào cơ sở dữ liệu' },
       { name: 'Resend', purpose: 'Gửi email giao dịch', data: 'Email, nội dung email giao dịch' },
       { name: 'SePay', purpose: 'Thanh toán chuyển khoản ngân hàng Việt Nam', data: 'Số tiền, nội dung chuyển khoản, mã giao dịch' },
       { name: 'Dodo Payments', purpose: 'Thanh toán thẻ (USD) cho gói thành viên và khoá học', data: 'Email, tên, mã tài khoản zuey.me và trạng thái gói; thông tin thẻ do Dodo Payments thu thập' },
@@ -175,6 +176,9 @@ const content: Record<'vi' | 'en', {
       { name: 'Discord', purpose: 'Thông báo đơn hàng cho quản trị viên', data: 'Mã đơn, số tiền, kênh và mã giao dịch' },
       { name: 'Dewee (bot Zuey AI trên Telegram)', purpose: 'Hỏi zuey.me xem người gửi có được chat với Zuey AI không', data: 'Telegram user ID và username người gửi; nhận lại kết quả cho phép/từ chối và mã tham chiếu ẩn danh' },
       { name: 'Open-Meteo', purpose: 'Thời tiết cho hiệu ứng nền (tuỳ chọn)', data: 'Tên thành phố hoặc toạ độ đã làm tròn' },
+      { name: 'YouTube (youtube-nocookie.com, i.ytimg.com)', purpose: 'Trình phát Zueytube (/videos), video nhúng trong bài viết và bài học, ảnh thumbnail video', data: 'Trình duyệt của bạn gửi trực tiếp địa chỉ IP, user agent và cookie YouTube đã đặt: trình phát tải khi bạn mở một video, thumbnail tải khi danh sách video hiển thị, video nhúng tải khi bạn cuộn tới (hoặc khi bấm, nếu bạn tắt tự tải)' },
+      { name: 'Nội dung nhúng khác: Vimeo, SoundCloud, Spotify, X, Facebook, Instagram, TikTok, LinkedIn', purpose: 'Hiển thị bài đăng, video hoặc âm thanh được nhúng trong bài viết và bài học', data: 'Trình duyệt của bạn gửi trực tiếp địa chỉ IP, user agent và cookie nền tảng đã đặt khi bạn cuộn tới nội dung nhúng (hoặc khi bấm, nếu bạn tắt tự tải); X được nhúng ở chế độ không theo dõi (dnt)' },
+      { name: 'jsDelivr', purpose: 'CDN tải giao diện tài liệu API Scalar trên trang /docs', data: 'Địa chỉ IP và user agent khi bạn mở /docs; không gửi trang nguồn (no-referrer), khoá API bạn dán chỉ được gửi tới zuey.me' },
       { name: 'PostHog', purpose: 'Thống kê sử dụng', data: 'Lượt xem trang, sự kiện thao tác, mã ẩn danh của trình duyệt, mã thành viên nội bộ khi đã đăng nhập, và sự kiện tài khoản, mua hàng từ máy chủ (gói, số tiền, loại tiền, cổng thanh toán) kèm mã thành viên đó (không có email hay tên)' },
     ],
     processorsNote: 'Nếu thêm bên thanh toán hoặc bên xử lý mới, danh sách này sẽ được cập nhật trước khi dịch vụ đó được dùng cho dữ liệu của bạn.',
@@ -254,6 +258,7 @@ const content: Record<'vi' | 'en', {
         title: 'Zuey AI and model providers',
         paras: [
           'To generate answers, your question and relevant content excerpts are sent through the Dewee gateway to an AI model provider. Before that, TypeSafe AI may score which excerpts are most relevant to your question. These parties process the data to answer and may retain it under their own policies; zuey.me does not promise that providers never retain data.',
+          'Knowledges search (on the site, through the API or MCP) may use Cloudflare Workers AI when semantic search is on: the query text (up to 200 characters) is sent to Workers AI to build a vector, without your account or email. zuey.me does not store that query in its database; Cloudflare processes it under its own service terms.',
           'Do not enter passwords, secret keys or other sensitive information in the chat.',
         ],
       },
@@ -261,7 +266,7 @@ const content: Record<'vi' | 'en', {
         id: 'embeds',
         title: 'Content embedded from other platforms',
         paras: [
-          'Knowledges articles and course lessons may embed posts or videos from X, Facebook, Instagram, TikTok, LinkedIn, YouTube, Vimeo, SoundCloud and Spotify. An embed loads automatically when you scroll to it. Your browser then sends a request directly to that platform, including your IP address, user agent and any cookies the platform has set, and the platform processes this data under its own policy. YouTube is embedded through youtube-nocookie.com and X in do-not-track (dnt) mode.',
+          'Knowledges articles and course lessons may embed posts or videos from X, Facebook, Instagram, TikTok, LinkedIn, YouTube, Vimeo, SoundCloud and Spotify. An embed loads automatically when you scroll to it. Your browser then sends a request directly to that platform, including your IP address, user agent and any cookies the platform has set, and the platform processes this data under its own policy. YouTube is embedded through youtube-nocookie.com and X in do-not-track (dnt) mode. The Zueytube player (/videos) also embeds YouTube through youtube-nocookie.com when you open a video, and video thumbnails load from YouTube’s i.ytimg.com.',
           'You can turn automatic loading off on the device you are using with the “Không tự tải nội dung nhúng trên thiết bị này” (do not auto-load embeds on this device) button below any embed. Each embed then loads only when you click it. This choice is stored in your browser’s localStorage and is not linked to your account. A link to the original post is always shown.',
         ],
       },
@@ -298,7 +303,7 @@ const content: Record<'vi' | 'en', {
     processorsIntro: 'zuey.me relies on the services below. Each receives only the data its function needs.',
     processorsHead: ['Processor', 'Purpose', 'Data involved'],
     processors: [
-      { name: 'Cloudflare', purpose: 'Hosting, database (D1), CDN, security', data: 'All stored data, request logs' },
+      { name: 'Cloudflare', purpose: 'Hosting, database (D1), CDN, security; Workers AI turns search queries into vectors when semantic search is on, and summarises, classifies and cleans up public content (articles, Zuey Reads, Zueytube transcripts)', data: 'All stored data, request logs; Workers AI receives only the search query text (up to 200 characters, without your account or email) and that public content; zuey.me does not store the query in its database' },
       { name: 'Resend', purpose: 'Transactional email', data: 'Email address, transactional email content' },
       { name: 'SePay', purpose: 'Vietnamese bank-transfer payments', data: 'Amount, transfer memo, transaction reference' },
       { name: 'Dodo Payments', purpose: 'Card payments (USD) for membership plans and courses', data: 'Email, name, zuey.me account ID and subscription status; card details collected by Dodo Payments' },
@@ -311,6 +316,9 @@ const content: Record<'vi' | 'en', {
       { name: 'Discord', purpose: 'Order alerts to the admin', data: 'Order reference, amount, channel and transaction reference' },
       { name: 'Dewee (Zuey AI Telegram bot)', purpose: 'Asks zuey.me whether a sender may chat with Zuey AI', data: 'Sender Telegram user ID and username; receives an allow/deny decision and an anonymous reference' },
       { name: 'Open-Meteo', purpose: 'Weather for background effects (optional)', data: 'City name or rounded coordinates' },
+      { name: 'YouTube (youtube-nocookie.com, i.ytimg.com)', purpose: 'The Zueytube player (/videos), videos embedded in articles and lessons, video thumbnails', data: 'Your browser sends your IP address, user agent and any YouTube cookies directly: the player loads when you open a video, thumbnails load when a video list is shown, embeds load when you scroll to them (or when you click, if you turned auto-load off)' },
+      { name: 'Other embeds: Vimeo, SoundCloud, Spotify, X, Facebook, Instagram, TikTok, LinkedIn', purpose: 'Showing posts, videos or audio embedded in articles and lessons', data: 'Your browser sends your IP address, user agent and any cookies the platform has set directly when you scroll to the embed (or when you click, if you turned auto-load off); X is embedded in do-not-track (dnt) mode' },
+      { name: 'jsDelivr', purpose: 'CDN serving the Scalar API reference on /docs', data: 'IP address and user agent when you open /docs; the referring page is not sent (no-referrer) and an API key you paste is sent only to zuey.me' },
       { name: 'PostHog', purpose: 'Usage analytics', data: 'Page views, interaction events, the browser’s anonymous id, your internal member id once signed in, and server-side account and purchase events (plan, amount, currency, provider) under that member id (no email or name)' },
     ],
     processorsNote: 'If a new payment provider or processor is added, this list is updated before that service handles your data.',

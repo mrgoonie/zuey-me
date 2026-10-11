@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { PROVIDER_LABELS } from '../src/lib/blocks/embed';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
 import {
   BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, resolveConsentStorage,
@@ -569,6 +570,49 @@ describe('privacy page consent copy', () => {
     expect(source).toContain('data-storage-off={c.analytics.storageOff}');
     // `inline-flex` would otherwise override the `hidden` attribute and leave an empty button on screen.
     expect(source).toContain('inline-flex items-center [&[hidden]]:hidden');
+  });
+});
+
+describe('privacy page third-party processors', () => {
+  const read = (rel: string) => Bun.file(new URL(rel, import.meta.url)).text();
+
+  /** The `processors: [...]` rows of each language, as source text. */
+  async function processorRows(): Promise<Record<'vi' | 'en', string>> {
+    const source = await read('../src/pages/privacy.astro');
+    const [vi, en] = source.split('\n  en: {');
+    const rows = (block: string) => block.slice(block.indexOf('    processors: ['), block.indexOf('    processorsNote:'));
+    return { vi: rows(vi), en: rows(en) };
+  }
+
+  test('every embeddable provider is listed in both languages', async () => {
+    const rows = await processorRows();
+    const providers = Object.entries(PROVIDER_LABELS).filter(([id]) => id !== 'generic').map(([, label]) => label);
+    expect(providers.length).toBe(9);
+    for (const lang of ['vi', 'en'] as const) {
+      const names = [...rows[lang].matchAll(/name: '([^']+)'/g)].map(m => m[1]).join(' | ');
+      for (const label of providers) expect(names).toContain(label);
+      expect(rows[lang]).toContain('youtube-nocookie.com, i.ytimg.com');
+    }
+  });
+
+  test('jsDelivr is listed in both languages because /docs loads Scalar from it', async () => {
+    const docs = await read('../src/pages/docs/index.astro');
+    expect(docs).toContain('https://cdn.jsdelivr.net/');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'jsDelivr', purpose: '[^']*\/docs[^']*', data: '[^']*IP/);
+    expect(rows.en).toMatch(/name: 'jsDelivr', purpose: '[^']*\/docs[^']*', data: '[^']*IP/);
+  });
+
+  test('Cloudflare discloses Workers AI and the search query it receives in both languages', async () => {
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*từ khoá tìm kiếm \(tối đa 200 ký tự/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*search query text \(up to 200 characters/);
+  });
+
+  test('the server-side analytics row stays in both languages', async () => {
+    const rows = await processorRows();
+    expect(rows.vi).toContain("name: 'PostHog'");
+    expect(rows.en).toContain("name: 'PostHog'");
   });
 });
 
