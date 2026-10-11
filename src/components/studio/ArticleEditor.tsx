@@ -26,6 +26,8 @@ import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
 import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
+import { latestDraftFrom, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage } from './recovered-draft';
+import type { DraftRecovery, LatestDraft, RestoredRevision } from './recovered-draft';
 import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../../lib/blocks/icons';
 import type { IconSize } from '../../lib/blocks/icons';
 
@@ -800,6 +802,10 @@ interface Editing {
   saved: string;
   /** New-article email to members; null before the article's first publish. */
   emailNotification: EmailNotification | null;
+  /** The stored draft of this edition failed validation and is shown recovered; null when shown as stored. */
+  recovery: DraftRecovery | null;
+  /** A History revision loaded into the editor that needed recovery; cleared by the next load or save. */
+  restored: RestoredRevision | null;
 }
 
 interface EmailNotification { status: string; sendAfter: string; sentCount: number }
@@ -839,6 +845,9 @@ function editingFrom(data: unknown, requested: Locale | undefined): Editing | nu
     originalSlug: data.slug, revision: data.revision, status: fallback ? 'draft' : data.status === 'published' ? 'published' : 'draft',
     hasUnpublished: fallback || data.has_unpublished_changes === true, editions: parseEditions(data.editions), newEdition: fallback,
     draft, saved: snapshot(draft), emailNotification: parseEmailNotification(data.email_notification),
+    // A fallback shows another edition, so its recovery does not concern the (new) edition being written.
+    recovery: fallback ? null : parseDraftRecovery(data.recovery),
+    restored: null,
   };
 }
 
@@ -888,10 +897,12 @@ function TagEditor({ value, onChange, options }: { value: TagChip[]; onChange: (
 
 interface RevisionRow { revision: number; locale: Locale; action: string; title: string; actor: string; created_at: string }
 
-function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale; onRestore: (title: string, excerpt: string, doc: ArticleDocument, revision: number) => void }) {
+function HistoryView({ slug, locale, onRestore }: {
+  slug: string; locale: Locale; onRestore: (title: string, excerpt: string, doc: ArticleDocument, revision: number, recovery: DraftRecovery | null) => void;
+}) {
   const [rows, setRows] = useState<RevisionRow[] | null>(null);
   const [error, setError] = useState('');
-  const [viewing, setViewing] = useState<{ revision: number; title: string; excerpt: string; doc: ArticleDocument } | null>(null);
+  const [viewing, setViewing] = useState<{ revision: number; title: string; excerpt: string; doc: ArticleDocument; recovery: DraftRecovery | null } | null>(null);
   useEffect(() => {
     let alive = true;
     setRows(null);
@@ -910,7 +921,7 @@ function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale
     const res = await api(`/api/v1/articles/${encodeURIComponent(slug)}/revisions?lang=${locale}&revision=${revision}`);
     const doc = isObj(res.data) ? validateDocument(res.data.document) : null;
     if (!res.ok || !isObj(res.data) || !doc?.ok) { setError(res.message || 'Không mở được revision'); return; }
-    setViewing({ revision, title: str(res.data, 'title'), excerpt: str(res.data, 'excerpt'), doc: doc.doc });
+    setViewing({ revision, title: str(res.data, 'title'), excerpt: str(res.data, 'excerpt'), doc: doc.doc, recovery: parseDraftRecovery(res.data.recovery) });
   };
   const ACTIONS: Record<string, string> = { create: 'tạo', save: 'lưu nháp', publish: 'xuất bản', delete_edition: 'xoá bản ngôn ngữ' };
   return (
@@ -935,9 +946,14 @@ function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2 items-center">
             <span className="text-xs text-stone-300">Revision r{viewing.revision}: <b>{viewing.title}</b></span>
-            <button type="button" className={primaryCls} onClick={() => onRestore(viewing.title, viewing.excerpt, viewing.doc, viewing.revision)}>Khôi phục vào bản nháp</button>
+            <button type="button" className={primaryCls} onClick={() => onRestore(viewing.title, viewing.excerpt, viewing.doc, viewing.revision, viewing.recovery)}>Khôi phục vào bản nháp</button>
             <button type="button" className={btnCls} onClick={() => setViewing(null)}>Đóng</button>
           </div>
+          {viewing.recovery && (
+            <p role="alert" className="text-[11px] text-amber-200 rounded-lg border border-amber-700 bg-amber-950/40 px-3 py-2">
+              {restoredRevisionWarning({ revision: viewing.revision, recovery: viewing.recovery }, locale)}
+            </p>
+          )}
           <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
             <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight autoLoadEmbeds={false} />
           </div>
@@ -1013,7 +1029,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     setTab('blocks');
     if (initialSlug) { void load(initialSlug); return; }
     const draft = blankDraft('vi');
-    setEditing({ originalSlug: null, revision: 0, status: 'draft', hasUnpublished: true, editions: [], newEdition: true, draft, saved: snapshot(draft), emailNotification: null });
+    setEditing({ originalSlug: null, revision: 0, status: 'draft', hasUnpublished: true, editions: [], newEdition: true, draft, saved: snapshot(draft), emailNotification: null, recovery: null, restored: null });
     setJsonText(JSON.stringify(draft.doc, null, 2));
     setServerErrors([]);
     setConflict(null);
@@ -1032,9 +1048,16 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
 
   const setDraft = (patch: Partial<Draft>) => setEditing(e => (e ? { ...e, draft: { ...e.draft, ...patch } } : e));
 
-  const save = useCallback(async (overrideRevision?: number) => {
+  /** latest: the re-read stored state when overwriting after a conflict (its revision and recovery win). */
+  const save = useCallback(async (latest?: LatestDraft) => {
     if (!editing || busy) return;
     if (clientErrors.length > 0) { setStatus({ text: 'Sửa lỗi block trước khi lưu.', error: true }); return; }
+    // Saving always sends the whole document: never write a recovered draft back without an explicit yes.
+    const confirmQuestion = saveConfirmMessage(latest ? latest.recovery : editing.recovery, editing.restored, editing.draft.locale);
+    if (confirmQuestion && !window.confirm(confirmQuestion)) {
+      setStatus({ text: 'Chưa lưu: bản nháp đã lưu được giữ nguyên.', error: false });
+      return;
+    }
     setBusy(true);
     setServerErrors([]);
     const d = editing.draft;
@@ -1046,7 +1069,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       ? await api(`/api/v1/articles/${encodeURIComponent(editing.originalSlug)}`, {
         method: 'PUT',
         body: {
-          ...common, expected_revision: overrideRevision ?? editing.revision,
+          ...common, expected_revision: latest?.revision ?? editing.revision,
           ...(d.slug !== editing.originalSlug ? { slug: d.slug } : {}),
           ...(editing.editions.some(e => e.locale === d.primary_locale) ? { primary_locale: d.primary_locale } : {}),
         },
@@ -1082,9 +1105,12 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     if (!editing?.originalSlug) return;
     if (!window.confirm('Ghi đè thay đổi vừa được lưu ở nơi khác bằng bản của bạn?')) return;
     const res = await api(`/api/v1/articles/${encodeURIComponent(editing.originalSlug)}?draft=1&lang=${editing.draft.locale}`);
-    if (!res.ok || !isObj(res.data) || typeof res.data.revision !== 'number') { setStatus({ text: res.message || 'Không đọc được bản mới nhất', error: true }); return; }
+    const latest = res.ok ? latestDraftFrom(res.data) : null;
+    if (!latest) { setStatus({ text: res.message || 'Không đọc được bản mới nhất', error: true }); return; }
     setConflict(null);
-    await save(res.data.revision);
+    // The stored draft may have been replaced by one that needs recovery: warn and confirm against it.
+    setEditing(e => (e ? { ...e, recovery: latest.recovery } : e));
+    await save(latest);
   };
 
   const switchLocale = async (locale: Locale) => {
@@ -1199,6 +1225,16 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
           Bản {LOCALE_LABELS[d.locale].native} chưa có. Viết nội dung rồi lưu để tạo — bản dịch do người viết, hệ thống không tự dịch.
         </p>
       )}
+      {editing.recovery && (
+        <p role="alert" className="text-[11px] text-amber-200 rounded-lg border border-amber-700 bg-amber-950/40 px-3 py-2">
+          {recoveryWarning(editing.recovery, d.locale)}
+        </p>
+      )}
+      {editing.restored && (
+        <p role="alert" className="text-[11px] text-amber-200 rounded-lg border border-amber-700 bg-amber-950/40 px-3 py-2">
+          {restoredRevisionWarning(editing.restored, d.locale)}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <Text label={`Tiêu đề (${d.locale})`} value={d.title} onChange={title => setDraft({ title })} />
@@ -1259,8 +1295,8 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       )}
       {tab === 'history' && editing.originalSlug && (
         <HistoryView slug={editing.originalSlug} locale={d.locale}
-          onRestore={(title, excerpt, doc, revision) => {
-            setDraft({ title, excerpt, doc });
+          onRestore={(title, excerpt, doc, revision, recovery) => {
+            setEditing(e => (e ? { ...e, draft: { ...e.draft, title, excerpt, doc }, restored: recovery ? { revision, recovery } : null } : e));
             setTab('blocks');
             setStatus({ text: `Đã nạp r${revision} vào bản nháp — bấm Lưu để giữ.`, error: false });
           }} />

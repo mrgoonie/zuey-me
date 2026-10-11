@@ -2,10 +2,17 @@
  * Health check of an analytics outbox drain run, read from the endpoint's `{ success, data }` body. A run that
  * returned 200 can still hide a delivery problem, so the scheduler warns or fails on it:
  * - fail: analytics is disabled on the production host while events are queued (they would never leave), or
- *   every claimed row failed (the destination is down or the key is wrong);
- * - warn: rows were dead-lettered, the run was skipped on a non-production host, or the body is unreadable.
+ *   nothing was delivered while the run shows a systemic problem: at least DRAIN_OUTAGE_MIN_CLAIMED rows were
+ *   claimed and all failed (the destination is down or the key is wrong), or rows were dead-lettered (a row
+ *   only dies after ~22 h of retries or on a rejected payload);
+ * - warn: a few claimed rows were all retried (one timeout at low volume is retried with backoff), rows were
+ *   dead-lettered while others were delivered, the run was skipped on a non-production host, or the body is
+ *   unreadable.
  */
 import type { JobOutcome } from './jobs';
+
+/** Claimed rows that must all fail in one run before it counts as an outage rather than a transient retry. */
+export const DRAIN_OUTAGE_MIN_CLAIMED = 3;
 
 interface DrainSummary {
   status: string;
@@ -44,7 +51,11 @@ export function analyticsDrainCheck(body: unknown, _raw: string): JobOutcome {
     }
     return { level: 'warn', summary: `skipped (${s.skipped_reason ?? 'unknown'}) ${counts}` };
   }
-  if (s.claimed > 0 && s.sent === 0) return { level: 'fail', summary: `every delivery failed ${counts}` };
+  if (s.claimed > 0 && s.sent === 0) {
+    if (s.dead > 0) return { level: 'fail', summary: `nothing delivered, dead-lettered ${s.dead} ${counts}` };
+    if (s.claimed >= DRAIN_OUTAGE_MIN_CLAIMED) return { level: 'fail', summary: `every delivery failed ${counts}` };
+    return { level: 'warn', summary: `transient retry, nothing delivered ${counts}` };
+  }
   if (s.dead > 0) return { level: 'warn', summary: `dead-lettered ${s.dead} ${counts}` };
   return { level: 'ok', summary: counts };
 }

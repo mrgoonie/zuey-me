@@ -140,7 +140,7 @@ export const articlesMcpModule: McpToolModule = {
     },
     {
       name: 'article_get',
-      description: 'Get one locale edition of an article (locale falls back to the primary edition; locale_fallback tells). Readers without the read_full entitlement (Knowledges, Kết hợp, Cộng đồng plans) receive the published version with the paid remainder withheld. Admins may pass draft: true. format "markdown" returns Markdown.',
+      description: 'Get one locale edition of an article (locale falls back to the primary edition; locale_fallback tells). Readers without the read_full entitlement (Knowledges, Kết hợp, Cộng đồng plans) receive the published version with the paid remainder withheld. Admins may pass draft: true; the draft view carries recovery: null, or {dropped_blocks, degraded_embeds, unreadable} when the stored draft failed validation and was recovered for display (writing that document back makes the loss permanent). format "markdown" returns Markdown.',
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, draft: { type: 'boolean' }, format: { type: 'string', enum: ['json', 'markdown'] } }, required: ['slug'] },
     },
     {
@@ -162,7 +162,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' } }, required: ['slug', 'locale', 'expected_revision'] },
     },
     {
-      name: 'article_revisions', description: 'Admin: revision history; with revision + locale returns that stored document (restore by saving it via article_update).',
+      name: 'article_revisions', description: 'Admin: revision history; with revision + locale returns that stored document (restore by saving it via article_update) and recovery: null, or {dropped_blocks, degraded_embeds, unreadable} when the snapshot failed validation and was recovered (saving it makes the loss permanent).',
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, revision: { type: 'integer' } }, required: ['slug'] },
     },
     {
