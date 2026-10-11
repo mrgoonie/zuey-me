@@ -695,6 +695,40 @@ describe('PostHog snippet stub', () => {
     });
   });
 
+  test('an opted-out visitor who signs out after PostHog loaded does not resume automatic events', () => {
+    // A loaded posthog-js instance: reset() clears its opt-out, and automatic events honour the opt-out.
+    const sent: string[] = [];
+    let optedOut = false;
+    const loaded = {
+      init: () => undefined,
+      reset: () => { optedOut = false; },
+      opt_out_capturing: () => { optedOut = true; },
+      opt_in_capturing: () => { optedOut = false; },
+      autoCapture: (event: string) => { if (!optedOut) sent.push(event); },
+    };
+    withWindow(loaded, () => {
+      const env: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() };
+      const client = createAnalyticsClient({
+        destinations: [postHogClientDestination],
+        consent: () => env,
+        local: () => new MemoryStorage(),
+        session: () => new MemoryStorage(),
+        fetchIdentity: async () => undefined,
+        now: () => 1_000_000,
+        debug: () => undefined,
+      });
+      client.activate(false);
+      client.optOut();
+      expect(optedOut).toBe(true);
+      // Sign-out (and account deletion) call reset().
+      client.reset();
+      loaded.autoCapture('$autocapture');
+      loaded.autoCapture('$pageleave');
+      expect(sent).toEqual([]);
+      expect(optedOut).toBe(true);
+    });
+  });
+
   test('values without an init function are rejected', () => {
     for (const value of [null, undefined, 'posthog', {}, [], { capture: () => undefined }]) {
       withWindow(value, () => expect(getPostHog()).toBeNull());

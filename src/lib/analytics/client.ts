@@ -74,7 +74,13 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
       }
     }
   };
-  const live = (): boolean => active && consentState(deps.consent()) === 'granted';
+  const granted = (): boolean => consentState(deps.consent()) === 'granted';
+  const live = (): boolean => active && granted();
+  // posthog-js reset() also clears its own opt-out: re-apply it so a reset never resumes capture.
+  const resetDestinations = (): void => {
+    each(d => d.reset());
+    if (!granted()) each(d => d.optOut());
+  };
 
   const client: AnalyticsClient = {
     activate(on) {
@@ -111,7 +117,7 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
           return;
         }
         // Never let a second person inherit the first one's identity on a shared device.
-        if (previous !== null && previous !== memberId) each(d => d.reset());
+        if (previous !== null && previous !== memberId) resetDestinations();
         each(d => d.identify(memberId));
         write(deps.local(), IDENTITY_STORAGE_KEY, memberId);
       } catch (err) {
@@ -123,7 +129,7 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
         write(deps.local(), IDENTITY_STORAGE_KEY, null);
         write(deps.session(), IDENTITY_CACHE_KEY, null);
         // Reset even when inactive: a sign-out must never leave the previous member attached.
-        each(d => d.reset());
+        resetDestinations();
       } catch (err) {
         deps.debug('analytics: reset failed', err instanceof Error ? err.message : err);
       }
@@ -151,7 +157,7 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
         }
         if (planIdentity(previous, current).includes('reset')) {
           write(deps.local(), IDENTITY_STORAGE_KEY, null);
-          each(d => d.reset());
+          resetDestinations();
         }
         // identify() is a no-op when the destinations already attribute events to this member.
         if (current !== null) client.identify(current);
@@ -161,10 +167,11 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
     },
     optOut() {
       setOptOut(true, deps.consent());
-      // Reset first: posthog-js reset() also clears its own opt-out, so an opt-out sent before it is lost
-      // (including the calls the snippet queues while array.js is still loading).
+      // reset() opts the destinations out last (posthog-js reset() clears its own opt-out), which also
+      // orders the calls the snippet queues while array.js is still loading.
       client.reset();
-      each(d => d.optOut());
+      // No storage to hold the choice (consent still reads granted): opt this page out anyway.
+      if (granted()) each(d => d.optOut());
     },
     optIn() {
       setOptOut(false, deps.consent());
