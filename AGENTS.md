@@ -42,6 +42,26 @@ Process memory for AI agents collaborating on `zuey-me`.
 - If `wrangler pages` hits the wrong account despite exported credentials, delete the stale `node_modules/.cache/wrangler/pages.json`.
 - Inside this repo, `wrangler d1 <cmd> zuey_me_db` resolves the database by the `database_id` in `wrangler.toml` (production), not by name. To act on a D1 in any other account, run wrangler from a directory without `wrangler.toml`.
 
+## Issue Workflow (humans and agents)
+
+Status labels show who owns which issue, so two contributors never work the same thing. Keep exactly one status label on an issue and swap it (never add a second) at each transition: (none) → `in progress` → `in review` → `done` → `shipped`. `blocked` replaces `in progress` at any time and is swapped back when unblocked; review findings send `in review` back to `in progress`. An issue with no assignee and no status label is unowned.
+
+| Label | When |
+| --- | --- |
+| `in progress` | You start work. Assign yourself in the same step. Never start an issue that has another assignee or an `in progress`, `in review` or `blocked` label unless its owner agrees in a comment. |
+| `blocked` | Work cannot continue (missing credential, external dependency, product decision). Comment what unblocks it. |
+| `in review` | Implementation is done and under code review (an isolated reviewer agent or a human). |
+| `done` | The pull request is open, reviewed and green. Link it with `Closes #N` in the PR body. |
+| `shipped` | Whoever merges the PR into `main` (CI deploys production) swaps `done` for `shipped`; the issue then closes. |
+
+- Priority labels: `P0` (critical) to `P3` (roadmap). Pick the highest-priority unowned issue first; a missing priority label counts as `P3`.
+- `epic` issues are split into sub-issues; the epic tracks them with a task list and closes when every sub-issue ships. An epic carries `epic` and a priority label; status labels go on its sub-issues.
+- Branch from the latest `main`, one issue per branch and PR. Commits use conventional format and never mention plan IDs or AI tooling.
+- Review every change in a context that did not write it (a fresh reviewer agent or another person) before marking `done`.
+- A bug, gap or hardening need found while working on something else gets its own issue; do not widen the current PR. A related or duplicate issue gets a comment that links the current one.
+- Record evidence (test output, build result, screenshots for UI) in the PR before marking `done`.
+- Clear test caches and temporary build output you created (`.wrangler/`, `dist/`, extra worktrees) when you finish.
+
 ## Definition of Done
 
 Before claiming any task complete:
