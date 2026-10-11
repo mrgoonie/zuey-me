@@ -609,6 +609,18 @@ describe('privacy page third-party processors', () => {
     expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*search query text \(up to 200 characters/);
   });
 
+  test('Cloudflare discloses Stream lesson videos and their signed links in both languages', async () => {
+    const signing = await read('../src/lib/courses/course-media-signing.ts');
+    expect(signing).toContain('.cloudflarestream.com/');
+    expect(signing).toContain('MEDIA_TOKEN_MIN_TTL_SECONDS = 10 * 60');
+    expect(signing).toContain('MEDIA_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60');
+    const lesson = await read('../src/pages/courses/[slug]/[lesson].astro');
+    expect(lesson).toContain("'Referrer-Policy', 'no-referrer'");
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*Cloudflare Stream phát video bài học[^']*', data: '[^']*link Stream ký riêng hết hạn sau ít nhất 10 phút và tối đa 4 giờ[^']*cloudflarestream\.com địa chỉ IP và user agent/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Cloudflare Stream plays course lesson videos[^']*', data: '[^']*signed Stream link that expires after 10 minutes to 4 hours[^']*IP address and user agent directly to cloudflarestream\.com/);
+  });
+
   test('the server-side analytics row stays in both languages', async () => {
     const rows = await processorRows();
     expect(rows.vi).toContain("name: 'PostHog'");
