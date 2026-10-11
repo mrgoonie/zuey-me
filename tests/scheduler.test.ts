@@ -87,6 +87,31 @@ describe('scheduler worker jobs', () => {
       expect(message).not.toContain('could not be reached');
     });
 
+    it('fails when Telegram rate limits the sweep and nothing changed', async () => {
+      const limited = { id: 'cm_3', code: 'telegram_rate_limited', message: 'Telegram banChatMember is rate limited' };
+      expect(await failure(runJob(env, sweep, respond(200, result({ errors: [limited] }))))).toContain('errors=1 [cm_3:telegram_rate_limited]');
+    });
+
+    it('only warns for one stuck membership Telegram refuses, even when nothing was removed', async () => {
+      const refused = { id: 'cm_4', code: 'telegram_error', message: 'Telegram banChatMember failed: Bad Request: can\'t remove chat owner' };
+      const outcome = await runJob(env, sweep, respond(200, result({ errors: [refused] })));
+      expect(outcome.level).toBe('warn');
+      expect(outcome.summary).toContain('errors=1 [cm_4:telegram_error]');
+    });
+
+    it('only warns for a membership without a configured group in a dry run with no actions', async () => {
+      const missingGroup = { id: 'cm_5', code: 'community_unconfigured', message: 'No configured group or Telegram user for membership cm_5' };
+      const outcome = await runJob(env, sweep, respond(200, result({ dry_run: true, errors: [missingGroup] })));
+      expect(outcome.level).toBe('warn');
+      expect(outcome.summary).toContain('dry_run=true');
+      expect(outcome.summary).toContain('errors=1');
+    });
+
+    it('treats planned actions as progress in a dry run', async () => {
+      const outcome = await runJob(env, sweep, respond(200, result({ dry_run: true, actions: [removeAction], errors: [telegramDown] })));
+      expect(outcome.level).toBe('warn');
+    });
+
     it('warns with the error count when some memberships failed but others were processed', async () => {
       const outcome = await runJob(env, sweep, respond(200, result({ removed: 1, actions: [removeAction], errors: [telegramDown] })));
       expect(outcome.level).toBe('warn');

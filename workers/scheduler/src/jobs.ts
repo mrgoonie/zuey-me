@@ -49,15 +49,25 @@ function count(data: Record<string, unknown>, key: string): number {
 }
 
 /**
+ * Sweep error codes (from src/lib/experience/community.ts) that mean the sweep as a whole cannot act, as
+ * opposed to one membership Telegram refuses (`telegram_error`) or that has no configured group.
+ */
+const SYSTEMIC_SWEEP_ERRORS: ReadonlySet<string> = new Set(['telegram_unreachable', 'telegram_rate_limited', 'internal_error']);
+
+/**
  * Community sweep: logs counts, action ids with reasons, error codes and the cursor instead of the body
- * (member emails are never part of it). Errors fail the run only when nothing was removed or revoked, so a
- * single stuck membership warns while a sweep that cannot act at all (e.g. Telegram down) alerts.
+ * (member emails are never part of it). The run fails only when a systemic error (Telegram unreachable or
+ * rate limited, an internal error) comes with no progress: nothing removed or revoked in live mode, no
+ * planned action in a dry run. Any other error, such as one permanently stuck membership, only warns with
+ * the error count, so it never fails every 5-minute run once the backlog is cleared.
  */
 export function sweepCheck(body: unknown): JobOutcome {
   const data = isRecord(body) && isRecord(body.data) ? body.data : null;
   if (!data) return { level: 'fail', summary: 'unexpected sweep response (no data object)' };
-  const actions = records(data.actions).map(a => `${String(a.id)}:${String(a.action)}:${String(a.reason)}`);
-  const errors = records(data.errors).map(e => `${String(e.id)}:${String(e.code)}`);
+  const actionRows = records(data.actions);
+  const errorRows = records(data.errors);
+  const actions = actionRows.map(a => `${String(a.id)}:${String(a.action)}:${String(a.reason)}`);
+  const errors = errorRows.map(e => `${String(e.id)}:${String(e.code)}`);
   const removed = count(data, 'removed');
   const revoked = count(data, 'revoked');
   const summary = [
@@ -72,7 +82,9 @@ export function sweepCheck(body: unknown): JobOutcome {
     `complete=${data.complete === true}`,
   ].join(' ');
   if (errors.length === 0) return { level: 'ok', summary };
-  return { level: removed + revoked === 0 ? 'fail' : 'warn', summary };
+  const systemic = errorRows.some(e => typeof e.code === 'string' && SYSTEMIC_SWEEP_ERRORS.has(e.code));
+  const progressed = data.dry_run === true ? actionRows.length > 0 : removed + revoked > 0;
+  return { level: systemic && !progressed ? 'fail' : 'warn', summary };
 }
 
 export function scheduledJobs(env: SchedulerEnv): Job[] {
