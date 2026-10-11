@@ -366,6 +366,13 @@ function subscriptionMismatch(
   return null;
 }
 
+/**
+ * Besides one row per webhook id, `payment_events` holds prefixed rows keyed by the business fact: a collected
+ * Dodo charge (`charge:<payment id>`, raw type `payment.charge`) and a refund/dispute (`<event type>:<id>`).
+ */
+const CHARGE_RAW_TYPE = 'payment.charge';
+const chargeKey = (paymentId: string): string => `charge:${paymentId}`;
+
 async function recordEvent(d1: D1DatabaseLike, eventId: string, cardId: string | null, amount: number | null, currency: string | null, rawType: string): Promise<boolean> {
   try {
     await d1.prepare(
@@ -462,6 +469,8 @@ async function applyPaymentEvent(
   const data = event.data;
   const nowIso = iso(membersRuntime.now());
   const succeeded = event.type === 'payment.succeeded';
+  // Refunds and disputes name only the payment: remember which card every collected charge belongs to.
+  if (succeeded) await recordEvent(d1, chargeKey(data.paymentId), card.id, data.totalAmount, data.currency, CHARGE_RAW_TYPE);
   // The first successful charge is stored with its amount and tax, so a failed commission capture can be retried.
   const first = succeeded ? [data.paymentId, data.totalAmount, data.tax ?? 0, event.occurredAt ?? nowIso] : [null, null, null, null];
   await d1.prepare(
@@ -567,22 +576,40 @@ export async function applyDodoEvent(
   }
 }
 
+/** The card a Dodo payment was charged to: the first payment, or any later charge recorded by `applyPaymentEvent`. */
+async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Row | null> {
+  const first = await d1.prepare("SELECT id, user_id, plan, first_payment_id FROM card_subscriptions WHERE provider = 'dodo' AND first_payment_id = ?")
+    .bind(paymentId).first<Row>();
+  if (first) return first;
+  return d1.prepare(
+    `SELECT c.id, c.user_id, c.plan, c.first_payment_id FROM payment_events e JOIN card_subscriptions c ON c.id = e.card_subscription_id
+     WHERE e.provider = 'dodo' AND e.event_id = ? AND c.provider = 'dodo'`
+  ).bind(chargeKey(paymentId)).first<Row>();
+}
+
 /**
- * Refund or chargeback on a Dodo payment. Only the card's first payment carries a referral commission, so
- * the event is matched through `first_payment_id`; anything else (renewals, unknown payments) is ignored.
- * Reversal is idempotent, so webhook retries need no separate event record.
+ * Refund or chargeback on a Dodo payment of a card subscription, first charge or renewal. Only the first
+ * payment carries a referral commission, so only its reversal reverses the commission (idempotently); a
+ * renewal reports `renewal`. Access is not changed for either: the admin reviews the logged reversal.
+ * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
+ * `payment_events` row keyed by the refund or dispute id gates them across webhook retries.
  */
 export async function applyDodoReversal(
   d1: D1DatabaseLike, event: DodoReversalEvent
-): Promise<{ outcome: ReversalOutcome | 'ignored'; card_subscription_id: string | null }> {
-  const row = await d1.prepare("SELECT id, user_id, plan FROM card_subscriptions WHERE provider = 'dodo' AND first_payment_id = ?").bind(event.paymentId).first<Row>();
+): Promise<{ outcome: ReversalOutcome | 'renewal' | 'ignored'; card_subscription_id: string | null }> {
+  const row = await cardForPayment(d1, event.paymentId);
   if (!row) return { outcome: 'ignored', card_subscription_id: null };
   const cardId = str(row, 'id');
-  const result = await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind);
+  const renewal = strOrNull(row, 'first_payment_id') !== event.paymentId;
+  const outcome = renewal ? 'renewal' : (await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind)).outcome;
   const userId = strOrNull(row, 'user_id');
-  if (userId) {
+  const reversalKey = `${event.type}:${event.objectId ?? event.paymentId}`;
+  if (!userId || !(await recordEvent(d1, reversalKey, cardId, event.amount, event.currency, event.type))) {
+    return { outcome, card_subscription_id: cardId };
+  }
+  try {
     await logActivity(d1, userId, 'billing.card_reversal', {
-      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial,
+      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
     });
     // An opened dispute may still be won; only money that actually went back is a refund.
     if (event.kind !== 'dispute_opened') {
@@ -591,6 +618,9 @@ export async function applyDodoReversal(
         reason: event.kind === 'refund' ? 'refund' : 'chargeback', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
       });
     }
+  } catch (err) {
+    await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('dodo', reversalKey).run().catch(() => undefined);
+    throw err;
   }
-  return { outcome: result.outcome, card_subscription_id: cardId };
+  return { outcome, card_subscription_id: cardId };
 }

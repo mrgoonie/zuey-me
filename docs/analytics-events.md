@@ -117,7 +117,7 @@ Table `analytics_outbox` (`migrations/0022_analytics_outbox.sql`), code in `src/
 - **Monitoring.** The scheduler reads each drain summary (`workers/scheduler/src/analytics-drain-check.ts`). It logs a warning when rows were dead-lettered or the run was skipped on a non-production host, and fails the cron invocation when every claimed row failed or analytics is disabled on the production host while rows are pending.
 - **Retention.** Delivered rows are deleted 30 days after `sent_at` (up to 500 per run, index `(status, sent_at)`); pending and dead rows are kept. Dedupe keys are not needed after that window: providers redeliver webhooks within days, lifecycle keys include the period end, the expiry sweep looks back only 3 days, and a dispute won later restores access without queueing a purchase.
 - **Preview gate.** Without a destination (not a production build, no key, or a non-production host) the drain claims nothing and the rows stay `pending`.
-- Known limit: Dodo refunds and chargebacks are matched through the card's first payment only, so a refund of a renewal charge sends no `refund` event yet ([#100](https://github.com/mrgoonie/zuey-me/issues/100)).
+- **Dodo refunds of renewals.** Refund and dispute webhooks carry only the payment id. Every collected Dodo charge is recorded in `payment_events` as `charge:<payment id>` with its card, so a refund or lost dispute of a renewal charge is matched to its card, logged (`billing.card_reversal` with `renewal: true`) and queues one `refund` keyed by the refund/dispute id. Only a first-payment reversal reverses the referral commission. Renewals charged before this mapping existed are still unmatched.
 
 ## Adding an event
 

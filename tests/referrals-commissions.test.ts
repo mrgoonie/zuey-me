@@ -312,8 +312,9 @@ describe('Dodo commission and refunds', () => {
     expect(c?.commission_cents).toBe(80);
     expect(c?.provider_payment_id).toBe('pay_first');
 
-    // A refund of a renewal does not touch the first-order commission.
-    expect(await sendDodo('refund.succeeded', { payload_type: 'Refund', refund_id: 'rfd_0', payment_id: 'pay_renewal', amount: 2090, currency: 'USD' })).toBe('ignored');
+    // A refund of a renewal is matched to the card but does not touch the first-order commission.
+    expect(await sendDodo('refund.succeeded', { payload_type: 'Refund', refund_id: 'rfd_0', payment_id: 'pay_renewal', amount: 2090, currency: 'USD' })).toBe('renewal');
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('pending');
     expect(await sendDodo('refund.succeeded', { payload_type: 'Refund', refund_id: 'rfd_1', payment_id: 'pay_first', amount: 1777, currency: 'USD', is_partial: false })).toBe('reversed');
     expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
     expect(await sendDodo('refund.succeeded', { payload_type: 'Refund', refund_id: 'rfd_1', payment_id: 'pay_first', amount: 1777, currency: 'USD' })).toBe('already_reversed');
