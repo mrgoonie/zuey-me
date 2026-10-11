@@ -12,21 +12,34 @@ import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
 import { IconGlyph as StaticIconGlyph } from './block-icons';
 import type { IconGlyphProps } from './block-icons';
-import { isIconName } from '../../lib/blocks/icons';
+import { ICON_PIXELS, isIconName } from '../../lib/blocks/icons';
 import { InteractiveFrame } from '../ai/InteractiveFrame';
 
 type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
 
 /**
  * The icon map (~40 KB) ships to the browser only for documents that use icons: the client loads it
- * on demand, while the server renders the SVG directly so the hydrated markup is already complete.
- * `import.meta.env.SSR` is a build-time constant, so the static import is dropped from client bundles.
+ * on demand, while the server renders the SVG directly. `import.meta.env.SSR` is a build-time
+ * constant, so the static import is dropped from client bundles.
  */
 const LazyIconGlyph = lazy(() => import('./block-icons').then(m => ({ default: m.IconGlyph })));
 
+/** Same-size empty box shown while the icon chunk loads (client-only renders such as Studio previews). */
+export function IconPlaceholder({ size }: { size: IconGlyphProps['size'] }) {
+  const px = typeof size === 'number' ? size : ICON_PIXELS[size];
+  return <span aria-hidden="true" style={{ display: 'inline-block', width: px, height: px }} />;
+}
+
+/**
+ * The Suspense boundary must exist on both sides: the server emits its markers around the SVG, so
+ * hydration keeps the server markup in place until the lazy chunk resolves instead of failing.
+ */
 function IconSlot(props: IconGlyphProps) {
-  if (import.meta.env.SSR) return <StaticIconGlyph {...props} />;
-  return <Suspense fallback={null}><LazyIconGlyph {...props} /></Suspense>;
+  return (
+    <Suspense fallback={<IconPlaceholder size={props.size} />}>
+      {import.meta.env.SSR ? <StaticIconGlyph {...props} /> : <LazyIconGlyph {...props} />}
+    </Suspense>
+  );
 }
 
 interface RenderContext {

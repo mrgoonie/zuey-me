@@ -103,8 +103,8 @@ function IconPickerPanel({ id, label, value, onPick, onClose }: {
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
-  /** Set by keyboard moves only, so opening or typing never scrolls anything. */
-  const revealNext = useRef(false);
+  /** Set on open and by keyboard moves (never by typing); revealing only scrolls the list container. */
+  const revealNext = useRef(true);
   const current = Math.min(active, Math.max(items.length - 1, 0));
   const optionId = (name: IconName) => `${listId}-${name}`;
 
@@ -124,7 +124,7 @@ function IconPickerPanel({ id, label, value, onPick, onClose }: {
     if (next !== null) {
       revealNext.current = true;
       setActive(next);
-    } else if (e.key === 'Enter' && !e.altKey && items[current]) {
+    } else if (e.key === 'Enter' && !e.altKey && !e.ctrlKey && !e.metaKey && items[current]) {
       onPick(items[current]);
     } else if (e.key === 'Escape') {
       if (query) { setQuery(''); setActive(0); } else onClose();
@@ -148,7 +148,7 @@ function IconPickerPanel({ id, label, value, onPick, onClose }: {
         className="relative grid grid-cols-8 gap-1 max-h-44 overflow-auto rounded-lg bg-stone-950 p-1">
         {items.length === 0 && <li role="presentation" className="col-span-8 px-2 py-1.5 text-[11px] text-stone-500">Không có icon phù hợp</li>}
         {items.map((name, i) => (
-          <li key={name} id={optionId(name)} role="option" aria-selected={name === value} aria-label={name} title={name}
+          <li key={name} id={optionId(name)} role="option" aria-selected={i === current} aria-label={name} title={name}
             data-icon-option={name}
             onMouseDown={e => e.preventDefault()}
             onClick={() => onPick(name)}

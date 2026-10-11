@@ -4,6 +4,7 @@ import type { Root } from 'react-dom/client';
 import type { IconName } from '../src/lib/blocks/icons';
 
 // The DOM must exist before react-dom/client loads, so the modules under test are imported dynamically.
+// This file installs happy-dom as process globals: never run it with `bun test --concurrent`.
 GlobalRegistrator.register();
 const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
@@ -30,6 +31,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
   await GlobalRegistrator.unregister();
 });
 
@@ -129,6 +131,24 @@ describe('IconPicker keyboard', () => {
     expect(listbox()).toBeNull();
     expect(scrollIntoView).not.toHaveBeenCalled();
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('marks the active option aria-selected and ignores Ctrl/Meta+Enter', async () => {
+    const picked: (IconName | undefined)[] = [];
+    await mount('rocket', name => picked.push(name));
+    await act(async () => toggle().click());
+    const selected = () => Array.from(host.querySelectorAll('[role="option"][aria-selected="true"]')).map(o => o.getAttribute('data-icon-option'));
+    // Opening starts on the committed value.
+    expect(selected()).toEqual(['rocket']);
+    await key(search(), { key: 'ArrowRight' });
+    const next = ICON_NAMES[ICON_NAMES.indexOf('rocket') + 1];
+    expect(selected()).toEqual([next]);
+    expect(search().getAttribute('aria-activedescendant')).toContain(next);
+    const ctrl = await key(search(), { key: 'Enter', ctrlKey: true });
+    const meta = await key(search(), { key: 'Enter', metaKey: true });
+    expect(ctrl.defaultPrevented || meta.defaultPrevented).toBe(false);
+    expect(picked).toEqual([]);
+    expect(listbox()).not.toBeNull();
   });
 
   it('lets Alt/Meta+Arrow reach the block card (reorder shortcut)', async () => {
