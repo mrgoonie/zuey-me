@@ -33,6 +33,7 @@ import { BookingPanel } from './BookingPanel';
 import { BillingAttentionPanel } from './BillingAttentionPanel';
 import { ReferralsTab } from './ReferralsTab';
 import { InvoicesTab, PromosTab } from './PromosTab';
+import { reset as resetAnalytics } from '../../lib/analytics/client';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
 
 interface StudioAppProps {
@@ -130,6 +131,8 @@ export const StudioApp: React.FC<StudioAppProps> = ({
     // Member admins end their member session; the owner's Studio session has its own endpoint.
     const endpoint = sessionVia === 'member_session' ? '/api/members/auth/logout' : '/api/auth/logout';
     await fetch(endpoint, { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
+    // The member endpoint also ends the analytics identity; the owner-only Studio session never had one.
+    if (sessionVia === 'member_session') resetAnalytics();
     setIsAuthenticated(false);
   };
 

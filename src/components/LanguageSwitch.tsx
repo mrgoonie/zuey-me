@@ -2,7 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { Check, Globe } from 'lucide-react';
 import type { Locale } from '../lib/i18n/locales';
 import { LOCALES, LOCALE_LABELS, localeCookieValue } from '../lib/i18n/locales';
-import { trackEvent } from '../lib/posthog';
+import { track } from '../lib/analytics/client';
 
 interface LanguageSwitchProps {
   locale: Locale;
@@ -71,7 +71,7 @@ export const LanguageSwitch: React.FC<LanguageSwitchProps> = ({ locale, label, b
     } catch {
       // Cookies disabled: the ?lang= query still selects the locale for this page.
     }
-    trackEvent('language_changed', { language: next });
+    track('language_changed', { language: next });
     if (beforeNavigate) await beforeNavigate().catch(() => undefined);
     window.location.assign(hrefFor(next));
   };

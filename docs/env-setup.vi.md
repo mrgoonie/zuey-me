@@ -298,3 +298,13 @@ wrangler d1 execute zuey_me_db --remote --file=./migrations/0020_promo_codes_and
 - Khi đơn được thanh toán, yêu cầu chuyển `requested` và mọi email trong `ADMIN_EMAILS` nhận một email (Resend). Admin xuất hoá đơn điện tử thủ công, rồi nhập số hoá đơn ở Studio (*Mark issued*) hoặc `POST /api/v1/admin/invoice-requests/{id}/issue`. CSV cho kế toán: `GET /api/v1/admin/invoice-requests.csv?status=requested`.
 
 **Kiểm tra sau khi deploy:** tạo một mã thử ở Studio → Mã KM, nhập ở `/pricing` → hiện giá đã giảm; `GET /api/v1/promos/quote?code=<MÃ>` trả `200`; `/docs` có nhóm "Promo codes & invoices". Tắt mã thử sau khi kiểm tra.
+
+## 14. Analytics (PostHog)
+
+Project đích: PostHog **Zuey.me**. Danh mục sự kiện, quy tắc PII và consent: [analytics-events.md](analytics-events.md).
+
+- `PUBLIC_POSTHOG_KEY`: project API key (`phc_…`, là key công khai, không phải secret). Hiện được khai báo trong `[vars]` của `wrangler.toml` (cùng `PUBLIC_POSTHOG_HOST`); thiếu thì **chỉ bản build production** dùng key mặc định trong `src/lib/analytics/destinations/posthog.ts`, bản dev/preview tắt analytics.
+- `PUBLIC_POSTHOG_HOST` (tuỳ chọn): mặc định `https://us.i.posthog.com`. Phải là `https://`.
+- `PUBLIC_ANALYTICS_DEBUG` (tuỳ chọn): `1` để gửi sự kiện cả khi chạy `localhost`/`bun run dev` và in lời gọi analytics ra console. Bình thường để trống: localhost và bản dev không gửi gì.
+
+**Kiểm tra sau khi deploy:** mở zuey.me (không bật Do Not Track), PostHog → *Activity → Live events* phải thấy `$pageview` với `$current_url` không chứa `token`/`code`/`email`. Đăng nhập rồi tải lại trang: sự kiện mang `distinct_id` là member ID (không phải email). Đăng xuất: sự kiện kế tiếp có `distinct_id` ẩn danh mới. Bấm "Tắt thống kê" ở `/privacy#analytics`: không còn sự kiện mới từ trình duyệt đó.

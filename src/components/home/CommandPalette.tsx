@@ -12,7 +12,7 @@ import { animateDialogIn } from './motion';
 import type { VideoHit } from '../../lib/videos/types';
 import { parseVideoHits } from '../zueytube/zueytube-api-client';
 import { STORAGE_KEYS, isRecord, readStored, writeStored } from './storage';
-import { trackEvent } from '../../lib/posthog';
+import { track } from '../../lib/analytics/client';
 
 export type PaletteActionId = keyof HomeStrings['palette']['items'];
 
@@ -193,7 +193,7 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
   }, []);
 
   const runAction = useCallback((id: PaletteActionId) => {
-    trackEvent('command_palette_action', { action: id });
+    track('command_palette_action', { action: id });
     if (id === 'search') {
       setMode('articles');
       setQuery('');
@@ -213,14 +213,14 @@ export const CommandPalette: React.FC<PaletteProps> = ({ open, onClose, strings,
   const openArticle = useCallback((hit: ArticleHit) => {
     const href = `/articles/${encodeURIComponent(hit.slug)}`;
     remember({ id: `article:${hit.slug}`, label: hit.title, href });
-    trackEvent('command_palette_article', { slug: hit.slug });
+    track('command_palette_article', { slug: hit.slug });
     close(() => window.location.assign(href));
   }, [close, remember]);
 
   const openVideo = useCallback((hit: VideoHit) => {
     const href = `/videos?v=${encodeURIComponent(hit.youtube_id)}`;
     remember({ id: `video:${hit.youtube_id}`, label: hit.title, href });
-    trackEvent('command_palette_video', { youtube_id: hit.youtube_id });
+    track('command_palette_video', { youtube_id: hit.youtube_id });
     close(() => (onOpenVideo ? onOpenVideo(hit.youtube_id) : window.location.assign(href)));
   }, [close, remember, onOpenVideo]);
 

@@ -4,7 +4,7 @@ import { BrandIcon } from './BrandIcons';
 import { LinkCard } from './LinkCard';
 import { ShareModal } from './ShareModal';
 import { QrCodeModal } from './QrCodeModal';
-import { trackEvent } from '../lib/posthog';
+import { track } from '../lib/analytics/client';
 import type { Profile, LinkItem } from '../db/types';
 import type { Locale } from '../lib/i18n/locales';
 import { homeStrings, profileContentLocale } from './home/home-i18n';
@@ -131,7 +131,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-stone-700 hover:text-black hover:scale-110 active:scale-95 transition-all duration-150"
                 aria-label={item.label}
                 title={item.label}
-                onClick={() => trackEvent('social_clicked', { platform: item.name })}
+                onClick={() => track('social_clicked', { platform: item.name })}
               >
                 <BrandIcon name={item.name} className="w-4 h-4 sm:w-5 sm:h-5" />
               </a>
@@ -149,7 +149,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <a
                     href={item.href}
                     className="group h-full flex flex-col gap-0.5 rounded-2xl border border-stone-300/80 bg-white/80 hover:bg-white px-3 py-2.5 shadow-card hover:shadow-card-hover transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500"
-                    onClick={() => trackEvent('explore_clicked', { target: item.href })}
+                    onClick={() => track('explore_clicked', { target: item.href })}
                   >
                     <span className="text-[13px] sm:text-sm font-bold text-stone-900 font-serif leading-tight">{lang === 'vi' ? item.vi : item.en}</span>
                     <span className="text-[11px] text-stone-600 leading-snug">{lang === 'vi' ? item.descVi : item.descEn}</span>

@@ -17,6 +17,22 @@ interface Section {
   items?: string[];
 }
 
+interface AnalyticsCopy {
+  title: string;
+  paras: string[];
+  neverTitle: string;
+  never: string[];
+  controlTitle: string;
+  granted: string;
+  optedOut: string;
+  dnt: string;
+  noScript: string;
+  optOut: string;
+  optIn: string;
+  saved: string;
+  storageBlocked: string;
+}
+
 interface Processor {
   name: string;
   purpose: string;
@@ -31,6 +47,7 @@ const content: Record<'vi' | 'en', {
   pledgeTitle: string;
   pledges: string[];
   sections: Section[];
+  analytics: AnalyticsCopy;
   processorsTitle: string;
   processorsIntro: string;
   processorsHead: [string, string, string];
@@ -71,7 +88,7 @@ const content: Record<'vi' | 'en', {
           'Cộng đồng Telegram (gói Cộng đồng): link mời một lần dùng, Telegram user ID khi bạn vào nhóm bằng link đó, và trạng thái thành viên để mời hoặc gỡ khỏi nhóm theo hiệu lực gói.',
           'Thời tiết (chỉ khi bạn bật): tên thành phố hoặc toạ độ đã làm tròn tới 1 chữ số thập phân (khoảng 11 km). Lựa chọn này chỉ lưu trong trình duyệt của bạn; máy chủ chỉ chuyển truy vấn tới Open-Meteo, không gắn với tài khoản.',
           'Lưu trữ trên trình duyệt: cookie ngôn ngữ (zuey_locale) và localStorage cho vị trí và trạng thái linh vật, thông báo đã đóng, lệnh gần đây và tuỳ chọn thời tiết. Bạn có thể xoá bất cứ lúc nào trong cài đặt trình duyệt.',
-          'Thống kê sử dụng: lượt xem trang và một số sự kiện thao tác (ví dụ bấm liên kết, đổi ngôn ngữ) qua PostHog.',
+          'Thống kê sử dụng: lượt xem trang và một số sự kiện thao tác (ví dụ bấm liên kết, đổi ngôn ngữ) qua PostHog. Chi tiết và cách tắt ở mục "Thống kê sử dụng (analytics)" bên dưới.',
           'Nhật ký kỹ thuật: địa chỉ IP, user agent và thông tin yêu cầu do Cloudflare ghi nhận để vận hành và chống lạm dụng.',
         ],
       },
@@ -103,6 +120,32 @@ const content: Record<'vi' | 'en', {
         ],
       },
     ],
+    analytics: {
+      title: 'Thống kê sử dụng (analytics)',
+      paras: [
+        'zuey.me dùng PostHog (project riêng của zuey.me, máy chủ tại Mỹ) để hiểu ở mức tổng hợp trang nào được xem và tính năng nào được dùng. Mỗi trình duyệt có một mã ẩn danh ngẫu nhiên lưu trong cookie/localStorage của PostHog.',
+        'Khi bạn đăng nhập, mã ẩn danh đó được gắn với mã thành viên nội bộ của bạn (một chuỗi ngẫu nhiên, không phải email hay tên) để thống kê không bị đếm trùng giữa các trang. Khi đăng xuất hoặc xoá tài khoản, liên kết này bị xoá khỏi trình duyệt và một mã ẩn danh mới được tạo, nên người dùng chung máy không bị gộp vào nhau.',
+        'Mỗi sự kiện chỉ được gửi các thuộc tính đã khai báo trước. Địa chỉ trang và nguồn giới thiệu được lọc bỏ các tham số nhạy cảm (ví dụ token, code, email, key, secret, state, session) trước khi gửi. Không ghi lại phiên màn hình (session replay).',
+        'Analytics không chạy khi trình duyệt bật Do Not Track hoặc Global Privacy Control, hoặc khi bạn tắt ở đây. Lựa chọn được lưu trong trình duyệt này; xoá dữ liệu trình duyệt sẽ xoá lựa chọn.',
+      ],
+      neverTitle: 'Không bao giờ gửi sang analytics',
+      never: [
+        'Email, tên, ảnh đại diện, số điện thoại.',
+        'Mật khẩu, link đăng nhập, token, khoá API, mã xác thực OAuth.',
+        'Nội dung chat với Zuey AI, câu hỏi hay prompt bạn nhập.',
+        'Số tài khoản ngân hàng, thông tin thẻ, nội dung chuyển khoản.',
+        'Nội dung bạn nhập trong biểu mẫu đặt lịch hay khảo sát.',
+      ],
+      controlTitle: 'Lựa chọn của bạn',
+      granted: 'Đang bật thống kê sử dụng trên trình duyệt này.',
+      optedOut: 'Bạn đã tắt thống kê sử dụng trên trình duyệt này.',
+      dnt: 'Trình duyệt của bạn đang bật Do Not Track hoặc Global Privacy Control, nên thống kê luôn tắt.',
+      noScript: 'Cần bật JavaScript để thay đổi lựa chọn này.',
+      optOut: 'Tắt thống kê',
+      optIn: 'Bật lại thống kê',
+      saved: 'Đã lưu lựa chọn.',
+      storageBlocked: 'Trình duyệt chặn lưu trữ cục bộ nên không lưu được lựa chọn.',
+    },
     processorsTitle: 'Các bên xử lý dữ liệu',
     processorsIntro: 'zuey.me dùng các dịch vụ sau. Mỗi bên chỉ nhận phần dữ liệu cần cho chức năng tương ứng.',
     processorsHead: ['Bên xử lý', 'Mục đích', 'Dữ liệu liên quan'],
@@ -119,7 +162,7 @@ const content: Record<'vi' | 'en', {
       { name: 'Telegram', purpose: 'Nhóm cộng đồng của gói Cộng đồng; thông báo đơn hàng cho quản trị viên', data: 'Link mời, Telegram user ID, trạng thái thành viên; mã đơn, số tiền, kênh và mã giao dịch' },
       { name: 'Discord', purpose: 'Thông báo đơn hàng cho quản trị viên', data: 'Mã đơn, số tiền, kênh và mã giao dịch' },
       { name: 'Open-Meteo', purpose: 'Thời tiết cho hiệu ứng nền (tuỳ chọn)', data: 'Tên thành phố hoặc toạ độ đã làm tròn' },
-      { name: 'PostHog', purpose: 'Thống kê sử dụng', data: 'Lượt xem trang, sự kiện thao tác, định danh thiết bị' },
+      { name: 'PostHog', purpose: 'Thống kê sử dụng', data: 'Lượt xem trang, sự kiện thao tác, mã ẩn danh của trình duyệt, mã thành viên nội bộ khi đã đăng nhập (không có email hay tên)' },
     ],
     processorsNote: 'Nếu thêm bên thanh toán hoặc bên xử lý mới, danh sách này sẽ được cập nhật trước khi dịch vụ đó được dùng cho dữ liệu của bạn.',
     retentionTitle: 'Lưu giữ, sao lưu và xoá dữ liệu',
@@ -168,7 +211,7 @@ const content: Record<'vi' | 'en', {
           'Telegram community (Community plan): single-use invite links, your Telegram user ID once you join through such a link, and membership status so access follows your plan.',
           'Weather (only if you turn it on): a city name or coordinates rounded to 1 decimal place (about 11 km). The choice is stored in your browser only; the server just forwards the query to Open-Meteo and does not link it to your account.',
           'Browser storage: a locale cookie (zuey_locale) and localStorage for the companion position and state, dismissed notices, recent commands and weather preference. You can clear these at any time in your browser settings.',
-          'Usage analytics: page views and some interaction events (such as link clicks and language changes) via PostHog.',
+          'Usage analytics: page views and some interaction events (such as link clicks and language changes) via PostHog. Details and how to turn it off are in "Usage analytics" below.',
           'Technical logs: IP address, user agent and request details recorded by Cloudflare to operate the service and prevent abuse.',
         ],
       },
@@ -200,6 +243,32 @@ const content: Record<'vi' | 'en', {
         ],
       },
     ],
+    analytics: {
+      title: 'Usage analytics',
+      paras: [
+        'zuey.me uses PostHog (a project dedicated to zuey.me, hosted in the US) to understand in aggregate which pages are viewed and which features are used. Each browser gets a random anonymous id stored in PostHog’s cookie/localStorage.',
+        'When you sign in, that anonymous id is linked to your internal member id (a random string, never your email or name) so usage is not double-counted across pages. Signing out or deleting your account removes the link from the browser and starts a new anonymous id, so people sharing a device are never merged.',
+        'Each event carries only properties declared in advance. Page addresses and referrers are stripped of sensitive parameters (such as token, code, email, key, secret, state, session) before sending. Session replay is not recorded.',
+        'Analytics does not run when your browser sends Do Not Track or Global Privacy Control, or when you turn it off here. The choice is stored in this browser; clearing browser data clears it.',
+      ],
+      neverTitle: 'Never sent to analytics',
+      never: [
+        'Email address, name, avatar, phone number.',
+        'Passwords, sign-in links, tokens, API keys, OAuth codes.',
+        'Your Zuey AI chats, questions or prompts.',
+        'Bank account numbers, card details, transfer memos.',
+        'What you type into booking or survey forms.',
+      ],
+      controlTitle: 'Your choice',
+      granted: 'Usage analytics is on in this browser.',
+      optedOut: 'You turned usage analytics off in this browser.',
+      dnt: 'Your browser sends Do Not Track or Global Privacy Control, so analytics is always off.',
+      noScript: 'JavaScript is needed to change this choice.',
+      optOut: 'Turn analytics off',
+      optIn: 'Turn analytics back on',
+      saved: 'Choice saved.',
+      storageBlocked: 'Your browser blocks local storage, so the choice cannot be saved.',
+    },
     processorsTitle: 'Processors',
     processorsIntro: 'zuey.me relies on the services below. Each receives only the data its function needs.',
     processorsHead: ['Processor', 'Purpose', 'Data involved'],
@@ -216,7 +285,7 @@ const content: Record<'vi' | 'en', {
       { name: 'Telegram', purpose: 'Community plan groups; order alerts to the admin', data: 'Invite links, Telegram user ID, membership status; order reference, amount, channel and transaction reference' },
       { name: 'Discord', purpose: 'Order alerts to the admin', data: 'Order reference, amount, channel and transaction reference' },
       { name: 'Open-Meteo', purpose: 'Weather for background effects (optional)', data: 'City name or rounded coordinates' },
-      { name: 'PostHog', purpose: 'Usage analytics', data: 'Page views, interaction events, device identifier' },
+      { name: 'PostHog', purpose: 'Usage analytics', data: 'Page views, interaction events, the browser’s anonymous id, your internal member id once signed in (no email or name)' },
     ],
     processorsNote: 'If a new payment provider or processor is added, this list is updated before that service handles your data.',
     retentionTitle: 'Retention, backups and deletion',
@@ -269,6 +338,7 @@ const fallback = lang !== locale;
         <ol class="grid gap-1 text-sm list-decimal pl-5">
           <li><a class="underline underline-offset-2 hover:text-black" href="#pledges">{c.pledgeTitle}</a></li>
           {c.sections.map(sec => <li><a class="underline underline-offset-2 hover:text-black" href={`#${sec.id}`}>{sec.title}</a></li>)}
+          <li><a class="underline underline-offset-2 hover:text-black" href="#analytics">{c.analytics.title}</a></li>
           <li><a class="underline underline-offset-2 hover:text-black" href="#processors">{c.processorsTitle}</a></li>
           <li><a class="underline underline-offset-2 hover:text-black" href="#retention">{c.retentionTitle}</a></li>
           <li><a class="underline underline-offset-2 hover:text-black" href="#rights">{c.rightsTitle}</a></li>
@@ -294,6 +364,35 @@ const fallback = lang !== locale;
           )}
         </section>
       ))}
+
+      <section id="analytics" class="mt-8">
+        <h2 class="text-xl font-bold font-serif">{c.analytics.title}</h2>
+        {c.analytics.paras.map(p => <p class="mt-3 text-[15px] leading-relaxed text-stone-800">{p}</p>)}
+        <h3 class="mt-4 text-base font-bold">{c.analytics.neverTitle}</h3>
+        <ul class="mt-2 grid gap-2 text-[15px] leading-relaxed text-stone-800 list-disc pl-5">
+          {c.analytics.never.map(i => <li>{i}</li>)}
+        </ul>
+        <div
+          id="analytics-consent"
+          class="mt-4 rounded-2xl border border-stone-200 bg-white/80 p-4"
+          data-granted={c.analytics.granted}
+          data-opted-out={c.analytics.optedOut}
+          data-dnt={c.analytics.dnt}
+          data-opt-out={c.analytics.optOut}
+          data-opt-in={c.analytics.optIn}
+          data-saved={c.analytics.saved}
+          data-storage-blocked={c.analytics.storageBlocked}
+        >
+          <h3 class="text-base font-bold">{c.analytics.controlTitle}</h3>
+          <p class="mt-2 text-sm text-stone-700" data-consent-status role="status" aria-live="polite">{c.analytics.noScript}</p>
+          <button
+            type="button"
+            hidden
+            data-consent-toggle
+            class="mt-3 inline-flex items-center rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-stone-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+          ></button>
+        </div>
+      </section>
 
       <section id="processors" class="mt-8">
         <h2 class="text-xl font-bold font-serif">{c.processorsTitle}</h2>
@@ -339,3 +438,28 @@ const fallback = lang !== locale;
     </article>
   </main>
 </Layout>
+
+<script>
+  import { currentConsent, optIn, optOut } from '../lib/analytics/client';
+
+  const root = document.getElementById('analytics-consent');
+  const status = root?.querySelector<HTMLElement>('[data-consent-status]');
+  const toggle = root?.querySelector<HTMLButtonElement>('[data-consent-toggle]');
+  if (root && status && toggle) {
+    const label = (name: string): string => root.dataset[name] ?? '';
+    const render = (note?: string): void => {
+      const state = currentConsent();
+      const text = state === 'do_not_track' ? label('dnt') : state === 'opted_out' ? label('optedOut') : label('granted');
+      status.textContent = note ? `${text} ${note}` : text;
+      toggle.hidden = state === 'do_not_track';
+      toggle.textContent = state === 'opted_out' ? label('optIn') : label('optOut');
+    };
+    toggle.addEventListener('click', () => {
+      const before = currentConsent();
+      if (before === 'opted_out') optIn();
+      else optOut();
+      render(currentConsent() !== before ? label('saved') : label('storageBlocked'));
+    });
+    render();
+  }
+</script>

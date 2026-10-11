@@ -18,6 +18,7 @@ import { POST as magicLinkApi } from '../src/pages/api/members/auth/magic-link';
 import { POST as verifyApi } from '../src/pages/api/members/auth/magic-link/verify';
 import { GET as oauthStartApi } from '../src/pages/api/members/auth/[provider]';
 import { POST as logoutApi } from '../src/pages/api/members/auth/logout';
+import { GET as identityApi } from '../src/pages/api/members/auth/identity';
 import { GET as googleCallback } from '../src/pages/api/auth/google/callback';
 import { GET as githubCallback } from '../src/pages/api/auth/github/callback';
 import { DELETE as meDeleteApi, GET as meApi, PATCH as mePatchApi } from '../src/pages/api/v1/me/index';
@@ -270,6 +271,21 @@ describe('member sessions and CSRF', () => {
     expect(out.status).toBe(200);
     expect(out.headers.getSetCookie().join('')).toContain('Max-Age=0');
     expect((await meApi(ctx({ headers: { cookie } }))).status).toBe(401);
+  });
+
+  it('exposes only the member id as the analytics identity, and null once signed out', async () => {
+    const { userId, cookie } = await memberWithSession('lan@example.com');
+    const signedIn = await identityApi(ctx({ headers: { cookie } }));
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.headers.get('Cache-Control')).toBe('private, no-store');
+    const body = await read(signedIn);
+    expect(body.data).toEqual({ member_id: userId });
+    expect(JSON.stringify(body)).not.toContain('lan@example.com');
+
+    expect((await read(await identityApi(ctx({})))).data).toEqual({ member_id: null });
+    await logoutApi(ctx({ method: 'POST', headers: browser(cookie) }));
+    expect((await read(await identityApi(ctx({ headers: { cookie } })))).data).toEqual({ member_id: null });
+    expect((await identityApi(ctx({ headers: { cookie }, env: {} }))).status).toBe(503);
   });
 
   it('slides the 30-day session and expires idle sessions', async () => {
@@ -600,7 +616,7 @@ describe('API surface registration', () => {
     expect(OPENAPI_FRAGMENTS).toContain(billingOpenApi);
     expect(MCP_FEATURE_MODULES).toContain(membersMcpModule);
     const paths = [...Object.keys(membersOpenApi.paths), ...Object.keys(billingOpenApi.paths)];
-    for (const p of ['/api/v1/me', '/api/v1/me/keys', '/api/v1/me/keys/{id}/rotate', '/api/v1/plans', '/api/v1/billing/orders', '/api/v1/billing/subscription', '/api/v1/admin/members', '/api/v1/billing/reconcile', '/api/v1/admin/billing/attention', '/api/v1/admin/billing/orders/{code}/resolve', '/api/members/auth/magic-link', '/api/members/auth/logout']) {
+    for (const p of ['/api/v1/me', '/api/v1/me/keys', '/api/v1/me/keys/{id}/rotate', '/api/v1/plans', '/api/v1/billing/orders', '/api/v1/billing/subscription', '/api/v1/admin/members', '/api/v1/billing/reconcile', '/api/v1/admin/billing/attention', '/api/v1/admin/billing/orders/{code}/resolve', '/api/members/auth/magic-link', '/api/members/auth/logout', '/api/members/auth/identity']) {
       expect(paths).toContain(p);
     }
     expect(membersMcpModule.tools.map(t => t.name).sort()).toEqual([

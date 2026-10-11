@@ -64,6 +64,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 
 | Feature | Variables / bindings |
 |---|---|
+| Analytics (PostHog) | `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (optional), `PUBLIC_ANALYTICS_DEBUG` (optional; capture on localhost/dev). Event dictionary and privacy rules: [docs/analytics-events.md](docs/analytics-events.md) |
 | Surveys | `SURVEY_HASH_SALT` |
 | Reads | `ANYMD_API_KEY`, `READS_SUMMARY_MODEL` (optional), Workers AI binding `AI` |
 | Zueytube | `ANYMD_API_KEY` (optional; without it AnyMD's small anonymous quota applies), `OPENROUTER_API_KEY` + `VIDEOS_REWRITE_OPENROUTER_MODEL` (optional), `VIDEOS_REWRITE_MODEL` (optional), `VIDEOS_REWRITE_GLOSSARY` (optional extra proper nouns), Workers AI binding `AI` |
