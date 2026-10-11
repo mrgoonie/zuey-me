@@ -131,7 +131,7 @@ function image({ url, alt, caption, width, height }: EmailImage, siteUrl: string
   let size = `width="${EMAIL_IMAGE_MAX_WIDTH}" style="display:block;margin:0 auto;width:100%;max-width:${EMAIL_IMAGE_MAX_WIDTH}px;height:auto;border-radius:10px"`;
   if (width && height) {
     const w = Math.max(1, Math.min(width, EMAIL_IMAGE_MAX_WIDTH, Math.floor(EMAIL_IMAGE_MAX_HEIGHT * width / height)));
-    const h = Math.max(1, Math.round(w * height / width));
+    const h = Math.min(EMAIL_IMAGE_MAX_HEIGHT, Math.max(1, Math.round(w * height / width)));
     size = `width="${w}" height="${h}" style="display:block;margin:0 auto;width:${w}px;max-width:100%;height:auto;border-radius:10px"`;
   }
   const img = `<img src="${escapeHtml(absoluteUrl(url, siteUrl))}" alt="${escapeHtml(alt)}" ${size}>`;

@@ -176,6 +176,8 @@ describe('article images are horizontally centred', () => {
       expect(email([{ ...image, width: 400, height: 700 }])).toContain('width="365" height="639"');
       // Wider than the column: 520px wide, height in proportion.
       expect(email([{ ...image, width: 2000, height: 1000 }])).toContain('width="520" height="260"');
+      // An extreme sliver never exceeds the height cap.
+      expect(email([{ ...image, width: 1, height: 50_000 }])).toContain('width="1" height="640"');
     });
 
     it('centres every gallery image', () => {

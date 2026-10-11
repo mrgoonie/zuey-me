@@ -19,6 +19,7 @@ const imageSize = {
   width: { type: 'integer', minimum: 1, maximum: LIMITS.imagePixels, description: 'Natural width in pixels; requires height' },
   height: { type: 'integer', minimum: 1, maximum: LIMITS.imagePixels, description: 'Natural height in pixels; requires width' },
 };
+const imageSizeTogether = { width: ['height'], height: ['width'] };
 const iconName = {
   type: 'string',
   enum: [...ICON_NAMES, ...Object.keys(ICON_ALIASES)],
@@ -56,7 +57,7 @@ export const blockSchemas: Record<string, unknown> = {
   }, ['text']),
   BlockCode: block('code', { language: { type: 'string', maxLength: 40 }, code: { type: 'string', maxLength: LIMITS.code } }, ['code']),
   BlockDivider: block('divider', {}),
-  BlockImage: block('image', { url: httpsUrl, alt: short, caption: short, ...imageSize }, ['url']),
+  BlockImage: { ...block('image', { url: httpsUrl, alt: short, caption: short, ...imageSize }, ['url']), dependentRequired: imageSizeTogether },
   BlockEmbed: block('embed', {
     url: httpsUrl,
     provider: { type: 'string', enum: [...EMBED_PROVIDERS], description: 'Detected from the URL when omitted. When sent it must equal the detected provider, or be `generic` to show a plain link; any other value is rejected with 422 invalid_document. Rendered as a centred embed that loads when scrolled into view (readers can switch to click-to-load per device), with a link to the original URL.' },
@@ -102,7 +103,7 @@ export const blockSchemas: Record<string, unknown> = {
   BlockGallery: block('gallery', {
     images: {
       type: 'array', minItems: 1, maxItems: LIMITS.galleryImages,
-      items: { type: 'object', required: ['url'], properties: { url: httpsUrl, alt: short, caption: short, ...imageSize } },
+      items: { type: 'object', required: ['url'], properties: { url: httpsUrl, alt: short, caption: short, ...imageSize }, dependentRequired: imageSizeTogether },
     },
     caption: short,
   }, ['images']),

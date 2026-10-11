@@ -27,13 +27,16 @@ interface ImageSizeProbeProps {
  * Loads an image URL in the background and reports its natural size, so the stored block carries
  * `width`/`height` and readers reserve the image box before it loads. Renders nothing; a URL that fails
  * to load (or reports no size) leaves the block without a size, which still renders.
+ * Only a URL entered after the field appears is measured: opening an older article never edits its
+ * unsized images by itself (that would mark the draft unsaved and block publishing).
  */
 export function ImageSizeProbe({ url, known, onSize }: ImageSizeProbeProps) {
   const latest = useRef(onSize);
   latest.current = onSize;
+  const initialUrl = useRef(url);
 
   useEffect(() => {
-    if (known || !/^https:\/\/[^/]+\/./.test(url)) return;
+    if (known || url === initialUrl.current || !/^https:\/\/[^/]+\/./.test(url)) return;
     let cancelled = false;
     const probe = new Image();
     const timer = setTimeout(() => {
