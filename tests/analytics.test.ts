@@ -198,6 +198,15 @@ describe('browser client', () => {
     expect(opted.calls.map(c => c.method)).toEqual(['reset', 'optOut']);
   });
 
+  test('opting out without storage to save the choice still opts this page out', () => {
+    // No storage: setOptOut cannot persist the choice, so consent keeps reading as granted.
+    const noStorage = fakeClient({}, { navigator: {}, storage: null });
+    noStorage.client.activate(false);
+    noStorage.client.optOut();
+    expect(consentState(noStorage.consent)).toBe('granted');
+    expect(noStorage.calls.map(c => c.method)).toEqual(['reset', 'optOut']);
+  });
+
   test('track never throws, even when a destination does', () => {
     const { client } = fakeClient({
       destinations: [{ name: 'broken', capture: () => { throw new Error('boom'); }, identify: () => undefined, reset: () => undefined, optOut: () => undefined, optIn: () => undefined, distinctId: () => null }],
