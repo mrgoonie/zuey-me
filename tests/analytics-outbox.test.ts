@@ -18,6 +18,7 @@ import { parseDodoReversalEvent } from '../src/lib/payments/dodo';
 import { applyDodoEvent, applyDodoReversal } from '../src/lib/payments/dodo-billing';
 import { minimumChargeCents } from '../src/lib/payments/dodo-card-referral-pricing';
 import { AppError } from '../src/lib/http';
+import { GET as identityApi } from '../src/pages/api/members/auth/identity';
 import { POST as drainApi } from '../src/pages/api/v1/analytics/outbox/drain';
 import { POST as ordersApi } from '../src/pages/api/v1/billing/orders/index';
 import { POST as reconcileApi } from '../src/pages/api/v1/billing/reconcile';
@@ -161,6 +162,20 @@ beforeEach(async () => {
   bookingRuntime.now = () => now;
   bookingRuntime.fetch = fakeFetch;
   adminKey = (await createApiKey('ops', 'admin', d1)).key;
+});
+
+describe('funnel identity join', () => {
+  it('the browser identity endpoint returns the distinct_id the server purchase and activation use', async () => {
+    const m = await member('join@example.com');
+    const identity = await identityApi(ctx({ method: 'GET', headers: m.browser }));
+    const memberId = field((await read(identity)).data, 'member_id');
+    expect(memberId).toBe(m.userId);
+
+    const o = await order(m, 'ai', 3);
+    expect(await webhook(transfer(`CK ${o.code}`, o.amount))).toBe('paid');
+    expect(rows('purchase').map(r => r.distinct_id)).toEqual([String(memberId)]);
+    expect(rows('subscription_activated').map(r => r.distinct_id)).toEqual([String(memberId)]);
+  });
 });
 
 describe('SePay membership events', () => {

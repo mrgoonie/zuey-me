@@ -3,6 +3,9 @@
  * run from the layout. Nothing here ever throws into the caller; when consent is missing, the
  * environment is local/dev, or PostHog failed to load, every call is a silent no-op.
  */
+import {
+  ATTRIBUTION_STORAGE_KEY, attributionProperties, parseAttribution, parseStoredAttribution, type Attribution,
+} from './attribution';
 import { CONFIG_ELEMENT_ID, PRODUCTION_HOSTNAMES } from './constants';
 import { browserConsentEnvironment, consentState, setOptOut, type ConsentEnvironment, type ConsentState } from './consent';
 import {
@@ -28,13 +31,31 @@ export interface AnalyticsClientDeps {
   fetchIdentity: () => Promise<unknown>;
   now: () => number;
   debug: (message: string, detail?: unknown) => void;
+  /** The landing page this session's attribution is read from (absent: no attribution). */
+  page?: () => PageContext | null;
 }
 
+export interface PageContext {
+  search: string;
+  referrer: string;
+  hostname: string;
+}
+
+/** Events tracked before the boot step decided whether analytics runs on this page (islands may hydrate first). */
+export const MAX_PENDING_EVENTS = 50;
+
 export interface AnalyticsClient {
-  /** Marks the client live (consent and environment already checked by the caller). */
+  /**
+   * Marks the client live (consent and environment already checked by the caller), records this session's
+   * attribution and sends the events tracked while the boot step was still pending.
+   */
   activate(debug: boolean): void;
+  /** The boot step decided analytics stays off on this page: drop the pending events, queue no more. */
+  settle(): void;
   isActive(): boolean;
   track<E extends ClientEventName>(event: E, properties: EventProperties<E>): void;
+  /** `track()` at most once per page load for `key` (mount effects re-run under StrictMode and remounts). */
+  trackOnce<E extends ClientEventName>(key: string, event: E, properties: EventProperties<E>): void;
   identify(memberId: string): void;
   reset(): void;
   /** Aligns the identified member with the server session (identify, reset, or both). */
@@ -64,6 +85,11 @@ function write(storage: StorageLike | null, key: string, value: string | null): 
 export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClient {
   let active = false;
   let debug = false;
+  // Until activate() or settle(), events wait here: a component may mount before the layout's boot script runs.
+  let decided = false;
+  let pending: Array<{ event: string; properties: unknown }> = [];
+  const once = new Set<string>();
+  let attribution: Attribution | null = null;
 
   const each = (run: (d: ClientDestination) => void): void => {
     for (const d of deps.destinations) {
@@ -82,26 +108,72 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
     if (!granted()) each(d => d.optOut());
   };
 
+  // First tracked page of the tab session wins; later pages reuse it (also when it is empty: a direct visit).
+  const loadAttribution = (): Attribution | null => {
+    const stored = parseStoredAttribution(read(deps.session(), ATTRIBUTION_STORAGE_KEY));
+    if (stored) return stored;
+    const page = deps.page?.() ?? null;
+    if (!page) return null;
+    const fresh = parseAttribution(page.search, page.referrer, page.hostname);
+    write(deps.session(), ATTRIBUTION_STORAGE_KEY, JSON.stringify(fresh));
+    return fresh;
+  };
+
+  const send = (event: string, properties: unknown): void => {
+    if (!live()) return;
+    const checked = validateEvent(event, properties, 'client');
+    if (!checked.ok) {
+      deps.debug('analytics: event rejected', checked.error);
+      return;
+    }
+    const props = {
+      ...checked.properties, ...attributionProperties(attribution),
+      event_version: checked.version, schema_version: ANALYTICS_SCHEMA_VERSION,
+    };
+    if (debug) deps.debug(`analytics: ${event}`, props);
+    each(d => d.capture(event, props));
+  };
+
   const client: AnalyticsClient = {
     activate(on) {
       active = true;
       debug = on;
+      decided = true;
+      try {
+        if (granted()) attribution = loadAttribution();
+      } catch {
+        attribution = null;
+      }
+      const queued = pending;
+      pending = [];
+      for (const item of queued) {
+        try {
+          send(item.event, item.properties);
+        } catch (err) {
+          deps.debug('analytics: track failed', err instanceof Error ? err.message : err);
+        }
+      }
+    },
+    settle() {
+      decided = true;
+      pending = [];
     },
     isActive: live,
     track(event, properties) {
       try {
-        if (!live()) return;
-        const checked = validateEvent(event, properties, 'client');
-        if (!checked.ok) {
-          deps.debug('analytics: event rejected', checked.error);
+        if (!decided) {
+          if (pending.length < MAX_PENDING_EVENTS) pending.push({ event, properties });
           return;
         }
-        const props = { ...checked.properties, event_version: checked.version, schema_version: ANALYTICS_SCHEMA_VERSION };
-        if (debug) deps.debug(`analytics: ${event}`, props);
-        each(d => d.capture(event, props));
+        send(event, properties);
       } catch (err) {
         deps.debug('analytics: track failed', err instanceof Error ? err.message : err);
       }
+    },
+    trackOnce(key, event, properties) {
+      if (once.has(key)) return;
+      once.add(key);
+      client.track(event, properties);
     },
     identify(memberId) {
       try {
@@ -167,6 +239,9 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
     },
     optOut() {
       setOptOut(true, deps.consent());
+      pending = [];
+      attribution = null;
+      write(deps.session(), ATTRIBUTION_STORAGE_KEY, null);
       // reset() opts the destinations out last (posthog-js reset() clears its own opt-out), which also
       // orders the calls the snippet queues while array.js is still loading.
       client.reset();
@@ -217,11 +292,24 @@ const browserClient = createAnalyticsClient({
   fetchIdentity: fetchIdentityFromServer,
   now: () => Date.now(),
   debug: (message, detail) => console.debug(message, detail ?? ''),
+  page: () => (typeof window === 'undefined' ? null : {
+    search: window.location.search,
+    referrer: typeof document === 'undefined' ? '' : document.referrer,
+    hostname: window.location.hostname,
+  }),
 });
 
 /** Sends a taxonomy event from the browser. Unknown properties or PII drop the event. */
 export function track<E extends ClientEventName>(event: E, properties: EventProperties<E>): void {
   browserClient.track(event, properties);
+}
+
+/**
+ * Sends an event at most once per page load for `key`: use it in mount effects, which React runs twice
+ * under StrictMode and again on every remount.
+ */
+export function trackOnce<E extends ClientEventName>(key: string, event: E, properties: EventProperties<E>): void {
+  browserClient.trackOnce(key, event, properties);
 }
 
 /** Links this browser to a verified member id. Emails, names and other non-id values are refused. */
@@ -231,6 +319,15 @@ export function identify(memberId: string): void {
 
 /** Forgets the identified member (call on sign-out and account deletion). */
 export function reset(): void {
+  browserClient.reset();
+}
+
+/**
+ * Call once the server ended a member session: sends `logout` while this browser is still identified as
+ * the member (so it joins their funnel), then forgets the identity.
+ */
+export function signOutAnalytics(surface: 'account'): void {
+  browserClient.track('logout', { surface });
   browserClient.reset();
 }
 
@@ -291,5 +388,8 @@ export function bootAnalytics(): void {
     void browserClient.syncIdentity(window.location.pathname);
   } catch (err) {
     console.debug('analytics: boot failed', err instanceof Error ? err.message : 'unknown');
+  } finally {
+    // Analytics stays off on this page: events queued by components that mounted first are dropped.
+    if (typeof window !== 'undefined' && !browserClient.isActive()) browserClient.settle();
   }
 }

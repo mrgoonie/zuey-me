@@ -622,6 +622,53 @@ describe('admin access', () => {
     expect(field(d1.raw.query('SELECT status FROM chat_artifacts WHERE id = ?').get(artifactId), 'status')).toBe('attached');
     expect(d1.raw.query(`SELECT COUNT(*) AS n FROM admin_access_audit WHERE action = 'chat.artifact.attach'`).get()).toEqual({ n: 2 });
   });
+
+  it('refuses to attach to a recovered draft unless confirmed, and never overwrites an unreadable one', async () => {
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      script = answers(`\`\`\`zuey-interactive\n${interactiveJson('<p>tick</p>')}\n\`\`\``);
+      const boss = await member('boss@example.com', ['ai']);
+      const sessionId = await newSession(boss);
+      const events = await askAndRead(boss, sessionId, 'demo');
+      const artifacts = field(events.find(e => e.event === 'done')?.data, 'artifacts');
+      const artifactId = String(field(Array.isArray(artifacts) ? artifacts[0] : null, 'id'));
+      const lossy = JSON.stringify({
+        version: 1,
+        blocks: [
+          { id: 'p1', type: 'paragraph', text: 'Giữ lại' },
+          { id: 'e1', type: 'embed', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', provider: 'vimeo' },
+          { id: 'h1', type: 'heading', level: 9, text: 'Bad level' },
+        ],
+      });
+      const storedDraft = (slug: string) => String(field(d1.raw.query('SELECT draft_json FROM article_editions WHERE id = ?').get(`ed_${slug}`), 'draft_json'));
+      const attach = (slug: string, extra: Record<string, unknown> = {}) =>
+        attachApi(ctx({ method: 'POST', params: { id: artifactId }, body: { article_slug: slug, expected_revision: 1, ...extra }, headers: boss.headers }));
+
+      insertArticle('hong', 'free', ['Mở đầu']);
+      d1.raw.query('UPDATE article_editions SET draft_json = ? WHERE id = ?').run(lossy, 'ed_hong');
+      const refused = await read(await attach('hong'));
+      expect(refused.status).toBe(409);
+      expect(refused.code).toBe('draft_needs_recovery');
+      expect(storedDraft('hong')).toBe(lossy);
+      expect(field(d1.raw.query('SELECT status FROM chat_artifacts WHERE id = ?').get(artifactId), 'status')).toBe('private');
+
+      insertArticle('khong-doc-duoc', 'free', ['Mở đầu']);
+      d1.raw.query('UPDATE article_editions SET draft_json = ? WHERE id = ?').run('{not json', 'ed_khong-doc-duoc');
+      const unreadable = await read(await attach('khong-doc-duoc', { confirm_recovered_draft: true }));
+      expect(unreadable.status).toBe(409);
+      expect(unreadable.code).toBe('draft_unreadable');
+      expect(storedDraft('khong-doc-duoc')).toBe('{not json');
+
+      const confirmed = await attach('hong', { confirm_recovered_draft: true });
+      expect(confirmed.status).toBe(200);
+      const blocks = field(JSON.parse(storedDraft('hong')), 'blocks');
+      expect(Array.isArray(blocks) && blocks.map(b => field(b, 'type'))).toEqual(['paragraph', 'embed', 'interactive']);
+      expect(field(d1.raw.query('SELECT status FROM chat_artifacts WHERE id = ?').get(artifactId), 'status')).toBe('attached');
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
 });
 
 describe('interactive blocks', () => {
