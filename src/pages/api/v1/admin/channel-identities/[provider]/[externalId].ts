@@ -1,14 +1,19 @@
 import { runtimeWaitUntil } from '../../../../../../lib/blocks/articles';
-import { adminGetChannelIdentity, adminUnlinkChannelIdentity, parseChannelRef, parseUnlinkReason } from '../../../../../../lib/channel-access/admin';
+import type { ChannelRef } from '../../../../../../lib/channel-access/admin';
+import { adminGetChannelIdentity, adminUnlinkChannelIdentity, decodePathParam, parseChannelRef, parseUnlinkReason } from '../../../../../../lib/channel-access/admin';
 import { AppError, jsonOk } from '../../../../../../lib/http';
 import { NO_STORE, memberRoute } from '../../../../../../lib/members/account';
-import { adminLabel } from '../../../../../../lib/members/billing-attention';
 import { requireCan } from '../../../../../../lib/members/policy';
+
+/** Path params arrive still percent-encoded (`777%3A002`); decode once, then validate. */
+function refFromParams(params: Record<string, string | undefined>): ChannelRef {
+  return parseChannelRef(params.provider, decodePathParam(params.externalId, 'external_id'));
+}
 
 /** Admin: which member holds this chat account. */
 export const GET = memberRoute(async ({ params }, { d1, principal }) => {
   requireCan(principal, 'admin');
-  return jsonOk(await adminGetChannelIdentity(d1, parseChannelRef(params.provider, params.externalId)), 200, NO_STORE);
+  return jsonOk(await adminGetChannelIdentity(d1, refFromParams(params)), 200, NO_STORE);
 });
 
 /** Optional JSON body `{ reason }`; an empty body is allowed (scripted calls still send Content-Type: application/json). */
@@ -28,10 +33,8 @@ async function readReason(request: Request): Promise<string | null> {
 /** Admin: unlink this chat account from whichever member holds it; dewee is told to re-check the sender at once. */
 export const DELETE = memberRoute(async ({ params, request, locals }, { d1, env, principal }) => {
   requireCan(principal, 'admin');
-  const ref = parseChannelRef(params.provider, params.externalId);
+  const ref = refFromParams(params);
   const reason = await readReason(request);
-  const result = await adminUnlinkChannelIdentity(d1, env, ref, {
-    admin: adminLabel(principal), reason, request, waitUntil: runtimeWaitUntil(locals.runtime),
-  });
+  const result = await adminUnlinkChannelIdentity(d1, env, ref, { principal, reason, waitUntil: runtimeWaitUntil(locals.runtime) });
   return jsonOk(result, 200, NO_STORE);
 });
