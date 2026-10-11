@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import { PROVIDER_LABELS } from '../src/lib/blocks/embed';
 import { createAnalyticsClient, shouldCaptureOn, type AnalyticsClientDeps } from '../src/lib/analytics/client';
 import {
   BLOCKED_STORAGE, OPT_OUT_STORAGE_KEY, STORAGE_PROBE_KEY, consentControlView, consentState, isOptedOut, resolveConsentStorage,
   setOptOut, type ConsentEnvironment,
 } from '../src/lib/analytics/consent';
 import {
-  DEFAULT_POSTHOG_KEY, createPostHogServerDestination, getPostHog, isSensitivePath, postHogClientDestination, resolvePostHogConfig, scrubCaptureResult,
+  DEFAULT_POSTHOG_KEY, createPostHogServerDestination, getPostHog, isSensitivePath, postHogClientDestination, postHogInitOptions, resolvePostHogConfig,
+  scrubCaptureResult,
 } from '../src/lib/analytics/destinations/posthog';
 import type { ClientDestination, ServerDestination } from '../src/lib/analytics/destinations/types';
 import { validateEvent, type Taxonomy } from '../src/lib/analytics/events';
@@ -193,7 +195,17 @@ describe('browser client', () => {
     opted.client.activate(false);
     opted.client.optOut();
     opted.client.track('social_clicked', { platform: 'x' });
-    expect(opted.calls.map(c => c.method)).toEqual(['optOut', 'reset']);
+    // posthog-js reset() clears its opt-out, so the opt-out must be the last call.
+    expect(opted.calls.map(c => c.method)).toEqual(['reset', 'optOut']);
+  });
+
+  test('opting out without storage to save the choice still opts this page out', () => {
+    // No storage: setOptOut cannot persist the choice, so consent keeps reading as granted.
+    const noStorage = fakeClient({}, { navigator: {}, storage: null });
+    noStorage.client.activate(false);
+    noStorage.client.optOut();
+    expect(consentState(noStorage.consent)).toBe('granted');
+    expect(noStorage.calls.map(c => c.method)).toEqual(['reset', 'optOut']);
   });
 
   test('track never throws, even when a destination does', () => {
@@ -572,6 +584,104 @@ describe('privacy page consent copy', () => {
   });
 });
 
+describe('privacy page third-party processors', () => {
+  const read = (rel: string) => Bun.file(new URL(rel, import.meta.url)).text();
+
+  /** The `processors: [...]` rows of each language, as source text. */
+  async function processorRows(): Promise<Record<'vi' | 'en', string>> {
+    const source = await read('../src/pages/privacy.astro');
+    const [vi, en] = source.split('\n  en: {');
+    const rows = (block: string) => block.slice(block.indexOf('    processors: ['), block.indexOf('    processorsNote:'));
+    return { vi: rows(vi), en: rows(en) };
+  }
+
+  test('every embeddable provider is listed in both languages', async () => {
+    const rows = await processorRows();
+    const providers = Object.entries(PROVIDER_LABELS).filter(([id]) => id !== 'generic').map(([, label]) => label);
+    expect(providers.length).toBe(9);
+    for (const lang of ['vi', 'en'] as const) {
+      const names = [...rows[lang].matchAll(/name: '([^']+)'/g)].map(m => m[1]).join(' | ');
+      for (const label of providers) expect(names).toContain(label);
+      expect(rows[lang]).toContain('youtube-nocookie.com, i.ytimg.com');
+    }
+  });
+
+  test('jsDelivr is listed in both languages because /docs loads Scalar from it', async () => {
+    const docs = await read('../src/pages/docs/index.astro');
+    expect(docs).toContain('https://cdn.jsdelivr.net/');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'jsDelivr', purpose: '[^']*\/docs[^']*', data: '[^']*IP/);
+    expect(rows.en).toMatch(/name: 'jsDelivr', purpose: '[^']*\/docs[^']*', data: '[^']*IP/);
+  });
+
+  /** Each language's whole copy block (sections, analytics text and processors), as source text. */
+  async function languageBlocks(): Promise<Record<'vi' | 'en', string>> {
+    const [vi, en] = (await read('../src/pages/privacy.astro')).split('\n  en: {');
+    return { vi, en };
+  }
+
+  test('Cloudflare discloses Workers AI, the search query and members-only articles in both languages', async () => {
+    const indexer = await read('../src/lib/search/indexer.ts');
+    expect(indexer).toContain("tier: 'full'");
+    expect(indexer).toContain('embedTexts(backend.ai');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*nội dung từ khoá tìm kiếm \(tối đa 200 ký tự[^']*nội dung đã xuất bản \(kể cả bài viết dành cho thành viên\)/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Workers AI[^']*', data: '[^']*search query text \(up to 200 characters[^']*published content \(including members-only articles\)/);
+    expect(rows.vi).not.toContain('chữ của từ khoá');
+  });
+
+  test('Cloudflare discloses Stream lesson videos and their signed links in both languages', async () => {
+    const signing = await read('../src/lib/courses/course-media-signing.ts');
+    expect(signing).toContain('.cloudflarestream.com/');
+    expect(signing).toContain('MEDIA_TOKEN_MIN_TTL_SECONDS = 10 * 60');
+    expect(signing).toContain('MEDIA_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60');
+    const lesson = await read('../src/pages/courses/[slug]/[lesson].astro');
+    expect(lesson).toContain("'Referrer-Policy', 'no-referrer'");
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*Cloudflare Stream phát video bài học[^']*', data: '[^']*link Stream ký riêng hết hạn sau ít nhất 10 phút và tối đa 4 giờ[^']*gửi địa chỉ IP và user agent trực tiếp tới cloudflarestream\.com/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Cloudflare Stream plays course lesson videos[^']*', data: '[^']*signed Stream link that expires after 10 minutes to 4 hours[^']*IP address and user agent directly to cloudflarestream\.com/);
+  });
+
+  test('blocks that load from any https host are disclosed in both languages', async () => {
+    const validate = await read('../src/lib/blocks/validate.ts');
+    expect(validate).toContain("protocol === 'https:'");
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'Máy chủ ảnh, media và tệp do tác giả chọn', purpose: '[^']*https:\/\/[^']*', data: '[^']*Địa chỉ IP và user agent/);
+    expect(rows.en).toMatch(/name: 'Image, media and file hosts chosen by the author', purpose: '[^']*https:\/\/[^']*', data: '[^']*IP address and user agent/);
+    const copy = await languageBlocks();
+    expect(copy.vi).toContain('có thể trỏ tới bất kỳ địa chỉ https:// nào do tác giả chọn');
+    expect(copy.en).toContain('can point to any https:// address the author chooses');
+  });
+
+  test('OpenRouter is listed as the transcript rewriter with no visitor data, and Workers AI only as its fallback', async () => {
+    const providers = await read('../src/lib/videos/video-transcript-rewrite-providers.ts');
+    expect(providers).toContain('https://openrouter.ai/api/v1/chat/completions');
+    const ingest = await read('../src/lib/videos/video-ingest-service.ts');
+    expect(ingest.indexOf('openRouterRewriter(')).toBeLessThan(ingest.indexOf('workersAiRewriter('));
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'OpenRouter', purpose: '[^']*phụ đề[^']*', data: 'Chỉ phụ đề công khai[^']*không có dữ liệu của người xem'/);
+    expect(rows.en).toMatch(/name: 'OpenRouter', purpose: '[^']*transcripts[^']*', data: 'Only the public video transcript[^']*no visitor data'/);
+    expect(rows.vi).toMatch(/name: 'Cloudflare', purpose: '[^']*phụ đề Zueytube khi OpenRouter không được cấu hình hoặc bị lỗi/);
+    expect(rows.en).toMatch(/name: 'Cloudflare', purpose: '[^']*Zueytube transcripts only when OpenRouter is not configured or fails/);
+  });
+
+  test('SePay discloses the qr.sepay.vn image in both languages', async () => {
+    expect(await read('../src/lib/payments/sepay.ts')).toContain('https://qr.sepay.vn/img?');
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'SePay', purpose: '[^']*', data: '[^']*qr\.sepay\.vn/);
+    expect(rows.en).toMatch(/name: 'SePay', purpose: '[^']*', data: '[^']*qr\.sepay\.vn/);
+  });
+
+  test('the server-side analytics disclosure stays in both languages', async () => {
+    const rows = await processorRows();
+    expect(rows.vi).toMatch(/name: 'PostHog', purpose: '[^']*', data: '[^']*sự kiện tài khoản, mua hàng từ máy chủ[^']*\(không có email hay tên\)'/);
+    expect(rows.en).toMatch(/name: 'PostHog', purpose: '[^']*', data: '[^']*server-side account and purchase events[^']*\(no email or name\)'/);
+    const copy = await languageBlocks();
+    expect(copy.vi).toContain('các sự kiện này vẫn được gửi kể cả khi bạn tắt analytics trên trình duyệt');
+    expect(copy.en).toContain('they are sent even when browser analytics is off');
+  });
+});
+
 describe('PostHog snippet stub', () => {
   /** Mirrors the official loader snippet: before init() the array stub only has `init` and `__SV`. */
   function snippetStub() {
@@ -609,6 +719,121 @@ describe('PostHog snippet stub', () => {
       postHogClientDestination.identify('mem_1');
       expect([...stub]).toEqual([['capture', 'after_init', { a: 1 }], ['identify', 'mem_1']]);
       expect(stub._i.length).toBe(1);
+    });
+  });
+
+  describe('opting out while array.js is still loading', () => {
+    /**
+     * Mirrors posthog-js when array.js arrives: it runs the `loaded` callback, replays the calls the stub
+     * queued (its `reset()` also clears the opt-out), then sends the automatic `$pageview` unless opted out.
+     */
+    function loadLibrary(stub: ReturnType<typeof snippetStub>) {
+      const sent: string[] = [];
+      let optedOut = false;
+      const instance: Record<string, (...args: unknown[]) => void> = {
+        opt_out_capturing: () => { optedOut = true; },
+        opt_in_capturing: () => { optedOut = false; },
+        reset: () => { optedOut = false; },
+        capture: (event: unknown) => { if (!optedOut && typeof event === 'string') sent.push(event); },
+        identify: () => undefined,
+      };
+      const queuedInit: unknown = stub._i[0];
+      const options: unknown = Array.isArray(queuedInit) ? queuedInit[1] : undefined;
+      if (typeof options !== 'object' || options === null) throw new Error('init() was not queued');
+      const loaded: unknown = Reflect.get(options, 'loaded');
+      if (typeof loaded === 'function') loaded(instance);
+      for (const entry of [...stub]) {
+        if (!Array.isArray(entry)) continue;
+        const [method, ...args] = entry;
+        if (typeof method === 'string') instance[method]?.(...args);
+      }
+      if (Reflect.get(options, 'capture_pageview') === true && !optedOut) sent.push('$pageview');
+      return { sent, optedOut: () => optedOut };
+    }
+
+    function bootWith(stub: ReturnType<typeof snippetStub>, env: ConsentEnvironment) {
+      const client = createAnalyticsClient({
+        destinations: [postHogClientDestination],
+        consent: () => env,
+        local: () => new MemoryStorage(),
+        session: () => new MemoryStorage(),
+        fetchIdentity: async () => undefined,
+        now: () => 1_000_000,
+        debug: () => undefined,
+      });
+      // What bootAnalytics() does while consent is still granted.
+      const options = postHogInitOptions({ key: KEY, host: 'https://us.i.posthog.com', debug: false }, '/privacy', () => consentState(env) === 'granted');
+      getPostHog()?.init(KEY, options);
+      client.activate(false);
+      return client;
+    }
+
+    test('a visitor who opts out before the library loads sends no pageview', () => {
+      const stub = snippetStub();
+      withWindow(stub, () => {
+        const env: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() };
+        const client = bootWith(stub, env);
+        client.optOut();
+        const posthog = loadLibrary(stub);
+        expect(posthog.sent).toEqual([]);
+        expect(posthog.optedOut()).toBe(true);
+      });
+    });
+
+    test('an opt-out stored in another tab before the library loads is applied in loaded', () => {
+      const stub = snippetStub();
+      withWindow(stub, () => {
+        const env: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() };
+        bootWith(stub, env);
+        setOptOut(true, env);
+        const posthog = loadLibrary(stub);
+        expect(posthog.sent).toEqual([]);
+        expect(posthog.optedOut()).toBe(true);
+      });
+    });
+
+    test('a visitor who stays opted in still sends the automatic pageview', () => {
+      const stub = snippetStub();
+      withWindow(stub, () => {
+        bootWith(stub, { navigator: {}, storage: new MemoryStorage() });
+        const posthog = loadLibrary(stub);
+        expect(posthog.sent).toEqual(['$pageview']);
+        expect(posthog.optedOut()).toBe(false);
+      });
+    });
+  });
+
+  test('an opted-out visitor who signs out after PostHog loaded does not resume automatic events', () => {
+    // A loaded posthog-js instance: reset() clears its opt-out, and automatic events honour the opt-out.
+    const sent: string[] = [];
+    let optedOut = false;
+    const loaded = {
+      init: () => undefined,
+      reset: () => { optedOut = false; },
+      opt_out_capturing: () => { optedOut = true; },
+      opt_in_capturing: () => { optedOut = false; },
+      autoCapture: (event: string) => { if (!optedOut) sent.push(event); },
+    };
+    withWindow(loaded, () => {
+      const env: ConsentEnvironment = { navigator: {}, storage: new MemoryStorage() };
+      const client = createAnalyticsClient({
+        destinations: [postHogClientDestination],
+        consent: () => env,
+        local: () => new MemoryStorage(),
+        session: () => new MemoryStorage(),
+        fetchIdentity: async () => undefined,
+        now: () => 1_000_000,
+        debug: () => undefined,
+      });
+      client.activate(false);
+      client.optOut();
+      expect(optedOut).toBe(true);
+      // Sign-out (and account deletion) call reset().
+      client.reset();
+      loaded.autoCapture('$autocapture');
+      loaded.autoCapture('$pageleave');
+      expect(sent).toEqual([]);
+      expect(optedOut).toBe(true);
     });
   });
 
