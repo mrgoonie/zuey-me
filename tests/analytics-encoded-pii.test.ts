@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { postHogInitOptions, scrubCaptureResult } from '../src/lib/analytics/destinations/posthog';
-import { REDACTED, containsPii, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
+import { MAX_SCRUB_LENGTH, REDACTED, containsPii, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
 
 const EMAIL = 'jane.doe@example.com';
 const LOCAL = 'jane.doe';
@@ -91,6 +91,53 @@ describe('percent-encoded emails', () => {
   test('scrubValue redacts nested encoded emails', () => {
     const out = scrubValue({ $initial_person_info: { r: 'https://www.google.com/search?q=jane.doe%40example.com', u: 'https://zuey.me/' } });
     expect(leaksEmail(JSON.stringify(out))).toBe(false);
+  });
+});
+
+describe('long inputs', () => {
+  const MB = 1024 * 1024;
+
+  function timed<T>(run: () => T): [T, number] {
+    const start = performance.now();
+    const out = run();
+    return [out, performance.now() - start];
+  }
+
+  test('a 1 MB URL is scrubbed in under 50 ms and the email inside it is redacted', () => {
+    const url = `https://www.google.com/search?q=jane.doe%40example.com&x=${'a%40aaaa'.repeat(MB / 8)}`;
+    const [out, ms] = timed(() => scrubValue({ $referrer: url }));
+    expect(ms).toBeLessThan(50);
+    const text = JSON.stringify(out);
+    expect(leaksEmail(text)).toBe(false);
+    expect(text).toContain(REDACTED);
+    expect(text.length).toBeLessThanOrEqual(MAX_SCRUB_LENGTH + 100);
+  });
+
+  test('1 MB of free text with a literal email is scrubbed in under 50 ms', () => {
+    const value = `contact ${EMAIL} ${'a'.repeat(MB)}`;
+    const [out, ms] = timed(() => redactString(value));
+    expect(ms).toBeLessThan(50);
+    expect(leaksEmail(out)).toBe(false);
+    expect(out.startsWith(`contact ${REDACTED} `)).toBe(true);
+  });
+
+  test('a cut never leaves part of an email, encoded email or token behind', () => {
+    const pad = 'x'.repeat(MAX_SCRUB_LENGTH - 10);
+    for (const tail of [EMAIL, 'jane.doe%40example.com', 'zm_abcdefghijklmnopqrstuvwxyz']) {
+      const out = redactString(`${pad} ${tail}`);
+      expect(out.endsWith(` ${REDACTED}`)).toBe(true);
+      expect(out).not.toContain('jane');
+      expect(out).not.toContain('zm_');
+    }
+  });
+
+  test('values up to the cap are kept whole', () => {
+    const value = 'a'.repeat(MAX_SCRUB_LENGTH);
+    expect(redactString(value)).toBe(value);
+  });
+
+  test('containsPii treats a value too long to inspect as PII', () => {
+    expect(containsPii('a'.repeat(MAX_SCRUB_LENGTH + 1))).toBe(true);
   });
 });
 

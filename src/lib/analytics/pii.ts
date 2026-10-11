@@ -14,7 +14,11 @@ const SENSITIVE_PARAMS = new Set([
 /** Any parameter whose name contains one of these fragments is also removed (e.g. `reset_token`). */
 const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'email', 'session', 'signature'];
 
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+/**
+ * Quantifiers are bounded (RFC 5321 limits: 64-char local part, 253-char domain, 63-char label) so a failed
+ * match is abandoned after a fixed number of steps; unbounded runs made long inputs scan quadratically.
+ */
+const EMAIL_RE = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}/g;
 const JWT_RE = /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g;
 /** zuey.me member sessions (`zm_`), OAuth tokens (`zoa_`/`zor_`), API keys (`zk_`), and common provider secrets. */
 const SECRET_RE = /\b(?:zm|zoa|zor|zk|sk|rk|whsec|ghp|gho|github_pat|xox[abpr])_[A-Za-z0-9_-]{12,}/g;
@@ -69,6 +73,24 @@ function test(re: RegExp, value: string): boolean {
 
 /** A run of characters between URL delimiters (query/fragment separators, path slashes, whitespace, quotes). */
 const SEGMENT_RE = /[^\s&#?=;/"'<>]+/g;
+const SEGMENT_DELIMITER_RE = /[\s&#?=;/"'<>]/;
+
+/**
+ * Longest string the scrubber inspects. Real URLs, referrers and autocapture element chains stay far below
+ * it; anything longer is cut so a crafted value cannot stall the visitor's tab on every capture.
+ */
+export const MAX_SCRUB_LENGTH = 16_384;
+
+/**
+ * Cuts a string to `MAX_SCRUB_LENGTH` and replaces the rest with `[redacted]`. The cut falls back to the
+ * last URL delimiter so a half-cut email, JWT or token never survives as a fragment the patterns miss.
+ */
+function capLength(value: string): string {
+  if (value.length <= MAX_SCRUB_LENGTH) return value;
+  let end = MAX_SCRUB_LENGTH;
+  while (end > 0 && !SEGMENT_DELIMITER_RE.test(value.charAt(end - 1))) end--;
+  return `${value.slice(0, end)}${REDACTED}`;
+}
 /** Percent-decoding passes: enough for double (`%2540`) and triple encoding. */
 const MAX_DECODE_PASSES = 3;
 
@@ -121,8 +143,9 @@ export function looksLikeJwt(value: string): boolean {
   return test(JWT_RE, value);
 }
 
-/** True when a string carries an email address, a JWT or a recognisable secret token. */
+/** True when a string carries an email address, a JWT or a recognisable secret token, or is too long to inspect. */
 export function containsPii(value: string): boolean {
+  if (value.length > MAX_SCRUB_LENGTH) return true;
   return looksLikeEmail(value) || looksLikeJwt(value) || test(SECRET_RE, value);
 }
 
@@ -141,7 +164,8 @@ function scrubParams(params: URLSearchParams): boolean {
  * Removes sensitive query parameters (and fragment parameters such as `#access_token=`) from an
  * absolute or root-relative URL. Values that do not parse as a URL go through `redactString` instead.
  */
-export function scrubUrl(input: string): string {
+export function scrubUrl(raw: string): string {
+  const input = capLength(raw);
   const relative = input.startsWith('/') && !input.startsWith('//');
   const absolute = /^https?:\/\//i.test(input);
   if (!relative && !absolute) return redactString(input);
@@ -177,7 +201,7 @@ export function scrubUrl(input: string): string {
  */
 export function redactString(value: string): string {
   return redactEncodedEmails(
-    templatePaths(value)
+    templatePaths(capLength(value))
       .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match))
       .replace(JWT_RE, REDACTED)
       .replace(SECRET_RE, REDACTED)
