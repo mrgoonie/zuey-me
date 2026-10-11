@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { DragEvent, KeyboardEvent } from 'react';
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
@@ -9,7 +9,7 @@ import type {
   ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
   ResponsiveSpan, SurveyBlock, ToggleBlock,
 } from '../../lib/blocks/schema';
-import { recognizeEmbed } from '../../lib/blocks/embed';
+import { embedFromPastedText, recognizeEmbed } from '../../lib/blocks/embed';
 import { formatBytes } from '../../lib/blocks/markdown';
 import { validateDocument } from '../../lib/blocks/validate';
 import type { ValidationError } from '../../lib/blocks/validate';
@@ -89,6 +89,12 @@ function newBlock(type: BlockType): Block | null {
   }
 }
 
+/** Native embed block for a bare supported URL (pasted or typed); the original URL is what gets stored. */
+function embedBlockFrom(text: string, id: string = newId()): Block | null {
+  const embed = embedFromPastedText(text);
+  return embed ? { id, type: 'embed', url: embed.url, provider: embed.provider } : null;
+}
+
 const CREATABLE: BlockType[] = BLOCK_TYPES.filter(t => TYPE_LABELS[t] !== undefined);
 
 interface ListCtx { layoutDepth: number; inToggle: boolean; slug: string }
@@ -136,7 +142,7 @@ function SlashList({ id, items, active, onPick }: { id: string; items: BlockType
 }
 
 /** Notion-style inserter: "/" opens the block menu; plain text + Enter adds a paragraph. */
-function BlockInserter({ allowed, onInsert, autoFocus, onDone }: { allowed: BlockType[]; onInsert: (b: Block) => void; autoFocus?: boolean; onDone?: () => void }) {
+export function BlockInserter({ allowed, onInsert, autoFocus, onDone }: { allowed: BlockType[]; onInsert: (b: Block) => void; autoFocus?: boolean; onDone?: () => void }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -156,24 +162,34 @@ function BlockInserter({ allowed, onInsert, autoFocus, onDone }: { allowed: Bloc
     if (showing && slashKey(e, items.length, active, setActive, () => insert(items[Math.min(active, items.length - 1)]), () => { reset(); onDone?.(); })) return;
     if (e.key === 'Enter' && q.trim()) {
       e.preventDefault();
-      onInsert({ id: newId(), type: 'paragraph', text: q.trim() });
+      onInsert(embedBlockFrom(q) ?? { id: newId(), type: 'paragraph', text: q.trim() });
       reset();
       onDone?.();
     } else if (e.key === 'Escape') {
       onDone?.();
     }
   };
+  // Pasting a bare X/Facebook/Instagram/YouTube… link into the empty inserter adds an embed block directly.
+  const onPaste = (e: ClipboardEvent<HTMLInputElement>) => {
+    if (q.trim()) return;
+    const b = embedBlockFrom(e.clipboardData.getData('text'));
+    if (!b) return;
+    e.preventDefault();
+    onInsert(b);
+    reset();
+    onDone?.();
+  };
   return (
     <div className="relative">
       <div className="flex gap-2 items-center">
         <input className={`${inputCls} border-dashed`} value={q} autoFocus={autoFocus}
-          placeholder="Gõ / để chèn block, hoặc gõ chữ rồi Enter"
+          placeholder="Gõ / để chèn block, dán link X/Facebook/YouTube… để nhúng, hoặc gõ chữ rồi Enter"
           role="combobox" aria-expanded={showing} aria-controls={listId} aria-autocomplete="list"
           aria-activedescendant={showing && items[active] ? `${listId}-${items[active]}` : undefined}
           aria-label="Chèn block mới"
           onChange={e => { setQ(e.target.value); setActive(0); }}
           onBlur={() => setOpen(false)}
-          onKeyDown={onKeyDown} />
+          onKeyDown={onKeyDown} onPaste={onPaste} />
         <button type="button" className={btnCls} aria-label="Chọn loại block" aria-expanded={open}
           onMouseDown={e => e.preventDefault()} onClick={() => setOpen(o => !o)}>+</button>
       </div>
@@ -237,10 +253,13 @@ function SurveyResultsView({ block, slug }: { block: SurveyBlock; slug: string }
 
 // ---------- Per-type block fields ----------
 
-interface FieldsProps { block: Block; onChange: (b: Block) => void; ctx: ListCtx; allowed: BlockType[] }
+/** A field may replace its block with several (e.g. an embed turned back into text keeps its caption). */
+type BlockReplace = (b: Block | Block[]) => void;
+
+interface FieldsProps { block: Block; onChange: BlockReplace; ctx: ListCtx; allowed: BlockType[] }
 
 /** Paragraph textarea; typing "/" in an empty paragraph turns it into another block type. */
-function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; onChange: (b: Block) => void; allowed: BlockType[] }) {
+export function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; onChange: (b: Block) => void; allowed: BlockType[] }) {
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const listId = useId();
@@ -250,6 +269,9 @@ function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; o
     const b = t ? newBlock(t) : null;
     if (b) onChange({ ...b, id: block.id });
   };
+  // A paragraph holding only a supported social/video link can become a native embed in one click.
+  const asEmbed = embedBlockFrom(block.text, block.id);
+  const embedLabel = asEmbed ? recognizeEmbed(block.text.trim()).label : '';
   return (
     <div className="relative">
       <Field label="Nội dung (**đậm**, *nghiêng*, ~~gạch~~, ==tô sáng==, `code`, [link](https://…)) — gõ / để đổi loại block">
@@ -257,9 +279,22 @@ function ParagraphField({ block, onChange, allowed }: { block: ParagraphBlock; o
           aria-controls={slash ? listId : undefined} aria-expanded={slash}
           aria-activedescendant={slash && items[active] ? `${listId}-${items[active]}` : undefined}
           onChange={e => { setDismissed(false); setActive(0); onChange({ ...block, text: e.target.value }); }}
+          onPaste={e => {
+            // Pasting a bare supported link into an empty paragraph turns it into an embed block.
+            if (block.text.trim()) return;
+            const b = embedBlockFrom(e.clipboardData.getData('text'), block.id);
+            if (!b) return;
+            e.preventDefault();
+            onChange(b);
+          }}
           onKeyDown={e => { if (slash) slashKey(e, items.length, active, setActive, () => pick(items[Math.min(active, items.length - 1)]), () => setDismissed(true)); }} />
       </Field>
       {slash && <SlashList id={listId} items={items} active={Math.min(active, Math.max(items.length - 1, 0))} onPick={pick} />}
+      {asEmbed && (
+        <button type="button" className={`${btnCls} mt-2`} onClick={() => onChange(asEmbed)}>
+          Chuyển thành khối nhúng {embedLabel}
+        </button>
+      )}
     </div>
   );
 }
@@ -325,7 +360,7 @@ function GalleryFields({ images, onChange }: { images: GalleryImage[]; onChange:
   );
 }
 
-function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: (b: Block) => void }) {
+export function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed' }>; onChange: BlockReplace }) {
   const rec = recognizeEmbed(block.url);
   return (
     <div className="space-y-2">
@@ -337,8 +372,20 @@ function EmbedFields({ block, onChange }: { block: Extract<Block, { type: 'embed
           onChange({ ...block, url, provider: follow ? detected : block.provider });
         }} />
       <p className="text-[11px] text-stone-400" aria-live="polite">
-        Nhận diện: <b className="text-stone-200">{rec.label}</b> · {rec.src ? 'nhúng được (người đọc bấm để tải)' : 'hiển thị dạng liên kết'}
+        Nhận diện: <b className="text-stone-200">{rec.label}</b> · {rec.src ? 'nhúng được (tự tải khi người đọc cuộn tới)' : 'hiển thị dạng liên kết'}
       </p>
+      {rec.provider === 'facebook' && !rec.src && (
+        <p className="text-[11px] text-amber-300">
+          Link chia sẻ Facebook (/share/…) không nhúng được. Mở link rồi dán URL gốc của bài (dạng /posts/, /reel/, /videos/).
+        </p>
+      )}
+      {/* Undo for a pasted link that became an embed: keep it as plain text instead, caption included. */}
+      <button type="button" className={btnCls} onClick={() => onChange([
+        { id: block.id, type: 'paragraph', text: block.url },
+        ...(block.caption ? [{ id: newId(), type: 'paragraph' as const, text: block.caption }] : []),
+      ])}>
+        Chuyển về đoạn văn
+      </button>
       <Select label="Nhà cung cấp" value={block.provider} options={EMBED_PROVIDERS} onChange={provider => onChange({ ...block, provider })} />
       <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
     </div>
@@ -576,7 +623,7 @@ function BlockPreview({ block, slug }: { block: Block; slug: string }) {
   return (
     <div className="rounded-2xl bg-[#F5EFEB] p-3 sm:p-4 min-w-0 overflow-hidden">
       {res.ok
-        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight />
+        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight autoLoadEmbeds={false} />
         : <ul className="text-[11px] text-rose-700 font-mono">{res.errors.slice(0, 5).map((e, i) => <li key={i}>{e.path}: {e.message}</li>)}</ul>}
     </div>
   );
@@ -658,7 +705,7 @@ function BlockListEditor({ blocks, onChange, ctx }: { blocks: Block[]; onChange:
               </div>
               {isPreview
                 ? <BlockPreview block={block} slug={ctx.slug} />
-                : <BlockFields block={block} ctx={ctx} allowed={allowed} onChange={b => onChange(blocks.map((x, j) => (j === i ? b : x)))} />}
+                : <BlockFields block={block} ctx={ctx} allowed={allowed} onChange={b => onChange(blocks.flatMap((x, j) => (j === i ? b : [x])))} />}
             </div>
             {insertAt === i + 1 && i + 1 < blocks.length && (
               <div className="mt-2.5">
@@ -884,7 +931,7 @@ function HistoryView({ slug, locale, onRestore }: { slug: string; locale: Locale
             <button type="button" className={btnCls} onClick={() => setViewing(null)}>Đóng</button>
           </div>
           <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight />
+            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight autoLoadEmbeds={false} />
           </div>
         </div>
       )}
@@ -1193,7 +1240,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       )}
       {tab === 'preview' && (
         <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
+          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight autoLoadEmbeds={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
         </div>
       )}
       {tab === 'json' && (

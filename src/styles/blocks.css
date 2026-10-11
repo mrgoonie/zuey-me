@@ -125,14 +125,51 @@
 .zb-diagram-tools button:focus-visible { outline: 2px solid #d97706; outline-offset: 1px; }
 .zb-note { font-size: 0.8rem; color: #78716c; }
 
-.zb-embed { border: 1px solid #e7e5e4; border-radius: 1rem; padding: 1rem; background: #fafaf9; }
-.zb-embed-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem; }
+/* Embeds: a centred box sized per provider (posts stay narrow, video players use the full column).
+   The frame reserves its final shape before the iframe exists so loading never shifts the page. */
+.zb-embed { display: flex; flex-direction: column; align-items: center; gap: 0.45rem; }
+.zb-embed > * { width: 100%; max-width: var(--zb-embed-max, 100%); }
+.zb-embed-x, .zb-embed-linkedin { --zb-embed-max: 550px; }
+.zb-embed-instagram { --zb-embed-max: 540px; }
+.zb-embed-facebook.zb-embed-post { --zb-embed-max: 500px; }
+.zb-embed-vertical { --zb-embed-max: 340px; }
+.zb-embed > figcaption { margin-top: 0; text-align: center; }
 .zb-embed-provider { font-weight: 700; }
-.zb-embed-frame { position: relative; width: 100%; margin-top: 0.75rem; border-radius: 0.75rem; overflow: hidden; background: #000; }
+.zb-embed-frame { position: relative; width: 100%; border-radius: 0.75rem; overflow: hidden; background: #000; }
 .zb-embed-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .zb-embed-frame.zb-ratio-video { aspect-ratio: 16 / 9; }
 .zb-embed-frame.zb-ratio-audio { height: 166px; background: transparent; }
 .zb-embed-frame.zb-ratio-post { height: 560px; background: transparent; }
+.zb-embed-x .zb-embed-frame.zb-ratio-post { height: 480px; }
+.zb-embed-instagram .zb-embed-frame.zb-ratio-post { height: 680px; }
+/* Facebook's post plugin never reports its height (no postMessage), so the frame is square: 500px at the
+   500px cap, the column width on phones. That fits a text or square-image post; taller posts scroll
+   inside the frame and the original link sits right below. */
+.zb-embed-facebook .zb-embed-frame.zb-ratio-post { height: auto; aspect-ratio: 1 / 1; min-height: 320px; }
+.zb-embed-placeholder {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem;
+  padding: 1rem; text-align: center; font-size: 0.85rem; color: #57534e; background: #f5f5f4; border: 1px solid #e7e5e4; border-radius: inherit;
+}
+/* While a frame loads, the overlay is decoration only: it never blocks the iframe underneath. */
+.zb-embed-frame.is-loading .zb-embed-placeholder { pointer-events: none; animation: zb-embed-pulse 1.4s ease-in-out infinite; }
+@keyframes zb-embed-pulse { 50% { opacity: 0.55; } }
+.zb-embed-notice {
+  margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.35rem; padding: 0.6rem 0.9rem;
+  border: 1px solid #fcd34d; border-radius: 0.75rem; background: #fffbeb; font-size: 0.8rem; color: #57534e; text-align: center;
+}
+.zb-embed-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.6rem; }
+.zb-embed-fallback {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.6rem;
+  padding: 0.9rem 1rem; border: 1px solid #e7e5e4; border-radius: 1rem; background: #fafaf9; text-align: center;
+}
+.zb-embed-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.25rem 1rem; font-size: 0.8rem; }
+.zb-embed-link-btn { border: 0; background: none; padding: 0; font: inherit; color: #78716c; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.zb-embed-link-btn:hover:not(:disabled) { color: #44403c; }
+.zb-embed-link-btn:disabled { cursor: default; }
+.zb-embed-link-btn:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; border-radius: 0.25rem; }
+@media (prefers-reduced-motion: reduce) {
+  .zb-embed-frame.is-loading .zb-embed-placeholder { animation: none; }
+}
 .zb-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
   border-radius: 999px; padding: 0.45rem 0.95rem; font-size: 0.85rem; font-weight: 700;

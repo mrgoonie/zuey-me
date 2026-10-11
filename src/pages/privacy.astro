@@ -88,7 +88,7 @@ const content: Record<'vi' | 'en', {
           'Cộng đồng Telegram (gói Cộng đồng): link mời một lần dùng, Telegram user ID khi bạn vào nhóm bằng link đó, và trạng thái thành viên để mời hoặc gỡ khỏi nhóm theo hiệu lực gói.',
           'Zuey AI trên Telegram: Telegram user ID của bạn được lưu trong bảng liên kết tài khoản chat (channel_identities) khi bạn liên kết qua trang /connect, hoặc được nạp sẵn từ lần vào nhóm cộng đồng nếu ID đó chỉ thuộc về một tài khoản. ID này chỉ dùng để kiểm tra bạn có gói còn hạn trước khi Zuey AI trả lời trên Telegram. Dewee (nền tảng chạy bot) chỉ nhận kết quả cho phép hoặc từ chối và một mã tham chiếu ẩn danh, không nhận email hay thông tin gói của bạn.',
           'Thời tiết (chỉ khi bạn bật): tên thành phố hoặc toạ độ đã làm tròn tới 1 chữ số thập phân (khoảng 11 km). Lựa chọn này chỉ lưu trong trình duyệt của bạn; máy chủ chỉ chuyển truy vấn tới Open-Meteo, không gắn với tài khoản.',
-          'Lưu trữ trên trình duyệt: cookie ngôn ngữ (zuey_locale) và localStorage cho vị trí và trạng thái linh vật, thông báo đã đóng, lệnh gần đây và tuỳ chọn thời tiết. Bạn có thể xoá bất cứ lúc nào trong cài đặt trình duyệt.',
+          'Lưu trữ trên trình duyệt: cookie ngôn ngữ (zuey_locale) và localStorage cho vị trí và trạng thái linh vật, thông báo đã đóng, lệnh gần đây, tuỳ chọn thời tiết và tuỳ chọn tự tải nội dung nhúng. Bạn có thể xoá bất cứ lúc nào trong cài đặt trình duyệt.',
           'Thống kê sử dụng: lượt xem trang và một số sự kiện thao tác (ví dụ bấm liên kết, đổi ngôn ngữ) qua PostHog. Chi tiết và cách tắt ở mục "Thống kê sử dụng (analytics)" bên dưới.',
           'Nhật ký kỹ thuật: địa chỉ IP, user agent và thông tin yêu cầu do Cloudflare ghi nhận để vận hành và chống lạm dụng.',
         ],
@@ -118,6 +118,14 @@ const content: Record<'vi' | 'en', {
         paras: [
           'Để tạo câu trả lời, câu hỏi của bạn cùng các đoạn nội dung liên quan được gửi qua Dewee gateway tới nhà cung cấp mô hình AI. Trước đó, TypeSafe AI có thể chấm điểm đoạn nội dung nào liên quan nhất tới câu hỏi. Các bên này xử lý dữ liệu để trả lời và có thể lưu giữ theo chính sách riêng của họ; zuey.me không cam kết rằng dữ liệu không bao giờ được lưu ở phía nhà cung cấp.',
           'Không nhập mật khẩu, khoá bí mật hoặc thông tin nhạy cảm vào khung chat.',
+        ],
+      },
+      {
+        id: 'embeds',
+        title: 'Nội dung nhúng từ nền tảng khác',
+        paras: [
+          'Bài viết Knowledges và bài học trong khoá học có thể nhúng bài đăng hoặc video từ X, Facebook, Instagram, TikTok, LinkedIn, YouTube, Vimeo, SoundCloud và Spotify. Nội dung nhúng tự tải khi bạn cuộn tới vị trí của nó. Khi đó trình duyệt của bạn gửi yêu cầu trực tiếp tới nền tảng đó, kèm địa chỉ IP, user agent và cookie mà nền tảng đã đặt; nền tảng xử lý dữ liệu này theo chính sách riêng của họ. YouTube được nhúng qua youtube-nocookie.com và X được nhúng ở chế độ không theo dõi (dnt).',
+          'Bạn có thể tắt việc tự tải trên thiết bị đang dùng bằng nút “Không tự tải nội dung nhúng trên thiết bị này” bên dưới mỗi nội dung nhúng. Sau đó mỗi nội dung nhúng chỉ tải khi bạn bấm. Lựa chọn này được lưu trong localStorage của trình duyệt và không gắn với tài khoản. Liên kết tới bài gốc luôn hiển thị.',
         ],
       },
     ],
@@ -214,7 +222,7 @@ const content: Record<'vi' | 'en', {
           'Telegram community (Community plan): single-use invite links, your Telegram user ID once you join through such a link, and membership status so access follows your plan.',
           'Zuey AI on Telegram: your Telegram user ID is stored in the chat-account link table (channel_identities) when you link it on the /connect page, or carried over from joining the community group when that ID belongs to a single account. It is used only to check that you have an active plan before Zuey AI answers you on Telegram. Dewee (the platform running the bot) receives only an allow or deny decision and an anonymous reference, never your email or plan details.',
           'Weather (only if you turn it on): a city name or coordinates rounded to 1 decimal place (about 11 km). The choice is stored in your browser only; the server just forwards the query to Open-Meteo and does not link it to your account.',
-          'Browser storage: a locale cookie (zuey_locale) and localStorage for the companion position and state, dismissed notices, recent commands and weather preference. You can clear these at any time in your browser settings.',
+          'Browser storage: a locale cookie (zuey_locale) and localStorage for the companion position and state, dismissed notices, recent commands, weather preference and the embed auto-load preference. You can clear these at any time in your browser settings.',
           'Usage analytics: page views and some interaction events (such as link clicks and language changes) via PostHog. Details and how to turn it off are in "Usage analytics" below.',
           'Technical logs: IP address, user agent and request details recorded by Cloudflare to operate the service and prevent abuse.',
         ],
@@ -244,6 +252,14 @@ const content: Record<'vi' | 'en', {
         paras: [
           'To generate answers, your question and relevant content excerpts are sent through the Dewee gateway to an AI model provider. Before that, TypeSafe AI may score which excerpts are most relevant to your question. These parties process the data to answer and may retain it under their own policies; zuey.me does not promise that providers never retain data.',
           'Do not enter passwords, secret keys or other sensitive information in the chat.',
+        ],
+      },
+      {
+        id: 'embeds',
+        title: 'Content embedded from other platforms',
+        paras: [
+          'Knowledges articles and course lessons may embed posts or videos from X, Facebook, Instagram, TikTok, LinkedIn, YouTube, Vimeo, SoundCloud and Spotify. An embed loads automatically when you scroll to it. Your browser then sends a request directly to that platform, including your IP address, user agent and any cookies the platform has set, and the platform processes this data under its own policy. YouTube is embedded through youtube-nocookie.com and X in do-not-track (dnt) mode.',
+          'You can turn automatic loading off on the device you are using with the “Không tự tải nội dung nhúng trên thiết bị này” (do not auto-load embeds on this device) button below any embed. Each embed then loads only when you click it. This choice is stored in your browser’s localStorage and is not linked to your account. A link to the original post is always shown.',
         ],
       },
     ],

@@ -1,13 +1,13 @@
 import { Fragment, lazy, Suspense, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
-import type { ArticleDocument, Block, CodeBlock, EmbedBlock, LayoutBlock } from '../../lib/blocks/schema';
+import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
 import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
 import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
 import { resolveSpan } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
-import { embedFrame, embedSrc, PROVIDER_LABELS } from '../../lib/blocks/embed';
+import { EmbedView } from './EmbedView';
 import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
 import { DiagramBlock } from './DiagramBlock';
@@ -49,6 +49,7 @@ interface RenderContext {
   interactive: boolean;
   highlights?: CodeHighlights;
   liveHighlight: boolean;
+  autoLoadEmbeds: boolean;
 }
 
 function renderNodes(nodes: InlineNode[]): ReactNode[] {
@@ -69,45 +70,6 @@ function renderNodes(nodes: InlineNode[]): ReactNode[] {
 export function Inline({ text }: { text: string }) {
   const lines = text.split(/\r?\n/);
   return <>{lines.map((line, i) => <span key={i}>{i > 0 && <br />}{renderNodes(parseInline(line))}</span>)}</>;
-}
-
-function frameClass(block: EmbedBlock): string {
-  return `zb-ratio-${embedFrame(block.provider, block.url)}`;
-}
-
-/** Click-to-load embed: no third-party request happens until the reader opts in. */
-function EmbedView({ block }: { block: EmbedBlock }) {
-  const [loaded, setLoaded] = useState(false);
-  const src = embedSrc(block.url, block.provider);
-  const label = PROVIDER_LABELS[block.provider];
-  return (
-    <figure className="zb-figure zb-embed">
-      <div className="zb-embed-head">
-        <span className="zb-embed-provider">{label}</span>
-        <span style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
-          {src && !loaded && (
-            <button type="button" className="zb-btn" onClick={() => setLoaded(true)}>Tải nội dung từ {label}</button>
-          )}
-          <a href={block.url} target="_blank" rel="noopener noreferrer nofollow">Mở liên kết</a>
-        </span>
-      </div>
-      {src && !loaded && <p className="zb-note" style={{ marginTop: '0.5rem' }}>Nội dung nhúng chỉ tải khi bạn bấm, để {label} không theo dõi bạn trước.</p>}
-      {src && loaded && (
-        <div className={`zb-embed-frame ${frameClass(block)}`}>
-          <iframe
-            src={src}
-            title={block.caption || `${label} embed`}
-            loading="lazy"
-            referrerPolicy="strict-origin-when-cross-origin"
-            sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
-            allow="encrypted-media; picture-in-picture; fullscreen"
-            allowFullScreen
-          />
-        </div>
-      )}
-      {block.caption && <figcaption>{block.caption}</figcaption>}
-    </figure>
-  );
 }
 
 function LayoutView({ block, ctx }: { block: LayoutBlock; ctx: RenderContext }) {
@@ -223,7 +185,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
           {block.caption && <figcaption>{block.caption}</figcaption>}
         </figure>
       );
-    case 'embed': return <EmbedView block={block} />;
+    case 'embed': return <EmbedView key={block.url} block={block} autoLoad={ctx.autoLoadEmbeds} />;
     case 'table':
       return (
         <div className="zb-scroll">
@@ -276,11 +238,13 @@ interface BlockRendererProps {
   highlights?: CodeHighlights;
   /** Highlight code blocks on the client by lazy-loading the highlighter (Studio previews). */
   liveHighlight?: boolean;
+  /** Third-party embeds load by themselves when scrolled into view (default). False keeps them click-to-load (every Studio preview). */
+  autoLoadEmbeds?: boolean;
 }
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
-export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false }: BlockRendererProps) {
-  const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight };
+export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true }: BlockRendererProps) {
+  const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds };
   return (
     <div className="zb-doc">
       {doc.blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
