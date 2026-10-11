@@ -2,8 +2,8 @@ import { Fragment, lazy, Suspense, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
 import type { ArticleDocument, Block, CodeBlock, EmbedBlock, LayoutBlock } from '../../lib/blocks/schema';
-import { highlightedText, isTokenKind, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
-import type { CodeHighlights, HighlightLine } from '../../lib/blocks/code-syntax';
+import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
+import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
 import { resolveSpan } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
@@ -132,26 +132,23 @@ function LayoutView({ block, ctx }: { block: LayoutBlock; ctx: RenderContext }) 
 /** Studio previews re-highlight after typing pauses for this long. */
 const LIVE_HIGHLIGHT_DELAY_MS = 150;
 
-function renderLines(lines: HighlightLine[]): ReactNode[] {
-  return lines.map((line, i) => (
-    <Fragment key={i}>
-      {i > 0 && '\n'}
-      {line.map(([text, kind], j) => (isTokenKind(kind)
-        ? <span key={j} className={`zb-tk-${kind}`}>{text}</span>
-        : <Fragment key={j}>{text}</Fragment>))}
-    </Fragment>
-  ));
+function renderSegments(segments: CodeSegment[]): ReactNode[] {
+  return segments.map(({ text, kind }, i) => (kind
+    ? <span key={i} className={`zb-tk-${kind}`}>{text}</span>
+    : <Fragment key={i}>{text}</Fragment>));
 }
 
 /**
- * Code block. Tokens come pre-computed from the server (`highlights`, so no-JS readers get colours and hydration
- * matches) or, in Studio previews, from the highlighter loaded lazily on the client. Tokens are used only when
- * their text reproduces the source exactly; otherwise — and for unsupported languages — the code renders plain.
+ * Code block. Token runs come pre-computed from the server (`highlights`, so no-JS readers get colours and
+ * hydration matches) or, in Studio previews, from the highlighter loaded lazily on the client. Runs only carry
+ * lengths and kinds; the text is always sliced from the block's own code, and runs that do not cover it exactly
+ * are ignored. Line endings are normalised to LF so the server HTML parses back to the same text.
  */
 function CodeView({ block, ctx }: { block: CodeBlock; ctx: RenderContext }) {
-  const provided = ctx.highlights?.[block.id];
-  const source = `${block.language}\u0000${block.code}`;
-  const [live, setLive] = useState<{ source: string; lines: HighlightLine[] | null } | null>(null);
+  const text = normalizeCode(block.code);
+  const provided = codeRuns(ctx.highlights, block.id, text.length);
+  const source = `${block.language}\u0000${text}`;
+  const [live, setLive] = useState<{ source: string; runs: TokenRuns | null } | null>(null);
   const wantsLive = ctx.liveHighlight && !provided && resolveHighlightLanguage(block.language) !== null;
 
   useEffect(() => {
@@ -159,19 +156,19 @@ function CodeView({ block, ctx }: { block: CodeBlock; ctx: RenderContext }) {
     let cancelled = false;
     const timer = setTimeout(() => {
       import('../../lib/blocks/code-highlight')
-        .then(m => { if (!cancelled) setLive({ source, lines: m.highlightCode(block.code, block.language) }); })
+        .then(m => { if (!cancelled) setLive({ source, runs: m.highlightCode(block.code, block.language) }); })
         // The highlighter chunk failed to load (offline, deploy skew): the preview keeps plain code.
-        .catch(() => { if (!cancelled) setLive({ source, lines: null }); });
+        .catch(() => { if (!cancelled) setLive({ source, runs: null }); });
     }, LIVE_HIGHLIGHT_DELAY_MS);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [wantsLive, source, block.code, block.language]);
 
-  const candidate = provided ?? (live?.source === source ? live.lines : null);
-  const lines = candidate && highlightedText(candidate) === block.code ? candidate : null;
+  const runs = provided ?? (live?.source === source ? live.runs : null);
+  const segments = runs ? codeSegments(text, runs) : null;
   return (
     <pre className="zb-code">
       {block.language && <span className="zb-code-lang">{block.language}</span>}
-      <code>{lines ? renderLines(lines) : block.code}</code>
+      <code>{segments ? renderSegments(segments) : text}</code>
     </pre>
   );
 }
@@ -274,7 +271,8 @@ interface BlockRendererProps {
   /** Published article slug; enables survey voting. */
   articleSlug?: string;
   /** False in editor previews (surveys are shown but cannot be submitted). */
-  interactive?: boolean;  /** Server-computed code tokens by block id (see `highlightBlocks`); missing blocks render plain. */
+  interactive?: boolean;
+  /** Server-computed code token runs by block id (see `highlightBlocks`); missing blocks render plain. */
   highlights?: CodeHighlights;
   /** Highlight code blocks on the client by lazy-loading the highlighter (Studio previews). */
   liveHighlight?: boolean;

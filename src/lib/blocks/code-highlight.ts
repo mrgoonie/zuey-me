@@ -2,8 +2,8 @@
  * Syntax highlighting for article code blocks.
  *
  * Shiki's fine-grained core with the JavaScript regex engine (no WASM) and only the grammars listed in
- * `code-syntax.ts`. Output is plain data — lines of `[text, kind?]` tokens — that React renders as
- * text nodes inside spans, so author input is never turned into HTML. Colours live in CSS
+ * `code-syntax.ts`. Output is plain data — `[length, kindIndex]` runs over the block's normalised code — that the
+ * renderer turns into text slices inside spans, so author input is never turned into HTML. Colours live in CSS
  * (`.zb-tk-<kind>` in blocks.css); the theme below only maps TextMate scopes to token kinds.
  *
  * Heavy module: import it dynamically (server pages, Studio preview), never statically from a client island.
@@ -26,8 +26,8 @@ import markdown from 'shiki/langs/markdown.mjs';
 import diff from 'shiki/langs/diff.mjs';
 import type { Block } from './schema';
 import { walkBlocks } from './schema';
-import { TOKEN_KINDS, resolveHighlightLanguage } from './code-syntax';
-import type { CodeHighlights, HighlightLanguage, HighlightLine, TokenKind } from './code-syntax';
+import { TOKEN_KINDS, isValidRuns, normalizeCode, resolveHighlightLanguage, tokenKindIndex } from './code-syntax';
+import type { CodeHighlights, HighlightLanguage, TokenKind, TokenRuns } from './code-syntax';
 
 /** Larger blocks stay plain: bounds tokenizer CPU per request on the edge worker. */
 export const MAX_HIGHLIGHT_CHARS = 20_000;
@@ -96,25 +96,27 @@ function getHighlighter(): HighlighterCore {
 }
 
 /**
- * Tokenises `code` for `language`. Returns null — meaning "render plain code" — for an unsupported language,
- * empty or oversized code, a tokenizer failure, or output whose text does not reproduce the source exactly.
+ * Tokenises `code` for `language` into runs over `normalizeCode(code)`. Returns null — meaning "render plain
+ * code" — for an unsupported language, empty or oversized code, a tokenizer failure, or output whose text does
+ * not reproduce the source exactly.
  */
-export function highlightCode(code: string, language: string | undefined): HighlightLine[] | null {
+export function highlightCode(code: string, language: string | undefined): TokenRuns | null {
   const lang: HighlightLanguage | null = resolveHighlightLanguage(language);
   if (!lang || !code || code.length > MAX_HIGHLIGHT_CHARS) return null;
-  const key = `${lang}\u0000${code}`;
+  const text = normalizeCode(code);
+  const key = `${lang}\u0000${text}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
-  const lines = tokenize(code, lang);
-  remember(key, lines);
-  return lines;
+  const runs = tokenize(text, lang);
+  remember(key, runs);
+  return runs;
 }
 
-const cache = new Map<string, HighlightLine[] | null>();
+const cache = new Map<string, TokenRuns | null>();
 let cachedChars = 0;
 
-function remember(key: string, lines: HighlightLine[] | null): void {
-  cache.set(key, lines);
+function remember(key: string, runs: TokenRuns | null): void {
+  cache.set(key, runs);
   cachedChars += key.length;
   // Map iteration follows insertion order, so the oldest entries are evicted first.
   for (const oldest of cache.keys()) {
@@ -124,55 +126,67 @@ function remember(key: string, lines: HighlightLine[] | null): void {
   }
 }
 
-function tokenize(code: string, lang: HighlightLanguage): HighlightLine[] | null {
+/** `text` is already normalised (LF only), so its lines are exactly what the tokenizer sees. */
+function tokenize(text: string, lang: HighlightLanguage): TokenRuns | null {
   let tokenLines: Array<Array<{ content: string; color?: string }>>;
   try {
-    tokenLines = getHighlighter().codeToTokensBase(code, {
+    tokenLines = getHighlighter().codeToTokensBase(text, {
       lang,
       theme: THEME.name,
-      tokenizeMaxLineLength: 2_000,
-      // Generous: the limit includes first-use grammar compilation, and Workers freeze timers during CPU work anyway.
+      // Longer lines are emitted as one uncoloured token. This, with the per-block and per-document character
+      // caps, is what bounds tokenizer CPU.
+      tokenizeMaxLineLength: 1_000,
+      // Not a CPU bound on Workers: the isolate clock does not advance during synchronous CPU work, so this
+      // limit only takes effect in runtimes with a live clock (Node, Bun, dev). It also counts first-use
+      // grammar compilation, hence the generous value.
       tokenizeTimeLimit: 2_000,
     });
   } catch {
     return null;
   }
-  const sourceLines = code.split('\n');
+  const sourceLines = text.split('\n');
   if (tokenLines.length > sourceLines.length) return null;
-  const lines: HighlightLine[] = [];
+  const runs: number[] = [];
+  // Appends a run, merging it into the previous one when the kind matches to keep the payload small.
+  const push = (size: number, kindIndex: number): void => {
+    const last = runs.length - 2;
+    if (last >= 0 && runs[last + 1] === kindIndex) runs[last] = (runs[last] ?? 0) + size;
+    else runs.push(size, kindIndex);
+  };
   for (let i = 0; i < sourceLines.length; i++) {
-    const source = sourceLines[i] ?? '';
-    const line: HighlightLine = [];
-    let text = '';
+    if (i > 0) {
+      // A newline carries no colour, so it joins whatever run precedes it.
+      const last = runs.length - 2;
+      if (last >= 0) runs[last] = (runs[last] ?? 0) + 1;
+      else push(1, 0);
+    }
+    let lineText = '';
     for (const token of tokenLines[i] ?? []) {
       if (!token.content) continue;
-      text += token.content;
-      const kind = token.color ? COLOR_TO_KIND.get(token.color.toLowerCase()) : undefined;
-      const prev = line[line.length - 1];
-      // Merge neighbours of the same kind to keep the payload small.
-      if (prev && prev[1] === kind) prev[0] += token.content;
-      else line.push(kind ? [token.content, kind] : [token.content]);
+      lineText += token.content;
+      const kind: TokenKind | undefined = token.color ? COLOR_TO_KIND.get(token.color.toLowerCase()) : undefined;
+      push(token.content.length, tokenKindIndex(kind));
     }
-    // The tokenizer drops a CRLF's carriage return; restore it so the text stays byte-identical.
-    if (text !== source) {
-      if (source === `${text}\r`) line.push(['\r']);
-      else return null;
-    }
-    lines.push(line);
+    if (lineText !== sourceLines[i]) return null;
   }
-  return lines;
+  const encoded = Uint32Array.from(runs);
+  return isValidRuns(encoded, text.length) ? encoded : null;
 }
 
-/** Highlights every code block in a document (layouts and toggles included), within the per-document budget. */
+/**
+ * Highlights every code block in a document (layouts and toggles included), within the per-document budget.
+ * Built with `Object.fromEntries`, so ids such as `__proto__` stay own data properties instead of touching the
+ * prototype; readers must still look entries up with `codeRuns` (own keys only).
+ */
 export function highlightBlocks(blocks: Block[]): CodeHighlights {
-  const out: CodeHighlights = {};
+  const entries: Array<[string, TokenRuns]> = [];
   let budget = MAX_DOCUMENT_HIGHLIGHT_CHARS;
   walkBlocks(blocks, block => {
     if (block.type !== 'code' || block.code.length > budget) return;
-    const lines = highlightCode(block.code, block.language);
-    if (!lines) return;
+    const runs = highlightCode(block.code, block.language);
+    if (!runs) return;
     budget -= block.code.length;
-    out[block.id] = lines;
+    entries.push([block.id, runs]);
   });
-  return out;
+  return Object.fromEntries(entries);
 }

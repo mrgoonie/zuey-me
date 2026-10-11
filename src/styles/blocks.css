@@ -68,7 +68,7 @@
 .zb-code-lang { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a8a29e; margin-bottom: 0.4rem; }
 /* Syntax token palette for the dark code surface; every colour keeps >= 7:1 contrast on #1c1917. */
 .zb-code {
-  --zb-tk-comment: #a8a29e; --zb-tk-keyword: #f0abfc; --zb-tk-string: #bef264; --zb-tk-constant: #fdba74;
+  --zb-tk-comment: #b8b2ad; --zb-tk-keyword: #f0abfc; --zb-tk-string: #bef264; --zb-tk-constant: #fdba74;
   --zb-tk-function: #93c5fd; --zb-tk-type: #fcd34d; --zb-tk-tag: #fda4af; --zb-tk-attr: #5eead4;
   --zb-tk-variable: #c4b5fd; --zb-tk-regexp: #fb923c; --zb-tk-inserted: #86efac; --zb-tk-deleted: #fca5a5;
   --zb-tk-heading: #fcd34d; --zb-tk-link: #7dd3fc; --zb-tk-meta: #a5b4fc;

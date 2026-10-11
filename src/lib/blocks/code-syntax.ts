@@ -46,21 +46,74 @@ export const TOKEN_KINDS = [
 ] as const;
 export type TokenKind = (typeof TOKEN_KINDS)[number];
 
-const KIND_SET = new Set<string>(TOKEN_KINDS);
+/**
+ * Compact token runs for one code block: a flat `[length, kindIndex, length, kindIndex, …]` list covering the
+ * block's normalised code (see `normalizeCode`) from start to end. `kindIndex` 0 means uncoloured text; `k > 0`
+ * means `TOKEN_KINDS[k - 1]`. Runs carry no text, so the payload is a fraction of the code's size and the
+ * rendered text always comes from the block itself. A typed array because Astro serialises island props of that
+ * type as one flat number list, whereas each element of a plain array gets its own `[type, value]` wrapper.
+ */
+export type TokenRuns = Uint32Array;
+/**
+ * Token runs per code block id. Block ids may be any `[A-Za-z0-9_-]` string, `constructor` and `__proto__`
+ * included, so build this with `Object.fromEntries` (own data properties) and read it via `codeRuns`.
+ */
+export type CodeHighlights = Record<string, TokenRuns>;
 
-export function isTokenKind(value: unknown): value is TokenKind {
-  return typeof value === 'string' && KIND_SET.has(value);
+/** One rendered piece of a highlighted block: its exact text and, when coloured, its kind. */
+export interface CodeSegment {
+  text: string;
+  kind?: TokenKind;
 }
 
-/** One token: its exact source text and, when coloured, its kind. */
-export type HighlightToken = [text: string, kind?: TokenKind];
-export type HighlightLine = HighlightToken[];
-/** Highlighted lines per code block id. Blocks without an entry render as plain code. */
-export type CodeHighlights = Record<string, HighlightLine[]>;
+/**
+ * Line endings as an HTML parser would deliver them (CRLF and lone CR become LF). Both the highlighter and the
+ * renderer work on this form, so server HTML, hydration and the copied text all agree.
+ */
+export function normalizeCode(code: string): string {
+  return code.replace(/\r\n?/g, '\n');
+}
 
-/** Exact source text of highlighted lines; renderers compare it with the block's code before using tokens. */
-export function highlightedText(lines: HighlightLine[]): string {
-  return lines.map(line => line.map(t => t[0]).join('')).join('\n');
+/** Index of `kind` in the runs encoding (1-based; 0 is uncoloured). */
+export function tokenKindIndex(kind: TokenKind | undefined): number {
+  return kind ? TOKEN_KINDS.indexOf(kind) + 1 : 0;
+}
+
+/** True when `runs` is a well-formed run list that covers exactly `length` characters. */
+export function isValidRuns(runs: unknown, length: number): runs is TokenRuns {
+  // Elements of a Uint32Array are always non-negative integers, so only zero sizes and kind range need checks.
+  if (!(runs instanceof Uint32Array) || runs.length === 0 || runs.length % 2 !== 0) return false;
+  let total = 0;
+  for (let i = 0; i < runs.length; i += 2) {
+    const size = runs[i] ?? 0;
+    const kind = runs[i + 1] ?? 0;
+    if (size === 0 || kind > TOKEN_KINDS.length) return false;
+    total += size;
+    if (total > length) return false;
+  }
+  return total === length;
+}
+
+/** Validated runs for block `id`, ignoring inherited keys (`constructor`, `toString`, …) and malformed data. */
+export function codeRuns(highlights: CodeHighlights | undefined, id: string, length: number): TokenRuns | null {
+  if (!highlights || !Object.hasOwn(highlights, id)) return null;
+  const runs: unknown = highlights[id];
+  return isValidRuns(runs, length) ? runs : null;
+}
+
+/** Splits normalised `code` by `runs`; null (render plain) unless the runs cover the code exactly. */
+export function codeSegments(code: string, runs: unknown): CodeSegment[] | null {
+  if (!isValidRuns(runs, code.length)) return null;
+  const segments: CodeSegment[] = [];
+  let at = 0;
+  for (let i = 0; i < runs.length; i += 2) {
+    const size = runs[i] ?? 0;
+    const kind = TOKEN_KINDS[(runs[i + 1] ?? 0) - 1];
+    const text = code.slice(at, at + size);
+    at += size;
+    segments.push(kind ? { text, kind } : { text });
+  }
+  return segments;
 }
 
 /** True when some code block (nested ones included) has a supported language, i.e. loading the highlighter pays off. */
