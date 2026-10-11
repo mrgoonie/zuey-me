@@ -3,7 +3,7 @@ import { createTestD1 } from './helpers/d1';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
 import type { ArticleRecord } from '../src/lib/blocks/articles';
-import { createArticle, getArticle, updateArticle } from '../src/lib/blocks/articles';
+import { createArticle, deleteEdition, getArticle, updateArticle } from '../src/lib/blocks/articles';
 import { AppError } from '../src/lib/http';
 
 // A save bumps the revision and writes the draft together: no reader or concurrent save may ever
@@ -146,6 +146,34 @@ describe('updateArticle atomicity (real SQLite)', () => {
     expect(paragraphText(saved)).toBe('lost');
     expect(saved.tag_ids.length).toBe(1);
     expect(d1.raw.query("SELECT tags FROM articles WHERE slug = 'renamed'").get()).toEqual({ tags: JSON.stringify(['atomic']) });
+  });
+
+  it('stale saves to the existing edition, a deleted edition or the tags change nothing', async () => {
+    await updateArticle(d1, 'post', { tags: ['kept'] }, 1);
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 2);
+    await deleteEdition(d1, 'post', 'en', 3);
+    await updateArticle(d1, 'post', { document: doc('current') }, 4);
+    const stale = 4;
+    const state = () => ({
+      articles: d1.raw.query('SELECT * FROM articles').all(),
+      editions: d1.raw.query('SELECT * FROM article_editions ORDER BY locale').all(),
+      tags: d1.raw.query('SELECT article_id, tag_id, position FROM article_tags ORDER BY position').all(),
+      revisions: d1.raw.query('SELECT COUNT(*) AS n FROM article_revisions').get(),
+    });
+    const before = state();
+    expect(before.tags.length).toBe(1);
+
+    const saves: Array<[string, Parameters<typeof updateArticle>[2]]> = [
+      ['existing edition', { document: doc('stale'), title: 'Stale' }],
+      ['deleted edition', { locale: 'en', title: 'Stale', document: doc('stale') }],
+      ['tags', { tags: ['replaced'] }],
+    ];
+    for (const [label, input] of saves) {
+      const outcome = await settle(updateArticle(d1, 'post', input, stale));
+      expect(conflictRevision(outcome)).toBe(5);
+      expect({ label, ...state() }).toEqual({ label, ...before });
+    }
+    expect(paragraphText(await getArticle(d1, 'post'))).toBe('current');
   });
 
   it('a stale save that would add an edition and tags writes nothing', async () => {
