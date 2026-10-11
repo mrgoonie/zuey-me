@@ -326,7 +326,7 @@ export function reset(): void {
  * Call once the server ended a member session: sends `logout` while this browser is still identified as
  * the member (so it joins their funnel), then forgets the identity.
  */
-export function signOutAnalytics(surface: 'account' | 'studio'): void {
+export function signOutAnalytics(surface: 'account'): void {
   browserClient.track('logout', { surface });
   browserClient.reset();
 }

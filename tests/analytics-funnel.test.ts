@@ -60,26 +60,36 @@ describe('funnel taxonomy', () => {
 });
 
 describe('session attribution', () => {
-  test('keeps the five utm keys with plain values and drops everything else', () => {
+  test('keeps the five utm keys with slug-like values, lowercased, and drops every other parameter', () => {
     const a = parseAttribution(
-      '?utm_source=newsletter&utm_medium=email&utm_campaign=Ra%20m%E1%BA%AFt%20Zuey&utm_term=ai+agents&utm_content=hero-cta&gclid=abc123&ref=x&email=a@b.co',
+      '?utm_source=Google&utm_medium=cpc&utm_campaign=spring-2026&utm_term=ai_agents&utm_content=hero.cta-2&gclid=abc123&ref=x&email=a@b.co',
       '', 'zuey.me',
     );
-    expect(a).toEqual({ utm_source: 'newsletter', utm_medium: 'email', utm_campaign: 'Ra mắt Zuey', utm_term: 'ai agents', utm_content: 'hero-cta' });
+    expect(a).toEqual({ utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'spring-2026', utm_term: 'ai_agents', utm_content: 'hero.cta-2' });
+    expect(parseAttribution('?utm_source=google&utm_campaign=spring-2026', '', 'zuey.me')).toEqual({ utm_source: 'google', utm_campaign: 'spring-2026' });
   });
 
-  test('utm values that look like an email, a URL, a token or free text are dropped', () => {
+  test('phone numbers, names, free text, emails, URLs, tokens and encoded values are dropped whole', () => {
+    expect(parseAttribution('?utm_content=0912345678&utm_term=Nguyen%20Van%20A', '', 'zuey.me')).toEqual({});
+    expect(parseAttribution('?utm_term=Nguyen+Van+A&utm_campaign=Ra%20m%E1%BA%AFt%20Zuey&utm_source=a%2Bb', '', 'zuey.me')).toEqual({});
     const a = parseAttribution(
-      `?utm_source=duy@example.com&utm_medium=https://evil.test/?token=1&utm_campaign=${'x'.repeat(101)}&utm_term=zk_abcdefghijklmnop&utm_content=a=b`,
+      `?utm_source=duy@example.com&utm_medium=https://evil.test/?token=1&utm_campaign=${'x'.repeat(65)}&utm_term=zk_abcdefghijklmnop&utm_content=a=b`,
       '', 'zuey.me',
     );
     expect(a).toEqual({});
+    // A literal `%`, `+` or a long digit run never survives, even inside an otherwise slug-like value.
+    expect(parseAttribution('?utm_source=ad%2520x&utm_medium=promo-84912345678&utm_campaign=sale-2026', '', 'zuey.me')).toEqual({ utm_campaign: 'sale-2026' });
   });
 
   test('the referrer keeps only the origin of an external http(s) site', () => {
     expect(referrerOrigin('https://www.google.com/search?q=zuey+duy%40example.com', 'zuey.me')).toBe('https://www.google.com');
     expect(referrerOrigin('https://mail.example.com/u/0/#inbox/FMfcgz?token=abc', 'zuey.me')).toBe('https://mail.example.com');
     expect(referrerOrigin('https://zuey.me/login/verify?token=secret', 'zuey.me')).toBeNull();
+    // zuey.me and www.zuey.me are the same site, never each other's referrer.
+    expect(referrerOrigin('https://www.zuey.me/pricing', 'zuey.me')).toBeNull();
+    expect(referrerOrigin('https://zuey.me/', 'www.zuey.me')).toBeNull();
+    expect(referrerOrigin('https://ZUEY.me/', 'localhost')).toBeNull();
+    expect(referrerOrigin('https://blog.zuey.me/x', 'zuey.me')).toBe('https://blog.zuey.me');
     expect(referrerOrigin('android-app://com.google.android.gm/', 'zuey.me')).toBeNull();
     expect(referrerOrigin('not a url', 'zuey.me')).toBeNull();
     expect(referrerOrigin('', 'zuey.me')).toBeNull();

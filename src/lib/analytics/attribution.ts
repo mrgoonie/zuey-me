@@ -2,10 +2,12 @@
  * Session attribution: the campaign (UTM) parameters and referring site of the page that opened this
  * browser session, kept in sessionStorage and attached to every client event as `session_*` properties.
  *
- * Only an allowlist survives: the five standard `utm_*` keys with short, plain values, and the referrer's
+ * Only an allowlist survives: the five standard `utm_*` keys with slug-like values (campaign codes such as
+ * `google` or `spring-2026`, never free text, names or phone numbers), and the referrer's
  * origin. The referrer's path and query are dropped because they routinely carry search terms, private
  * document or webmail ids and sign-in tokens; the origin is enough to tell the channel apart.
  */
+import { PRODUCTION_HOSTNAMES } from './constants';
 import { containsPii } from './pii';
 
 /** sessionStorage key: one entry per tab session, written on the first tracked page of the session. */
@@ -16,23 +18,32 @@ type UtmKey = (typeof UTM_KEYS)[number];
 
 export type Attribution = Partial<Record<UtmKey, string>> & { referrer?: string };
 
-/** Letters (any script), digits, spaces and a few separators; nothing that can carry a URL, address or query. */
-const UTM_VALUE_RE = /^[\p{L}\p{N} ._+|:()-]{1,100}$/u;
+/**
+ * Slug-like campaign codes only: ASCII letters, digits, `.`, `_`, `-`. Spaces (names, search terms), `@`, `+`, `%`
+ * (emails, encoded text) and anything else drop the value whole.
+ */
+const UTM_VALUE_RE = /^[a-z0-9._-]{1,64}$/;
+/** Eight or more digits in a row look like a phone, account or order number. */
+const DIGIT_RUN_RE = /\d{8,}/;
 
 function cleanUtm(raw: string | null): string | null {
   if (raw === null) return null;
-  const value = raw.trim();
-  if (!UTM_VALUE_RE.test(value) || containsPii(value)) return null;
+  const value = raw.trim().toLowerCase();
+  if (!UTM_VALUE_RE.test(value) || DIGIT_RUN_RE.test(value) || containsPii(value)) return null;
   return value;
 }
 
-/** Origin of an external http(s) referrer; null for none, for this site itself, or for anything else. */
+/**
+ * Origin of an external http(s) referrer; null for none, for this site itself (the current host or any
+ * production hostname, so zuey.me and www.zuey.me are not each other's referrers), or for anything else.
+ */
 export function referrerOrigin(referrer: string, ownHostname: string): string | null {
   if (!referrer) return null;
   try {
     const url = new URL(referrer);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-    if (url.hostname.toLowerCase() === ownHostname.toLowerCase()) return null;
+    const host = url.hostname.toLowerCase();
+    if (host === ownHostname.toLowerCase() || PRODUCTION_HOSTNAMES.includes(host)) return null;
     return url.origin;
   } catch {
     return null;

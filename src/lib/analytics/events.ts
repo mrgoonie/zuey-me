@@ -99,7 +99,7 @@ export const ANALYTICS_EVENTS = {
     props: { stage: str, reason: str },
   },
   logout: {
-    version: 1, source: 'client', owner: 'growth', trigger: 'A member signs out (sent before the identity is reset)',
+    version: 1, source: 'client', owner: 'growth', trigger: 'A member signs out on a member-facing page (sent before the identity is reset); the admin Studio does not run analytics',
     props: { surface: str },
   },
   pricing_viewed: {
