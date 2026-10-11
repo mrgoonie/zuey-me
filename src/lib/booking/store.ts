@@ -959,37 +959,46 @@ export async function rescheduleBooking(
 interface BookingPaymentEvent { provider: string; event_id: string; amount: number | null; currency: string | null; received_at: string }
 
 /**
- * Queues the `purchase` of a booking an admin confirmed after verifying its payment. It uses the webhook's key:
- * the first provider transaction recorded for the booking (a booking the webhook confirmed has none before the
- * confirming one, since any earlier one would have flagged it). So a booking the webhook already counted, then
- * flagged and resolved, is not counted again; repeated resolves share the key too. The amount is everything the
- * guest paid through that provider in that currency (an underpayment plus its top-up). Without any recorded
- * transaction (a transfer the admin matched by hand) the booking id is the key and the amount is the price due.
+ * Queues the `purchase` of a booking an admin confirmed after verifying its payment. Never throws: the booking is
+ * already confirmed, and its invite, extras and commission must still run.
+ *
+ * - Key: the webhook's, i.e. the first provider transaction recorded for the booking (a booking the webhook
+ *   confirmed has none before the confirming one, since any earlier one would have flagged it). Without a recorded
+ *   transaction (a transfer the admin matched by hand) it is the booking id, and the amount is the price due.
+ * - Amount: everything recorded for the booking in its currency, across providers (an underpayment plus its top-up).
+ * - Counted before: a booking with recorded transactions whose `attention_reason` was NULL or `admin` before this
+ *   resolve was already confirmed with money (by the webhook or an earlier resolve). A payment that flags a booking
+ *   always overwrites the reason with its own, so nothing is queued again even after the outbox forgot the key.
  */
-async function queueResolvedPurchase(d1: D1DatabaseLike, env: RuntimeEnv, row: BookingRow, nowIso: string): Promise<void> {
-  const distinctId = await guestDistinctId(row.id);
-  const { results } = await d1.prepare(
-    'SELECT provider, event_id, amount, currency, received_at FROM payment_events WHERE booking_id = ? ORDER BY id'
-  ).bind(row.id).all<BookingPaymentEvent>();
-  const first = (results ?? [])[0];
-  if (first) {
+async function queueResolvedPurchase(d1: D1DatabaseLike, env: RuntimeEnv, before: BookingRow, nowIso: string): Promise<void> {
+  try {
+    const { results } = await d1.prepare(
+      'SELECT provider, event_id, amount, currency, received_at FROM payment_events WHERE booking_id = ? ORDER BY id'
+    ).bind(before.id).all<BookingPaymentEvent>();
+    const events = results ?? [];
+    const first = events[0];
+    const distinctId = await guestDistinctId(before.id);
+    if (!first) {
+      const provider = paymentMethodOf(before);
+      if (!provider) return;
+      const expected = expectedAmount(before, env);
+      await queuePurchase(d1, {
+        distinctId, provider, orderType: 'booking', transactionId: `booking:${before.id}`,
+        amountMinor: before.amount_paid ?? expected.amount ?? 0, currency: before.currency ?? expected.currency, occurredAt: nowIso,
+      });
+      return;
+    }
+    if (before.attention_reason === null || before.attention_reason === 'admin') return;
     const provider = PAYMENT_METHODS.find(m => m === first.provider);
-    if (!provider || !first.currency) return;
-    const amountMinor = (results ?? [])
-      .filter(e => e.provider === first.provider && e.currency === first.currency)
-      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
+    const currency = events.some(e => e.currency === before.currency) ? before.currency : first.currency;
+    if (!provider || !currency) return;
+    const amountMinor = events.filter(e => e.currency === currency).reduce((sum, e) => sum + (e.amount ?? 0), 0);
     await queuePurchase(d1, {
-      distinctId, provider, orderType: 'booking', transactionId: first.event_id, amountMinor, currency: first.currency, occurredAt: first.received_at,
+      distinctId, provider, orderType: 'booking', transactionId: first.event_id, amountMinor, currency, occurredAt: first.received_at,
     });
-    return;
+  } catch (err) {
+    console.warn(`analytics: could not queue the purchase of booking ${before.id}:`, err instanceof Error ? err.message : 'unknown');
   }
-  const provider = paymentMethodOf(row);
-  if (!provider) return;
-  const expected = expectedAmount(row, env);
-  await queuePurchase(d1, {
-    distinctId, provider, orderType: 'booking', transactionId: `booking:${row.id}`,
-    amountMinor: row.amount_paid ?? expected.amount ?? 0, currency: row.currency ?? expected.currency, occurredAt: nowIso,
-  });
 }
 
 export type AdminAction = 'cancel' | 'resolve' | 'mark_attention' | 'note';
@@ -1024,8 +1033,8 @@ export async function adminUpdateBooking(
       if (isUniqueViolation(err)) throw new AppError(409, 'slot_taken', 'Another active booking holds this slot; cancel or move it first');
       throw err;
     }
+    await queueResolvedPurchase(d1, env, row, nowIso);
     const confirmed = await getBookingRow(d1, id);
-    if (confirmed) await queueResolvedPurchase(d1, env, confirmed, nowIso);
     if (confirmed && confirmed.meet_status !== 'sent') await fulfilBooking(d1, env, confirmed, 'confirmed');
     if (confirmed) await settleBookingExtras(d1, env, confirmed);
     if (row.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id });
