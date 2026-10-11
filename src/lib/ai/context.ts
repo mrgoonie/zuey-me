@@ -105,6 +105,7 @@ function blockText(block: Block): string {
     case 'bookmark': return [block.title ?? '', block.siteName ?? '', block.description ?? ''].join(' ');
     // Toggle children are visited by walkBlocks.
     case 'toggle': return t(block.summary);
+    case 'icon': return block.label ?? '';
     case 'divider': case 'layout': return '';
   }
 }

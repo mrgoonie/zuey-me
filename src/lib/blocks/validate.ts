@@ -6,6 +6,8 @@ import type {
   LayoutChild, ResponsiveCols, ResponsiveSpan, SurveyOption,
 } from './schema';
 import { detectProvider } from './embed';
+import { ICON_ALIGNS, ICON_SIZES, ICON_TONES, resolveIconName } from './icons';
+import type { IconName } from './icons';
 
 export interface ValidationError { path: string; message: string }
 export type ValidationResult = { ok: true; doc: ArticleDocument } | { ok: false; errors: ValidationError[] };
@@ -169,8 +171,12 @@ class Validator {
         const tone = v.tone === undefined ? 'info' : v.tone;
         if (!isOneOf(CALLOUT_TONES, tone)) { this.err(`${path}.tone`, `must be one of ${CALLOUT_TONES.join(', ')}`); return undefined; }
         const text = this.str(v, 'text', path, T);
-        return text === undefined ? undefined : { id, type, tone, text };
+        const icon = this.iconName(v, 'icon', path, true);
+        if (icon === null) return undefined;
+        return text === undefined ? undefined : { id, type, tone, text, ...(icon ? { icon } : {}) };
       }
+      case 'icon':
+        return this.icon(id, v, path);
       case 'code': {
         const language = this.str(v, 'language', path, 40, { optional: true }) ?? '';
         if (language && !/^[\w+#.-]+$/.test(language)) { this.err(`${path}.language`, 'contains invalid characters'); return undefined; }
@@ -361,6 +367,35 @@ class Validator {
         return { id, type, summary, ...(v.open === true ? { open: true } : {}), blocks };
       }
     }
+  }
+
+  /**
+   * Canonical allowlisted icon name (aliases resolve to it). Returns undefined when an optional
+   * field is absent and null when the value is invalid (an error is recorded).
+   */
+  private iconName(o: Obj, key: string, path: string, optional: boolean): IconName | undefined | null {
+    const raw = o[key];
+    if ((raw === undefined || raw === null || raw === '') && optional) return undefined;
+    const name = resolveIconName(raw);
+    if (name) return name;
+    // Never echo the raw value: it may be long or contain markup.
+    this.err(`${path}.${key}`, raw === undefined || raw === null
+      ? 'is required; pick a name from the icon allowlist (block_schema → icons.names)'
+      : 'is not an allowlisted icon name; pick one from the icon allowlist (block_schema → icons.names)');
+    return null;
+  }
+
+  private icon(id: string, v: Obj, path: string): Block | undefined {
+    const name = this.iconName(v, 'name', path, false);
+    const size = v.size === undefined ? 'md' : v.size;
+    if (!isOneOf(ICON_SIZES, size)) { this.err(`${path}.size`, `must be one of ${ICON_SIZES.join(', ')}`); return undefined; }
+    const tone = v.tone === undefined ? 'default' : v.tone;
+    if (!isOneOf(ICON_TONES, tone)) { this.err(`${path}.tone`, `must be one of ${ICON_TONES.join(', ')}`); return undefined; }
+    const align = v.align;
+    if (align !== undefined && !isOneOf(ICON_ALIGNS, align)) { this.err(`${path}.align`, `must be one of ${ICON_ALIGNS.join(', ')}`); return undefined; }
+    const label = this.str(v, 'label', path, LIMITS.iconLabel, { optional: true })?.trim();
+    if (!name) return undefined;
+    return { id, type: 'icon', name, size, tone, ...(label ? { label } : {}), ...(align ? { align } : {}) };
   }
 
   private interactive(id: string, v: Obj, path: string): Block | undefined {

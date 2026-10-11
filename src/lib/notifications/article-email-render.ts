@@ -160,6 +160,9 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
       return `<p style="${P}"><strong>${inlineHtml(block.summary)}</strong></p>${block.blocks.map(b => blockHtml(b, input)).join('')}`;
     case 'layout':
       return block.children.flatMap(c => c.blocks.map(b => blockHtml(b, input))).join('');
+    // Email clients render inline SVG unreliably: a labelled icon keeps its label, a decorative one is dropped.
+    case 'icon':
+      return block.label ? `<p style="${P}">${escapeHtml(block.label)}</p>` : '';
     case 'chart': case 'diagram': case 'survey': case 'interactive': case 'embed': case 'audio': case 'video': case 'math':
       return webLink(labels[block.type] ?? block.type, input, block);
   }
@@ -179,6 +182,7 @@ function blockText(block: Block, input: ArticleEmailInput): string {
     case 'toggle': return [inlineToPlain(block.summary), ...block.blocks.map(b => blockText(b, input))].join('\n\n');
     case 'layout': return block.children.flatMap(c => c.blocks.map(b => blockText(b, input))).filter(Boolean).join('\n\n');
     case 'image': case 'gallery': case 'file': return '';
+    case 'icon': return block.label ?? '';
     default: return `[${labelsFor(input.locale)[block.type] ?? block.type}: ${input.articleUrl}]`;
   }
 }

@@ -24,6 +24,9 @@ import type { StatusMsg } from './knowledge-studio-kit';
 import { ArticleLabelsPanel } from './ArticleLabelsPanel';
 import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
+import { IconPicker } from './IconPicker';
+import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../../lib/blocks/icons';
+import type { IconSize } from '../../lib/blocks/icons';
 
 // ---------- Block catalogue ----------
 
@@ -35,7 +38,7 @@ const TYPE_LABELS: Partial<Record<BlockType, string>> = {
   callout: 'Callout', code: 'Code', divider: 'Đường kẻ', image: 'Ảnh', embed: 'Nhúng (YouTube, Spotify, X…)', table: 'Bảng',
   chart: 'Biểu đồ', diagram: 'Sơ đồ Mermaid', survey: 'Khảo sát', layout: 'Bố cục (cột/lưới)',
   math: 'Công thức (TeX)', gallery: 'Bộ sưu tập ảnh', audio: 'Âm thanh (file)', video: 'Video (file)', file: 'Tệp đính kèm',
-  bookmark: 'Thẻ liên kết', toggle: 'Mục thu gọn',
+  bookmark: 'Thẻ liên kết', toggle: 'Mục thu gọn', icon: 'Biểu tượng (icon)',
   interactive: 'Tương tác (HTML/JS)',
 };
 
@@ -46,10 +49,14 @@ const TYPE_HINTS: Partial<Record<BlockType, string>> = {
   embed: 'youtube vimeo spotify soundcloud x twitter facebook instagram tiktok linkedin', table: 'grid', chart: 'bar line pie graph',
   diagram: 'mermaid flow', survey: 'poll vote', layout: 'columns grid bento', math: 'latex katex equation formula',
   gallery: 'images album', audio: 'mp3 podcast sound', video: 'mp4', file: 'pdf download attachment', bookmark: 'link card url',
-  toggle: 'details collapse accordion',
+  toggle: 'details collapse accordion', icon: 'icon symbol lucide bieu tuong',
 };
 
 const typeLabel = (t: BlockType): string => TYPE_LABELS[t] ?? t;
+
+const ICON_SIZE_LABELS: Record<IconSize, string> = {
+  sm: `sm (${ICON_PIXELS.sm}px)`, md: `md (${ICON_PIXELS.md}px)`, lg: `lg (${ICON_PIXELS.lg}px)`, xl: `xl (${ICON_PIXELS.xl}px)`,
+};
 
 function newBlock(type: BlockType): Block | null {
   const id = newId();
@@ -77,6 +84,7 @@ function newBlock(type: BlockType): Block | null {
     case 'file': return { id, type, url: 'https://', name: 'tai-lieu.pdf' };
     case 'bookmark': return { id, type, url: 'https://' };
     case 'toggle': return { id, type, summary: 'Xem thêm', blocks: [] };
+    case 'icon': return { id, type, name: 'sparkles', size: 'lg', tone: 'accent' };
     default: return null;
   }
 }
@@ -388,6 +396,20 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
         <div className="space-y-2">
           <Select label="Sắc thái" value={block.tone} options={CALLOUT_TONES} onChange={tone => onChange({ ...block, tone })} />
           <Area label="Nội dung" value={block.text} onChange={text => onChange({ ...block, text })} />
+          <IconPicker label="Icon (tuỳ chọn)" value={block.icon} noneLabel="Dùng ký hiệu mặc định"
+            onChange={icon => { const { icon: _old, ...rest } = block; onChange(icon ? { ...rest, icon } : rest); }} />
+        </div>
+      );
+    case 'icon':
+      return (
+        <div className="space-y-2">
+          <IconPicker label="Icon" value={block.name} onChange={name => { if (name) onChange({ ...block, name }); }} />
+          <div className="grid grid-cols-3 gap-2">
+            <Select label="Kích thước" value={block.size} options={ICON_SIZES} labels={ICON_SIZE_LABELS} onChange={size => onChange({ ...block, size })} />
+            <Select label="Màu" value={block.tone} options={ICON_TONES} onChange={tone => onChange({ ...block, tone })} />
+            <Select label="Căn lề" value={block.align ?? 'start'} options={ICON_ALIGNS} onChange={align => onChange({ ...block, align })} />
+          </div>
+          <Text label="Nhãn truy cập (để trống nếu chỉ trang trí)" value={block.label ?? ''} onChange={label => onChange({ ...block, label: opt(label) })} />
         </div>
       );
     case 'code':

@@ -4,6 +4,8 @@
  * Inline text fields accept a tiny safe Markdown subset (see ./inline.ts); raw HTML is never rendered.
  */
 
+import type { IconAlign, IconName, IconSize, IconTone } from './icons';
+
 export const DOCUMENT_VERSION = 1;
 
 export const LIMITS = {
@@ -33,6 +35,7 @@ export const LIMITS = {
   math: 10_000,
   galleryImages: 24,
   toggleChildren: 50,
+  iconLabel: 120,
 } as const;
 
 export const BLOCK_TYPES = [
@@ -40,6 +43,7 @@ export const BLOCK_TYPES = [
   'image', 'embed', 'table', 'chart', 'diagram', 'survey', 'layout', 'interactive',
   // Knowledge media blocks
   'math', 'gallery', 'audio', 'video', 'file', 'bookmark', 'toggle',
+  'icon',
 ] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
 
@@ -63,7 +67,13 @@ export interface ListBlock extends BlockBase { type: 'list'; style: 'bullet' | '
 export interface ChecklistItem { text: string; checked: boolean }
 export interface ChecklistBlock extends BlockBase { type: 'checklist'; items: ChecklistItem[] }
 export interface QuoteBlock extends BlockBase { type: 'quote'; text: string; cite?: string }
-export interface CalloutBlock extends BlockBase { type: 'callout'; tone: (typeof CALLOUT_TONES)[number]; text: string }
+export interface CalloutBlock extends BlockBase {
+  type: 'callout';
+  tone: (typeof CALLOUT_TONES)[number];
+  text: string;
+  /** Allowlisted icon replacing the tone's default glyph. */
+  icon?: IconName;
+}
 export interface CodeBlock extends BlockBase { type: 'code'; language: string; code: string }
 export interface DividerBlock extends BlockBase { type: 'divider' }
 export interface ImageBlock extends BlockBase { type: 'image'; url: string; alt: string; caption?: string }
@@ -130,11 +140,25 @@ export interface ToggleBlock extends BlockBase { type: 'toggle'; summary: string
 
 export type KnowledgeMediaBlock = MathBlock | GalleryBlock | AudioBlock | VideoBlock | FileBlock | BookmarkBlock | ToggleBlock;
 
+/**
+ * One icon from the curated allowlist (./icons). With `label` it conveys meaning (role="img" + aria-label);
+ * without it the icon is decorative and hidden from assistive technology.
+ */
+export interface IconBlock extends BlockBase {
+  type: 'icon';
+  name: IconName;
+  size: IconSize;
+  tone: IconTone;
+  label?: string;
+  align?: IconAlign;
+}
+
 export type Block =
   | ParagraphBlock | HeadingBlock | ListBlock | ChecklistBlock | QuoteBlock | CalloutBlock | CodeBlock
   | DividerBlock | ImageBlock | EmbedBlock | TableBlock | ChartBlock | DiagramBlock | SurveyBlock | LayoutBlock
   | InteractiveBlock
-  | KnowledgeMediaBlock;
+  | KnowledgeMediaBlock
+  | IconBlock;
 
 export interface ArticleDocument { version: 1; blocks: Block[] }
 

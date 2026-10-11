@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
 import type { ArticleDocument, Block, EmbedBlock, LayoutBlock } from '../../lib/blocks/schema';
@@ -10,9 +10,37 @@ import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
+import { IconGlyph as StaticIconGlyph } from './block-icons';
+import type { IconGlyphProps } from './block-icons';
+import { ICON_PIXELS, isIconName } from '../../lib/blocks/icons';
 import { InteractiveFrame } from '../ai/InteractiveFrame';
 
 type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
+
+/**
+ * The icon map (~40 KB) ships to the browser only for documents that use icons: the client loads it
+ * on demand, while the server renders the SVG directly. `import.meta.env.SSR` is a build-time
+ * constant, so the static import is dropped from client bundles.
+ */
+const LazyIconGlyph = lazy(() => import('./block-icons').then(m => ({ default: m.IconGlyph })));
+
+/** Same-size empty box shown while the icon chunk loads (client-only renders such as Studio previews). */
+export function IconPlaceholder({ size }: { size: IconGlyphProps['size'] }) {
+  const px = typeof size === 'number' ? size : ICON_PIXELS[size];
+  return <span aria-hidden="true" style={{ display: 'inline-block', width: px, height: px }} />;
+}
+
+/**
+ * The Suspense boundary must exist on both sides: the server emits its markers around the SVG, so
+ * hydration keeps the server markup in place until the lazy chunk resolves instead of failing.
+ */
+function IconSlot(props: IconGlyphProps) {
+  return (
+    <Suspense fallback={<IconPlaceholder size={props.size} />}>
+      {import.meta.env.SSR ? <StaticIconGlyph {...props} /> : <LazyIconGlyph {...props} />}
+    </Suspense>
+  );
+}
 
 interface RenderContext {
   articleSlug?: string;
@@ -128,10 +156,12 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </blockquote>
       );
     case 'callout': {
-      const icon = block.tone === 'warn' ? '!' : block.tone === 'tip' ? '★' : 'i';
+      const glyph = block.tone === 'warn' ? '!' : block.tone === 'tip' ? '★' : 'i';
       return (
         <aside className={`zb-callout zb-callout-${block.tone}`} role="note">
-          <span className="zb-callout-icon" aria-hidden="true">{icon}</span>
+          <span className="zb-callout-icon" aria-hidden="true">
+            {isIconName(block.icon) ? <IconSlot name={block.icon} size={20} /> : glyph}
+          </span>
           <div style={{ minWidth: 0 }}><Inline text={block.text} /></div>
         </aside>
       );
@@ -171,6 +201,12 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'layout': return <LayoutView block={block} ctx={ctx} />;
     // Sandboxed, click-to-run in articles; previews never execute code automatically.
     case 'interactive': return <InteractiveFrame block={block} />;
+    case 'icon':
+      return (
+        <div className={`zb-icon zb-icon-${block.align ?? 'start'} zb-icon-tone-${block.tone}`}>
+          <IconSlot name={block.name} size={block.size} label={block.label} />
+        </div>
+      );
     case 'math':
     case 'gallery':
     case 'audio':

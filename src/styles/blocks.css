@@ -40,6 +40,17 @@
 .zb-callout-warn { background: #fffbeb; border-color: #fcd34d; }
 .zb-callout-tip { background: #ecfdf5; border-color: #a7f3d0; }
 .zb-callout-icon { flex: none; font-weight: 800; }
+.zb-callout-icon svg { display: block; margin-top: 0.2rem; }
+.zb-icon { display: flex; line-height: 0; color: #1c1917; }
+.zb-icon svg { flex: none; max-width: 100%; height: auto; }
+.zb-icon-start { justify-content: flex-start; }
+.zb-icon-center { justify-content: center; }
+.zb-icon-end { justify-content: flex-end; }
+.zb-icon-tone-muted { color: #78716c; }
+.zb-icon-tone-accent { color: #92400e; }
+.zb-icon-tone-success { color: #047857; }
+.zb-icon-tone-warning { color: #c2410c; }
+.zb-icon-tone-danger { color: #b91c1c; }
 .zb-code {
   margin: 0;
   background: #1c1917;

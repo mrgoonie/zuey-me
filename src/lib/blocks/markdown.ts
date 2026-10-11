@@ -75,6 +75,8 @@ function blockToMarkdown(block: Block, opts: MarkdownOptions): string {
       const meta = [block.siteName, block.description].filter(Boolean).join(' — ');
       return `[${title}](${block.url})${meta ? `\n\n> ${meta.replace(/\r?\n/g, ' ')}` : ''}`;
     }
+    // Decorative icons have no text equivalent; a labelled icon falls back to its label.
+    case 'icon': return block.label ?? '';
     case 'toggle': {
       const inner = block.blocks.map(b => blockToMarkdown(b, opts)).filter(Boolean).join('\n\n');
       return `**${block.summary}**${inner ? `\n\n${inner}` : ''}`;
