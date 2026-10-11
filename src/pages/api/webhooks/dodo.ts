@@ -12,6 +12,7 @@ import { announceOrder, shouldNotifyOrder } from '../../../lib/notifications/ord
  * Dodo Payments webhook (Standard Webhooks signature, 5-minute replay window). Subscription and
  * payment events drive card memberships, course payments, refunds and disputes; the `webhook-id` makes every delivery idempotent.
  * refund.succeeded / dispute.opened / dispute.lost of a card charge (first or renewal) are logged once; on the first payment they also reverse the referral commission.
+ * One for a payment not recorded yet but of a known Dodo customer answers 409 so Dodo redelivers it after the charge.
  * A course order it pays, a card subscription it activates, and anything it flags are announced to the admin channels.
  */
 export const POST: APIRoute = async ({ request, locals }) => {

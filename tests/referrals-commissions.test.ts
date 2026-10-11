@@ -327,6 +327,23 @@ describe('Dodo commission and refunds', () => {
     expect(parseDodoReversalEvent({ type: 'dispute.won', data: { payment_id: 'pay_first' } })).toBeNull();
     expect(parseDodoReversalEvent({ type: 'refund.succeeded', data: {} })).toBeNull();
   });
+
+  it('answers 409 to a signed refund of a not yet recorded payment of a known Dodo customer, so Dodo redelivers it', async () => {
+    await paidCard();
+    expect(parseDodoReversalEvent({ type: 'refund.succeeded', data: { payment_id: 'p', customer: { customer_id: 'cus_1' } } })?.customerId).toBe('cus_1');
+    const body = JSON.stringify({
+      business_id: 'bus_test', type: 'refund.succeeded', timestamp: new Date(T0).toISOString(),
+      data: { payload_type: 'Refund', refund_id: 'rfd_early', payment_id: 'pay_next', amount: 2090, currency: 'USD', customer: { customer_id: 'cus_1' } },
+    });
+    const ts = String(Math.floor(T0 / 1000));
+    const signature = await signDodoPayload(DODO_SECRET, 'msg_early', ts, body);
+    const res = await dodoWebhook(ctx({ method: 'POST', rawBody: body, headers: { 'webhook-id': 'msg_early', 'webhook-timestamp': ts, 'webhook-signature': signature } }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ success: false, error: { code: 'payment_not_recorded' } });
+    // The signature is still checked first.
+    const forged = await dodoWebhook(ctx({ method: 'POST', rawBody: body, headers: { 'webhook-id': 'msg_early', 'webhook-timestamp': ts, 'webhook-signature': 'v1,AAAA' } }));
+    expect(forged.status).toBe(401);
+  });
 });
 
 describe('ledger reversal after approval', () => {

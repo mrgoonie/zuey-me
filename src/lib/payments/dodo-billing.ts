@@ -401,11 +401,28 @@ async function flagUnmatched(d1: D1DatabaseLike, env: RuntimeEnv, event: DodoEve
   console.warn(`dodo ${event.type} for ${subscriptionId} could not be matched to a member (metadata missing); flagged for the admin`);
 }
 
-/** Successful charges recorded for a card (webhook ids are unique, so retries are not double-counted). */
+/**
+ * A `payment.succeeded` webhook row is written a moment before the `charge:` row of the same delivery. Webhook rows
+ * older than a card's first charge row by more than this are charges collected before charge rows existed.
+ */
+const LEGACY_CHARGE_GAP_MS = 60 * 1000;
+
+/**
+ * Distinct Dodo payments collected on a card. Each `charge:<payment id>` row is one payment, however many webhook
+ * ids delivered it. Charges collected before charge rows were written have only their webhook row (the payload is not
+ * stored), so those are counted one per webhook row: every webhook row when the card has no charge row yet, otherwise
+ * the ones received before its first charge row.
+ */
 async function succeededCharges(d1: D1DatabaseLike, cardId: string): Promise<number> {
-  const row = await d1.prepare("SELECT COUNT(*) AS n FROM payment_events WHERE provider = 'dodo' AND card_subscription_id = ? AND raw_type = 'payment.succeeded'")
-    .bind(cardId).first<Row>();
-  return Number(row?.n ?? 0);
+  const charges = await d1.prepare(
+    "SELECT COUNT(*) AS n, MIN(received_at) AS first_at FROM payment_events WHERE provider = 'dodo' AND card_subscription_id = ? AND raw_type = ?"
+  ).bind(cardId, CHARGE_RAW_TYPE).first<Row>();
+  const firstAt = strOrNull(charges ?? {}, 'first_at');
+  const cutoff = firstAt ? iso(Date.parse(firstAt) - LEGACY_CHARGE_GAP_MS) : null;
+  const legacy = await d1.prepare(
+    "SELECT COUNT(*) AS n FROM payment_events WHERE provider = 'dodo' AND card_subscription_id = ? AND raw_type = 'payment.succeeded' AND (? IS NULL OR received_at < ?)"
+  ).bind(cardId, cutoff, cutoff).first<Row>();
+  return Number(charges?.n ?? 0) + Number(legacy?.n ?? 0);
 }
 
 async function applySubscriptionEvent(
@@ -593,12 +610,26 @@ async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Ro
  * renewal reports `renewal`. Access is not changed for either: the admin reviews the logged reversal.
  * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
  * `payment_events` row keyed by the refund or dispute id gates them across webhook retries.
+ *
+ * A reversal can arrive before the `payment.succeeded` of its renewal charge. When the payment is unknown but the
+ * payload names a Dodo customer that owns a card subscription here, this throws a 409 so Dodo redelivers it (Dodo
+ * stops after its last scheduled attempt, about a day later). Any other unknown payment is `ignored`.
  */
 export async function applyDodoReversal(
   d1: D1DatabaseLike, event: DodoReversalEvent
 ): Promise<{ outcome: ReversalOutcome | 'renewal' | 'ignored'; card_subscription_id: string | null }> {
   const row = await cardForPayment(d1, event.paymentId);
-  if (!row) return { outcome: 'ignored', card_subscription_id: null };
+  if (!row) {
+    const known = event.customerId
+      ? await d1.prepare("SELECT id FROM card_subscriptions WHERE provider = 'dodo' AND provider_customer_id = ? LIMIT 1").bind(event.customerId).first<Row>()
+      : null;
+    if (known) {
+      throw new AppError(409, 'payment_not_recorded', 'The reversed payment is not recorded yet; retry after its payment.succeeded webhook', {
+        payment_id: event.paymentId,
+      });
+    }
+    return { outcome: 'ignored', card_subscription_id: null };
+  }
   const cardId = str(row, 'id');
   const renewal = strOrNull(row, 'first_payment_id') !== event.paymentId;
   const outcome = renewal ? 'renewal' : (await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind)).outcome;
@@ -608,9 +639,8 @@ export async function applyDodoReversal(
     return { outcome, card_subscription_id: cardId };
   }
   try {
-    await logActivity(d1, userId, 'billing.card_reversal', {
-      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
-    });
+    // The analytics event is deduped by its key, so it goes first; the activity log is the last write, so a failure
+    // before it releases the gate without anything logged and the retry writes it once.
     // An opened dispute may still be won; only money that actually went back is a refund.
     if (event.kind !== 'dispute_opened') {
       await queueRefund(d1, {
@@ -618,6 +648,9 @@ export async function applyDodoReversal(
         reason: event.kind === 'refund' ? 'refund' : 'chargeback', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
       });
     }
+    await logActivity(d1, userId, 'billing.card_reversal', {
+      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
+    });
   } catch (err) {
     await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('dodo', reversalKey).run().catch(() => undefined);
     throw err;
