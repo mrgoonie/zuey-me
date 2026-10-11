@@ -1,6 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv, WorkersAiLike } from '../../env';
-import { validateDocument } from '../blocks/validate';
+import { readStoredDocument } from '../blocks/validate';
 import { AppError } from '../http';
 import { LOCALES, isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
@@ -130,10 +130,10 @@ async function nextCandidates(db: D1DatabaseLike, job: AuditJob, limit: number):
     const articleId = str(r, 'article_id');
     if (job.scope.locales.length && !job.scope.locales.includes(locale)) continue;
     if (job.scope.article_ids.length && !job.scope.article_ids.includes(articleId)) continue;
-    const parsed = validateDocument(parseJson(r.published_json));
+    const parsed = readStoredDocument(parseJson(r.published_json));
     out.push({
       key: `${articleId}|${locale}`, articleId, locale, revision: num(r, 'revision'), title: str(r, 'title'),
-      text: parsed.ok ? documentText(parsed.doc) : '',
+      text: parsed ? documentText(parsed.doc) : '',
     });
     if (out.length >= limit) break;
   }

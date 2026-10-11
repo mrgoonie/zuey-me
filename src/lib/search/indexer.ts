@@ -2,7 +2,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { applyPaywall } from '../blocks/paywall';
 import type { Viewer } from '../blocks/paywall';
-import { validateDocument } from '../blocks/validate';
+import { readStoredDocument } from '../blocks/validate';
 import { LOCALES } from '../i18n/locales';
 import { documentText, spaceCjk } from './text';
 import { embedTexts, semanticBackend, vectorId } from './semantic';
@@ -20,8 +20,7 @@ interface IndexEntry { locale: string; tier: SearchTier; title: string; tags: st
 
 function parseDoc(text: string) {
   try {
-    const res = validateDocument(JSON.parse(text));
-    return res.ok ? res.doc : null;
+    return readStoredDocument(JSON.parse(text))?.doc ?? null;
   } catch {
     return null;
   }

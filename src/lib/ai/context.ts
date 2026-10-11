@@ -15,7 +15,7 @@ import { inlineToPlain } from '../blocks/inline';
 import { applyPaywall, canReadFull } from '../blocks/paywall';
 import type { ArticleAccess, ArticleDocument, Block } from '../blocks/schema';
 import { walkBlocks } from '../blocks/schema';
-import { validateDocument } from '../blocks/validate';
+import { readStoredDocument } from '../blocks/validate';
 import type { Principal } from '../members/policy';
 import { viewerFromPrincipal } from '../members/policy';
 import type { JevConfig } from '../search/jev';
@@ -185,8 +185,7 @@ function parseTags(raw: string): string[] {
 
 function parseDoc(raw: string): ArticleDocument | null {
   try {
-    const res = validateDocument(JSON.parse(raw));
-    return res.ok ? res.doc : null;
+    return readStoredDocument(JSON.parse(raw))?.doc ?? null;
   } catch {
     return null;
   }

@@ -157,9 +157,12 @@ describe('embed rendering', () => {
     expect(html).toContain('class="zb-embed-frame zb-ratio-post"');
     expect(html).not.toContain('<iframe');
     expect(html).not.toContain('platform.twitter.com');
-    // Without JavaScript nothing will load, so the server markup promises nothing and offers the original post.
+    // Without JavaScript nothing will load, so the server markup promises nothing; the original post is linked once, below.
     expect(html).not.toContain('sẽ tự tải khi bạn cuộn tới');
-    expect(html).toMatch(/<noscript>[^]*cần JavaScript[^]*href="https:\/\/x\.com\/someone\/status\/1234567890123"[^]*<\/noscript>/);
+    const note = html.match(/<noscript>([^]*?)<\/noscript>/)?.[1] ?? '';
+    expect(note).toContain('cần JavaScript');
+    expect(note).not.toContain('href=');
+    expect(html.match(/Mở bài gốc/g)).toHaveLength(1);
     expect(html).toContain('<figcaption>Bài đăng gốc</figcaption>');
     expect(html).toContain('<a href="https://x.com/someone/status/1234567890123" target="_blank" rel="noopener noreferrer nofollow">Mở bài gốc trên <!-- -->X</a>');
   });
@@ -171,9 +174,9 @@ describe('embed rendering', () => {
     expect(html).not.toContain('thiết bị này');
   });
 
-  it('renders the per-device opt-out from the first paint, disabled until hydrated (no line shift)', () => {
+  it('reserves the per-device opt-out from the first paint, hidden and disabled until hydrated (no line shift, nothing dead without JavaScript)', () => {
     const html = render([embed('https://x.com/someone/status/1234567890123', 'x')]);
-    expect(html).toContain('<button type="button" class="zb-embed-link-btn" disabled="">Không tự tải nội dung nhúng trên thiết bị này</button>');
+    expect(html).toContain('<button type="button" class="zb-embed-link-btn" disabled="" style="visibility:hidden">Không tự tải nội dung nhúng trên thiết bị này</button>');
   });
 
   it('falls back to a plain link for unsupported URLs and Facebook share links', () => {
