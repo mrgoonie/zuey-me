@@ -14,6 +14,11 @@ import { documentText as aiDocumentText } from '../src/lib/ai/context';
 import { documentText } from '../src/lib/search/text';
 import { renderArticleEmail } from '../src/lib/notifications/article-email-render';
 import { editorInternals } from '../src/components/studio/ArticleEditor';
+import { RESERVED_ANCHORS } from '../src/lib/blocks/page-ids';
+import { CONFIG_ELEMENT_ID } from '../src/lib/analytics/constants';
+import { validateWith } from '../src/lib/blocks/validator-core';
+import { interactive } from '../src/lib/blocks/definitions/interactive';
+import { validateInteractiveBlock } from '../src/lib/ai/artifacts';
 
 // `import.meta.env.SSR` is the live process.env in Bun; render the server path like the article page does.
 const previousSsr = process.env.SSR;
@@ -291,8 +296,57 @@ describe('paywall with sections', () => {
     if (lastCard?.type === 'card' && lastCard.blocks.length < 2) expect(lastCard.footer).toBeUndefined();
   });
 
-  it('keeps documents without sections on the original cut', () => {
-    const doc = valid({ version: 1, blocks: [p(long(100)), p(long(100)), p(long(100)), p(long(100))] });
+  it('drops the footer of a card that loses a unit deep inside a layout, on every surface', () => {
+    const doc = valid({ version: 1, blocks: [
+      { type: 'section', width: 'wide', surface: 'none', blocks: [{
+        type: 'card', title: 'Thẻ', footer: 'SECRETFOOTER', blocks: [{
+          type: 'layout', variant: 'columns', cols: { base: 1, md: 2, lg: 2 }, children: [
+            { blocks: [p('A'.repeat(50))] },
+            { blocks: [p('B'.repeat(50)), p('Z'.repeat(50))] },
+          ],
+        }],
+      }] },
+      p('X'.repeat(150)),
+    ] });
+    const res = applyPaywall(doc, 'knowledges', viewer);
+    expect(res.truncated).toBe(true);
+    const kept = JSON.stringify(res.doc);
+    expect(kept).toContain('A'.repeat(50));
+    expect(kept).toContain('B'.repeat(50));
+    expect(kept).not.toContain('Z'.repeat(50));
+    expect(kept).not.toContain('SECRETFOOTER');
+    expect(validateDocument(res.doc).ok).toBe(true);
+    const surfaces = [
+      renderToString(createElement(BlockRenderer, { doc: res.doc, articleSlug: 'demo' })),
+      documentToMarkdown(res.doc, { articleUrl: 'https://zuey.me/articles/demo' }),
+      aiDocumentText(res.doc),
+      documentText(res.doc),
+    ];
+    for (const s of surfaces) {
+      expect(s).toContain('B'.repeat(50));
+      expect(s).not.toContain('SECRETFOOTER');
+    }
+    const email = renderArticleEmail({
+      locale: 'vi', title: 'Demo', excerpt: 'Tóm tắt', access: 'knowledges', coverUrl: null, document: doc,
+      articleUrl: 'https://zuey.me/articles/demo', pricingUrl: 'https://zuey.me/pricing', siteUrl: 'https://zuey.me', mode: 'teaser',
+    });
+    expect(email.html).not.toContain('SECRETFOOTER');
+    expect(email.text).not.toContain('SECRETFOOTER');
+  });
+
+  it('keeps the footer of a card whose units are all kept', () => {
+    const doc = valid({ version: 1, blocks: [
+      { type: 'section', width: 'wide', surface: 'none', blocks: [
+        { type: 'card', title: 'Thẻ', footer: 'Chân giữ lại', blocks: [p('A'.repeat(100))] },
+      ] },
+      p('X'.repeat(150)),
+    ] });
+    const res = applyPaywall(doc, 'knowledges', viewer);
+    expect(res.truncated).toBe(true);
+    expect(JSON.stringify(res.doc)).toContain('Chân giữ lại');
+  });
+
+  it('keeps documents without sections on the original cut', () => {    const doc = valid({ version: 1, blocks: [p(long(100)), p(long(100)), p(long(100)), p(long(100))] });
     const res = applyPaywall(doc, 'knowledges', viewer);
     expect(res.doc.blocks.map(b => b.id)).toEqual(doc.blocks.slice(0, 2).map(b => b.id));
     expect(res.outline?.blocks).toBe(2);
@@ -312,5 +366,58 @@ describe('block registry', () => {
     expect(block).toContain('#/components/schemas/BlockCard');
     expect(JSON.stringify(blockSchemas.BlockSection)).toContain('"anchor"');
     expect(JSON.stringify(blockSchemas.BlockCard)).toContain('"footer"');
+  });
+});
+
+describe('card heading level', () => {
+  const cardDoc = (level?: number) => valid({ version: 1, blocks: [{ type: 'card', title: 'Tiêu đề', blocks: [p('Thân.')], ...(level === undefined ? {} : { level }) }] });
+  const email = (doc: ArticleDocument) => renderArticleEmail({
+    locale: 'vi', title: 'Demo', excerpt: 'Tóm tắt', access: 'free', coverUrl: null, document: doc,
+    articleUrl: 'https://zuey.me/articles/demo', pricingUrl: 'https://zuey.me/pricing', siteUrl: 'https://zuey.me', mode: 'full',
+  }).html;
+
+  it('accepts levels 2 to 4 and rejects anything else', () => {
+    expect(cardDoc().blocks[0]).not.toHaveProperty('level');
+    for (const level of [2, 3, 4]) expect(cardDoc(level).blocks[0]).toMatchObject({ level });
+    for (const level of [1, 5, '3', 2.5]) {
+      expect(errorsOf([{ type: 'card', title: 'T', level }]).join()).toContain('level: must be one of 2, 3, 4');
+    }
+  });
+
+  it('uses the level in the renderer, Markdown and email (default 3)', () => {
+    const cases: Array<[number | undefined, number]> = [[undefined, 3], [2, 2], [4, 4]];
+    for (const [level, n] of cases) {
+      const doc = cardDoc(level);
+      expect(renderToString(createElement(BlockRenderer, { doc }))).toContain(`<h${n} class="zb-card-title"><span>Tiêu đề</span></h${n}>`);
+      expect(documentToMarkdown(doc)).toContain(`${'#'.repeat(n)} Tiêu đề\n\nThân.`);
+      // Email shifts headings one level down: its h1 is the article title.
+      expect(email(doc)).toMatch(new RegExp(`<h${n + 1} [^>]*>Tiêu đề</h${n + 1}>`));
+    }
+  });
+
+  it('publishes the level in the card schema', () => {
+    const schema = JSON.stringify(blockSchemas.BlockCard);
+    expect(schema).toContain('"level":{"type":"integer","enum":[2,3,4],"default":3');
+  });
+});
+
+describe('reserved anchors and the slim artifact validator', () => {
+  it('reserves the page ids, including the analytics config element', () => {
+    expect(RESERVED_ANCHORS).toEqual(expect.arrayContaining(['locked-title', 'related-videos', CONFIG_ELEMENT_ID]));
+    for (const anchor of RESERVED_ANCHORS.filter(a => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(a))) {
+      expect(errorsOf([{ type: 'section', anchor, blocks: [] }]).join()).toContain('used by the article page');
+    }
+    expect(errorsOf([{ type: 'section', anchor: 'zuey-analytics', blocks: [] }]).join()).toContain('used by the article page');
+  });
+
+  it('validates interactive artifacts without the registry and rejects other types', () => {
+    const ok = validateInteractiveBlock({ title: 'Demo', html: '<p>hi</p>' });
+    expect(ok.ok).toBe(true);
+    const bad = validateInteractiveBlock({ title: 'Demo' });
+    expect(bad.ok).toBe(false);
+    const only = (type: string) => (type === 'interactive' ? interactive : undefined);
+    const res = validateWith(only, { version: 1, blocks: [p('x')] });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.errors[0]?.message).toBe('block type "paragraph" is not allowed here');
   });
 });

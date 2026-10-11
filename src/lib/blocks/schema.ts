@@ -74,6 +74,9 @@ export const SECTION_PADDINGS = ['none', 'sm', 'md', 'lg'] as const;
 export const CARD_VARIANTS = ['outline', 'soft', 'elevated', 'plain'] as const;
 export const CARD_ACCENTS = ['amber', 'emerald', 'sky', 'rose', 'violet', 'stone'] as const;
 export const CARD_ALIGNS = ['start', 'center'] as const;
+/** Heading level of a card title; 3 (under a section h2) when omitted. */
+export const CARD_LEVELS = [2, 3, 4] as const;
+export const DEFAULT_CARD_LEVEL = 3;
 /** Section anchors: lowercase slug, used as the element id and URL fragment. */
 export const ANCHOR_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -204,6 +207,8 @@ export interface CardBlock extends BlockBase {
   variant: (typeof CARD_VARIANTS)[number];
   accent?: (typeof CARD_ACCENTS)[number];
   align?: (typeof CARD_ALIGNS)[number];
+  /** Heading level of the title (default 3). */
+  level?: (typeof CARD_LEVELS)[number];
 }
 
 export type ContainerBlock = SectionBlock | CardBlock;

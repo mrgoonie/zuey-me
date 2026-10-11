@@ -1,4 +1,5 @@
-import type { ArticleAccess, ArticleDocument, Block, ImageSize } from '../blocks/schema';
+import type { ArticleAccess, ArticleDocument, Block, CardBlock, ImageSize } from '../blocks/schema';
+import { DEFAULT_CARD_LEVEL } from '../blocks/schema';
 import { parseInline } from '../blocks/inline';
 import type { InlineNode } from '../blocks/inline';
 import { inlineToPlain } from '../blocks/inline';
@@ -117,6 +118,8 @@ function inlineHtml(text: string): string {
 const EMAIL_IMAGE_MAX_WIDTH = 520;
 /** Inside a card: the column minus the card's 2 x 16px padding and 2 x 1px border. */
 const CARD_IMAGE_MAX_WIDTH = EMAIL_IMAGE_MAX_WIDTH - 34;
+/** Card title font size by heading level (matches the heading block sizes one level down). */
+const CARD_TITLE_SIZE: Record<NonNullable<CardBlock['level']>, number> = { 2: 20, 3: 17, 4: 16 };
 /** Mail clients have no viewport units: a tall portrait is capped at this height instead of 80vh. */
 const EMAIL_IMAGE_MAX_HEIGHT = 640;
 
@@ -185,13 +188,17 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
     // Email keeps a single column: a section is its blocks; a card is a bordered box.
     case 'section':
       return block.blocks.map(b => blockHtml(b, input)).join('');
-    case 'card':
+    case 'card': {
+      // Shifted one level down like heading blocks, since the email's h1 is the article title.
+      const tag = `h${(block.level ?? DEFAULT_CARD_LEVEL) + 1}`;
+      const size = CARD_TITLE_SIZE[block.level ?? DEFAULT_CARD_LEVEL];
       return '<div style="margin:0 0 16px;padding:16px;border:1px solid #e7e0d8;border-radius:12px">'
         + (block.image ? image(block.image, input.siteUrl, CARD_IMAGE_MAX_WIDTH) : '')
-        + (block.title ? `<p style="${P};font-weight:bold;font-size:17px;margin:0 0 8px">${inlineHtml(block.title)}</p>` : '')
+        + (block.title ? `<${tag} style="font-family:Georgia,serif;font-size:${size}px;line-height:1.3;margin:0 0 8px;color:#1c1917">${inlineHtml(block.title)}</${tag}>` : '')
         + block.blocks.map(b => blockHtml(b, input)).join('')
         + (block.footer ? `<p style="${P};margin:0">${inlineHtml(block.footer)}</p>` : '')
         + '</div>';
+    }
     // Email clients render inline SVG unreliably: a labelled icon keeps its label, a decorative one is dropped.
     case 'icon':
       return block.label ? `<p style="${P}">${escapeHtml(block.label)}</p>` : '';

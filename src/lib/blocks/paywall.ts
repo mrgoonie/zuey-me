@@ -92,11 +92,23 @@ function paywallUnits(blocks: Block[]): PaywallUnit[] {
   return blocks.flatMap(block => (block.type === 'section' ? sectionUnits(block, []) : [{ block, path: [] }]));
 }
 
+/** Number of units inside each card body (at any depth), used to tell a whole card from a partly kept one. */
+function cardUnitCounts(units: PaywallUnit[]): Map<CardBlock, number> {
+  const counts = new Map<CardBlock, number>();
+  for (const { path } of units) {
+    for (const frame of path) {
+      if (frame.kind === 'body' && frame.block.type === 'card') counts.set(frame.block, (counts.get(frame.block) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 /**
  * Rebuilds top-level blocks from kept units. A partly kept container keeps its settings and only the
- * kept blocks; a partly kept card also drops its footer, which belongs to the withheld end of the card.
+ * kept blocks; a card that lost any unit (even deep inside a layout) also drops its footer, which
+ * belongs to the withheld end of the card.
  */
-function joinUnits(units: PaywallUnit[]): Block[] {
+function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[] {
   const out: Block[] = [];
   const bodies = new Map<SectionBlock | CardBlock | LayoutChild, Block[]>();
   const layouts = new Map<LayoutBlock, LayoutBlock>();
@@ -133,8 +145,9 @@ function joinUnits(units: PaywallUnit[]): Block[] {
     }
     list.push(block);
   }
+  const kept = cardUnitCounts(units);
   for (const [source, copy] of cards) {
-    if (copy.blocks.length < source.blocks.length) delete copy.footer;
+    if ((kept.get(source) ?? 0) < (totals.get(source) ?? 0)) delete copy.footer;
   }
   return out;
 }
@@ -155,7 +168,7 @@ export function applyPaywall(doc: ArticleDocument, access: ArticleAccess, viewer
     keep += 1;
   }
   if (units.length > 1) keep = Math.min(keep, units.length - 1);
-  const kept: ArticleDocument = { version: 1, blocks: joinUnits(units.slice(0, keep)) };
+  const kept: ArticleDocument = { version: 1, blocks: joinUnits(units.slice(0, keep), cardUnitCounts(units)) };
   if (keep >= units.length) return { doc: kept, truncated: false };
   return { doc: kept, truncated: true, outline: lockedOutline(units.slice(keep).map(u => u.block)) };
 }

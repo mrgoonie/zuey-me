@@ -9,8 +9,8 @@ export function isObj(v: unknown): v is Obj {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-export function isOneOf<T extends string>(list: readonly T[], v: unknown): v is T {
-  return typeof v === 'string' && list.some(item => item === v);
+export function isOneOf<T extends string | number>(list: readonly T[], v: unknown): v is T {
+  return list.some(item => item === v);
 }
 
 export function isInt(v: unknown, min: number, max: number): v is number {

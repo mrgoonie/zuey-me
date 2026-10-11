@@ -3,7 +3,7 @@ import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
-  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, SECTION_PADDINGS,
+  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, SECTION_PADDINGS,
   SECTION_SURFACES, SECTION_WIDTHS, emptyDocument,
 } from '../../lib/blocks/schema';
 import type {
@@ -453,7 +453,11 @@ function CardFields({ block, onChange, ctx }: { block: CardBlock; onChange: (b: 
   const image = block.image;
   return (
     <div className="space-y-2">
-      <Text label="Tiêu đề" value={block.title ?? ''} onChange={title => onChange({ ...block, title: opt(title) })} />
+      <div className="grid grid-cols-[1fr_5rem] gap-2">
+        <Text label="Tiêu đề" value={block.title ?? ''} onChange={title => onChange({ ...block, title: opt(title) })} />
+        <NumberSelect label="Cấp" value={block.level ?? DEFAULT_CARD_LEVEL} min={2} max={4}
+          onChange={v => onChange({ ...block, level: v === 2 ? 2 : v === 4 ? 4 : 3 })} />
+      </div>
       <div className="grid grid-cols-3 gap-2">
         <Select label="Kiểu" value={block.variant} options={CARD_VARIANTS} onChange={variant => onChange({ ...block, variant })} />
         <Select label="Màu nhấn" value={block.accent ?? 'none'} options={['none', ...CARD_ACCENTS] as const}

@@ -13,6 +13,7 @@ import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articl
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
 import { readingMinutes } from '../../lib/search/text';
 import { hasHighlightableCode } from '../../lib/blocks/code-syntax';
+import { LOCKED_TITLE_ID, RELATED_VIDEOS_ID } from '../../lib/blocks/page-ids';
 import { documentLanes } from '../../lib/blocks/schema';
 import { articleOgImage } from '../../lib/og/article-og-service';
 import { relatedVideosForArticle } from '../../lib/videos/related-content';
@@ -142,11 +143,11 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
                 })}
                 {lockedHeadings.length === 0 && <div class="zb-lock-lines" aria-hidden="true"><span></span><span></span><span></span><span></span></div>}
               </div>
-              <section class="zb-lockbox" aria-labelledby="locked-title">
+              <section class="zb-lockbox" aria-labelledby={LOCKED_TITLE_ID}>
                 <span class="zb-lockbox-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
                 </span>
-                <p id="locked-title" class="font-serif text-xl font-bold text-stone-900">{t.lockedTitle}</p>
+                <p id={LOCKED_TITLE_ID} class="font-serif text-xl font-bold text-stone-900">{t.lockedTitle}</p>
                 {view.locked_outline && <p class="mt-1 text-sm font-semibold text-amber-900">{t.lockedMore(lockedHeadings.length, readingMinutes(view.locked_outline.words))}</p>}
                 <p class="mt-2 text-sm text-stone-700">{t.lockedBody}</p>
                 <div class="mt-4 flex flex-wrap justify-center gap-2">
@@ -158,8 +159,8 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
           )}
 
           {relatedVideos.length > 0 && (
-            <section class="mt-10 border-t border-stone-300/70 pt-6" aria-labelledby="related-videos">
-              <h2 id="related-videos" class="text-sm font-bold uppercase tracking-wider text-stone-500 mb-3">{relatedVideosLabel}</h2>
+            <section class="mt-10 border-t border-stone-300/70 pt-6" aria-labelledby={RELATED_VIDEOS_ID}>
+              <h2 id={RELATED_VIDEOS_ID} class="text-sm font-bold uppercase tracking-wider text-stone-500 mb-3">{relatedVideosLabel}</h2>
               <ul class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {relatedVideos.map(v => (
                   <li class="min-w-0">

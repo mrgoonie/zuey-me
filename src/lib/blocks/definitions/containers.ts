@@ -2,10 +2,11 @@
 import type { BlockDefinition } from '../block-definition';
 import { childContext } from '../nesting';
 import {
-  ANCHOR_RE, BREAKPOINTS, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
+  ANCHOR_RE, BREAKPOINTS, CARD_ACCENTS, CARD_ALIGNS, CARD_LEVELS, CARD_VARIANTS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
   SECTION_PADDINGS, SECTION_SURFACES, SECTION_WIDTHS,
 } from '../schema';
 import type { CardBlock, CardImage, LayoutBlock, LayoutChild, ResponsiveCols, ResponsiveSpan, SectionBlock, ToggleBlock } from '../schema';
+import { RESERVED_ANCHORS } from '../page-ids';
 import { iconName, colsInt, httpsUrl, imageSize, imageSizeTogether, inline, ref, short } from './schema-fragments';
 import { isInt, isObj, isOneOf, plain, plainLength } from './shared';
 
@@ -142,8 +143,6 @@ export const toggle: BlockDefinition<ToggleBlock> = {
   },
 };
 
-/** Element ids the article page itself uses; a section anchor may not take them over. */
-export const RESERVED_ANCHORS: readonly string[] = ['locked-title', 'related-videos', 'main', 'content', 'top'];
 
 export const section: BlockDefinition<SectionBlock> = {
   type: 'section',
@@ -217,6 +216,8 @@ export const card: BlockDefinition<CardBlock> = {
     if (accent !== undefined && !isOneOf(CARD_ACCENTS, accent)) { v.err(`${path}.accent`, `must be one of ${CARD_ACCENTS.join(', ')}`); return undefined; }
     const align = raw.align;
     if (align !== undefined && !isOneOf(CARD_ALIGNS, align)) { v.err(`${path}.align`, `must be one of ${CARD_ALIGNS.join(', ')}`); return undefined; }
+    const level = raw.level;
+    if (level !== undefined && !isOneOf(CARD_LEVELS, level)) { v.err(`${path}.level`, `must be one of ${CARD_LEVELS.join(', ')}`); return undefined; }
     const rawBlocks = raw.blocks === undefined ? [] : raw.blocks;
     if (!Array.isArray(rawBlocks) || rawBlocks.length > LIMITS.cardChildren) {
       v.err(`${path}.blocks`, `must be an array of at most ${LIMITS.cardChildren} blocks`);
@@ -228,12 +229,13 @@ export const card: BlockDefinition<CardBlock> = {
     return {
       id, type: 'card', ...(title ? { title } : {}), ...(icon ? { icon } : {}), ...(image ? { image } : {}), blocks,
       ...(footer ? { footer } : {}), variant, ...(accent ? { accent } : {}), ...(align ? { align } : {}),
+      ...(level !== undefined ? { level } : {}),
     };
   },
   markdown(b, ctx) {
     return [
       b.image ? `![${b.image.alt.replace(/[[\]]/g, '')}](${b.image.url})` : '',
-      b.title ? `### ${b.title}` : '',
+      b.title ? `${'#'.repeat(b.level ?? DEFAULT_CARD_LEVEL)} ${b.title}` : '',
       ctx.blocks(b.blocks),
       b.footer ?? '',
     ].filter(Boolean).join('\n\n');
@@ -254,6 +256,7 @@ export const card: BlockDefinition<CardBlock> = {
       variant: { type: 'string', enum: [...CARD_VARIANTS], default: 'outline' },
       accent: { type: 'string', enum: [...CARD_ACCENTS], description: 'Accent colour for the icon and top edge; omit for the site accent' },
       align: { type: 'string', enum: [...CARD_ALIGNS], default: 'start' },
+      level: { type: 'integer', enum: [...CARD_LEVELS], default: DEFAULT_CARD_LEVEL, description: 'Heading level of the title: 2 for a card directly under the article title, 4 under an h3 subsection' },
     },
     extra: {
       description: 'Needs a title, an image or at least one block.',

@@ -33,8 +33,8 @@ export const BLOCK_SCHEMA_NOTES = [
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
   `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,
   'Toggle blocks may contain any block except toggle and layout.',
-  `Section blocks are top-level only and may contain any block except section (at most ${LIMITS.sectionChildren}). width picks the reading lane on the article page (prose, wide or full); surface and padding style the band; anchor is an optional unique slug for #links. The paywall counts a top-level section's children one by one.`,
-  `Card blocks may appear anywhere except inside another card (body at most ${LIMITS.cardChildren} blocks, no section or card). A card needs a title, an image or at least one block; footer is inline text for links.`,
+  `Section blocks are top-level only (never inside a layout, toggle or card) and may contain any block except section (at most ${LIMITS.sectionChildren}). width picks the reading lane on the article page (prose, wide or full); surface and padding style the band; anchor is an optional unique slug for #links. The paywall counts a top-level section's children one by one.`,
+  `Card blocks may appear anywhere except inside another card (body at most ${LIMITS.cardChildren} blocks, no section or card). A card needs a title, an image or at least one block; level (2, 3 or 4, default 3) sets the heading level of its title; footer is inline text for links.`,
   `Icon blocks and callout.icon accept only the ${ICON_NAMES.length} curated icon names (or their aliases); block_schema returns them under icons. Add label when the icon carries meaning; omit it for decoration.`,
   'Inline text supports **bold**, *italic*, ~~strike~~, ==highlight==, `code` and [label](https://...).',
 ];
