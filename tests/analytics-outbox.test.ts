@@ -463,6 +463,46 @@ describe('Dodo card events', () => {
     expect(reversalLogs()).toBe(1);
   });
 
+  it('asks Dodo to retry a reversal when the payment lookup hits an outage, and ignores one Dodo rejects', async () => {
+    await seedCard();
+    d1.raw.run("UPDATE card_subscriptions SET first_payment_id = 'pay_0' WHERE id = 'csub_1'");
+    const refund = { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_9', paymentId: 'pay_9', amount: PRICE, currency: 'USD', isPartial: false } as const;
+    const outages: Array<[string, () => Promise<Response>]> = [
+      ['Dodo Payments payment lookup failed (HTTP 503)', async () => json({ code: 'UNAVAILABLE' }, 503)],
+      ['Dodo Payments payment lookup failed (HTTP 429)', async () => json({ code: 'RATE_LIMITED' }, 429)],
+      ['Dodo Payments payment lookup failed (HTTP 408)', async () => json({ code: 'REQUEST_TIMEOUT' }, 408)],
+      ['Could not reach Dodo Payments (payment lookup)', async () => { throw new TypeError('fetch failed'); }],
+      ['Dodo Payments did not answer in time (payment lookup)', async () => { throw new DOMException('The operation timed out.', 'TimeoutError'); }],
+    ];
+    const signals: unknown[] = [];
+    for (const [message, respond] of outages) {
+      membersRuntime.fetch = async (_input, init) => {
+        signals.push(init?.signal);
+        return respond();
+      };
+      const err = await applyDodoReversal(d1, refund, dodoEnv()).then(() => null, (e: unknown) => e);
+      expect(err instanceof AppError ? [err.status, err.code, err.message] : err).toEqual([502, 'payment_provider_error', message]);
+    }
+    // Every Dodo call is bounded by a timeout signal.
+    expect(signals.length).toBe(outages.length);
+    expect(signals.every(s => s instanceof AbortSignal)).toBe(true);
+    expect(reversalLogs()).toBe(0);
+    expect(rows('refund')).toHaveLength(0);
+
+    membersRuntime.fetch = fakeFetch;
+    const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // Dodo does not know the payment (404): retrying cannot help.
+      expect(await applyDodoReversal(d1, refund, dodoEnv())).toEqual({ outcome: 'ignored', card_subscription_id: null });
+    } finally {
+      warn.mockRestore();
+    }
+    // Once Dodo answers, the redelivered reversal is applied once.
+    dodoPayments.pay_9 = { payment_id: 'pay_9', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' } };
+    expect(await applyDodoReversal(d1, refund, dodoEnv())).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
+    expect(reversalLogs()).toBe(1);
+  });
+
   it('logs a reversal once when the activity log write fails and Dodo retries', async () => {
     await seedCard();
     await applyDodoEvent(d1, env(), 'wh_1', payment('payment.succeeded', 'pay_1', new Date(T0).toISOString()));
