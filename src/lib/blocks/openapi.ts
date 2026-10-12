@@ -37,6 +37,7 @@ export const BLOCK_SCHEMA_NOTES = [
   `Card blocks may appear anywhere except inside another card (body at most ${LIMITS.cardChildren} blocks, no section or card). A card needs a title, an image or at least one block; level (2, 3 or 4, default 3) sets the heading level of its title; footer is inline text for links.`,
   `Icon blocks and callout.icon accept only the ${ICON_NAMES.length} curated icon names (or their aliases); block_schema returns them under icons. Add label when the icon carries meaning; omit it for decoration.`,
   'Inline text supports **bold**, *italic*, ~~strike~~, ==highlight==, `code` and [label](https://...).',
+  'Host images on https://media.zuey.me instead of hotlinking: media_upload_url (file on disk, upload with curl), media_import (public URL) or media_upload (small base64) return an image block with width and height to insert as is.',
 ];
 
 const localeEnum = { type: 'string', enum: [...LOCALES] };

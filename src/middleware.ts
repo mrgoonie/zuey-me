@@ -9,7 +9,7 @@ function setMachineCors(headers: Headers): void {
   // No cookies are honoured on these endpoints (Bearer tokens only), so a wildcard origin is safe; /mcp
   // additionally validates the Origin header itself.
   headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   headers.set('Access-Control-Allow-Headers', MACHINE_ALLOW_HEADERS);
   headers.set('Access-Control-Expose-Headers', EXPOSE_HEADERS);
   headers.set('Access-Control-Max-Age', '600');
