@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0023_job_cursors.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0024_media_assets.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -53,6 +53,18 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
    - **Workers AI** (dự phòng, hoặc là provider duy nhất khi không có key OpenRouter): dùng binding `AI` có sẵn. Model mặc định `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, đổi bằng biến `VIDEOS_REWRITE_MODEL`.
    - **Tên riêng**: prompt luôn kèm tiêu đề video và danh sách tên riêng mặc định (ClaudeKit, AgentKit, Codex, Zuey…, kèm các cách phụ đề hay nghe nhầm) trong `src/lib/videos/video-transcript-glossary.ts`. Bổ sung tên mới bằng biến `VIDEOS_REWRITE_GLOSSARY` (không bắt buộc), mỗi tên cách nhau bằng dấu phẩy hoặc xuống dòng, có thể ghi cách hay bị nghe nhầm: `Hermes = Han Harris | Hermit, Kongming`. Sau khi đổi, bấm nút viết lại AI (hoặc `zuey videos rewrite <youtube_id>`) để áp dụng cho video cũ.
    Cột `transcript_rewrite_model` ghi provider đã tạo ra bản viết lại.
+
+## 2b. Ảnh bài viết (media CDN)
+
+1. Chạy migration `0024_media_assets.sql` (xem mục 0).
+2. R2: bucket public `zuey-media`, custom domain `media.zuey.me` (đã có sẵn trong account Cloudflare của zuey.me). Binding `MEDIA` khai báo trong `wrangler.toml`. Thiếu binding thì các API ảnh trả `503 media_unconfigured`. Ảnh bài viết nằm dưới prefix `articles/`; các prefix `blog/`, `research/` có sẵn không bị đụng tới.
+3. Đưa ảnh lên (chỉ admin, API key read-only không dùng được):
+   - Agent có shell: MCP `media_upload_url` (hoặc `POST /api/v1/admin/media/upload-url`) trả về URL dùng một lần, hạn 15 phút. Upload bằng `curl --upload-file ./anh.png '<upload_url>'`. File không phải ảnh hợp lệ thì bị từ chối mà URL vẫn dùng lại được.
+   - Ảnh đã có URL public: MCP `media_import` hoặc `POST /api/v1/admin/media` với JSON `{"url": "https://…"}`. Server không đi theo redirect, nên phải đưa URL cuối.
+   - Ảnh nhỏ (tối đa 2 MB): MCP `media_upload` với `data_base64`.
+4. Kết quả có `block` (block `image` kèm `width`/`height`). Chèn block này vào document của bài viết rồi gọi `article_update`. Cùng một file upload lại sẽ trả về ảnh đã có, không tạo bản sao.
+5. Xoá: MCP `media_delete` hoặc `DELETE /api/v1/admin/media/{id}`. Nếu bản nháp hoặc bản đã xuất bản của bài viết hay bài học còn dùng ảnh thì bị từ chối (`409 media_in_use`). Các revision cũ không được kiểm tra.
+6. Ảnh trong bài Knowledges vẫn public theo URL (key là hash khó đoán). Paywall chỉ bảo vệ phần chữ, vì email và ảnh chia sẻ mạng xã hội cần URL ảnh public.
 
 ## 3. Google Calendar / Meet
 

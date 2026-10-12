@@ -29,3 +29,9 @@ bucket_name = "zuey-referral-kyc"
 [[r2_buckets]]
 binding = "COURSE_FILES"
 bucket_name = "zuey-course-files"
+
+# Public article media served at https://media.zuey.me (R2 custom domain). Admins upload images through
+# MCP `media_*` tools or /api/v1/admin/media; keys under `articles/` are content-addressed.
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "zuey-media"
