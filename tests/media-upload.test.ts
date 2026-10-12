@@ -111,6 +111,15 @@ describe('sniffImage', () => {
     expect(sniffImage(avif)).toEqual({ mime: 'image/avif', ext: 'avif', width: 1920, height: 1080 });
   });
 
+  it('reads AVIF listed as a compatible brand and keeps the largest ispe box', () => {
+    const mif1 = bytes([0, 0, 0, 0x18], 'ftyp', 'mif1', pad(4), 'miaf', 'avif', 'ispe', pad(4), be32(320), be32(180), 'ispe', pad(4), be32(4000), be32(3000));
+    expect(sniffImage(mif1)).toEqual({ mime: 'image/avif', ext: 'avif', width: 4000, height: 3000 });
+  });
+
+  it('drops sizes the image block would reject', () => {
+    expect(sniffImage(png(4_000_000_000, 10))).toMatchObject({ mime: 'image/png', width: null, height: null });
+  });
+
   it('refuses SVG and other bytes', () => {
     expect(sniffImage(svg)).toBeNull();
     expect(sniffImage(bytes('hello world, not an image'))).toBeNull();
@@ -131,6 +140,15 @@ describe('media MCP tools', () => {
     const again = await mcpCall(adminKey, 'media_upload', { data_base64: b64(png(1200, 630)) });
     expect(field(again.result, 'created')).toBe(false);
     expect(field(again.result, 'asset', 'url')).toBe(url);
+    expect(bucket.objects.size).toBe(1);
+  });
+
+  it('returns the stored asset when the same image is uploaded twice at once', async () => {
+    const data = b64(png(640, 480, 7));
+    const [a, b] = await Promise.all([mcpCall(adminKey, 'media_upload', { data_base64: data }), mcpCall(adminKey, 'media_upload', { data_base64: data })]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(field(a.result, 'asset', 'id')).toBe(String(field(b.result, 'asset', 'id')));
+    expect([field(a.result, 'created'), field(b.result, 'created')].sort()).toEqual([false, true]);
     expect(bucket.objects.size).toBe(1);
   });
 
@@ -194,13 +212,19 @@ describe('media MCP tools', () => {
     expect(blocked.status).toBe(409);
     expect(blocked.code).toBe('media_in_use');
 
+    const cover = await mcpCall(adminKey, 'media_upload', { data_base64: b64(png(300, 200, 2)) });
+    const coverUrl = String(field(cover.result, 'asset', 'url'));
+    await d1.prepare("INSERT INTO courses (id, slug, title, cover_url, created_at, updated_at) VALUES ('crs_1', 'khoa-hoc', 'Khoá học', ?, ?, ?)")
+      .bind(coverUrl, new Date(T0).toISOString(), new Date(T0).toISOString()).run();
+    expect((await mcpCall(adminKey, 'media_delete', { id: String(field(cover.result, 'asset', 'id')) })).code).toBe('media_in_use');
+
     const other = await mcpCall(adminKey, 'media_upload', { data_base64: b64(png(300, 200, 1)) });
     const otherId = String(field(other.result, 'asset', 'id'));
     const done = await mcpCall(adminKey, 'media_delete', { id: otherId });
     expect(field(done.result, 'deleted')).toBe(true);
-    expect(bucket.objects.size).toBe(1);
+    expect(bucket.objects.size).toBe(2);
     const list = await mcpCall(adminKey, 'media_list', {});
-    expect(field(list.result, 'total')).toBe(1);
+    expect(field(list.result, 'total')).toBe(2);
   });
 });
 

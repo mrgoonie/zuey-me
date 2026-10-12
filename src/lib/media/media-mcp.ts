@@ -54,7 +54,7 @@ export const mediaMcpModule: McpToolModule = {
     },
     {
       name: 'media_delete',
-      description: 'Admin only: delete an image from the media CDN. Refused (409 media_in_use) while a current article or course lesson document still uses it; older article revisions are not checked.',
+      description: 'Admin only: delete an image from the media CDN. Refused (409 media_in_use) while a current article or course lesson document, or a course cover, still uses it; older article revisions are not checked. CDN caches may keep serving a deleted image.',
       inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Media asset id (med_…)' } }, required: ['id'] },
     },
   ],

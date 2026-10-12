@@ -113,7 +113,14 @@ export async function consumeUploadTicket(
   const claimed = await d1.prepare('UPDATE media_upload_tickets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?')
     .bind(nowIso, tokenHash, nowIso).run();
   if ((claimed.meta?.changes ?? 0) !== 1) throw new AppError(404, 'upload_url_invalid', 'This upload URL is unknown, expired or already used');
-  const result = await storeImage(d1, env, bytes, { alt: ticket.alt, actor: ticket.created_by });
+  let result: StoredMedia;
+  try {
+    result = await storeImage(d1, env, bytes, { alt: ticket.alt, actor: ticket.created_by });
+  } catch (err) {
+    // A failed store must not strand the caller: give the URL back for a retry.
+    await d1.prepare('UPDATE media_upload_tickets SET used_at = NULL WHERE token_hash = ?').bind(tokenHash).run();
+    throw err;
+  }
   await d1.prepare('UPDATE media_upload_tickets SET asset_id = ? WHERE token_hash = ?').bind(result.asset.id, tokenHash).run();
   return result;
 }

@@ -63,7 +63,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
    - Ảnh đã có URL public: MCP `media_import` hoặc `POST /api/v1/admin/media` với JSON `{"url": "https://…"}`. Server không đi theo redirect, nên phải đưa URL cuối.
    - Ảnh nhỏ (tối đa 2 MB): MCP `media_upload` với `data_base64`.
 4. Kết quả có `block` (block `image` kèm `width`/`height`). Chèn block này vào document của bài viết rồi gọi `article_update`. Cùng một file upload lại sẽ trả về ảnh đã có, không tạo bản sao.
-5. Xoá: MCP `media_delete` hoặc `DELETE /api/v1/admin/media/{id}`. Nếu bản nháp hoặc bản đã xuất bản của bài viết hay bài học còn dùng ảnh thì bị từ chối (`409 media_in_use`). Các revision cũ không được kiểm tra.
+5. Xoá: MCP `media_delete` hoặc `DELETE /api/v1/admin/media/{id}`. Nếu bản nháp hoặc bản đã xuất bản của bài viết hay bài học, hoặc ảnh bìa khoá học, còn dùng ảnh thì bị từ chối (`409 media_in_use`). Các revision cũ không được kiểm tra. Ảnh được cache `immutable` một năm, nên cache CDN và trình duyệt có thể vẫn hiện ảnh đã xoá.
 6. Ảnh trong bài Knowledges vẫn public theo URL (key là hash khó đoán). Paywall chỉ bảo vệ phần chữ, vì email và ảnh chia sẻ mạng xã hội cần URL ảnh public.
 
 ## 3. Google Calendar / Meet

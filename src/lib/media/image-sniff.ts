@@ -4,6 +4,8 @@
  * can carry script.
  */
 
+import { LIMITS } from '../blocks/schema';
+
 export type ImageMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/avif';
 
 export interface SniffedImage {
@@ -22,9 +24,10 @@ function be32(b: Uint8Array, i: number): number { return ((b[i] << 24) >>> 0) + 
 function le16(b: Uint8Array, i: number): number { return b[i] | (b[i + 1] << 8); }
 function le24(b: Uint8Array, i: number): number { return b[i] | (b[i + 1] << 8) | (b[i + 2] << 16); }
 
-/** Positive size or null (a header we could not read never blocks the upload). */
+/** Positive size the image block accepts, or null (an unreadable or implausible header never blocks the upload). */
 function size(width: number, height: number): { width: number | null; height: number | null } {
-  return width > 0 && height > 0 ? { width, height } : { width: null, height: null };
+  const ok = (n: number) => n > 0 && n <= LIMITS.imagePixels;
+  return ok(width) && ok(height) ? { width, height } : { width: null, height: null };
 }
 
 function jpegSize(b: Uint8Array): { width: number | null; height: number | null } {
@@ -54,14 +57,32 @@ function webpSize(b: Uint8Array): { width: number | null; height: number | null 
   return { width: null, height: null };
 }
 
-/** AVIF keeps the size in the `ispe` property box: version/flags (4 bytes), then width and height. */
+/**
+ * AVIF keeps sizes in `ispe` property boxes: version/flags (4 bytes), then width and height. Thumbnails,
+ * alpha planes and grid tiles carry their own, so the largest one is the displayed image.
+ */
 function avifSize(b: Uint8Array): { width: number | null; height: number | null } {
-  // The box needs 16 bytes from its type field: 'ispe', version/flags, width, height.
+  // Each box needs 16 bytes from its type field: 'ispe', version/flags, width, height.
   const last = Math.min(b.length - 16, 64 * 1024);
+  let best = { width: 0, height: 0 };
   for (let i = 4; i <= last; i++) {
-    if (b[i] === 0x69 && b[i + 1] === 0x73 && b[i + 2] === 0x70 && b[i + 3] === 0x65) return size(be32(b, i + 8), be32(b, i + 12));
+    if (b[i] === 0x69 && b[i + 1] === 0x73 && b[i + 2] === 0x70 && b[i + 3] === 0x65) {
+      const width = be32(b, i + 8), height = be32(b, i + 12);
+      if (width * height > best.width * best.height) best = { width, height };
+    }
   }
-  return { width: null, height: null };
+  return size(best.width, best.height);
+}
+
+/** True when the `ftyp` box names AVIF as its major brand or as one of its compatible brands. */
+function isAvif(b: Uint8Array): boolean {
+  const boxEnd = Math.min(be32(b, 0), b.length, 256);
+  for (let i = 8; i + 4 <= boxEnd; i += 4) {
+    if (i === 12) continue; // minor version, not a brand
+    const brand = ascii(b, i, 4);
+    if (brand === 'avif' || brand === 'avis') return true;
+  }
+  return false;
 }
 
 /** Returns the detected image type and size, or null when the bytes are not a supported image. */
@@ -74,9 +95,6 @@ export function sniffImage(b: Uint8Array): SniffedImage | null {
   const head6 = ascii(b, 0, 6);
   if (head6 === 'GIF87a' || head6 === 'GIF89a') return { mime: 'image/gif', ext: 'gif', ...size(le16(b, 6), le16(b, 8)) };
   if (ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 4) === 'WEBP') return { mime: 'image/webp', ext: 'webp', ...webpSize(b) };
-  if (ascii(b, 4, 4) === 'ftyp') {
-    const brand = ascii(b, 8, 4);
-    if (brand === 'avif' || brand === 'avis') return { mime: 'image/avif', ext: 'avif', ...avifSize(b) };
-  }
+  if (ascii(b, 4, 4) === 'ftyp' && isAvif(b)) return { mime: 'image/avif', ext: 'avif', ...avifSize(b) };
   return null;
 }

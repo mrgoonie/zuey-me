@@ -119,11 +119,20 @@ export async function storeImage(
   const objectKey = `articles/${month}/${sha256.slice(0, 16)}.${image.ext}`;
   await bucket.put(objectKey, bytes, { httpMetadata: { contentType: image.mime, cacheControl: IMMUTABLE } });
   const id = randomId('med');
-  await d1.prepare(
+  // A concurrent upload of the same bytes (a retry, a double submit) may have inserted first; that row wins.
+  const inserted = await d1.prepare(
     `INSERT INTO media_assets (id, object_key, url, sha256, mime, size_bytes, width, height, alt, source_url, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
   ).bind(id, objectKey, `${MEDIA_PUBLIC_ORIGIN}/${objectKey}`, sha256, image.mime, bytes.length, image.width, image.height,
     alt, input.sourceUrl ?? null, input.actor, iso(now)).run();
+  if ((inserted.meta?.changes ?? 0) === 0) {
+    const winner = await d1.prepare('SELECT * FROM media_assets WHERE sha256 = ?').bind(sha256).first<Row>();
+    if (!winner) throw new AppError(500, 'internal_error', 'Media asset was not persisted');
+    const asset = rowToAsset(winner);
+    // The winner stored under another month's key: drop the copy written above.
+    if (asset.object_key !== objectKey) await bucket.delete(objectKey);
+    return stored(asset, false, alt);
+  }
   const asset = await getMediaAsset(d1, id);
   if (!asset) throw new AppError(500, 'internal_error', 'Media asset was not persisted');
   return stored(asset, true, alt);
@@ -143,28 +152,36 @@ export async function listMediaAssets(
   return { items: (results ?? []).map(rowToAsset), total: Number(total?.n ?? 0), page, limit };
 }
 
-/** Articles and course lessons whose current draft or published document still uses the URL. */
-export async function mediaReferences(d1: D1DatabaseLike, url: string): Promise<{ articles: string[]; lessons: string[] }> {
+/** Articles and course lessons whose current draft or published document uses the URL, and courses using it as cover. */
+export async function mediaReferences(d1: D1DatabaseLike, url: string): Promise<{ articles: string[]; lessons: string[]; courses: string[] }> {
   const articles = await d1.prepare(
     `SELECT DISTINCT a.slug FROM article_editions e JOIN articles a ON a.id = e.article_id
-     WHERE e.deleted_at IS NULL AND (instr(e.draft_json, ?) > 0 OR instr(COALESCE(e.published_json, ''), ?) > 0)`,
-  ).bind(url, url).all<{ slug: string }>();
+     WHERE e.deleted_at IS NULL AND (instr(e.draft_json, ?) > 0 OR instr(COALESCE(e.published_json, ''), ?) > 0 OR e.cover_url = ?)`,
+  ).bind(url, url, url).all<{ slug: string }>();
   const lessons = await d1.prepare(
     `SELECT DISTINCT slug FROM course_lessons WHERE instr(draft_json, ?) > 0 OR instr(COALESCE(published_json, ''), ?) > 0`,
   ).bind(url, url).all<{ slug: string }>();
-  return { articles: (articles.results ?? []).map(r => r.slug), lessons: (lessons.results ?? []).map(r => r.slug) };
+  const courses = await d1.prepare('SELECT slug FROM courses WHERE cover_url = ?').bind(url).all<{ slug: string }>();
+  return {
+    articles: (articles.results ?? []).map(r => r.slug), lessons: (lessons.results ?? []).map(r => r.slug),
+    courses: (courses.results ?? []).map(r => r.slug),
+  };
 }
 
-/** Deletes the object and its record, refusing while a current article or lesson document uses it. */
+/**
+ * Deletes the object and its record, refusing while a current article or lesson document or a course cover
+ * uses it. Objects are cached as immutable, so CDN and browser caches may keep serving a deleted image.
+ */
 export async function deleteMediaAsset(d1: D1DatabaseLike, env: RuntimeEnv, id: string): Promise<{ deleted: true; id: string; url: string }> {
   const bucket = requireMediaBucket(env);
   const asset = await getMediaAsset(d1, id);
   if (!asset) throw new AppError(404, 'media_not_found', 'Media asset not found');
   const refs = await mediaReferences(d1, asset.url);
-  if (refs.articles.length || refs.lessons.length) {
+  if (refs.articles.length || refs.lessons.length || refs.courses.length) {
     throw new AppError(409, 'media_in_use', 'Remove the image from these documents before deleting it', refs);
   }
-  await bucket.delete(asset.object_key);
+  // Row first: if the object delete then fails, a re-upload stores the object again instead of matching a dead URL.
   await d1.prepare('DELETE FROM media_assets WHERE id = ?').bind(id).run();
+  await bucket.delete(asset.object_key);
   return { deleted: true, id, url: asset.url };
 }

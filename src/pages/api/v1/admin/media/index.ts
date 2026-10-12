@@ -2,7 +2,7 @@ import { AppError, jsonOk, readJsonObject } from '../../../../../lib/http';
 import { NO_STORE, memberRoute } from '../../../../../lib/members/account';
 import { requireCan } from '../../../../../lib/members/policy';
 import { principalActor } from '../../../../../lib/taxonomy/admin';
-import { imageBlock, listMediaAssets, storeImage } from '../../../../../lib/media/media-asset-store';
+import { MAX_IMAGE_BYTES, imageBlock, listMediaAssets, storeImage } from '../../../../../lib/media/media-asset-store';
 import { decodeBase64Image, importImageFromUrl, readBounded } from '../../../../../lib/media/media-upload-sources';
 
 /** Admin: images on the media CDN, newest first (`q` filters alt text and keys). */
@@ -25,6 +25,11 @@ export const POST = memberRoute(async ({ request }, { d1, env, principal }) => {
   const actor = principalActor(principal);
   const type = (request.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
   if (type === 'multipart/form-data') {
+    // formData() buffers the whole body, so refuse oversized uploads before reading it.
+    const declared = Number(request.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES + 64 * 1024) {
+      throw new AppError(413, 'file_too_large', `Images must be at most ${MAX_IMAGE_BYTES / 1024 / 1024} MB`);
+    }
     const form = await request.formData();
     const file = form.get('file');
     if (!(file instanceof File)) throw new AppError(400, 'invalid_field', 'file is required', { field: 'file' });
