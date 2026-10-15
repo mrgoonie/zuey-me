@@ -203,7 +203,7 @@ export function PricingTable({ catalog, initialPlan, initialMonths }: Props) {
       </ul>
       <p className="text-center text-xs text-stone-300 max-w-[720px] mx-auto">
         Giá niêm yết bằng USD; số tiền chuyển khoản tính theo VND (làm tròn lên 1.000 ₫ mỗi tháng). Gói được kích hoạt ngay khi hệ thống nhận được chuyển khoản, và cộng dồn nếu bạn gia hạn sớm.
-        {cardPlans.size > 0 && ' Thẻ quốc tế thanh toán bằng USD qua Dodo Payments, tự gia hạn hằng tháng và huỷ được bất cứ lúc nào trong mục Tài khoản.'}
+        {cardPlans.size > 0 && ' Thẻ quốc tế thanh toán bằng USD qua Dodo Payments với vai trò Merchant of Record (bên bán hàng chính thức của giao dịch thẻ), tự gia hạn hằng tháng và huỷ được bất cứ lúc nào trong mục Tài khoản.'}
       </p>
     </div>
   );

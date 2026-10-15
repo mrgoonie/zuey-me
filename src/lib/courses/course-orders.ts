@@ -214,7 +214,7 @@ export async function createCourseCheckout(
 ): Promise<CourseCheckout> {
   if (typeof body.course !== 'string' || !body.course) throw new AppError(400, 'invalid_field', 'course (slug or id) is required', { field: 'course' });
   if (body.accept_terms !== true) {
-    throw new AppError(400, 'terms_required', 'Accept the Terms of Use and the no-refund policy (accept_terms: true) to buy a course', { field: 'accept_terms', terms_url: '/terms', policy_url: '/policy' });
+    throw new AppError(400, 'terms_required', 'Accept the Terms of Use and the Course Policy (7-day refund) (accept_terms: true) to buy a course', { field: 'accept_terms', terms_url: '/terms', policy_url: '/policy' });
   }
   const provider = body.provider ?? 'sepay';
   if (provider !== 'sepay' && provider !== 'dodo') throw new AppError(400, 'invalid_field', "provider must be 'sepay' or 'dodo'", { field: 'provider' });
