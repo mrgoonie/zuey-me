@@ -4,7 +4,7 @@ import { callApi } from '../members/member-ui';
 
 /** Vietnamese copy for error codes the course APIs return; falls back to the member copy / server message. */
 const COURSE_ERROR_COPY: Record<string, string> = {
-  terms_required: 'Bạn cần đồng ý Điều khoản sử dụng và Chính sách (không hoàn tiền) để mua khoá học.',
+  terms_required: 'Bạn cần đồng ý Điều khoản sử dụng và Chính sách khoá học để mua khoá học.',
   already_owned: 'Bạn đã sở hữu khoá học này.',
   not_for_sale: 'Khoá học này hiện chưa mở bán.',
   account_locked: 'Quyền truy cập khoá học trên tài khoản này đang tạm dừng để kiểm tra. Vui lòng email hi@zuey.me.',

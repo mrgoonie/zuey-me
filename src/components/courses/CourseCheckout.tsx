@@ -58,7 +58,7 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
   async function submit(e: SubmitLike) {
     e.preventDefault();
     if (busy) return;
-    if (!accepted) { setError('Bạn cần đồng ý Điều khoản sử dụng và Chính sách (không hoàn tiền) để tiếp tục.'); return; }
+    if (!accepted) { setError('Bạn cần đồng ý Điều khoản sử dụng và Chính sách khoá học để tiếp tục.'); return; }
     const code = referral.trim();
     if (code && !REF_RE.test(code)) { setError('Mã ưu đãi chỉ gồm chữ, số, dấu gạch ngang hoặc gạch dưới.'); return; }
     const inv = provider === 'sepay' ? invoice.payload() : { invoice: null, error: null };
@@ -120,12 +120,15 @@ export function CourseCheckout({ courseSlug, signedIn, sepayAvailable, cardAvail
       </div>
 
       {provider === 'sepay' && sepayAvailable && <InvoiceRequestFields state={invoice} />}
+      {provider === 'dodo' && (
+        <p className="text-xs text-stone-600">Thanh toán thẻ do Dodo Payments xử lý với vai trò Merchant of Record (bên bán hàng chính thức của đơn này); tên Dodo Payments sẽ hiện trên sao kê thẻ.</p>
+      )}
 
       <label htmlFor={termsId} className="flex min-h-[44px] cursor-pointer items-start gap-3 text-sm">
         <input id={termsId} type="checkbox" required checked={accepted} onChange={e => { setAccepted(e.target.checked); if (e.target.checked) setError(null); }} className={`mt-0.5 h-5 w-5 shrink-0 accent-stone-900 ${focusRing}`} />
         <span>
           Tôi đồng ý <a href="/terms" target="_blank" rel="noopener" className="font-semibold underline">Điều khoản sử dụng</a> và{' '}
-          <a href="/policy" target="_blank" rel="noopener" className="font-semibold underline">Chính sách</a> (không hoàn tiền).
+          <a href="/policy" target="_blank" rel="noopener" className="font-semibold underline">Chính sách</a> (hoàn tiền trong 7 ngày).
         </span>
       </label>
 

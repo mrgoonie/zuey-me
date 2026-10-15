@@ -79,6 +79,6 @@ export async function renderCourseMarkdown(d1: D1DatabaseLike, env: RuntimeEnv, 
     if (!view.document) continue;
     lines.push(`## Học thử: ${t.title}`, '', lessonMarkdown(view.document), '');
   }
-  lines.push('---', `Mua khoá học: ${url} · Điều khoản: ${origin}/terms · Chính sách không hoàn tiền: ${origin}/policy`, '');
+  lines.push('---', `Mua khoá học: ${url} · Điều khoản: ${origin}/terms · Chính sách (hoàn tiền trong 7 ngày): ${origin}/policy`, '');
   return lines.join('\n');
 }

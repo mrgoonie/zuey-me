@@ -1,79 +1,171 @@
 ---
 import CourseLegalPage from '../components/courses/CourseLegalPage.astro';
-import type { LegalSection } from '../components/courses/CourseLegalPage.astro';
+import type { LegalContent, LegalLang } from '../components/courses/CourseLegalPage.astro';
 
 Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
 
-const highlights = [
-  'Mua một lần, học trọn đời trong suốt thời gian dịch vụ hoạt động. Không phải gia hạn.',
-  'KHÔNG HOÀN TIỀN sau khi thanh toán, trừ trường hợp chúng tôi phát hiện bạn bị trừ tiền trùng cho cùng một khoá học, hoặc khi pháp luật bắt buộc.',
-  'Hãy học thử các bài miễn phí trước khi mua để chắc chắn khoá học phù hợp với bạn.',
-  'Giảm giá thành viên và giảm giá mã giới thiệu không cộng dồn: hệ thống tự áp dụng mức cao hơn.',
-  'Hoàn tiền qua ngân hàng/thẻ hoặc khiếu nại thanh toán (chargeback) sẽ thu hồi quyền truy cập khoá học, kho GitHub và chứng chỉ.',
-];
-
-const sections: LegalSection[] = [
-  {
-    id: 'one-time',
-    title: 'Mua một lần, sở hữu trọn đời',
-    paras: [
-      'Mỗi khoá học được bán theo hình thức thanh toán một lần. Sau khi hệ thống xác nhận thanh toán, khoá học xuất hiện trong mục Khoá học của tôi và bạn được học mọi bài, kể cả các bài được bổ sung về sau, trong suốt thời gian dịch vụ zuey.me còn hoạt động.',
-      'Quyền truy cập là giấy phép cá nhân, không chuyển nhượng, theo Điều khoản sử dụng khoá học.',
+const content: Record<LegalLang, LegalContent> = {
+  vi: {
+    title: 'Chính sách khoá học',
+    intro: 'Chính sách này nói rõ về giá, thanh toán, bên bán hàng, giảm giá, hoàn tiền trong 7 ngày và những gì xảy ra khi khoản thanh toán bị đảo ngược. Vui lòng đọc kỹ trước khi mua.',
+    highlightsTitle: 'Tóm tắt',
+    highlights: [
+      'Mua một lần, học trọn đời trong suốt thời gian dịch vụ hoạt động. Không phải gia hạn.',
+      'Hoàn tiền 100%, không cần nêu lý do, nếu bạn yêu cầu trong vòng 7 ngày kể từ ngày thanh toán.',
+      'Thanh toán bằng thẻ quốc tế do Dodo Payments xử lý với vai trò Merchant of Record (bên bán hàng chính thức): Dodo đứng tên trên giao dịch, hoá đơn và sao kê thẻ của bạn.',
+      'Giảm giá thành viên và giảm giá mã giới thiệu không cộng dồn: hệ thống tự áp dụng mức cao hơn.',
+      'Khi đơn được hoàn tiền hoặc bị khiếu nại thanh toán (chargeback), quyền truy cập khoá học, kho GitHub và chứng chỉ sẽ bị thu hồi.',
+    ],
+    sections: [
+      {
+        id: 'one-time',
+        title: 'Mua một lần, sở hữu trọn đời',
+        paras: [
+          'Mỗi khoá học được bán theo hình thức thanh toán một lần. Sau khi hệ thống xác nhận thanh toán, khoá học xuất hiện trong mục Khoá học của tôi và bạn được học mọi bài, kể cả các bài được bổ sung về sau, trong suốt thời gian dịch vụ zuey.me còn hoạt động.',
+          'Quyền truy cập là giấy phép cá nhân, không chuyển nhượng, theo Điều khoản sử dụng khoá học.',
+        ],
+      },
+      {
+        id: 'seller',
+        title: 'Bên bán hàng (Merchant of Record)',
+        paras: [
+          'Khi bạn thanh toán bằng thẻ quốc tế, giao dịch được xử lý bởi Dodo Payments với vai trò Merchant of Record: Dodo Payments là bên bán hàng chính thức của đơn đó, chịu trách nhiệm thu tiền, thuế, hoá đơn, hoàn tiền và giải quyết khiếu nại thanh toán. Tên Dodo Payments có thể hiển thị trên sao kê thẻ của bạn. Điều khoản dành cho người mua của Dodo Payments cũng áp dụng cho giao dịch này; quyền hoàn tiền trong chính sách này là quyền bổ sung, không thay thế quyền bạn có theo điều khoản của Dodo Payments.',
+          'Khi bạn chuyển khoản ngân hàng qua VietQR (SePay), bên bán hàng là Duy Nguyen (Zuey), người cung cấp nội dung khoá học trên zuey.me.',
+        ],
+      },
+      {
+        id: 'pricing',
+        title: 'Giá và thanh toán',
+        items: [
+          'Giá niêm yết bằng đô la Mỹ (USD).',
+          'Chuyển khoản ngân hàng qua VietQR (SePay) thanh toán bằng đồng Việt Nam: số tiền VND được quy đổi theo tỷ giá tại thời điểm tạo đơn và làm tròn lên bội số 1.000 ₫. Số tiền trên đơn là số tiền bạn cần chuyển; đơn chuyển khoản có hiệu lực 60 phút.',
+          'Thẻ quốc tế thanh toán bằng USD qua Dodo Payments (khi được bật). Ngân hàng phát hành thẻ có thể thu thêm phí chuyển đổi ngoại tệ; khoản phí này không do zuey.me hay Dodo Payments thu.',
+          'Khoá học chỉ được mở khi hệ thống nhận được xác nhận thanh toán từ ngân hàng hoặc cổng thanh toán, không dựa vào ảnh chụp màn hình hay việc bạn quay lại trang.',
+          'Chuyển khoản thiếu, sai nội dung hoặc đến sau khi đơn hết hạn sẽ được đối soát thủ công; vui lòng email kèm mã đơn.',
+        ],
+      },
+      {
+        id: 'discounts',
+        title: 'Giảm giá',
+        items: [
+          'Thành viên đang có gói (Knowledges, Zuey AI, Kết hợp, Cộng đồng) được giảm giá theo gói; mức giảm hiển thị trên trang khoá học khi bạn đăng nhập.',
+          'Mã giới thiệu có thể mang lại mức giảm riêng.',
+          'Hai loại giảm giá không cộng dồn: hệ thống áp dụng mức cao hơn. Giá cuối cùng được chốt và lưu vào đơn tại thời điểm tạo đơn.',
+        ],
+      },
+      {
+        id: 'refunds',
+        title: 'Hoàn tiền trong 7 ngày',
+        paras: [
+          'Bạn được hoàn lại toàn bộ số tiền đã trả cho một khoá học nếu yêu cầu trong vòng 7 ngày kể từ ngày thanh toán, không cần nêu lý do, kể cả khi bạn đã học một phần khoá học.',
+        ],
+        items: [
+          'Cách yêu cầu: email hi@zuey.me kèm mã đơn (bắt đầu bằng ZSC). Với đơn thanh toán bằng thẻ, bạn cũng có thể yêu cầu hoàn tiền trực tiếp với Dodo Payments qua email biên nhận của Dodo.',
+          'Tiền được hoàn về phương thức thanh toán ban đầu: thẻ quốc tế hoàn qua Dodo Payments; chuyển khoản VietQR hoàn về tài khoản ngân hàng đã chuyển, theo đúng số VND đã nhận. Thời gian tiền về tài khoản tuỳ ngân hàng, thường từ 5 đến 10 ngày làm việc.',
+          'Sau 7 ngày, giao dịch mua được coi là hoàn tất. Chúng tôi vẫn hoàn khoản bị trừ tiền trùng cho cùng một khoá học, và hoàn tiền trong mọi trường hợp pháp luật hoặc điều khoản của Dodo Payments yêu cầu.',
+          'Khi đơn được hoàn tiền, quyền truy cập khoá học, quyền vào kho GitHub riêng và chứng chỉ của khoá học đó sẽ bị thu hồi.',
+        ],
+      },
+      {
+        id: 'reversals',
+        title: 'Khiếu nại thanh toán và thu hồi quyền truy cập',
+        items: [
+          'Nếu khoản thanh toán bị ngân hàng/thẻ khiếu nại (chargeback, dispute) hoặc bị đảo ngược vì bất kỳ lý do gì, quyền truy cập khoá học sẽ bị thu hồi ngay.',
+          'Cùng lúc đó, quyền vào các kho GitHub riêng của khoá học bị gỡ và chứng chỉ của khoá học bị thu hồi.',
+          'Nếu khiếu nại được giải quyết theo hướng khoản thanh toán hợp lệ, quyền truy cập sẽ được khôi phục.',
+          'Trong 7 ngày đầu, bạn không cần khiếu nại với ngân hàng: chỉ cần email hi@zuey.me để được hoàn tiền nhanh nhất.',
+        ],
+      },
+      {
+        id: 'locks',
+        title: 'Tạm khoá do vi phạm',
+        paras: [
+          'Khi phát hiện chia sẻ tài khoản, phát tán nội dung, ghi lại/thu thập nội dung tự động hoặc hành vi vi phạm khác trong Điều khoản sử dụng, quyền truy cập khoá học có thể bị tạm khoá trong lúc kiểm tra và bị khoá hẳn nếu xác nhận vi phạm. Việc khoá do vi phạm không làm mất quyền hoàn tiền trong 7 ngày nêu trên.',
+        ],
+      },
     ],
   },
-  {
-    id: 'pricing',
-    title: 'Giá và thanh toán',
-    items: [
-      'Giá niêm yết bằng đô la Mỹ (USD).',
-      'Chuyển khoản ngân hàng qua VietQR (SePay) thanh toán bằng đồng Việt Nam: số tiền VND được quy đổi theo tỷ giá tại thời điểm tạo đơn và làm tròn lên bội số 1.000 ₫. Số tiền trên đơn là số tiền bạn cần chuyển; đơn chuyển khoản có hiệu lực 60 phút.',
-      'Thẻ quốc tế thanh toán bằng USD qua Dodo Payments (khi được bật). Ngân hàng phát hành thẻ có thể thu thêm phí chuyển đổi ngoại tệ; khoản phí này không do zuey.me thu.',
-      'Khoá học chỉ được mở khi hệ thống nhận được xác nhận thanh toán từ ngân hàng hoặc cổng thanh toán, không dựa vào ảnh chụp màn hình hay việc bạn quay lại trang.',
-      'Chuyển khoản thiếu, sai nội dung hoặc đến sau khi đơn hết hạn sẽ được đối soát thủ công; vui lòng email kèm mã đơn.',
+  en: {
+    title: 'Course Policy',
+    intro: 'This policy covers pricing, payment, who the seller is, discounts, the 7-day refund and what happens when a payment is reversed. Please read it before you buy.',
+    highlightsTitle: 'Summary',
+    highlights: [
+      'Pay once and keep access for as long as the service runs. No renewals.',
+      'Full refund, no questions asked, if you ask within 7 days of payment.',
+      'Card payments are processed by Dodo Payments acting as Merchant of Record (the official seller): Dodo is the seller named on the transaction, the invoice and your card statement.',
+      'Membership and referral discounts do not stack: the larger one applies automatically.',
+      'A refunded or charged-back order loses access to the course, its GitHub repositories and its certificate.',
+    ],
+    sections: [
+      {
+        id: 'one-time',
+        title: 'One-time purchase, lifetime access',
+        paras: [
+          'Each course is sold as a one-time payment. Once the payment is confirmed, the course appears in My courses and you can study every lesson, including lessons added later, for as long as zuey.me operates.',
+          'Access is a personal, non-transferable licence under the course Terms of Use.',
+        ],
+      },
+      {
+        id: 'seller',
+        title: 'Seller (Merchant of Record)',
+        paras: [
+          'When you pay by card, the transaction is processed by Dodo Payments acting as Merchant of Record: Dodo Payments is the official seller of that order and handles payment collection, tax, invoicing, refunds and payment disputes. Dodo Payments may appear on your card statement. The Dodo Payments buyer terms also apply to that transaction; the refund right in this policy is in addition to, and does not replace, any right you have under the Dodo Payments terms.',
+          'When you pay by Vietnamese bank transfer through VietQR (SePay), the seller is Duy Nguyen (Zuey), who provides the course content on zuey.me.',
+        ],
+      },
+      {
+        id: 'pricing',
+        title: 'Pricing and payment',
+        items: [
+          'Prices are listed in US dollars (USD).',
+          'VietQR bank transfers (SePay) are paid in Vietnamese dong: the VND amount is converted at the rate when the order is created and rounded up to a multiple of 1,000 ₫. The amount on the order is what you transfer; a transfer order is valid for 60 minutes.',
+          'Card payments are charged in USD through Dodo Payments (when enabled). Your card issuer may add a foreign exchange fee; that fee is not charged by zuey.me or Dodo Payments.',
+          'A course unlocks only when the bank or payment provider confirms the payment, never from a screenshot or from returning to the page.',
+          'Short, mislabelled or late transfers are reconciled by hand; please email us with the order code.',
+        ],
+      },
+      {
+        id: 'discounts',
+        title: 'Discounts',
+        items: [
+          'Members with an active plan (Knowledges, Zuey AI, Combo, Community) get a plan discount, shown on the course page when signed in.',
+          'A referral code may carry its own discount.',
+          'The two do not stack: the larger one applies. The final price is fixed and stored on the order when it is created.',
+        ],
+      },
+      {
+        id: 'refunds',
+        title: '7-day refund',
+        paras: [
+          'You get a full refund of what you paid for a course if you ask within 7 days of payment, no questions asked, even if you have already studied part of it.',
+        ],
+        items: [
+          'How to ask: email hi@zuey.me with your order code (starting with ZSC). For card orders you can also request the refund directly from Dodo Payments through your Dodo receipt email.',
+          'Refunds go back to the original payment method: card payments are refunded through Dodo Payments; VietQR transfers are refunded to the sending bank account, for the VND amount received. How long the money takes to arrive depends on the bank, usually 5 to 10 business days.',
+          'After 7 days the purchase is final. We still refund a duplicate charge for the same course, and refund whenever the law or the Dodo Payments terms require it.',
+          'A refunded order loses access to the course, its private GitHub repositories and its certificate.',
+        ],
+      },
+      {
+        id: 'reversals',
+        title: 'Payment disputes and loss of access',
+        items: [
+          'If a payment is disputed with the bank or card issuer (chargeback, dispute) or reversed for any reason, course access is revoked immediately.',
+          'At the same time, access to the private GitHub repositories of the course is removed and the course certificate is revoked.',
+          'If the dispute is resolved in favour of the payment, access is restored.',
+          'Within the first 7 days there is no need to dispute with your bank: email hi@zuey.me for the fastest refund.',
+        ],
+      },
+      {
+        id: 'locks',
+        title: 'Suspension for violations',
+        paras: [
+          'If we detect account sharing, redistribution, recording or automated scraping of content, or another breach of the Terms of Use, course access may be suspended during review and closed if the breach is confirmed. A suspension does not remove the 7-day refund right above.',
+        ],
+      },
     ],
   },
-  {
-    id: 'discounts',
-    title: 'Giảm giá',
-    items: [
-      'Thành viên đang có gói (Knowledges, Zuey AI, Kết hợp, Cộng đồng) được giảm giá theo gói; mức giảm hiển thị trên trang khoá học khi bạn đăng nhập.',
-      'Mã giới thiệu có thể mang lại mức giảm riêng.',
-      'Hai loại giảm giá không cộng dồn: hệ thống áp dụng mức cao hơn. Giá cuối cùng được chốt và lưu vào đơn tại thời điểm tạo đơn.',
-    ],
-  },
-  {
-    id: 'no-refunds',
-    title: 'Không hoàn tiền',
-    paras: [
-      'Vì nội dung số được mở ngay sau khi thanh toán và không thể "trả lại", mọi giao dịch mua khoá học là cuối cùng và không được hoàn tiền, kể cả khi bạn chưa học hoặc học chưa hết. Mỗi khoá học đều có bài học thử miễn phí để bạn đánh giá trước khi mua.',
-      'Ngoại lệ duy nhất: (1) chúng tôi phát hiện bạn bị trừ tiền trùng cho cùng một khoá học, khi đó khoản trùng sẽ được hoàn lại; (2) các trường hợp pháp luật hiện hành bắt buộc phải hoàn tiền.',
-    ],
-  },
-  {
-    id: 'reversals',
-    title: 'Khiếu nại thanh toán và thu hồi quyền truy cập',
-    items: [
-      'Nếu khoản thanh toán bị hoàn lại, bị ngân hàng/thẻ khiếu nại (chargeback, dispute) hoặc bị đảo ngược vì bất kỳ lý do gì, quyền truy cập khoá học sẽ bị thu hồi ngay.',
-      'Cùng lúc đó, quyền vào các kho GitHub riêng của khoá học bị gỡ và chứng chỉ của khoá học bị thu hồi.',
-      'Nếu khiếu nại được giải quyết theo hướng khoản thanh toán hợp lệ, quyền truy cập sẽ được khôi phục.',
-      'Nếu bạn gặp vấn đề với đơn hàng, hãy liên hệ hi@zuey.me trước khi khiếu nại với ngân hàng để được hỗ trợ nhanh nhất.',
-    ],
-  },
-  {
-    id: 'locks',
-    title: 'Tạm khoá do vi phạm',
-    paras: [
-      'Khi phát hiện chia sẻ tài khoản, phát tán nội dung, ghi lại/thu thập nội dung tự động hoặc hành vi vi phạm khác trong Điều khoản sử dụng, quyền truy cập khoá học có thể bị tạm khoá trong lúc kiểm tra và bị khoá hẳn nếu xác nhận vi phạm, mà không hoàn tiền.',
-    ],
-  },
-];
+};
 ---
 
-<CourseLegalPage
-  path="/policy"
-  title="Chính sách khoá học"
-  intro="Chính sách này nói rõ về giá, thanh toán, giảm giá, việc không hoàn tiền và những gì xảy ra khi khoản thanh toán bị đảo ngược. Vui lòng đọc kỹ trước khi mua."
-  highlightsTitle="Tóm tắt"
-  highlights={highlights}
-  sections={sections}
-/>
+<CourseLegalPage path="/policy" content={content} />
