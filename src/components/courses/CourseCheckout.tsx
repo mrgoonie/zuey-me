@@ -19,7 +19,7 @@ interface Props {
 const REF_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * Buy box: payment method, mandatory consent to the Terms and the no-refund policy, optional "Mã ưu đãi"
+ * Buy box: payment method, mandatory consent to the Terms and the Course Policy (7-day refund), optional "Mã ưu đãi"
  * (promo or referral code, prefilled from ?ref= or ?code=) and, for bank transfer, a business invoice request.
  * SePay (and a free 100% promo order) continues on the order status page; Dodo opens the hosted checkout.
  */

@@ -2,8 +2,6 @@
 import CourseLegalPage from '../components/courses/CourseLegalPage.astro';
 import type { LegalContent, LegalLang } from '../components/courses/CourseLegalPage.astro';
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
-
 const content: Record<LegalLang, LegalContent> = {
   vi: {
     title: 'Điều khoản sử dụng khoá học',

@@ -2,8 +2,6 @@
 import CourseLegalPage from '../components/courses/CourseLegalPage.astro';
 import type { LegalContent, LegalLang } from '../components/courses/CourseLegalPage.astro';
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
-
 const content: Record<LegalLang, LegalContent> = {
   vi: {
     title: 'Chính sách khoá học',
@@ -60,7 +58,7 @@ const content: Record<LegalLang, LegalContent> = {
           'Bạn được hoàn lại toàn bộ số tiền đã trả cho một khoá học nếu yêu cầu trong vòng 7 ngày kể từ ngày thanh toán, không cần nêu lý do, kể cả khi bạn đã học một phần khoá học.',
         ],
         items: [
-          'Cách yêu cầu: email hi@zuey.me kèm mã đơn (bắt đầu bằng ZSC). Với đơn thanh toán bằng thẻ, bạn cũng có thể yêu cầu hoàn tiền trực tiếp với Dodo Payments qua email biên nhận của Dodo.',
+          'Cách yêu cầu: email hi@zuey.me kèm mã đơn (bắt đầu bằng ZSC).',
           'Tiền được hoàn về phương thức thanh toán ban đầu: thẻ quốc tế hoàn qua Dodo Payments; chuyển khoản VietQR hoàn về tài khoản ngân hàng đã chuyển, theo đúng số VND đã nhận. Thời gian tiền về tài khoản tuỳ ngân hàng, thường từ 5 đến 10 ngày làm việc.',
           'Sau 7 ngày, giao dịch mua được coi là hoàn tất. Chúng tôi vẫn hoàn khoản bị trừ tiền trùng cho cùng một khoá học, và hoàn tiền trong mọi trường hợp pháp luật hoặc điều khoản của Dodo Payments yêu cầu.',
           'Khi đơn được hoàn tiền, quyền truy cập khoá học, quyền vào kho GitHub riêng và chứng chỉ của khoá học đó sẽ bị thu hồi.',
@@ -140,7 +138,7 @@ const content: Record<LegalLang, LegalContent> = {
           'You get a full refund of what you paid for a course if you ask within 7 days of payment, no questions asked, even if you have already studied part of it.',
         ],
         items: [
-          'How to ask: email hi@zuey.me with your order code (starting with ZSC). For card orders you can also request the refund directly from Dodo Payments through your Dodo receipt email.',
+          'How to ask: email hi@zuey.me with your order code (starting with ZSC).',
           'Refunds go back to the original payment method: card payments are refunded through Dodo Payments; VietQR transfers are refunded to the sending bank account, for the VND amount received. How long the money takes to arrive depends on the bank, usually 5 to 10 business days.',
           'After 7 days the purchase is final. We still refund a duplicate charge for the same course, and refund whenever the law or the Dodo Payments terms require it.',
           'A refunded order loses access to the course, its private GitHub repositories and its certificate.',
