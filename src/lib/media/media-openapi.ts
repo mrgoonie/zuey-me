@@ -19,7 +19,7 @@ const storeErrors = {
 export const mediaOpenApi: OpenApiFragment = {
   tag: {
     name: TAG,
-    description: `Article images on the public media CDN (${MEDIA_PUBLIC_ORIGIN}). Keys are content-addressed, so identical bytes are stored once. Each upload returns an image block to insert into an article document. MCP: media_upload_url, media_import, media_upload, media_list, media_delete.`,
+    description: `Article images on the public media CDN (${MEDIA_PUBLIC_ORIGIN}). Keys are content-addressed, so identical bytes are stored once. Each upload returns an image block to insert into an article document. MCP: media_upload_url, media_import, media_upload, media_reconcile, media_list, media_delete.`,
   },
   paths: {
     '/api/v1/admin/media': {
@@ -95,6 +95,40 @@ export const mediaOpenApi: OpenApiFragment = {
         },
       },
     },
+    '/api/v1/admin/media/reconcile': {
+      post: {
+        tags: [TAG],
+        summary: 'Register an image already in the media bucket (admin)',
+        description: `For an object put into the bucket without an upload (so it has no registry record). The server reads the named object from its own bucket (never from a URL, and it never lists the bucket) and registers it only when the bytes are a supported image with exactly the given SHA-256 (and width/height, when given). The record is stored with origin \`reconcile\` and the acting admin. Identical bytes already managed under another key return that asset with \`duplicate_of_existing: true\`. MCP: media_reconcile.`,
+        security: adminSecurity,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object', required: ['sha256'],
+                properties: {
+                  object_key: { type: 'string', maxLength: 200, description: 'Key in the bucket; send this or url' },
+                  url: { type: 'string', format: 'uri', description: `${MEDIA_PUBLIC_ORIGIN}/<key> without query or fragment; send this or object_key` },
+                  sha256: { type: 'string', pattern: '^[0-9a-fA-F]{64}$' },
+                  width: { type: 'integer', minimum: 1 }, height: { type: 'integer', minimum: 1 },
+                  alt: { type: 'string', maxLength: 500 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Already registered, or the same bytes are managed under another key', content: envelope({ $ref: '#/components/schemas/MediaReconciled' }) },
+          '201': { description: 'Registered', content: envelope({ $ref: '#/components/schemas/MediaReconciled' }) },
+          ...errorResponses,
+          '404': { description: '`object_not_found`', content: errorRef },
+          '409': { description: '`media_key_conflict`: the key is registered with different bytes', content: errorRef },
+          '422': { description: '`sha256_mismatch` or `dimension_mismatch`', content: errorRef },
+          ...storeErrors,
+        },
+      },
+    },
     '/api/v1/admin/media/{id}': {
       delete: {
         tags: [TAG],
@@ -128,13 +162,23 @@ export const mediaOpenApi: OpenApiFragment = {
         id: { type: 'string' }, url: { type: 'string', description: `${MEDIA_PUBLIC_ORIGIN}/articles/…` }, object_key: { type: 'string' },
         sha256: { type: 'string' }, mime: { type: 'string' }, size_bytes: { type: 'integer' },
         width: { type: ['integer', 'null'] }, height: { type: ['integer', 'null'] }, alt: { type: 'string' },
-        source_url: { type: ['string', 'null'] }, created_by: { type: 'string' }, created_at: { type: 'string', format: 'date-time' },
+        source_url: { type: ['string', 'null'] }, origin: { type: 'string', enum: ['upload', 'import', 'reconcile'] }, created_by: { type: 'string' }, created_at: { type: 'string', format: 'date-time' },
       },
     },
     MediaImageBlock: {
       type: 'object',
       description: 'Image block for an article document (width/height only when known)',
       properties: { type: { type: 'string', enum: ['image'] }, url: { type: 'string' }, alt: { type: 'string' }, width: { type: 'integer' }, height: { type: 'integer' } },
+    },
+    MediaReconciled: {
+      allOf: [{ $ref: '#/components/schemas/MediaStored' }, {
+        type: 'object',
+        properties: {
+          reconciled: { type: 'boolean', description: 'True when this call created the record' },
+          duplicate_of_existing: { type: 'boolean', description: 'The same bytes were already managed under another key; that asset is returned and the named object is left alone' },
+          repaired: { type: 'array', items: { type: 'string', enum: ['content_type'] }, description: 'Stored-object metadata rewritten with the same bytes' },
+        },
+      }],
     },
     MediaStored: {
       type: 'object',

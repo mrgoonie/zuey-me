@@ -21,6 +21,9 @@ import { labelKey, listLabels, publicLabelsFor } from '../taxonomy/labels';
 import type { PublicLabel } from '../taxonomy/labels';
 import { applyPublishNotification, cancelArticleNotification, getArticleNotification, parseNotifyFlag } from '../notifications/article-notification-schedule';
 import type { ArticleNotification } from '../notifications/article-notification-schedule';
+import { coverColumnsFromRow, loadCoverAssets, parseCoverChange, requireAssets, resolveCover } from './article-cover';
+import type { CoverColumns, CoverImage, SocialPreview } from './article-cover';
+import type { MediaAsset } from '../media/media-asset-store';
 
 export interface EditionSummary {
   locale: Locale;
@@ -63,8 +66,12 @@ export interface ArticleSummary {
   /** Locales with a published edition (translations are never generated automatically). */
   available_locales: Locale[];
   reading_minutes: number;
-  /** First image of the public part, if any (thumbnails and social cards). */
+  /** The managed cover's URL, else the first image of the public part (thumbnails and cards). */
   cover_url: string | null;
+  /** Managed cover (one media asset for every locale, alt per locale); null until an admin sets one. */
+  cover: CoverImage | null;
+  /** Which image `og:image`, the Twitter card and JSON-LD announce; see article-cover.ts. */
+  social_preview: SocialPreview;
   /** Admin listings only: every edition including drafts. */
   editions?: EditionSummary[];
   /** Admin draft views and publish responses only: the new-article email to members. */
@@ -227,6 +234,7 @@ interface EditionRow {
   status: ArticleStatus;
   publishedWords: number;
   coverUrl: string | null;
+  coverAlt: string;
   publishedAt: string | null;
   updatedAt: string;
 }
@@ -244,6 +252,7 @@ function toEditionRow(r: Row): EditionRow {
     status: r.published_json ? 'published' : 'draft',
     publishedWords: n(r, 'published_words'),
     coverUrl: typeof r.cover_url === 'string' ? r.cover_url : null,
+    coverAlt: typeof r.cover_alt === 'string' ? r.cover_alt : '',
     publishedAt: typeof r.published_at === 'string' ? r.published_at : null,
     updatedAt: s(r, 'updated_at'),
   };
@@ -292,6 +301,7 @@ interface ArticleRowData {
   categoryId: string | null;
   revision: number;
   labelRevision: number;
+  cover: CoverColumns;
   createdAt: string;
   updatedAt: string;
 }
@@ -300,7 +310,7 @@ function toArticleRow(r: Row): ArticleRowData {
   return {
     id: s(r, 'id'), slug: s(r, 'slug'), primary: asLocale(r.locale), access: r.access === 'knowledges' ? 'knowledges' : 'free',
     categoryId: typeof r.category_id === 'string' ? r.category_id : null, revision: n(r, 'revision', 1),
-    labelRevision: n(r, 'label_revision'), createdAt: s(r, 'created_at'), updatedAt: s(r, 'updated_at'),
+    labelRevision: n(r, 'label_revision'), cover: coverColumnsFromRow(r), createdAt: s(r, 'created_at'), updatedAt: s(r, 'updated_at'),
   };
 }
 
@@ -308,9 +318,10 @@ interface Decorations {
   tags: Map<string, Array<{ id: string; slug: string; names: Partial<Record<Locale, string>> }>>;
   categories: Map<string, { id: string; slug: string; names: Partial<Record<Locale, string>> }>;
   labels: Map<string, Map<string, PublicLabel[]>>;
+  coverAssets: Map<string, MediaAsset>;
 }
 
-async function loadDecorations(db: D1DatabaseLike, picks: Array<{ articleId: string; locale: Locale }>): Promise<Decorations> {
+async function loadDecorations(db: D1DatabaseLike, picks: Array<{ articleId: string; locale: Locale }>, articles: ArticleRowData[]): Promise<Decorations> {
   const ids = picks.map(p => p.articleId);
   const tags = await tagsForArticles(db, ids);
   const categories = new Map((await listCategories(db)).map(c => [c.id, c]));
@@ -319,7 +330,8 @@ async function loadDecorations(db: D1DatabaseLike, picks: Array<{ articleId: str
     const forLocale = picks.filter(p => p.locale === locale).map(p => p.articleId);
     if (forLocale.length) labels.set(locale, await publicLabelsFor(db, forLocale, locale));
   }
-  return { tags, categories, labels };
+  const coverAssets = await loadCoverAssets(db, articles.map(a => a.cover));
+  return { tags, categories, labels, coverAssets };
 }
 
 function buildSummary(
@@ -329,6 +341,7 @@ function buildSummary(
   const cat = art.categoryId ? deco.categories.get(art.categoryId) : undefined;
   const topicTags = tagList.map(t => toPublicTag(t, edition.locale));
   const published = editions.filter(e => e.publishedJson !== null).sort(localeOrder);
+  const managed = resolveCover(art.cover, deco.coverAssets, edition.coverAlt);
   return {
     id: art.id,
     slug: art.slug,
@@ -351,7 +364,8 @@ function buildSummary(
     has_unpublished_changes: edition.publishedJson !== edition.draftJson,
     available_locales: published.map(e => e.locale),
     reading_minutes: readingMinutes(edition.publishedWords),
-    cover_url: edition.coverUrl,
+    cover_url: managed.cover?.url ?? edition.coverUrl,
+    ...managed,
     ...(opts.includeEditions ? { editions: [...editions].sort(localeOrder).map(editionSummary) } : {}),
   };
 }
@@ -397,7 +411,7 @@ export async function listArticles(d1: D1DatabaseLike | undefined, opts: ListOpt
     const pick = pickEdition(visible, opts.locale, art.primary);
     if (pick) picked.push({ art, edition: pick.edition, editions: all });
   }
-  const deco = await loadDecorations(d1, picked.map(p => ({ articleId: p.art.id, locale: p.edition.locale })));
+  const deco = await loadDecorations(d1, picked.map(p => ({ articleId: p.art.id, locale: p.edition.locale })), picked.map(p => p.art));
 
   let filtered = picked;
   if (opts.category) {
@@ -448,7 +462,7 @@ export async function getArticle(
   const candidates = opts.publishedOnly ? editions.filter(e => e.publishedJson !== null) : editions;
   const pick = pickEdition(candidates, opts.locale, art.primary);
   if (!pick) return null;
-  const deco = await loadDecorations(d1, [{ articleId: art.id, locale: pick.edition.locale }]);
+  const deco = await loadDecorations(d1, [{ articleId: art.id, locale: pick.edition.locale }], [art]);
   const summary = buildSummary(art, pick.edition, editions, deco, { includeEditions: true });
   const draft = readStoredDocWithRecovery(pick.edition.draftJson, slug);
   return {
@@ -594,7 +608,7 @@ function scheduleOgRefresh(db: D1DatabaseLike, articleId: string, slug: string, 
   })().catch(err => console.error('Share image refresh failed:', err instanceof Error ? err.message : 'unknown')));
 }
 
-function firstImage(blocks: Block[]): string | null {
+export function firstImage(blocks: Block[]): string | null {
   let url: string | null = null;
   walkBlocks(blocks, b => {
     if (url) return;
@@ -760,6 +774,44 @@ export async function updateArticle(
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
   const updated = await getArticle(db, nextSlug, { locale });
   if (!updated) throw new AppError(500, 'internal_error', 'Article disappeared after update');
+  return updated;
+}
+
+/**
+ * Sets the managed cover, the per-locale cover alt text and the social preview mode of an article without
+ * touching any document, so no edition needs a rewrite or a new publish. Like the other writers, every write
+ * is conditioned on `expectedRevision` and the revision bump runs last: it applies fully or not at all.
+ * Body: `{ cover_asset_id?, alt?, social_preview? }` (see `parseCoverChange`).
+ */
+export async function setArticleCover(
+  d1: D1DatabaseLike | undefined, slug: string, body: Record<string, unknown>, expectedRevision: unknown,
+): Promise<ArticleRecord> {
+  const db = requireDb(d1);
+  const expected = requireRevision(expectedRevision);
+  const art = await loadArticleRow(db, slug);
+  if (!art) throw new AppError(404, 'not_found', 'Article not found');
+  const { results } = await db.prepare('SELECT locale FROM article_editions WHERE article_id = ? AND deleted_at IS NULL').bind(art.id).all<Row>();
+  const change = parseCoverChange(body, (results ?? []).map(r => asLocale(r.locale)));
+  const coverAssetId = change.coverAssetId === undefined ? art.cover.coverAssetId : change.coverAssetId;
+  const social = change.social === undefined ? { mode: art.cover.socialMode, assetId: art.cover.socialAssetId } : change.social ?? { mode: null, assetId: null };
+  if (social.mode === 'cover' && !coverAssetId) {
+    throw new AppError(422, 'cover_required', 'social_preview.mode "cover" needs a cover: set cover_asset_id in the same call or choose another mode', { field: 'social_preview.mode' });
+  }
+  await requireAssets(db, [change.coverAssetId, change.social?.assetId]);
+
+  const now = nowIso();
+  const atExpected = 'EXISTS (SELECT 1 FROM articles WHERE id = ? AND revision = ? AND deleted_at IS NULL)';
+  const writes: D1PreparedStatementLike[] = change.alts.map(([locale, alt]) => db.prepare(
+    `UPDATE article_editions SET cover_alt = ? WHERE article_id = ? AND locale = ? AND deleted_at IS NULL AND ${atExpected}`,
+  ).bind(alt, art.id, locale, art.id, expected));
+  const casIndex = writes.push(db.prepare(`
+    UPDATE articles SET cover_asset_id = ?, social_preview_mode = ?, social_asset_id = ?, revision = revision + 1, updated_at = ?
+    WHERE id = ? AND revision = ? AND deleted_at IS NULL
+  `).bind(coverAssetId, social.mode, social.assetId, now, art.id, expected)) - 1;
+  const outcome = await db.batch(writes);
+  if (!outcome[casIndex]?.meta?.changes) return conflict(db, slug);
+  const updated = await getArticle(db, slug);
+  if (!updated) throw new AppError(500, 'internal_error', 'Article disappeared after cover update');
   return updated;
 }
 

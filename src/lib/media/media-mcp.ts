@@ -4,6 +4,7 @@ import { AppError } from '../http';
 import type { McpToolModule } from '../mcp/types';
 import { requireDb } from '../taxonomy/common';
 import { MAX_IMAGE_BYTES, deleteMediaAsset, imageBlock, listMediaAssets, storeImage } from './media-asset-store';
+import { reconcileMediaObject } from './media-reconcile';
 import { MAX_INLINE_BYTES, createUploadTicket, decodeBase64Image, importImageFromUrl } from './media-upload-sources';
 
 const MB = 1024 * 1024;
@@ -41,6 +42,22 @@ export const mediaMcpModule: McpToolModule = {
       },
     },
     {
+      name: 'media_reconcile',
+      description: `Admin only: register an image that is already in the media bucket (put there without media_upload_url or media_import, so it has no registry record) as a managed asset, so article_cover_set can use its id. Name the object by object_key or its https://media.zuey.me/<key> URL and give its sha256; the server reads the object from its own bucket (it never fetches URLs and never lists the bucket) and registers it only when the bytes are a PNG, JPEG, GIF, WebP or AVIF image up to ${MAX_IMAGE_BYTES / MB} MB whose SHA-256 (and width/height, when given) match. Identical bytes already managed under another key return that asset (duplicate_of_existing). ${RESULT_NOTE}`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          object_key: { type: 'string', description: 'Key in the bucket, e.g. blog/2026/10/cover.webp' },
+          url: { type: 'string', description: 'Alternative to object_key: https://media.zuey.me/<key> (no query or fragment)' },
+          sha256: { type: 'string', description: 'Expected SHA-256 of the file as 64 hex characters (sha256sum <file>)' },
+          width: { type: 'integer', minimum: 1, description: 'Expected width in pixels' },
+          height: { type: 'integer', minimum: 1, description: 'Expected height in pixels' },
+          ...altProp,
+        },
+        required: ['sha256'],
+      },
+    },
+    {
       name: 'media_list',
       description: 'Admin only: list images on the media CDN, newest first, each with a ready image block.',
       inputSchema: {
@@ -65,6 +82,7 @@ export const mediaMcpModule: McpToolModule = {
     if (name === 'media_upload_url') return createUploadTicket(db, ctx.env, siteOrigin(ctx.env, ctx.request), { alt: args.alt, actor });
     if (name === 'media_import') return importImageFromUrl(db, ctx.env, args.url, { alt: args.alt, actor });
     if (name === 'media_upload') return storeImage(db, ctx.env, decodeBase64Image(args.data_base64), { alt: args.alt, actor });
+    if (name === 'media_reconcile') return reconcileMediaObject(db, ctx.env, args, actor);
     if (name === 'media_list') {
       const res = await listMediaAssets(db, { q: typeof args.q === 'string' ? args.q : undefined, limit: optionalNumber(args, 'limit'), page: optionalNumber(args, 'page') });
       return { ...res, items: res.items.map(asset => ({ ...asset, block: imageBlock(asset) })) };

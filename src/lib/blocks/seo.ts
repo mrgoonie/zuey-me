@@ -43,12 +43,15 @@ export const PAYWALL_SELECTOR = '.zb-paywalled';
  * paywalled section (Google's subscription/paywalled content markup), never the hidden text itself.
  */
 export function articleJsonLd(
-  view: Pick<ArticleSummary, 'title' | 'excerpt' | 'slug' | 'locale' | 'access' | 'published_at' | 'updated_at' | 'cover_url' | 'tags' | 'category'>,
+  view: Pick<ArticleSummary, 'title' | 'excerpt' | 'slug' | 'locale' | 'access' | 'published_at' | 'updated_at' | 'cover_url' | 'social_preview' | 'tags' | 'category'>,
   origin: string,
   imageFallback: string,
 ): Record<string, unknown> {
   const paid = view.access === 'knowledges';
   const url = articleUrl(origin, view.slug, view.locale);
+  // Never configured: the cover (or first body image), else the generated card. Configured: exactly what og:image shows.
+  const { mode, image } = view.social_preview;
+  const imageUrl = mode === null ? view.cover_url ?? imageFallback : image?.url ?? imageFallback;
   return {
     '@context': 'https://schema.org',
     '@type': 'Article',
@@ -59,7 +62,7 @@ export function articleJsonLd(
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },
     datePublished: view.published_at ?? undefined,
     dateModified: view.updated_at,
-    image: [view.cover_url ?? imageFallback],
+    image: [imageUrl],
     keywords: view.tags.length ? view.tags.join(', ') : undefined,
     articleSection: view.category?.name,
     author: { '@type': 'Person', name: 'Duy Nguyen', url: origin },

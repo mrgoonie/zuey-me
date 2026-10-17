@@ -44,6 +44,7 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   media_upload: ADMIN,
   media_list: ADMIN,
   media_delete: ADMIN,
+  media_reconcile: ADMIN,
   // Courses (paid lesson bodies are browser-only; the lesson tool returns the denial)
   course_list: PUBLIC,
   course_get: PUBLIC,
@@ -80,6 +81,7 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   article_edition_delete: ADMIN,
   article_revisions: ADMIN,
   article_tags_set: ADMIN,
+  article_cover_set: ADMIN,
   article_labels_set: ADMIN,
   article_labels_revert: ADMIN,
   // Knowledge search & taxonomy (search filters paid text by the caller inside the tool)

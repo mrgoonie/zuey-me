@@ -7,7 +7,7 @@ import { AI_COPY } from '../../components/ai/copy';
 import { TagBadges } from '../../components/knowledge/TagBadges';
 import { EntitlementIcon } from '../../components/knowledge/EntitlementIcon';
 import { formatKnowledgeDate, knowledgeStrings } from '../../components/knowledge/strings';
-import { getArticleView, resolveViewer } from '../../lib/blocks/articles';
+import { firstImage, getArticleView, resolveViewer } from '../../lib/blocks/articles';
 import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
 import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
@@ -15,6 +15,7 @@ import { readingMinutes } from '../../lib/search/text';
 import { hasHighlightableCode } from '../../lib/blocks/code-syntax';
 import { LOCKED_TITLE_ID, RELATED_VIDEOS_ID } from '../../lib/blocks/page-ids';
 import { documentLanes } from '../../lib/blocks/schema';
+import { articleShareImage } from '../../lib/blocks/article-cover';
 import { articleOgImage } from '../../lib/og/article-og-service';
 import { relatedVideosForArticle } from '../../lib/videos/related-content';
 import { formatDuration } from '../../lib/videos/youtube-url';
@@ -47,9 +48,13 @@ if (preview) Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 const canonical = view ? articleUrl(origin, view.slug, view.locale) : `${origin}/articles/${slug}`;
 const alternates = view && !preview ? articleAlternates(origin, view.slug, view.available_locales) : [];
 if (view && !preview) Astro.response.headers.set('Link', linkHeader(canonical, alternates));
-// Generated share card of this edition; its ?v= hash changes with the content so networks re-fetch it.
-const shareImage = view && !preview ? `${origin}${(await articleOgImage(view)).path}` : undefined;
-const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, shareImage ?? 'https://zuey.me/og.png')) : null;
+// Share image: the generated card of this edition (its ?v= hash changes with the content so networks re-fetch it)
+// unless an editor chose the cover or another asset as the social preview.
+const generatedCard = view && !preview ? `${origin}${(await articleOgImage(view)).path}` : undefined;
+const shareImage = view && generatedCard ? articleShareImage(view, generatedCard) : undefined;
+const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, generatedCard ?? 'https://zuey.me/og.png')) : null;
+// The cover is shown above the body unless the body already opens with that same image.
+const showCover = Boolean(view?.cover && view.cover.url !== firstImage(view.document.blocks));
 const translations = view ? view.available_locales.filter(l => l !== view?.locale) : [];
 const dateText = view ? formatKnowledgeDate(view.published_at, view.locale) : '';
 const paywallClass = PAYWALL_SELECTOR.slice(1);
@@ -73,8 +78,11 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
   title={view ? `${view.title} — Zuey` : `${t.notFoundTitle} — Zuey`}
   description={view?.excerpt || t.sectionLead}
   url={canonical}
-  image={shareImage}
-  imageAlt={view?.title}
+  image={shareImage?.url}
+  imageAlt={shareImage?.alt ?? view?.title}
+  imageType={shareImage?.type}
+  imageWidth={shareImage?.width}
+  imageHeight={shareImage?.height}
   lang={LOCALE_LABELS[uiLocale].htmlLang}
 >
   {jsonLd && <script is:inline type="application/ld+json" set:html={jsonLd} />}
@@ -122,6 +130,13 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
               </p>
             )}
           </header>
+
+          {showCover && view.cover && (
+            <figure class="mb-7 -mx-1 sm:mx-0">
+              <img src={view.cover.url} alt={view.cover.alt} width={view.cover.width ?? undefined} height={view.cover.height ?? undefined}
+                fetchpriority="high" decoding="async" class="block w-full h-auto rounded-2xl border border-stone-200/90" />
+            </figure>
+          )}
 
           {/* Readable body: selections inside it get the "Ask Zuey AI" tooltip; tabindex lets the drawer return focus here. */}
           <div data-ask-ai-scope tabindex="-1" class="focus:outline-none">

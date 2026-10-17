@@ -16,7 +16,7 @@ Chạy lần lượt trên D1 remote (chỉ chạy khi bạn chủ động deplo
 wrangler d1 execute zuey_me_db --remote --file=./migrations/0002_zuey_reads.sql -y
 ```
 
-Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0024_media_assets.sql`). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
+Lặp lại theo đúng thứ tự số với mọi file còn lại trong `migrations/` (đến `0026_article_cover.sql`; số `0025` dành cho PR đang mở #168). Migration `0011` dựng lại bảng `bookings` để nhận phương thức `paypal`, nên phải chạy sau các migration có số nhỏ hơn.
 
 **Sao lưu trước khi đổi schema hoặc dữ liệu.** Từ `0009` trở đi DB có bảng FTS5, nên `wrangler d1 export` báo lỗi *cannot export databases with Virtual Tables*. Thay vào đó, ghi lại bookmark Time Travel (khôi phục được trong 30 ngày):
 
@@ -56,15 +56,17 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 
 ## 2b. Ảnh bài viết (media CDN)
 
-1. Chạy migration `0024_media_assets.sql` (xem mục 0).
+1. Chạy migration `0024_media_assets.sql` và `0026_article_cover.sql` (xem mục 0).
 2. R2: bucket public `zuey-media`, custom domain `media.zuey.me` (đã có sẵn trong account Cloudflare của zuey.me). Binding `MEDIA` khai báo trong `wrangler.toml`. Thiếu binding thì các API ảnh trả `503 media_unconfigured`. Ảnh bài viết nằm dưới prefix `articles/`; các prefix `blog/`, `research/` có sẵn không bị đụng tới.
 3. Đưa ảnh lên (chỉ admin, API key read-only không dùng được):
    - Agent có shell: MCP `media_upload_url` (hoặc `POST /api/v1/admin/media/upload-url`) trả về URL dùng một lần, hạn 15 phút. Upload bằng `curl --upload-file ./anh.png '<upload_url>'`. File không phải ảnh hợp lệ thì bị từ chối mà URL vẫn dùng lại được.
    - Ảnh đã có URL public: MCP `media_import` hoặc `POST /api/v1/admin/media` với JSON `{"url": "https://…"}`. Server không đi theo redirect, nên phải đưa URL cuối.
    - Ảnh nhỏ (tối đa 2 MB): MCP `media_upload` với `data_base64`.
+   - Ảnh đã nằm sẵn trong bucket nhưng chưa có bản ghi (đẩy bằng script): MCP `media_reconcile` hoặc `POST /api/v1/admin/media/reconcile` với `{"object_key": "blog/2026/10/cover.webp", "sha256": "…", "width": 1672, "height": 941}` (hoặc `url` dạng `https://media.zuey.me/<key>`). Server tự đọc object từ bucket của nó (không fetch URL, không liệt kê bucket), chỉ đăng ký khi đúng ảnh PNG/JPEG/GIF/WebP/AVIF ≤ 10 MB và khớp sha256 (và kích thước nếu có): sai thì `422 sha256_mismatch` / `422 dimension_mismatch`, không có object thì `404 object_not_found`. Key đã đăng ký với byte khác thì `409 media_key_conflict`; cùng byte đã có ở key khác thì trả asset cũ (`duplicate_of_existing`). Content-type sai được ghi lại cho đúng. Bản ghi có `origin = reconcile` và người thực hiện.
 4. Kết quả có `block` (block `image` kèm `width`/`height`). Chèn block này vào document của bài viết rồi gọi `article_update`. Cùng một file upload lại sẽ trả về ảnh đã có, không tạo bản sao.
 5. Xoá: MCP `media_delete` hoặc `DELETE /api/v1/admin/media/{id}`. Nếu bản nháp hoặc bản đã xuất bản của bài viết hay bài học, hoặc ảnh bìa khoá học, còn dùng ảnh thì bị từ chối (`409 media_in_use`). Các revision cũ không được kiểm tra. Ảnh được cache `immutable` một năm, nên cache CDN và trình duyệt có thể vẫn hiện ảnh đã xoá.
-6. Ảnh trong bài Knowledges vẫn public theo URL (key là hash khó đoán). Paywall chỉ bảo vệ phần chữ, vì email và ảnh chia sẻ mạng xã hội cần URL ảnh public.
+6. Ảnh bìa bài viết: MCP `article_cover_set` hoặc `PUT /api/v1/articles/{slug}/cover` nhận `cover_asset_id` (id `med_…`, không nhận URL thô), `alt` (một chuỗi cho mọi bản ngôn ngữ, hoặc object theo locale) và `expected_revision`. Một ảnh dùng chung cho mọi locale, chỉ đổi metadata nên không cần publish lại. `social_preview` = `{mode: generated_card | cover | custom_asset, asset_id?}` quyết định ảnh trong `og:image`, Twitter card và JSON-LD; `null` hoặc không cấu hình thì giữ hành vi cũ (card 1200×630 sinh tự động). Ảnh đang là bìa hoặc ảnh chia sẻ thì không xoá được (`409 media_in_use`).
+7. Ảnh trong bài Knowledges vẫn public theo URL (key là hash khó đoán). Paywall chỉ bảo vệ phần chữ, vì email và ảnh chia sẻ mạng xã hội cần URL ảnh public.
 
 ## 3. Google Calendar / Meet
 

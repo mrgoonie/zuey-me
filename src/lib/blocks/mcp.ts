@@ -7,7 +7,7 @@ import { LOCALES } from '../i18n/locales';
 import { principalActor } from '../taxonomy/admin';
 import {
   SORTS, createArticle, deleteArticle, deleteEdition, getArticle, getArticleView, getRevisionDocument, listArticles, listRevisions,
-  parseArticleInput, publishArticle, setTagsForArticle, toSummary, updateArticle,
+  parseArticleInput, publishArticle, setArticleCover, setTagsForArticle, toSummary, updateArticle,
 } from './articles';
 import { discoverArticles } from './discovery';
 import { MAX_ARTICLE_PAGE } from './pagination';
@@ -170,6 +170,26 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' } }, required: ['slug', 'tags', 'expected_revision'] },
     },
     {
+      name: 'article_cover_set',
+      description: 'Admin: set the cover of an article by managed media asset id (med_… from media_upload_url, media_import, media_upload, media_list or media_reconcile), never a raw URL. One asset serves every locale edition; alt is per locale. Also chooses what og:image, the Twitter card and JSON-LD show: social_preview.mode "generated_card" (the generated card), "cover", or "custom_asset" (with asset_id); null restores the unconfigured default. Changes metadata only: no document is rewritten and nothing needs republishing. Requires expected_revision (409 revision_conflict when stale) and returns the article summary with the new revision, cover and social_preview.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...slugProp,
+          expected_revision: { type: 'integer' },
+          cover_asset_id: { type: ['string', 'null'], description: 'Managed media asset id for the cover; null removes the cover; omit to keep it' },
+          alt: { description: 'Cover alt text: one string for every edition, or an object keyed by locale (only locales with an edition)', oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: { type: 'string' } }] },
+          social_preview: {
+            type: ['object', 'null'],
+            description: 'Which image the share preview uses; null restores the default (generated card, first body image in JSON-LD)',
+            properties: { mode: { type: 'string', enum: ['generated_card', 'cover', 'custom_asset'] }, asset_id: { type: 'string', description: 'Required for custom_asset' } },
+            required: ['mode'],
+          },
+        },
+        required: ['slug', 'expected_revision'],
+      },
+    },
+    {
       name: 'survey_results', description: 'Admin: full vote counts for a survey block (draft or published).',
       inputSchema: { type: 'object', properties: { article_slug: { type: 'string' }, block_id: { type: 'string' } }, required: ['article_slug', 'block_id'] },
     },
@@ -258,6 +278,11 @@ export const articlesMcpModule: McpToolModule = {
       case 'article_tags_set': {
         const actor = await mcpAdminActor(ctx);
         return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+      }
+      case 'article_cover_set': {
+        await ctx.requireAdmin();
+        const { slug: _slug, expected_revision: _revision, ...change } = args;
+        return toSummary(await setArticleCover(d1, requireSlug(args), change, args.expected_revision));
       }
       case 'survey_results': {
         await ctx.requireAdmin();

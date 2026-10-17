@@ -54,6 +54,15 @@ const editionSummary = {
     updated_at: { type: 'string' }, has_unpublished_changes: { type: 'boolean' }, reading_minutes: { type: 'integer' },
   },
 };
+const coverImage = {
+  type: 'object',
+  description: 'A managed media asset used as an image of the article',
+  properties: {
+    asset_id: { type: 'string', description: 'Media asset id (med_…)' }, url: { type: 'string' },
+    width: { type: ['integer', 'null'] }, height: { type: ['integer', 'null'] }, mime: { type: 'string' }, alt: { type: 'string' },
+  },
+};
+const socialPreviewModes = ['generated_card', 'cover', 'custom_asset'];
 const articleSummary = {
   type: 'object',
   properties: {
@@ -68,7 +77,18 @@ const articleSummary = {
     published_revision: { type: ['integer', 'null'] }, created_at: { type: 'string' }, updated_at: { type: 'string' },
     published_at: { type: ['string', 'null'] }, has_unpublished_changes: { type: 'boolean' },
     available_locales: { type: 'array', items: localeEnum, description: 'Locales with a published, human-written edition' },
-    reading_minutes: { type: 'integer' }, cover_url: { type: ['string', 'null'] },
+    reading_minutes: { type: 'integer' },
+    cover_url: { type: ['string', 'null'], description: 'The managed cover when set, else the first image of the public part' },
+    cover: { oneOf: [coverImage, { type: 'null' }], description: 'Managed cover shared by every locale (alt is per locale); null until article_cover_set / PUT …/cover sets one' },
+    social_preview: {
+      type: 'object',
+      description: 'Which image og:image, the Twitter card and JSON-LD announce',
+      properties: {
+        mode: { type: ['string', 'null'], enum: [...socialPreviewModes, null], description: 'null: never configured (generated card in og:image; cover or first body image in JSON-LD)' },
+        asset_id: { type: ['string', 'null'], description: 'Asset of the custom_asset mode' },
+        image: { oneOf: [coverImage, { type: 'null' }], description: 'The image used by the cover and custom_asset modes; null for the generated card' },
+      },
+    },
     snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
     editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
     email_notification: {
@@ -296,6 +316,37 @@ export const articlesOpenApi: OpenApiFragment = {
         tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['tags', 'expected_revision'], properties: { tags: { type: 'array', maxItems: 20, items: { type: 'string' } }, expected_revision: { type: 'integer' } } }) },
         responses: { '200': ok('Article', ref('ArticleSummary')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/cover': {
+      put: {
+        tags,
+        summary: 'Set the cover, its per-locale alt text and the social preview mode',
+        description: 'Metadata only: no document is rewritten and nothing is republished. The cover is a managed media asset (upload or reconcile the image first) shared by every locale; alt is per locale. Send at least one of cover_asset_id, alt, social_preview. Asset ids are never raw URLs. MCP: article_cover_set.',
+        security: adminSecurity, parameters: [slugParam],
+        requestBody: {
+          required: true,
+          content: json({
+            type: 'object', required: ['expected_revision'],
+            properties: {
+              expected_revision: { type: 'integer' },
+              cover_asset_id: { type: ['string', 'null'], description: 'Media asset id (`med_…`); null removes the cover; omit to keep it' },
+              alt: { description: 'One string for every edition, or an object keyed by locale (locales with an edition only)', oneOf: [{ type: 'string', maxLength: 500 }, { type: 'object', additionalProperties: { type: 'string', maxLength: 500 } }] },
+              social_preview: {
+                type: ['object', 'null'], description: 'null restores the unconfigured default',
+                required: ['mode'],
+                properties: { mode: { type: 'string', enum: socialPreviewModes }, asset_id: { type: 'string', description: 'Required for custom_asset, refused otherwise' } },
+              },
+            },
+          }),
+        },
+        responses: {
+          '200': ok('Article with the new revision, cover and social_preview', ref('ArticleSummary')),
+          '404': { description: 'Unknown article or `media_not_found`', content: json(ref('Error')) },
+          '409': conflict,
+          '422': { description: '`cover_required`: the cover mode needs a cover', content: json(ref('Error')) },
+          ...errorResponses,
+        },
       },
     },
     '/api/v1/articles/{slug}/labels': {
