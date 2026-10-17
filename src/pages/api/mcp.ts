@@ -4,6 +4,8 @@ import { AppError } from '../../lib/http';
 import { allMcpTools, callMcpTool } from '../../lib/mcp/dispatch';
 import type { McpContext } from '../../lib/mcp/types';
 import { runtimeWaitUntil } from '../../lib/blocks/articles';
+import { requireChannelAccessService } from '../../lib/channel-access/check';
+import { visibleTools } from '../../lib/oauth/tool-access';
 import { resolvePrincipal } from '../../lib/members/policy';
 import type { Principal } from '../../lib/members/policy';
 
@@ -47,7 +49,13 @@ export const POST: APIRoute = async ({ request, locals }) => {
   }
 
   if (method === 'tools/list') {
-    return rpc({ jsonrpc: '2.0', id, result: { tools: allMcpTools() } });
+    // Same visibility rule as /mcp: admin tool names and schemas stay hidden from callers who cannot use them.
+    // The dewee service key is not a principal, so it additionally sees the verifier it is allowed to call.
+    const principal = await resolvePrincipal(request, { ...env, DB: d1 });
+    const all = allMcpTools();
+    const serviceKey = await requireChannelAccessService(request, env).then(() => true, () => false);
+    const tools = all.filter(t => (serviceKey && t.name === 'channel_access_check') || visibleTools(principal, [t]).length > 0);
+    return rpc({ jsonrpc: '2.0', id, result: { tools } });
   }
 
   if (method === 'tools/call') {
