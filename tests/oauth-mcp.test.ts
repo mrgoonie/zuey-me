@@ -673,7 +673,7 @@ describe('admin media tool discovery', () => {
   });
 
   it('hides media tools from every principal that lacks the admin grant, and says how to get it', async () => {
-    // Member token with the default scopes (what a client gets when it asks for no scope or only the advertised ones).
+    // Member token with the default scopes (what a client gets when it sends no scope).
     const defaults = await fullFlow('lan@example.com');
     // Admin identity that approved only member scopes (the connector never asked for `admin`).
     const bossNoAdmin = await fullFlow('boss@example.com', { scope: 'articles:read account:read' });
@@ -701,13 +701,16 @@ describe('admin media tool discovery', () => {
     for (const t of MEDIA_TOOLS) expect(await toolNames(key.secret)).not.toContain(t);
   });
 
-  it('lets an admin who approves the advertised scopes obtain admin from the consent screen', async () => {
+  it('lets an admin who explicitly ticks admin obtain it after requesting the advertised scopes', async () => {
     const prm = await body(await prmMcpApi(ctx({ url: `${ORIGIN}/.well-known/oauth-protected-resource/mcp` })));
     const advertised = get(prm, 'scopes_supported');
     expect(Array.isArray(advertised) && advertised.includes('admin')).toBe(true);
     // A client that requests exactly the advertised scopes gets admin only when the signed-in user is an admin.
     const scope = (Array.isArray(advertised) ? advertised : []).join(' ');
-    const boss = await fullFlow('boss@example.com', { scope });
+    // The consent screen never pre-ticks admin: the admin must choose it explicitly.
+    const optedOut = await fullFlow('boss@example.com', { scope, approve: ['account:read'] });
+    expect(await toolNames(optedOut.access)).not.toContain('media_upload_url');
+    const boss = await fullFlow('boss@example.com', { scope, approve: [...(Array.isArray(advertised) ? advertised.map(String) : [])] });
     expect(await toolNames(boss.access)).toEqual(expect.arrayContaining(MEDIA_TOOLS));
     const lan = await fullFlow('lan@example.com', { scope });
     const names = await toolNames(lan.access);
