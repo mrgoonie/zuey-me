@@ -174,6 +174,37 @@ export const articlesOpenApi: OpenApiFragment = {
         unreadable: { type: 'boolean', description: 'The stored document (or every block of it) could not be read; it is returned empty' },
       },
     },
+    LocalizationManifest: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string' }, source_locale: localeEnum, source_revision: { type: 'integer' }, source_hash: { type: 'string' },
+        locales: { type: 'array', items: { type: 'object', properties: {
+          locale: localeEnum, state: { type: 'string', enum: ['missing', 'unmanaged', 'current', 'stale'] },
+          edition_status: { type: 'string', enum: ['draft', 'published'] }, edited_since_apply: { type: 'boolean' },
+          applied_from_revision: { type: 'integer' }, applied_at: { type: 'string' },
+        } } },
+        entries: { type: 'array', items: { type: 'object', properties: {
+          key: { type: 'string', description: '<block_id>#<field_path>; $article#title and $article#excerpt are the edition metadata' },
+          block_id: { type: 'string' }, field_path: { type: 'string' },
+          kind: { type: 'string', enum: ['text', 'inline', 'diagram_label', 'widget_text', 'meta'] },
+          source_text: { type: 'string' }, source_hash: { type: 'string' },
+          constraints: { type: 'object', properties: { placeholders: { type: 'array', items: { type: 'string' }, description: 'Link URLs, `code` spans and {{tokens}} to keep verbatim' }, plain: { type: 'boolean', description: 'Plain text (no inline Markdown)' } } },
+        } } },
+        skipped: { type: 'array', items: { type: 'object', properties: { block_id: { type: 'string' }, field_path: { type: 'string' }, reason: { type: 'string' } } } },
+        stats: { type: 'object', properties: { entries: { type: 'integer' }, characters: { type: 'integer' } } },
+        notes: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    LocalizationResult: {
+      type: 'object',
+      properties: {
+        dry_run: { type: 'boolean' }, valid: { type: 'boolean' }, committed: { type: 'boolean' },
+        slug: { type: 'string' }, locale: localeEnum, source_locale: localeEnum, source_hash: { type: 'string' },
+        errors: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, path: { type: 'string' }, code: { type: 'string' }, message: { type: 'string' } } } },
+        report: { type: ['object', 'null'], description: 'coverage, unchanged entries, placeholders kept, glossary checks, number/price/date/legal checks, warnings (review) and skipped items; quality is always "not_assessed"' },
+        article_revision: { type: 'integer' }, provenance_recorded: { type: 'boolean' }, next_action: { type: 'string' },
+      },
+    },
     SurveyResults: {
       type: 'object',
       properties: {
@@ -245,6 +276,38 @@ export const articlesOpenApi: OpenApiFragment = {
           notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
         } }) },
         responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/localization/prepare': {
+      post: {
+        tags, summary: 'Translatable manifest of one edition: entries keyed by block id + field path, skipped items and the state of each target locale',
+        security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', properties: {
+          locales: { type: 'array', items: localeEnum, description: 'Target locales (default: every locale except the source)' },
+          source_locale: { ...localeEnum, description: 'Edition to translate from (default: primary)' },
+          source_revision: { type: 'integer', description: '409 revision_conflict when the article moved on' },
+        } }) },
+        responses: { '200': ok('Manifest', ref('LocalizationManifest')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/localization/apply': {
+      post: {
+        tags, summary: 'Merge translations keyed by manifest key into the preserved source blocks and save them as one target edition draft (never published)',
+        description: 'All-or-nothing: missing or unknown keys, changed links/code/tokens, invalid diagram or widget text and any structural difference from the source return `valid: false` with `errors` and write nothing. '
+          + '`409`: `stale_source` (source changed since prepare), `translation_exists` (hand-written target), `translation_edited` (target edited after the last apply), `revision_conflict`.',
+        security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({ type: 'object', required: ['locale', 'source_hash', 'translations'], properties: {
+          locale: { ...localeEnum, description: 'Target locale (one per call)' },
+          source_locale: localeEnum,
+          source_hash: { type: 'string', description: 'From prepare; a different value means the source changed' },
+          source_hashes: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional per-key source_hash values from prepare, used to name the changed keys when the source is stale' },
+          translations: { type: 'object', additionalProperties: { type: 'string' }, description: 'Manifest key to translated text; every key of the manifest is required' },
+          glossary: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional {source term: required translation}' },
+          expected_revision: { type: 'integer', description: 'Optional; defaults to the revision read by this call' },
+          overwrite: { type: 'boolean', description: 'Replace a hand-written or hand-edited target edition' },
+          dry_run: { type: 'boolean', description: 'Validate and report without writing' },
+        } }) },
+        responses: { '200': ok('Result with the localization report', ref('LocalizationResult')), '404': notFound, '409': conflict, ...errorResponses },
       },
     },
     '/api/v1/articles/notifications/dispatch': {
