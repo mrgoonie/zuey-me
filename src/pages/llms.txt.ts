@@ -39,7 +39,7 @@ ${products.map(p => `- [${p.title_en}](${p.url}): ${p.subtitle_en || 'Product'}`
 ## AI & Developer Surface
 - API Reference: https://zuey.me/docs (Scalar interactive docs)
 - OpenAPI Specification: https://zuey.me/api/openapi.json
-- MCP Server: https://zuey.me/api/mcp (SSE & Streamable JSON-RPC)
+- MCP Server (members, OAuth 2.1): https://zuey.me/mcp (Streamable HTTP); legacy admin endpoint: https://zuey.me/api/mcp
 - Markdown Profile: https://zuey.me/index.md
 - Markdown Catalog: https://zuey.me/links.md
 - Zuey Reads (Markdown): https://zuey.me/reads.md
@@ -48,6 +48,7 @@ ${products.map(p => `- [${p.title_en}](${p.url}): ${p.subtitle_en || 'Product'}`
 - Articles: https://zuey.me/articles (each article also at /articles/<slug>.md)
 - Zuey for Business (1:1 consultation booking): https://zuey.me/business
 - 200lab courses Duy recommends (links carry referral code T2CWW3D7, 20% off for buyers): https://zuey.me/200lab.md
+- Checkout guide for agent-assisted purchases (membership, courses, consultation; the human pays): https://zuey.me/checkout.md
 - Full LLM Context: https://zuey.me/llms-full.txt
 `;
 

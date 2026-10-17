@@ -5,7 +5,7 @@ user-invocable: true
 keywords: [zuey, linktree, profile, links, theme, api, mcp, oauth, membership, duy-nguyen]
 metadata:
   author: zuey
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Zuey.me Management Skill
@@ -142,6 +142,15 @@ Every API response carries `X-Request-Id`; JSON errors also include `error.reque
 ### Legacy admin endpoint: `https://zuey.me/api/mcp`
 
 Plain JSON-RPC (`initialize`, `tools/list`, `tools/call`) for existing admin integrations, e.g. `get_profile`, `update_profile`, `list_links`, `create_link`, `update_link`, `delete_link`, `reorder_links`, `get_theme`, `set_theme`.
+
+---
+
+## Purchases / checkout
+
+Read `https://zuey.me/checkout.md` first. It is the public guide for helping a human pay for a membership, course or consultation. Rules: you help the human pay, never pay for them; confirm product, term and the live price (`GET /api/v1/plans`, `/courses.md`) before creating anything; never collect card numbers, passwords or OTPs; never accept course terms for the user.
+
+- **Unauthenticated:** give the official link: `https://zuey.me/pricing?plan=<knowledges|ai|combo|community>&months=<1|3|6|12>`, a course page from `/courses.md`, or `https://zuey.me/business` for consultations (the user picks the slot).
+- **Connected via `https://zuey.me/mcp` with `checkout:write` and `billing:read`:** `billing_checkout_create` / `course_checkout_create` (needs `accept_terms: true` only after the user accepted `/terms` and `/policy`), then hand over `checkout_url` or `transfer.qr_url` exactly as returned. Poll `billing_order_get` / `course_order_get` and report success only when `status` is `paid`; explain `pending`, `expired` and `needs_attention` as in the guide.
 
 ---
 

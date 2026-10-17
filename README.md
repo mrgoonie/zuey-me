@@ -18,7 +18,8 @@ The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed b
 - **Machine & Agent Surfaces**:
   - LLM Context: `src/pages/llms.txt.ts` and `src/pages/llms-full.txt.ts`
   - Markdown Routes: `src/pages/index.md.ts`, `src/pages/links.md.ts`, `src/pages/profile.md.ts`
-  - MCP Server: `src/pages/api/mcp.ts`
+  - Checkout guide for agent-assisted purchases (public, non-personalized): `src/pages/checkout.md.ts` (`/checkout.md`), text in `src/lib/agent-commerce/checkout-markdown.ts`
+  - MCP Server (members, OAuth 2.1): `src/pages/mcp.ts` (`/mcp`); legacy admin endpoint: `src/pages/api/mcp.ts`
   - NPM CLI: `packages/cli/bin/zuey.js`
   - Agent Skill: `skills/zuey-me/SKILL.md`
 - **Membership features** (each has a migration, REST endpoints in OpenAPI/Scalar, and MCP tools registered in `src/lib/mcp/registry.ts` / `src/lib/openapi/registry.ts`):

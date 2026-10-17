@@ -27,6 +27,9 @@ export const GET: APIRoute = async ({ locals }) => {
     md += `- [${l.title_en}](${l.url})${l.subtitle_en ? ` — ${l.subtitle_en}` : ''}\n`;
   });
 
+  md += `\n## Buy a membership, course or consultation\n`;
+  md += `- [Checkout guide for AI agents](https://zuey.me/checkout.md) — helps a human pay; agents never pay or accept terms for them\n`;
+
   return new Response(md, {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
