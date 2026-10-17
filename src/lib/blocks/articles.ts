@@ -21,6 +21,10 @@ import { labelKey, listLabels, publicLabelsFor } from '../taxonomy/labels';
 import type { PublicLabel } from '../taxonomy/labels';
 import { applyPublishNotification, cancelArticleNotification, getArticleNotification, parseNotifyFlag } from '../notifications/article-notification-schedule';
 import type { ArticleNotification } from '../notifications/article-notification-schedule';
+import { getMediaAsset } from '../media/media-asset-store';
+
+export const SOCIAL_PREVIEW_MODES = ['generated_card', 'cover', 'custom_asset'] as const;
+export type SocialPreviewMode = (typeof SOCIAL_PREVIEW_MODES)[number];
 
 export interface EditionSummary {
   locale: Locale;
@@ -63,8 +67,14 @@ export interface ArticleSummary {
   /** Locales with a published edition (translations are never generated automatically). */
   available_locales: Locale[];
   reading_minutes: number;
-  /** First image of the public part, if any (thumbnails and social cards). */
+  /** Cover of this edition (listings, hero, JSON-LD): the managed cover when set, else the first image of the public part. */
   cover_url: string | null;
+  /** Managed media asset used as the cover of every edition; null while the cover is derived from the body. */
+  cover_asset_id: string | null;
+  /** Alt text of this edition's managed cover ('' falls back to the asset's alt, then the title). */
+  cover_alt: string;
+  /** What `og:image` and Twitter cards show; `asset_id` is only set for `custom_asset`. */
+  social_preview: { mode: SocialPreviewMode; asset_id: string | null };
   /** Admin listings only: every edition including drafts. */
   editions?: EditionSummary[];
   /** Admin draft views and publish responses only: the new-article email to members. */
@@ -227,6 +237,7 @@ interface EditionRow {
   status: ArticleStatus;
   publishedWords: number;
   coverUrl: string | null;
+  coverAlt: string;
   publishedAt: string | null;
   updatedAt: string;
 }
@@ -244,6 +255,7 @@ function toEditionRow(r: Row): EditionRow {
     status: r.published_json ? 'published' : 'draft',
     publishedWords: n(r, 'published_words'),
     coverUrl: typeof r.cover_url === 'string' ? r.cover_url : null,
+    coverAlt: typeof r.cover_alt === 'string' ? r.cover_alt : '',
     publishedAt: typeof r.published_at === 'string' ? r.published_at : null,
     updatedAt: s(r, 'updated_at'),
   };
@@ -294,6 +306,9 @@ interface ArticleRowData {
   labelRevision: number;
   createdAt: string;
   updatedAt: string;
+  coverAssetId: string | null;
+  socialPreviewMode: SocialPreviewMode;
+  socialPreviewAssetId: string | null;
 }
 
 function toArticleRow(r: Row): ArticleRowData {
@@ -301,6 +316,9 @@ function toArticleRow(r: Row): ArticleRowData {
     id: s(r, 'id'), slug: s(r, 'slug'), primary: asLocale(r.locale), access: r.access === 'knowledges' ? 'knowledges' : 'free',
     categoryId: typeof r.category_id === 'string' ? r.category_id : null, revision: n(r, 'revision', 1),
     labelRevision: n(r, 'label_revision'), createdAt: s(r, 'created_at'), updatedAt: s(r, 'updated_at'),
+    coverAssetId: typeof r.cover_asset_id === 'string' ? r.cover_asset_id : null,
+    socialPreviewMode: SOCIAL_PREVIEW_MODES.find(m => m === r.social_preview_mode) ?? 'generated_card',
+    socialPreviewAssetId: typeof r.social_preview_asset_id === 'string' ? r.social_preview_asset_id : null,
   };
 }
 
@@ -352,6 +370,9 @@ function buildSummary(
     available_locales: published.map(e => e.locale),
     reading_minutes: readingMinutes(edition.publishedWords),
     cover_url: edition.coverUrl,
+    cover_asset_id: art.coverAssetId,
+    cover_alt: edition.coverAlt,
+    social_preview: { mode: art.socialPreviewMode, asset_id: art.socialPreviewAssetId },
     ...(opts.includeEditions ? { editions: [...editions].sort(localeOrder).map(editionSummary) } : {}),
   };
 }
@@ -425,7 +446,7 @@ export async function listArticles(d1: D1DatabaseLike | undefined, opts: ListOpt
   return opts.limit ? summaries.slice(0, opts.limit) : summaries;
 }
 
-async function loadArticleRow(db: D1DatabaseLike, slug: string): Promise<ArticleRowData | null> {
+export async function loadArticleRow(db: D1DatabaseLike, slug: string): Promise<ArticleRowData | null> {
   const row = await db.prepare('SELECT * FROM articles WHERE slug = ? AND deleted_at IS NULL').bind(slug).first<Row>();
   return row ? toArticleRow(row) : null;
 }
@@ -602,6 +623,17 @@ function firstImage(blocks: Block[]): string | null {
     else if (b.type === 'gallery' && b.images[0]) url = b.images[0].url;
   });
   return url;
+}
+
+/** First image a reader without access to paid content sees in a stored published document, if any. */
+export function publicBodyImage(publishedJson: string, access: ArticleAccess, slug: string): string | null {
+  const doc = readStoredDoc(publishedJson, slug);
+  return doc ? firstImage(applyPaywall(doc, access, { isAdmin: false, entitlements: [] }).doc.blocks) : null;
+}
+
+/** URL of the article's managed cover, or null when it has none (or its asset no longer exists). */
+async function managedCoverUrl(db: D1DatabaseLike, art: ArticleRowData): Promise<string | null> {
+  return art.coverAssetId ? (await getMediaAsset(db, art.coverAssetId))?.url ?? null : null;
 }
 
 async function recordRevision(
@@ -811,11 +843,12 @@ export async function publishArticle(
   if (!res.meta?.changes) return conflict(db, slug);
   const revision = expected + 1;
   const publicPart = applyPaywall(doc, art.access, { isAdmin: false, entitlements: [] }).doc;
+  const coverUrl = await managedCoverUrl(db, art) ?? firstImage(publicPart.blocks);
   await db.prepare(`
     UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
       published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
     WHERE article_id = ? AND locale = ?
-  `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale).run();
+  `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), coverUrl, now, art.id, locale).run();
   await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin');
   await mirrorPrimary(db, art.id);
   await reindexArticle(db, art.id, ctx.env);

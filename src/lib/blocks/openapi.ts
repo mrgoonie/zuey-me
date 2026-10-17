@@ -68,7 +68,15 @@ const articleSummary = {
     published_revision: { type: ['integer', 'null'] }, created_at: { type: 'string' }, updated_at: { type: 'string' },
     published_at: { type: ['string', 'null'] }, has_unpublished_changes: { type: 'boolean' },
     available_locales: { type: 'array', items: localeEnum, description: 'Locales with a published, human-written edition' },
-    reading_minutes: { type: 'integer' }, cover_url: { type: ['string', 'null'] },
+    reading_minutes: { type: 'integer' },
+    cover_url: { type: ['string', 'null'], description: 'Cover of this edition: the managed cover when set, else the first public image' },
+    cover_asset_id: { type: ['string', 'null'], description: 'Managed media asset shared by every edition as the cover (set with PUT /api/v1/articles/{slug}/cover)' },
+    cover_alt: { type: 'string', description: "Alt text of this edition's managed cover" },
+    social_preview: {
+      type: 'object',
+      description: 'What og:image and Twitter cards show: generated_card (rendered share card, default), cover (the managed cover) or custom_asset (its own asset)',
+      properties: { mode: { type: 'string', enum: ['generated_card', 'cover', 'custom_asset'] }, asset_id: { type: ['string', 'null'] } },
+    },
     snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
     editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
     email_notification: {
@@ -296,6 +304,34 @@ export const articlesOpenApi: OpenApiFragment = {
         tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['tags', 'expected_revision'], properties: { tags: { type: 'array', maxItems: 20, items: { type: 'string' } }, expected_revision: { type: 'integer' } } }) },
         responses: { '200': ok('Article', ref('ArticleSummary')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/cover': {
+      put: {
+        tags, summary: 'Set the managed cover (media asset id) and social preview for every edition, without rewriting bodies', security: adminSecurity, parameters: [slugParam],
+        requestBody: { required: true, content: json({
+          type: 'object', required: ['expected_revision'],
+          properties: {
+            expected_revision: { type: 'integer' },
+            asset_id: { type: ['string', 'null'], description: 'Managed media asset id (`med_…`); null clears the managed cover' },
+            alt: { type: 'string', maxLength: 500, description: 'Alt text for every edition' },
+            alts: { type: 'object', additionalProperties: { type: 'string', maxLength: 500 }, description: 'Per-locale alt text keyed by locale code' },
+            social_preview: { type: 'object', properties: { mode: { type: 'string', enum: ['generated_card', 'cover', 'custom_asset'] }, asset_id: { type: 'string', description: 'Required with custom_asset' } } },
+          },
+        }) },
+        responses: {
+          '200': ok('Receipt: new revision, cover, social preview and per-edition cover URL/alt', {
+            type: 'object',
+            properties: {
+              operation_success: { type: 'boolean' }, slug: { type: 'string' }, revision: { type: 'integer' },
+              cover: { type: ['object', 'null'], properties: { asset_id: { type: 'string' }, url: { type: 'string' }, width: { type: ['integer', 'null'] }, height: { type: ['integer', 'null'] } } },
+              social_preview: { type: 'object', properties: { mode: { type: 'string' }, asset_id: { type: ['string', 'null'] }, image_url: { type: ['string', 'null'] } } },
+              editions: { type: 'array', items: { type: 'object', properties: { locale: localeEnum, published: { type: 'boolean' }, cover_url: { type: ['string', 'null'] }, cover_alt: { type: 'string' } } } },
+              next_action: { type: 'string' },
+            },
+          }),
+          '404': notFound, '409': conflict, ...errorResponses,
+        },
       },
     },
     '/api/v1/articles/{slug}/labels': {
