@@ -25,7 +25,7 @@ describe('toWriteReceipt', () => {
       edition_draft_revision: rec.revision,
       published_revision: published.published_revision,
       has_unpublished_changes: true,
-      changed_fields: ['title', 'document'],
+      submitted_fields: ['title', 'document'],
       next_action: 'publish',
     });
     expect(receipt.article_revision).toBeGreaterThan(published.revision);
@@ -37,7 +37,19 @@ describe('toWriteReceipt', () => {
     const input: ArticleInput = { excerpt: 'tóm tắt' };
     const rec = await updateArticle(d1, 'post', input, created.revision);
     const receipt = toWriteReceipt(rec, input);
-    expect(receipt.changed_fields).toEqual(['excerpt']);
+    expect(receipt.submitted_fields).toEqual(['excerpt']);
     expect(receipt.published_revision).toBeNull();
+    expect(receipt.next_action).toBe('publish');
+  });
+
+  it('asks for no further action when a metadata-only save leaves the published document in sync', async () => {
+    const d1 = createTestD1();
+    const created = await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('v1') });
+    const published = await publishArticle(d1, 'post', created.revision, true);
+    const input: ArticleInput = { access: 'knowledges' };
+    const rec = await updateArticle(d1, 'post', input, published.revision);
+    const receipt = toWriteReceipt(rec, input);
+    expect(receipt.has_unpublished_changes).toBe(false);
+    expect(receipt.next_action).toBe('none');
   });
 });

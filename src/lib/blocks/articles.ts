@@ -360,14 +360,15 @@ function buildSummary(
 export interface WriteReceipt {
   operation_success: true;
   locale: Locale;
-  /** Article-wide revision after the write (the next expected_revision). */
+  /** Article-wide revision read right after the write (the next expected_revision unless another writer got in first). */
   article_revision: number;
-  /** Article revision at which this edition's draft last changed. */
+  /** Edition revision after the save; equals article_revision because a save bumps both together. */
   edition_draft_revision: number;
   /** Revision of the edition's currently public snapshot; null when it was never published. */
   published_revision: number | null;
   has_unpublished_changes: boolean;
-  changed_fields: string[];
+  /** Fields present in the request (not a diff against the stored values). */
+  submitted_fields: string[];
   next_action: 'publish' | 'none';
 }
 
@@ -382,7 +383,7 @@ export function toWriteReceipt(rec: ArticleRecord, input: ArticleInput): WriteRe
     edition_draft_revision: edition?.revision ?? rec.revision,
     published_revision: rec.published_revision,
     has_unpublished_changes: rec.has_unpublished_changes,
-    changed_fields: RECEIPT_FIELDS.filter(f => input[f] !== undefined),
+    submitted_fields: RECEIPT_FIELDS.filter(f => input[f] !== undefined),
     next_action: rec.has_unpublished_changes ? 'publish' : 'none',
   };
 }

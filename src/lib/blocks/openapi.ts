@@ -126,7 +126,7 @@ export const articlesOpenApi: OpenApiFragment = {
     ArticleSummary: articleSummary,
     WriteReceipt: {
       type: 'object',
-      required: ['operation_success', 'locale', 'article_revision', 'edition_draft_revision', 'published_revision', 'has_unpublished_changes', 'changed_fields', 'next_action'],
+      required: ['operation_success', 'locale', 'article_revision', 'edition_draft_revision', 'published_revision', 'has_unpublished_changes', 'submitted_fields', 'next_action'],
       properties: {
         operation_success: { type: 'boolean', const: true },
         locale: localeEnum,
@@ -134,7 +134,7 @@ export const articlesOpenApi: OpenApiFragment = {
         edition_draft_revision: { type: 'integer' },
         published_revision: { type: ['integer', 'null'] },
         has_unpublished_changes: { type: 'boolean' },
-        changed_fields: { type: 'array', items: { type: 'string' } },
+        submitted_fields: { type: 'array', items: { type: 'string' }, description: 'Fields present in the request, not a diff' },
         next_action: { type: 'string', enum: ['publish', 'none'] },
       },
     },
@@ -243,7 +243,7 @@ export const articlesOpenApi: OpenApiFragment = {
       put: {
         tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' } } }] }) },
-        responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', { allOf: [ref('Article'), { type: 'object', properties: { receipt: ref('WriteReceipt') } }] }), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
+        responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', { allOf: [ref('Article'), { type: 'object', required: ['receipt'], properties: { receipt: ref('WriteReceipt') } }] }), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
       delete: {
         tags, summary: 'Soft-delete an article', security: adminSecurity, parameters: [slugParam],
