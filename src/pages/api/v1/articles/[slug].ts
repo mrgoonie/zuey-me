@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
 import { deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, updateArticle, runtimeWaitUntil } from '../../../../lib/blocks/articles';
 import { localeParam } from '../../../../lib/blocks/params';
+import { documentReceipt, parseReadQuery, parseResponseMode, shapeArticleView } from '../../../../lib/blocks/read-modes';
 import { requireAdminActor } from '../../../../lib/taxonomy/admin';
 
 /**
@@ -16,11 +17,12 @@ export const GET: APIRoute = async ({ params, request, locals }) => {
       return jsonError(principal.credentialError.status, principal.credentialError.code, principal.credentialError.message);
     }
     const url = new URL(request.url);
+    const readQuery = parseReadQuery({ mode: url.searchParams.get('mode') ?? undefined, section_id: url.searchParams.get('section_id') ?? undefined, cursor: url.searchParams.get('cursor') ?? undefined, limit: url.searchParams.get('limit') ?? undefined });
     const draft = url.searchParams.get('draft') === '1';
     if (draft && !viewer.isAdmin) return jsonError(401, 'unauthorized', 'Draft access requires an admin session or key');
     const view = await getArticleView(env.DB, params.slug ?? '', viewer, { draft, locale: localeParam(url) });
     if (!view) return jsonError(404, 'not_found', 'Article not found');
-    return jsonOk(view, 200, { 'Cache-Control': 'private, no-store' });
+    return jsonOk(await shapeArticleView(view, readQuery), 200, { 'Cache-Control': 'private, no-store' });
   } catch (err) {
     return errorResponse(err);
   }
@@ -28,7 +30,7 @@ export const GET: APIRoute = async ({ params, request, locals }) => {
 
 /**
  * Admin: update one edition's draft (body.locale, default primary; a missing edition is created and
- * needs a title) plus article-wide metadata. Body: { expected_revision, locale?, document?, title?, tags?, category?, ... }.
+ * needs a title) plus article-wide metadata. Body: { expected_revision, locale?, document?, title?, tags?, category?, response_mode?, ... }.
  */
 export const PUT: APIRoute = async ({ params, request, locals }) => {
   const env = locals.runtime?.env ?? {};
@@ -36,8 +38,9 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
     const { actor } = await requireAdminActor(request, env);
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
+    const responseMode = parseResponseMode(body.response_mode);
     const rec = await updateArticle(env.DB, params.slug ?? '', parseArticleInput(body, 'update'), body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
-    return jsonOk({ ...toSummary(rec), document: rec.draft });
+    return jsonOk(responseMode === 'summary' ? { ...toSummary(rec), ...(await documentReceipt(rec.draft)) } : { ...toSummary(rec), document: rec.draft });
   } catch (err) {
     return errorResponse(err);
   }

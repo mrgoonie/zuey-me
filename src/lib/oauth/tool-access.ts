@@ -75,6 +75,7 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   article_create: ADMIN,
   article_update: ADMIN,
   article_publish: ADMIN,
+  article_verify_public: ADMIN,
   article_delete: ADMIN,
   survey_results: ADMIN,
   article_edition_delete: ADMIN,
