@@ -9,7 +9,7 @@ export const idempotencyKeyParam = {
   in: 'header',
   required: false,
   schema: { type: 'string', minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9._:-]{8,128}$' },
-  description: 'Opaque client-generated key that makes retries safe. Repeating the same request with the same key returns the stored result (`idempotent_replay: true`, header `Idempotent-Replayed: true`) without a second write, revision, email or media object. 422 `idempotency_key_reused` when the key was used for a different request; 409 `idempotency_in_progress` while the first request still runs (retry after `retry_after_seconds`). A failed request releases the key. Results are kept 24 hours, private to the admin. Also accepted as `idempotency_key` in the JSON body.',
+  description: 'Opaque client-generated key that makes retries safe. Repeating the same request with the same key returns the stored result (`idempotent_replay: true`, header `Idempotent-Replayed: true`) without a second write, revision, email or media object. 422 `idempotency_key_reused` when the key was used for a different request; 409 `idempotency_in_progress` while the first request still runs (retry after `retry_after_seconds`). A failed request releases the key. Results are kept 24 hours, private to the admin. Also accepted as `idempotency_key` in the JSON body (routes without a body take the header only).',
 } as const;
 
 const errorRef = { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } };

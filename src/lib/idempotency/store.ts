@@ -28,6 +28,8 @@ export interface IdempotencyRequest {
   key: unknown;
   /** Everything that defines the request (arguments, path parameters); the key itself is excluded. */
   request: unknown;
+  /** HTTP status recorded with the result (default 200). */
+  status?: number;
 }
 
 export interface IdempotentOutcome {
@@ -94,7 +96,7 @@ function parseStored(text: unknown): Json | null {
 
 function serialize(result: Json): string {
   const full = JSON.stringify(result);
-  if (full.length <= MAX_STORED_BYTES) return full;
+  if (new TextEncoder().encode(full).byteLength <= MAX_STORED_BYTES) return full;
   const { document: _document, ...rest } = result;
   return JSON.stringify({ ...rest, document_omitted: true });
 }
@@ -156,16 +158,22 @@ export async function withIdempotency(opts: IdempotencyRequest, run: () => Promi
   try {
     result = await run();
   } catch (err) {
-    await d1.prepare("DELETE FROM idempotency_keys WHERE actor = ? AND key_hash = ? AND state = 'in_progress' AND request_hash = ?")
-      .bind(actor, keyHash, requestHash).run().catch(() => undefined);
+    // Only release a claim this request still owns; a takeover may have replaced it.
+    await d1.prepare("DELETE FROM idempotency_keys WHERE actor = ? AND key_hash = ? AND state = 'in_progress' AND started_at = ?")
+      .bind(actor, keyHash, startedAt).run().catch(() => undefined);
     throw err;
   }
-  try {
-    await d1.prepare("UPDATE idempotency_keys SET state = 'done', status_code = 200, response_json = ?, completed_at = ? WHERE actor = ? AND key_hash = ?")
-      .bind(serialize(result), iso(membersRuntime.now()), actor, keyHash).run();
-  } catch (err) {
-    // The write already committed; a retry reports idempotency_in_progress instead of writing twice.
-    console.error('Idempotency result was not stored:', err instanceof Error ? err.message : 'unknown');
+  const stored = serialize(result);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await d1.prepare("UPDATE idempotency_keys SET state = 'done', status_code = ?, response_json = ?, completed_at = ? WHERE actor = ? AND key_hash = ? AND started_at = ?")
+        .bind(opts.status ?? 200, stored, iso(membersRuntime.now()), actor, keyHash, startedAt).run();
+      break;
+    } catch (err) {
+      // The write already committed. Until the claim goes stale a retry gets idempotency_in_progress; after that
+      // the retry re-runs and the domain guards (expected_revision, content hash) answer instead of a replay.
+      if (attempt === 1) console.error('Idempotency result was not stored:', err instanceof Error ? err.message : 'unknown');
+    }
   }
   return { result, replayed: false };
 }

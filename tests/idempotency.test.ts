@@ -136,6 +136,20 @@ describe('withIdempotency', () => {
     await first;
   });
 
+  it('does not release or complete a claim another retry took over', async () => {
+    let fail: () => void = () => undefined;
+    const gate = new Promise<void>((_, reject) => { fail = () => reject(new Error('late failure')); });
+    const slow = withIdempotency(base(), async () => { await gate; return { n: 1 }; }).catch(e => e);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    membersRuntime.now = () => T0 + IDEMPOTENCY_STALE_MS + 1;
+    const owner = await withIdempotency(base(), async () => ({ n: 2 }));
+    expect(owner.replayed).toBe(false);
+    fail();
+    expect(await slow).toBeInstanceOf(Error);
+    const replay = await withIdempotency(base(), async () => ({ n: 3 }));
+    expect(replay).toEqual({ result: { n: 2 }, replayed: true });
+  });
+
   it('forgets results after 24 hours', async () => {
     await withIdempotency(base(), async () => ({ n: 1 }));
     membersRuntime.now = () => T0 + IDEMPOTENCY_TTL_MS + 1000;

@@ -73,7 +73,7 @@ export const mediaMcpModule: McpToolModule = {
     if (name === 'media_delete') {
       const id = typeof args.id === 'string' ? args.id.trim() : '';
       if (!id) throw new AppError(400, 'invalid_field', 'id is required', { field: 'id' });
-      return runIdempotentTool(ctx, actor, name, args, () => deleteMediaAsset(db, ctx.env, id));
+      return runIdempotentTool(ctx, actor, name, { ...args, id }, () => deleteMediaAsset(db, ctx.env, id));
     }
     throw new AppError(400, 'unknown_tool', `Unknown tool: ${name}`);
   },
