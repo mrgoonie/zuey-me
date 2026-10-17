@@ -1,4 +1,4 @@
-import type { ArticleSummary } from './articles';
+import type { ArticleInput, ArticleSummary } from './articles';
 import type { Locale } from '../i18n/locales';
 
 export type WriteOperation = 'create' | 'update' | 'publish' | 'tags_set' | 'edition_delete';
@@ -12,7 +12,7 @@ export interface OperationReceipt {
   operation_success: true;
   operation: WriteOperation;
   article_revision: number;
-  /** Edition the operation touched (the edition shown in the response). */
+  /** Edition the operation touched; for article-wide writes (tags) the edition shown in the response. */
   edition_locale: Locale;
   /** Revision of the public version of that edition; null when it was never published. */
   published_revision: number | null;
@@ -24,23 +24,26 @@ export interface OperationReceipt {
   next_action: string;
 }
 
-const CHANGEABLE = ['slug', 'title', 'excerpt', 'access', 'category', 'tags', 'document', 'locale', 'primary_locale'] as const;
+const CHANGEABLE = ['slug', 'title', 'excerpt', 'access', 'category', 'tags', 'document'] as const satisfies readonly (keyof ArticleInput)[];
 
-/** Names of the input fields an update actually carried. */
-export function changedFields(input: object): string[] {
-  const present = input as Record<string, unknown>;
-  return CHANGEABLE.filter(key => present[key] !== undefined);
+/** Names of the content fields the call carried; `locale` only selects the edition and is not listed. */
+export function changedFields(input: ArticleInput): string[] {
+  return CHANGEABLE.filter(key => input[key] !== undefined);
 }
 
 export function buildReceipt(
   operation: WriteOperation,
   summary: Pick<ArticleSummary, 'revision' | 'locale' | 'published_revision' | 'has_unpublished_changes' | 'slug'>,
   changed: string[] = [],
+  deletedLocale?: Locale,
 ): OperationReceipt {
+  if (operation === 'edition_delete') {
+    // The record read after a delete shows the primary edition; the touched edition no longer exists.
+    return { operation_success: true, operation, article_revision: summary.revision, edition_locale: deletedLocale ?? summary.locale, published_revision: null, has_unpublished_changes: false, public_status: 'unpublished', changed_fields: [], next_action: 'none' };
+  }
   const published = summary.published_revision !== null;
   let next: string;
-  if (operation === 'edition_delete') next = 'none';
-  else if (!published) next = 'article_publish to make this edition public';
+  if (!published) next = 'article_publish to make this edition public';
   else if (summary.has_unpublished_changes) next = 'article_publish to release the draft; readers still see published_revision';
   else next = 'none';
   return {

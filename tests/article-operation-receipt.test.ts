@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'bun:test';
 import { createTestD1 } from './helpers/d1';
-import type { RuntimeEnv } from '../src/env';
 import { articlesMcpModule } from '../src/lib/blocks/mcp';
 import { buildReceipt, changedFields } from '../src/lib/blocks/receipt';
 import type { McpContext } from '../src/lib/mcp/types';
@@ -11,7 +10,7 @@ import type { McpContext } from '../src/lib/mcp/types';
 const d1 = createTestD1();
 const ctx: McpContext = {
   request: new Request('https://zuey.me/api/mcp'),
-  env: {} as RuntimeEnv,
+  env: {},
   d1,
   requireAdmin: async () => {},
   isAdmin: async () => true,
@@ -39,13 +38,25 @@ describe('operation receipts', () => {
     expect(updated.receipt.next_action).toContain('article_publish');
   });
 
-  it('reports tag writes and keeps stale revisions machine-readable', async () => {
+  it('keeps stale revisions machine-readable', async () => {
     const rec = await call('article_update', { slug: 'receipt-demo', expected_revision: 99, title: 'x' }).catch((e: unknown) => e);
     expect(rec).toMatchObject({ status: 409, code: 'revision_conflict' });
   });
 
+  it('describes the touched edition for non-primary updates, publishes and deletes', async () => {
+    const base = await call('article_create', { slug: 'receipt-i18n', title: 'Xin chào', document: doc('vi') });
+    const pub = await call('article_publish', { slug: 'receipt-i18n', expected_revision: base.revision, confirm: true, notify: false, summary_only: true });
+    const en = await call('article_update', { slug: 'receipt-i18n', locale: 'en', title: 'Hello', document: doc('en'), expected_revision: pub.revision });
+    expect(en.receipt).toMatchObject({ edition_locale: 'en', public_status: 'unpublished', published_revision: null, has_unpublished_changes: true, changed_fields: ['title', 'document'] });
+    const enPub = await call('article_publish', { slug: 'receipt-i18n', locale: 'en', expected_revision: en.revision, confirm: true, notify: false, summary_only: true });
+    expect(enPub.receipt).toMatchObject({ edition_locale: 'en', public_status: 'published', has_unpublished_changes: false, next_action: 'none' });
+    const tags = await call('article_tags_set', { slug: 'receipt-i18n', tags: [], expected_revision: enPub.revision });
+    expect(tags.receipt).toMatchObject({ operation: 'tags_set', changed_fields: ['tags'] });
+    const del = await call('article_edition_delete', { slug: 'receipt-i18n', locale: 'en', expected_revision: tags.revision });
+    expect(del.receipt).toMatchObject({ operation: 'edition_delete', edition_locale: 'en', public_status: 'unpublished', published_revision: null });
+  });
+
   it('lists only the fields an update carried', () => {
-    expect(changedFields({ title: 'a', document: undefined, tags: [] })).toEqual(['title', 'tags']);
-    expect(buildReceipt('edition_delete', { slug: 's', revision: 3, locale: 'en', published_revision: null, has_unpublished_changes: false }).next_action).toBe('none');
+    expect(changedFields({ title: 'a', document: undefined, tags: [], locale: 'en' })).toEqual(['title', 'tags']);
   });
 });

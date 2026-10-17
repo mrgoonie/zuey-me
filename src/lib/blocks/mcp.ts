@@ -145,21 +145,21 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, draft: { type: 'boolean' }, format: { type: 'string', enum: ['json', 'markdown'] } }, required: ['slug'] },
     },
     {
-      name: 'article_create', description: 'Admin: create a draft article; its first edition uses locale (default vi).',
+      name: 'article_create', description: 'Admin: create a draft article; its first edition uses locale (default vi). The response carries `receipt` (see article_update).',
       inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp }, required: ['slug', 'title'] },
     },
     {
-      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated. The response carries `receipt` (operation_success, article_revision, published_revision, has_unpublished_changes, public_status, changed_fields, next_action): status still describes the article shown, so read the receipt to know what the call did and what readers see.',
+      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated. The response carries `receipt` (operation_success, operation, article_revision, edition_locale, published_revision, has_unpublished_changes, public_status, changed_fields, next_action): status still describes the article shown, so read the receipt to know what the call did and what readers see.',
       inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
     },
     {
-      name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email).',
+      name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. The response carries `receipt` (see article_update). published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email).',
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' } }, required: ['slug', 'expected_revision', 'confirm'] },
     },
     { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     {
-      name: 'article_edition_delete', description: 'Admin: delete one non-primary locale edition. Requires expected_revision.',
+      name: 'article_edition_delete', description: 'Admin: delete one non-primary locale edition. Requires expected_revision. The response carries `receipt` (see article_update).',
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' } }, required: ['slug', 'locale', 'expected_revision'] },
     },
     {
@@ -167,7 +167,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, revision: { type: 'integer' } }, required: ['slug'] },
     },
     {
-      name: 'article_tags_set', description: 'Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision.',
+      name: 'article_tags_set', description: 'Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision. The response carries `receipt` (see article_update).',
       inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' } }, required: ['slug', 'tags', 'expected_revision'] },
     },
     {
@@ -242,7 +242,7 @@ export const articlesMcpModule: McpToolModule = {
         const locale = localeField(args);
         if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
         const rec = await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return { ...toSummary(rec), receipt: buildReceipt('edition_delete', rec) };
+        return { ...toSummary(rec), receipt: buildReceipt('edition_delete', rec, [], locale) };
       }
       case 'article_revisions': {
         await ctx.requireAdmin();
