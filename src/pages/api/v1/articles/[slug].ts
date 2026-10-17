@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
-import { deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, updateArticle, runtimeWaitUntil } from '../../../../lib/blocks/articles';
+import { deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, toWriteReceipt, updateArticle, runtimeWaitUntil } from '../../../../lib/blocks/articles';
 import { localeParam } from '../../../../lib/blocks/params';
 import { requireAdminActor } from '../../../../lib/taxonomy/admin';
 
@@ -36,8 +36,9 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
     const { actor } = await requireAdminActor(request, env);
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
-    const rec = await updateArticle(env.DB, params.slug ?? '', parseArticleInput(body, 'update'), body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
-    return jsonOk({ ...toSummary(rec), document: rec.draft });
+    const input = parseArticleInput(body, 'update');
+    const rec = await updateArticle(env.DB, params.slug ?? '', input, body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
+    return jsonOk({ ...toSummary(rec), receipt: toWriteReceipt(rec, input), document: rec.draft });
   } catch (err) {
     return errorResponse(err);
   }
