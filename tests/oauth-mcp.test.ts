@@ -713,11 +713,31 @@ describe('legacy /api/mcp', () => {
     const list = await body(await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 2, method: 'tools/list' } })));
     const tools = get(list, 'result', 'tools');
     const names = Array.isArray(tools) ? tools.map(t => String(get(t, 'name'))) : [];
-    expect(names).toEqual(expect.arrayContaining(['get_profile', 'update_profile', 'article_list', 'me_keys_list']));
+    expect(names).toEqual(expect.arrayContaining(['get_profile', 'article_list']));
     const profile = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_profile', arguments: {} } } }));
     expect(profile.status).toBe(200);
     const denied = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'update_profile', arguments: { name: 'x' } } } }));
     expect(denied.status).toBe(401);
+  });
+});
+
+describe('legacy /api/mcp tools/list visibility', () => {
+  async function legacyNames(headers: Record<string, string> = {}): Promise<string[]> {
+    const res = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, headers, json: { jsonrpc: '2.0', id: 1, method: 'tools/list' } }));
+    expect(res.status).toBe(200);
+    const tools = get(await body(res), 'result', 'tools');
+    return Array.isArray(tools) ? tools.map(t => String(get(t, 'name'))) : [];
+  }
+
+  it('hides admin tools from anonymous callers and shows them to admin keys', async () => {
+    const adminTools = Object.entries(TOOL_ACCESS).filter(([, a]) => a.kind === 'admin').map(([n]) => n);
+    expect(adminTools.length).toBeGreaterThan(0);
+    const anon = await legacyNames();
+    expect(anon).toContain('get_profile');
+    for (const n of adminTools) expect(anon).not.toContain(n);
+    const adminKey = (await createApiKey('legacy-list', 'admin', d1)).key;
+    const admin = await legacyNames({ Authorization: `Bearer ${adminKey}` });
+    for (const n of adminTools.filter(n => n !== 'channel_access_check')) expect(admin).toContain(n);
   });
 });
 
