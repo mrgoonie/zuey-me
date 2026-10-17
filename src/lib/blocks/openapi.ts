@@ -184,6 +184,30 @@ export const articlesOpenApi: OpenApiFragment = {
     },
   },
   paths: {
+    '/feed.json': {
+      get: {
+        tags, summary: 'Public JSON Feed 1.1 of published article summaries for partner syndication (no auth, never the paid body)',
+        description: 'Newest-first published editions of exactly one locale (default vi, no fallback to other locales). Title, summary and date_modified come from the last published snapshot, so draft saves never show up. Output depends only on the query, is CDN-cacheable and supports ETag / If-None-Match. Follow `next_url` for older items.',
+        parameters: [
+          { name: 'lang', in: 'query', schema: localeEnum, description: 'Edition locale (default vi)' },
+          { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Category slug or id' },
+          { name: 'tag', in: 'query', schema: { type: 'string' }, description: 'Topic tag slug or id' },
+          { name: 'access', in: 'query', schema: { type: 'string', enum: ['free', 'knowledges'] }, description: 'Filter only; the feed never carries paid bodies' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+          { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'Opaque value from a previous next_url' },
+        ],
+        responses: {
+          '200': {
+            description: 'JSON Feed 1.1',
+            headers: { ETag: { schema: { type: 'string' } }, 'Cache-Control': { schema: { type: 'string' } } },
+            content: { 'application/feed+json': { schema: { type: 'object', required: ['version', 'title', 'items'], properties: { version: { type: 'string', const: 'https://jsonfeed.org/version/1.1' }, title: { type: 'string' }, home_page_url: { type: 'string' }, feed_url: { type: 'string' }, language: { type: 'string' }, authors: { type: 'array', items: { type: 'object' } }, next_url: { type: 'string' }, items: { type: 'array', items: { type: 'object' } } } } } },
+          },
+          '304': { description: 'If-None-Match matched the current ETag' },
+          '400': { description: 'Invalid lang, access, limit or cursor', content: json(ref('Error')) },
+          '503': { description: 'Database unavailable (never an empty successful feed)', content: json(ref('Error')) },
+        },
+      },
+    },
     '/api/v1/articles': {
       get: {
         tags, summary: 'List/discover published articles (admins: ?include_drafts=1). With q, the authorization-first knowledge search orders results (X-Search-Semantic: 1|0).',
