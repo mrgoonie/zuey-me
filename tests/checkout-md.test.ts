@@ -4,6 +4,7 @@ import { GET as checkoutMd } from '../src/pages/checkout.md';
 import { GET as llmsTxt } from '../src/pages/llms.txt';
 import { GET as llmsFull } from '../src/pages/llms-full.txt';
 import { GET as indexMd } from '../src/pages/index.md';
+import { allMcpTools } from '../src/lib/mcp/dispatch';
 import { PLAN_IDS, BILLING_MONTHS } from '../src/lib/members/plans';
 
 const ctx = (url = 'https://zuey.me/checkout.md', env: Record<string, string> = {}) =>
@@ -50,7 +51,7 @@ describe('/checkout.md', () => {
     expect(md).not.toMatch(/[?&](key|token|api_key)=/i);
     // The only legacy endpoint mention is the warning against it.
     expect(md).toContain('/api/mcp');
-    expect(md).toMatch(/legacy[^\n]*admin endpoint/i);
+    expect(md).toMatch(/legacy[^\n]*API keys only/i);
   });
 
   it('never invites spending, inventing values or accepting terms for the user', async () => {
@@ -69,7 +70,17 @@ describe('discovery', () => {
     for (const text of [llms, full, index]) expect(text).toContain('https://zuey.me/checkout.md');
     for (const text of [llms, full]) {
       expect(text).toContain('https://zuey.me/mcp');
-      expect(text).toMatch(/legacy admin endpoint: https:\/\/zuey\.me\/api\/mcp/);
+      expect(text).toMatch(/legacy API-key endpoint: https:\/\/zuey\.me\/api\/mcp/);
     }
+  });
+});
+
+describe('guide matches the registry', () => {
+  it('only names MCP tools that exist', async () => {
+    const md = await body(checkoutMd(ctx()));
+    const names = new Set(allMcpTools().map(t => t.name));
+    const cited = [...md.matchAll(/`([a-z]+_[a-z_]+)`/g)].map(m => m[1]).filter(n => /^(billing|course|plans|subscription)_/.test(n));
+    expect(cited.length).toBeGreaterThan(4);
+    for (const n of cited) expect(names.has(n)).toBe(true);
   });
 });

@@ -53,7 +53,7 @@ ${videos.length ? renderVideoLines(videos, 'https://zuey.me') : '- No videos yet
 ## Developer, Agent & MCP Surface
 - Interactive Scalar Documentation: https://zuey.me/docs
 - REST API v1 Base: https://zuey.me/api/v1
-- MCP Endpoint (members, OAuth 2.1): https://zuey.me/mcp (legacy admin endpoint: https://zuey.me/api/mcp)
+- MCP Endpoint (members, OAuth 2.1): https://zuey.me/mcp (legacy API-key endpoint: https://zuey.me/api/mcp)
 - Checkout guide for agent-assisted purchases: https://zuey.me/checkout.md
 - NPM CLI: \`npm install -g zuey-cli\`
 - Claude / AgentKit Skill: \`skills/zuey-me/SKILL.md\`

@@ -39,7 +39,7 @@ ${products.map(p => `- [${p.title_en}](${p.url}): ${p.subtitle_en || 'Product'}`
 ## AI & Developer Surface
 - API Reference: https://zuey.me/docs (Scalar interactive docs)
 - OpenAPI Specification: https://zuey.me/api/openapi.json
-- MCP Server (members, OAuth 2.1): https://zuey.me/mcp (Streamable HTTP); legacy admin endpoint: https://zuey.me/api/mcp
+- MCP Server (members, OAuth 2.1): https://zuey.me/mcp (Streamable HTTP); legacy API-key endpoint: https://zuey.me/api/mcp
 - Markdown Profile: https://zuey.me/index.md
 - Markdown Catalog: https://zuey.me/links.md
 - Zuey Reads (Markdown): https://zuey.me/reads.md
