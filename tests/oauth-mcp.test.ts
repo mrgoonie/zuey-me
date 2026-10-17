@@ -645,7 +645,9 @@ describe('/mcp resource server', () => {
 
     // A stale or capture-time catalogue never grants access: a member calling a media tool is still refused.
     const call = await mcp('tools/call', { name: 'media_list', arguments: {} }, { token: lan.access });
-    expect(get(call.body, 'result', 'isError') === true || call.status === 403).toBe(true);
+    expect(call.status).toBe(200);
+    expect(get(call.body, 'result', 'isError')).toBe(true);
+    expect(String(get(call.body, 'result', 'content', 0, 'text'))).toMatch(/"status": 40[13]/);
   });
 
   it('lists key metadata read-only and never exposes secrets', async () => {

@@ -97,7 +97,7 @@ function decodeHeaderValue(value: string): string | null {
 }
 
 /** Short stable digest of a catalogue, so a connector (or an operator) can tell a stale captured manifest from the live one. */
-export async function catalogVersion(tools: McpTool[]): Promise<string> {
+async function catalogVersion(tools: McpTool[]): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(tools)));
   return Array.from(new Uint8Array(digest).slice(0, 8), b => b.toString(16).padStart(2, '0')).join('');
 }
