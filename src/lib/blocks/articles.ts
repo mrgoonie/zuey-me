@@ -723,7 +723,7 @@ export async function updateArticle(
     // Re-creating a deleted edition reuses its row (article_id + locale is unique) and starts as a draft.
     writes.push(db.prepare(`
       UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, published_json = NULL, published_revision = NULL,
-        status = 'draft', published_words = 0, cover_url = NULL, published_at = NULL, revision = ?, updated_at = ?, deleted_at = NULL
+        status = 'draft', published_words = 0, cover_url = NULL, published_at = NULL, published_title = NULL, published_excerpt = NULL, published_modified_at = NULL, revision = ?, updated_at = ?, deleted_at = NULL
       WHERE article_id = ? AND locale = ? AND ${atExpected}
     `).bind(title, excerpt, docJson, revision, now, art.id, locale, art.id, expected));
   } else {
@@ -813,9 +813,10 @@ export async function publishArticle(
   const publicPart = applyPaywall(doc, art.access, { isAdmin: false, entitlements: [] }).doc;
   await db.prepare(`
     UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
-      published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
+      published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?,
+      published_title = title, published_excerpt = excerpt, published_modified_at = ?
     WHERE article_id = ? AND locale = ?
-  `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale).run();
+  `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, now, art.id, locale).run();
   await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin');
   await mirrorPrimary(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
