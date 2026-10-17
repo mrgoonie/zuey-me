@@ -1,4 +1,5 @@
 import type { OpenApiFragment } from '../openapi/types';
+import { idempotencyKeyParam } from '../idempotency/openapi';
 import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
 import { SORTS } from './articles';
@@ -212,7 +213,7 @@ export const articlesOpenApi: OpenApiFragment = {
         },
       },
       post: {
-        tags, summary: 'Create a draft article', security: adminSecurity,
+        tags, summary: 'Create a draft article', security: adminSecurity, parameters: [idempotencyKeyParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { required: ['slug', 'title'] }] }) },
         responses: {
           '201': ok('Created draft', ref('Article')), '409': conflict,
@@ -227,18 +228,18 @@ export const articlesOpenApi: OpenApiFragment = {
         responses: { '200': ok('Article', ref('Article')), '404': notFound, ...errorResponses },
       },
       put: {
-        tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam],
+        tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' } } }] }) },
         responses: { '200': ok('Updated draft', ref('Article')), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
       delete: {
-        tags, summary: 'Soft-delete an article', security: adminSecurity, parameters: [slugParam],
+        tags, summary: 'Soft-delete an article', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         responses: { '200': ok('Deleted', { type: 'object', properties: { deleted: { type: 'boolean' } } }), '404': notFound, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/publish': {
       post: {
-        tags, summary: 'Publish one edition draft (locale, default primary)', security: adminSecurity, parameters: [slugParam],
+        tags, summary: 'Publish one edition draft (locale, default primary)', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: {
           expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum,
           published_at: { type: 'string', format: 'date-time', description: 'Backdate the publish time (not in the future), e.g. archive imports' },
@@ -271,7 +272,7 @@ export const articlesOpenApi: OpenApiFragment = {
         responses: { '200': ok('Editions', { type: 'object', properties: { slug: { type: 'string' }, primary_locale: localeEnum, revision: { type: 'integer' }, editions: { type: 'array', items: ref('ArticleEdition') } } }), '404': notFound, ...errorResponses },
       },
       delete: {
-        tags, summary: 'Delete one non-primary edition', security: adminSecurity, parameters: [slugParam],
+        tags, summary: 'Delete one non-primary edition', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['locale', 'expected_revision'], properties: { locale: localeEnum, expected_revision: { type: 'integer' } } }) },
         responses: { '200': ok('Remaining article', ref('ArticleSummary')), '404': notFound, '409': { description: '`revision_conflict` or `primary_edition`', content: json(ref('Error')) }, ...errorResponses },
       },
@@ -293,7 +294,7 @@ export const articlesOpenApi: OpenApiFragment = {
     },
     '/api/v1/articles/{slug}/tags': {
       put: {
-        tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam],
+        tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['tags', 'expected_revision'], properties: { tags: { type: 'array', maxItems: 20, items: { type: 'string' } }, expected_revision: { type: 'integer' } } }) },
         responses: { '200': ok('Article', ref('ArticleSummary')), '404': notFound, '409': conflict, ...errorResponses },
       },
