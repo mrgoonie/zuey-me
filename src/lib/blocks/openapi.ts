@@ -6,6 +6,7 @@ import { MAX_ARTICLE_PAGE } from './pagination';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import { ICON_NAMES } from './icons';
 import { blockDefinitions } from './registry';
+import { READ_MODES } from './read-modes';
 import { blockId, colsInt } from './definitions/schema-fragments';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -81,6 +82,7 @@ const articleSummary = {
     },
   },
 };
+const responseModeSchema = { type: 'string', enum: ['full', 'summary'], description: 'summary returns document_blocks (and content_hash on update) instead of echoing the document' };
 const localeQuery = { name: 'lang', in: 'query', schema: localeEnum, description: 'Edition locale; falls back to the primary edition (locale_fallback: true)' };
 
 const json = (schema: unknown) => ({ 'application/json': { schema } });
@@ -223,12 +225,18 @@ export const articlesOpenApi: OpenApiFragment = {
     '/api/v1/articles/{slug}': {
       get: {
         tags, summary: 'Get one published edition (paywalled) or, for admins, its draft with ?draft=1',
-        parameters: [slugParam, localeQuery, { name: 'draft', in: 'query', schema: { type: 'string', enum: ['1'] } }],
-        responses: { '200': ok('Article', ref('Article')), '404': notFound, ...errorResponses },
+        parameters: [
+          slugParam, localeQuery, { name: 'draft', in: 'query', schema: { type: 'string', enum: ['1'] } },
+          { name: 'mode', in: 'query', schema: { type: 'string', enum: [...READ_MODES], default: 'full' }, description: 'summary (metadata, document_blocks, content_hash), outline (block id/type/label tree), translatables (visible text per block_id + field_path, paged), section (one block by section_id) or full (default)' },
+          { name: 'section_id', in: 'query', schema: { type: 'string' }, description: 'Block id for mode=section (any block, nested included)' },
+          { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'next_cursor of the previous mode=translatables page' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 1000, default: 200 }, description: 'mode=translatables page size' },
+        ],
+        responses: { '200': ok('Article (shaped by mode)', ref('Article')), '404': notFound, ...errorResponses },
       },
       put: {
         tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam],
-        requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' } } }] }) },
+        requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' }, response_mode: responseModeSchema } }] }) },
         responses: { '200': ok('Updated draft', ref('Article')), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
       delete: {
@@ -240,11 +248,18 @@ export const articlesOpenApi: OpenApiFragment = {
       post: {
         tags, summary: 'Publish one edition draft (locale, default primary)', security: adminSecurity, parameters: [slugParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: {
-          expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum,
+          expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum, response_mode: responseModeSchema,
           published_at: { type: 'string', format: 'date-time', description: 'Backdate the publish time (not in the future), e.g. archive imports' },
           notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
         } }) },
         responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/verify': {
+      get: {
+        tags, summary: 'Read the public pages anonymously and report status, metadata and image reachability per locale', security: adminSecurity,
+        parameters: [slugParam, { name: 'locales', in: 'query', schema: { type: 'string' }, description: 'Comma-separated locales; default every published edition' }],
+        responses: { '200': ok('Verification report', { type: 'object', properties: { slug: { type: 'string' }, ok: { type: 'boolean' }, locales: { type: 'array', items: { type: 'object' } }, email_notification: { type: ['object', 'null'] }, not_tracked: { type: 'array', items: { type: 'string' } } } }), '404': notFound, ...errorResponses },
       },
     },
     '/api/v1/articles/notifications/dispatch': {

@@ -14,9 +14,10 @@ import { MAX_ARTICLE_PAGE } from './pagination';
 import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
 import type { ArticleDocument } from './schema';
-import { BLOCK_TYPES, LIMITS } from './schema';
-import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
-import { iconCatalog } from './icons';
+import { SCHEMA_SECTIONS, blockSchemaResponse } from './block-schema-view';
+import { BLOCK_TYPES } from './schema';
+import { READ_MODES, documentReceipt, parseReadQuery, parseResponseMode, shapeArticleView } from './read-modes';
+import { verifyPublic } from './verify-public';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
 
@@ -58,11 +59,19 @@ export async function withFetchedDocument(args: Record<string, unknown>, fetcher
   return { ...rest, ...filled, document: payload.document };
 }
 
-/** Echoes the saved draft, except for document_url imports where the caller already holds it (keeps bulk imports small). */
-function withSavedDocument<T extends object>(summary: T, draft: ArticleDocument, args: Record<string, unknown>) {
+/**
+ * Echoes the saved draft, except for document_url imports where the caller already holds it (keeps bulk imports small)
+ * and response_mode "summary", which returns a receipt (block count and content hash) instead of the document.
+ */
+async function withSavedDocument<T extends object>(summary: T, draft: ArticleDocument, args: Record<string, unknown>) {
+  if (parseResponseMode(args.response_mode) === 'summary') return { ...summary, ...(await documentReceipt(draft)) };
   if (args.document === undefined && typeof args.document_url === 'string') return { ...summary, document_blocks: draft.blocks.length };
   return { ...summary, document: draft };
 }
+
+const responseModeProp = {
+  response_mode: { type: 'string', enum: ['full', 'summary'], description: 'summary returns the article summary, document_blocks and content_hash instead of echoing the saved document (default full)' },
+};
 
 const slugProp = { slug: { type: 'string', description: 'Article slug' } };
 const localeProp = { locale: { type: 'string', enum: [...LOCALES], description: 'Edition locale (default: primary edition)' } };
@@ -124,7 +133,18 @@ function discoveryFromArgs(args: Record<string, unknown>) {
 
 export const articlesMcpModule: McpToolModule = {
   tools: [
-    { name: 'block_schema', description: 'Describe the article block document schema (all block types, layout rules, limits, the icon allowlist under icons, and examples).', inputSchema: { type: 'object', properties: {} } },
+    {
+      name: 'block_schema',
+      description: 'Describe the article block document schema. Without arguments it returns everything (all block types, layout rules, limits, the icon allowlist under icons, examples); that is large, so agents should pass types (only the block types you will write), include (sections to return) and compact: true (field → type lines instead of JSON Schema, icon names only). schema_hash identifies the schema version: reuse a cached description while it is unchanged.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          types: { type: 'array', items: { type: 'string', enum: [...BLOCK_TYPES] }, description: 'Only these block types (schemas and examples); default all' },
+          include: { type: 'array', items: { type: 'string', enum: [...SCHEMA_SECTIONS] }, description: 'Sections to return; default types, limits, rules, schemas, examples (icons only when asked) once any argument is given' },
+          compact: { type: 'boolean', description: 'Short field → type lines instead of full JSON Schema' },
+        },
+      },
+    },
     {
       name: 'article_list',
       description: 'List published articles with discovery filters (q uses the authorization-first knowledge search; tags, category and labels are public). include_drafts (admin) lists every edition.',
@@ -140,20 +160,25 @@ export const articlesMcpModule: McpToolModule = {
     },
     {
       name: 'article_get',
-      description: 'Get one locale edition of an article (locale falls back to the primary edition; locale_fallback tells). Readers without the read_full entitlement (Knowledges, Kết hợp, Cộng đồng plans) receive the published version with the paid remainder withheld. Admins may pass draft: true; the draft view carries recovery: null, or {dropped_blocks, degraded_embeds, unreadable} when the stored draft failed validation and was recovered for display (writing that document back makes the loss permanent). format "markdown" returns Markdown.',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, draft: { type: 'boolean' }, format: { type: 'string', enum: ['json', 'markdown'] } }, required: ['slug'] },
+      description: 'Get one locale edition of an article (locale falls back to the primary edition; locale_fallback tells). mode picks how much comes back: summary (metadata, document_blocks, content_hash), outline (block id/type/label tree), translatables (visible text per block_id + field_path with source_hash, paged by cursor/limit), section (one block by section_id with its children) or full (default, the whole document); prefer the smallest sufficient mode. Readers without the read_full entitlement (Knowledges, Kết hợp, Cộng đồng plans) receive the published version with the paid remainder withheld. Admins may pass draft: true; the draft view carries recovery: null, or {dropped_blocks, degraded_embeds, unreadable} when the stored draft failed validation and was recovered for display (writing that document back makes the loss permanent). format "markdown" returns Markdown.',
+      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, draft: { type: 'boolean' }, format: { type: 'string', enum: ['json', 'markdown'] }, mode: { type: 'string', enum: [...READ_MODES] }, section_id: { type: 'string', description: 'Block id for mode section (any block, nested included)' }, cursor: { type: 'string', description: 'next_cursor of the previous translatables page' }, limit: { type: 'integer', minimum: 1, maximum: 1000, description: 'translatables page size (default 200)' } }, required: ['slug'] },
     },
     {
       name: 'article_create', description: 'Admin: create a draft article; its first edition uses locale (default vi).',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp }, required: ['slug', 'title'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp, ...responseModeProp }, required: ['slug', 'title'] },
     },
     {
       name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated.',
-      inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, ...responseModeProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
     },
     {
       name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email).',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' } }, required: ['slug', 'expected_revision', 'confirm'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, ...responseModeProp, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' } }, required: ['slug', 'expected_revision', 'confirm'] },
+    },
+    {
+      name: 'article_verify_public',
+      description: 'Admin: read the article public pages as an anonymous visitor and report per locale the HTTP status, final title, canonical, hreflang set, access, cover and og:image URLs with image reachability, the stored published document hash and the email notification state. ok is true only when every checked locale passes; failed_checks names what did not. Defaults to every published locale. Only the site origin and the media CDN are requested.',
+      inputSchema: { type: 'object', properties: { ...slugProp, locales: { type: 'array', items: { type: 'string', enum: [...LOCALES] }, description: 'Locales to check (default: every published edition)' } }, required: ['slug'] },
     },
     { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
@@ -179,10 +204,7 @@ export const articlesMcpModule: McpToolModule = {
     const d1 = ctx.d1;
     switch (name) {
       case 'block_schema':
-        return {
-          version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas,
-          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE, section: SECTION_EXAMPLE, card: CARD_EXAMPLE },
-        };
+        return blockSchemaResponse(args);
       case 'article_list': {
         const query = discoveryFromArgs(args);
         if (args.include_drafts === true) {
@@ -195,6 +217,7 @@ export const articlesMcpModule: McpToolModule = {
       }
       case 'article_get': {
         const viewer = await mcpViewer(ctx);
+        const readQuery = parseReadQuery(args);
         if (args.draft === true && !viewer.isAdmin) throw new AppError(401, 'unauthorized', 'Draft access requires admin');
         const view = await getArticleView(d1, requireSlug(args), viewer, { draft: args.draft === true, locale: localeField(args) });
         if (!view) throw new AppError(404, 'not_found', 'Article not found');
@@ -202,10 +225,11 @@ export const articlesMcpModule: McpToolModule = {
           const origin = (ctx.env.PUBLIC_SITE_URL || new URL(ctx.request.url).origin).replace(/\/$/, '');
           return { ...view, document: undefined, markdown: documentToMarkdown(view.document, { articleUrl: articleUrl(origin, view.slug, view.locale) }) };
         }
-        return view;
+        return shapeArticleView(view, readQuery);
       }
       case 'article_create': {
         const actor = await mcpAdminActor(ctx);
+        parseResponseMode(args.response_mode);
         const input = parseArticleInput(await withFetchedDocument(args), 'create');
         const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return withSavedDocument(toSummary(rec), rec.draft, args);
@@ -213,16 +237,25 @@ export const articlesMcpModule: McpToolModule = {
       case 'article_update': {
         const actor = await mcpAdminActor(ctx);
         const slug = requireSlug(args);
+        parseResponseMode(args.response_mode);
         const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
         const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
         return withSavedDocument(toSummary(rec), rec.draft, args);
       }
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
+        const summaryOnly = args.summary_only === true || args.summary_only === 'true' || parseResponseMode(args.response_mode) === 'summary';
         const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at, notify: args.notify });
         // Clients holding a stale tool schema forward unknown flags as strings.
-        if (args.summary_only === true || args.summary_only === 'true') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
+        if (summaryOnly) return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
         return { ...toSummary(rec), document: rec.published };
+      }
+      case 'article_verify_public': {
+        await ctx.requireAdmin();
+        const locales = Array.isArray(args.locales) ? args.locales.map(l => localeField({ locale: l })).filter((l): l is NonNullable<typeof l> => l !== undefined) : undefined;
+        if (args.locales !== undefined && !Array.isArray(args.locales)) throw new AppError(400, 'invalid_field', 'locales must be an array', { field: 'locales' });
+        const origin = (ctx.env.PUBLIC_SITE_URL || new URL(ctx.request.url).origin).replace(/\/$/, '');
+        return verifyPublic(d1, requireSlug(args), { origin, locales });
       }
       case 'article_delete': {
         const actor = await mcpAdminActor(ctx);
