@@ -356,6 +356,37 @@ function buildSummary(
   };
 }
 
+/** Compact, unambiguous result of a draft write; `status` stays as the public state of the edition. */
+export interface WriteReceipt {
+  operation_success: true;
+  locale: Locale;
+  /** Article-wide revision after the write (the next expected_revision). */
+  article_revision: number;
+  /** Article revision at which this edition's draft last changed. */
+  edition_draft_revision: number;
+  /** Revision of the edition's currently public snapshot; null when it was never published. */
+  published_revision: number | null;
+  has_unpublished_changes: boolean;
+  changed_fields: string[];
+  next_action: 'publish' | 'none';
+}
+
+const RECEIPT_FIELDS = ['slug', 'title', 'excerpt', 'primary_locale', 'access', 'tags', 'category', 'document'] as const;
+
+export function toWriteReceipt(rec: ArticleRecord, input: ArticleInput): WriteReceipt {
+  const edition = rec.editions.find(e => e.locale === rec.locale);
+  return {
+    operation_success: true,
+    locale: rec.locale,
+    article_revision: rec.revision,
+    edition_draft_revision: edition?.revision ?? rec.revision,
+    published_revision: rec.published_revision,
+    has_unpublished_changes: rec.has_unpublished_changes,
+    changed_fields: RECEIPT_FIELDS.filter(f => input[f] !== undefined),
+    next_action: rec.has_unpublished_changes ? 'publish' : 'none',
+  };
+}
+
 export function toSummary(rec: ArticleRecord): ArticleSummary {
   const { draft: _draft, draft_recovery: _r, published: _published, category_id: _c, tag_ids: _t, ...summary } = rec;
   return summary;
