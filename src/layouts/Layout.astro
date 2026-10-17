@@ -10,9 +10,9 @@ interface Props {
   image?: string;
   /** Alt text of the share image (og:image:alt / twitter:image:alt). */
   imageAlt?: string;
-  /** Pixel size and MIME type of `image` (og:image:*); the default is the 1200x630 PNG share card. */
-  imageWidth?: number;
-  imageHeight?: number;
+  /** Pixel size and MIME type of `image` (og:image:*); the default is the 1200x630 PNG share card and null omits an unknown size. */
+  imageWidth?: number | null;
+  imageHeight?: number | null;
   imageType?: string;
   url?: string;
   lang?: string;
@@ -61,8 +61,8 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     <meta property="og:image" content={image} />
     <meta property="og:image:secure_url" content={image} />
     <meta property="og:image:type" content={imageType} />
-    <meta property="og:image:width" content={String(imageWidth)} />
-    <meta property="og:image:height" content={String(imageHeight)} />
+    {imageWidth !== null && <meta property="og:image:width" content={String(imageWidth)} />}
+    {imageHeight !== null && <meta property="og:image:height" content={String(imageHeight)} />}
     <meta property="og:image:alt" content={imageAlt} />
 
     <!-- Twitter Card -->

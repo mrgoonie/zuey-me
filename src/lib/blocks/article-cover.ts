@@ -13,6 +13,8 @@ import type { Row } from '../members/runtime';
 import { SOCIAL_PREVIEW_MODES, loadArticleRow, publicBodyImage } from './articles';
 import type { SocialPreviewMode } from './articles';
 
+const SHARE_MIMES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
 export interface CoverSetInput {
   slug: string;
   expectedRevision: unknown;
@@ -101,9 +103,19 @@ export async function setArticleCover(d1: D1DatabaseLike, input: CoverSetInput):
     throw new AppError(400, 'cover_required', 'social_preview.mode "cover" needs a managed cover; set asset_id first', { field: 'social_preview.mode' });
   }
 
+  // Crawlers behind og:image reliably render these only (no AVIF).
+  const shared = mode === 'cover' ? coverAsset : socialAsset;
+  if (shared && !SHARE_MIMES.includes(shared.mime)) {
+    throw new AppError(400, 'unsupported_social_image', `${shared.mime} cannot be a share image; use PNG, JPEG, WebP or GIF`, { field: mode === 'cover' ? 'asset_id' : 'social_preview.asset_id' });
+  }
+
   const { all: allAlt, byLocale } = parseAlts(input.alt, input.alts);
+  if (!coverAsset && (allAlt || byLocale.size)) {
+    throw new AppError(400, 'cover_required', 'alt and alts describe the managed cover; set asset_id first', { field: 'alt' });
+  }
   const { results } = await d1.prepare('SELECT * FROM article_editions WHERE article_id = ? AND deleted_at IS NULL').bind(art.id).all<Row>();
-  const editions = (results ?? []).sort((x, y) => LOCALES.indexOf(String(x.locale) as Locale) - LOCALES.indexOf(String(y.locale) as Locale));
+  const editions = (results ?? []).flatMap(row => (isLocale(row.locale) ? [{ row, locale: row.locale }] : []))
+    .sort((x, y) => LOCALES.indexOf(x.locale) - LOCALES.indexOf(y.locale));
   for (const locale of byLocale.keys()) {
     if (!editions.some(e => e.locale === locale)) throw badField(`alts.${locale}`, `This article has no ${locale} edition`);
   }
@@ -111,27 +123,25 @@ export async function setArticleCover(d1: D1DatabaseLike, input: CoverSetInput):
   const coverChanged = touchesCover && (coverAsset?.id ?? null) !== art.coverAssetId;
   const now = new Date().toISOString();
   const revision = expected + 1;
-  const statements: D1PreparedStatementLike[] = [
-    d1.prepare(
-      `UPDATE articles SET revision = ?, updated_at = ?, cover_asset_id = ?, social_preview_mode = ?, social_preview_asset_id = ?
-       WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
-    ).bind(revision, now, coverAsset?.id ?? null, mode, socialAsset?.id ?? null, art.id, expected),
-  ];
-  const next = editions.map(e => {
-    const locale = String(e.locale) as Locale;
+  const statements: D1PreparedStatementLike[] = [];
+  const next = editions.map(({ row: e, locale }) => {
     const stored = typeof e.cover_alt === 'string' ? e.cover_alt : '';
     const alt = !coverAsset ? '' : byLocale.get(locale) ?? allAlt ?? (coverChanged ? '' : stored);
     const publishedJson = typeof e.published_json === 'string' ? e.published_json : null;
     let coverUrl: string | null = null;
     if (publishedJson) coverUrl = coverAsset?.url ?? publicBodyImage(publishedJson, art.access, art.slug);
-    // Edition rows only change together with the article row: the guard fails when the revision check above did.
+    // Edition rows only change while the article is still at the expected revision; the article row moves last.
     statements.push(d1.prepare(
       `UPDATE article_editions SET cover_alt = ?, cover_url = CASE WHEN published_json IS NULL THEN cover_url ELSE ? END
-       WHERE article_id = ? AND locale = ? AND EXISTS (SELECT 1 FROM articles WHERE id = ? AND revision = ? AND updated_at = ?)`,
-    ).bind(alt, coverUrl, art.id, locale, art.id, revision, now));
+       WHERE article_id = ? AND locale = ? AND EXISTS (SELECT 1 FROM articles WHERE id = ? AND revision = ? AND deleted_at IS NULL)`,
+    ).bind(alt, coverUrl, art.id, locale, art.id, expected));
     return { locale, published: publishedJson !== null, cover_url: coverUrl, cover_alt: alt };
   });
-  const [cas] = await d1.batch(statements);
+  statements.push(d1.prepare(
+    `UPDATE articles SET revision = ?, updated_at = ?, cover_asset_id = ?, social_preview_mode = ?, social_preview_asset_id = ?
+     WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
+  ).bind(revision, now, coverAsset?.id ?? null, mode, socialAsset?.id ?? null, art.id, expected));
+  const cas = (await d1.batch(statements)).at(-1);
   if (!cas?.meta?.changes) {
     const current = await loadArticleRow(d1, input.slug);
     if (!current) throw new AppError(404, 'not_found', 'Article not found');

@@ -82,8 +82,8 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
   url={canonical}
   image={shareImage}
   imageAlt={shareImageAlt}
-  imageWidth={socialAsset?.width ?? undefined}
-  imageHeight={socialAsset?.height ?? undefined}
+  imageWidth={socialAsset ? socialAsset.width : undefined}
+  imageHeight={socialAsset ? socialAsset.height : undefined}
   imageType={socialAsset?.mime}
   lang={LOCALE_LABELS[uiLocale].htmlLang}
 >

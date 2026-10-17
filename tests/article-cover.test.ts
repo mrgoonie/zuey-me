@@ -373,3 +373,17 @@ describe('social preview', () => {
     expect(articleJsonLd({ ...view, cover_url: 'https://media.zuey.me/c.webp' }, ORIGIN, card, 'https://media.zuey.me/c.webp').image).toEqual(['https://media.zuey.me/c.webp']);
   });
 });
+
+describe('article_cover_set guards', () => {
+  it('refuses AVIF as a share image and alt text without a cover', async () => {
+    const revision = await seedArticle();
+    const avif = Uint8Array.from([0, 0, 0, 0x1c, ...ascii('ftyp'), ...ascii('avif'), ...pad(16), ...ascii('ispe'), ...pad(4), 0, 0, 7, 128, 0, 0, 4, 56]);
+    const avifId = await uploadCover(avif);
+    const pngLike = await uploadCover();
+    expect((await mcpCall(adminKey, 'article_cover_set', { slug: 'post', expected_revision: revision, asset_id: avifId, social_preview: { mode: 'cover' } })).code).toBe('unsupported_social_image');
+    expect((await mcpCall(adminKey, 'article_cover_set', { slug: 'post', expected_revision: revision, asset_id: pngLike, social_preview: { mode: 'custom_asset', asset_id: avifId } })).code).toBe('unsupported_social_image');
+    expect((await mcpCall(adminKey, 'article_cover_set', { slug: 'post', expected_revision: revision, alts: { vi: 'x' } })).code).toBe('cover_required');
+    // An AVIF cover is fine while the share image stays the generated card.
+    expect((await mcpCall(adminKey, 'article_cover_set', { slug: 'post', expected_revision: revision, asset_id: avifId })).status).toBe(200);
+  });
+});
