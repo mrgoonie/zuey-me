@@ -34,8 +34,9 @@ export function protectedResourceMetadata(request: Request): Record<string, unkn
   return {
     resource: mcpResourceFor(issuer),
     authorization_servers: [issuer],
-    // Minimal member scopes for normal use; `admin` is requested only by admins (step-up).
-    scopes_supported: [...DEFAULT_MEMBER_SCOPES],
+    // Clients (e.g. ChatGPT connectors) request what the resource advertises. `admin` must be listed so an
+    // admin can grant it; the consent screen and token exchange still drop it for every non-admin identity.
+    scopes_supported: [...DEFAULT_MEMBER_SCOPES, 'admin'],
     bearer_methods_supported: ['header'],
     resource_name: 'Zuey MCP',
     resource_documentation: `${issuer}/docs`,
