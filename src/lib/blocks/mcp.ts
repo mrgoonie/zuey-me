@@ -17,6 +17,7 @@ import type { ArticleDocument } from './schema';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
 import { iconCatalog } from './icons';
+import { buildReceipt, changedFields } from './receipt';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
 
@@ -148,7 +149,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp }, required: ['slug', 'title'] },
     },
     {
-      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated.',
+      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated. The response carries `receipt` (operation_success, article_revision, published_revision, has_unpublished_changes, public_status, changed_fields, next_action): status still describes the article shown, so read the receipt to know what the call did and what readers see.',
       inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
     },
     {
@@ -208,21 +209,22 @@ export const articlesMcpModule: McpToolModule = {
         const actor = await mcpAdminActor(ctx);
         const input = parseArticleInput(await withFetchedDocument(args), 'create');
         const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return withSavedDocument(toSummary(rec), rec.draft, args);
+        return withSavedDocument({ ...toSummary(rec), receipt: buildReceipt('create', rec, changedFields(input)) }, rec.draft, args);
       }
       case 'article_update': {
         const actor = await mcpAdminActor(ctx);
         const slug = requireSlug(args);
         const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
         const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return withSavedDocument(toSummary(rec), rec.draft, args);
+        return withSavedDocument({ ...toSummary(rec), receipt: buildReceipt('update', rec, changedFields(input)) }, rec.draft, args);
       }
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
         const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at, notify: args.notify });
         // Clients holding a stale tool schema forward unknown flags as strings.
-        if (args.summary_only === true || args.summary_only === 'true') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
-        return { ...toSummary(rec), document: rec.published };
+        const summary = { ...toSummary(rec), receipt: buildReceipt('publish', rec) };
+        if (args.summary_only === true || args.summary_only === 'true') return { ...summary, document_blocks: rec.published?.blocks.length ?? 0 };
+        return { ...summary, document: rec.published };
       }
       case 'article_delete': {
         const actor = await mcpAdminActor(ctx);
@@ -239,7 +241,8 @@ export const articlesMcpModule: McpToolModule = {
         const actor = await mcpAdminActor(ctx);
         const locale = localeField(args);
         if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
-        return toSummary(await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+        const rec = await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+        return { ...toSummary(rec), receipt: buildReceipt('edition_delete', rec) };
       }
       case 'article_revisions': {
         await ctx.requireAdmin();
@@ -257,7 +260,8 @@ export const articlesMcpModule: McpToolModule = {
       }
       case 'article_tags_set': {
         const actor = await mcpAdminActor(ctx);
-        return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+        const rec = await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+        return { ...toSummary(rec), receipt: buildReceipt('tags_set', rec, ['tags']) };
       }
       case 'survey_results': {
         await ctx.requireAdmin();
