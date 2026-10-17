@@ -202,8 +202,9 @@ export async function loadFeedPage(
     const slug = str(r, 'slug');
     // Published snapshot only: the draft-mutable `title` / `excerpt` columns are a fallback for rows
     // that predate the snapshot columns and were never republished.
-    const title = str(r, 'published_title') || str(r, 'title');
-    const excerpt = (str(r, 'published_excerpt') || str(r, 'excerpt')).trim();
+    // An empty published value is real (no excerpt), so only NULL falls back to the draft column.
+    const title = typeof r.published_title === 'string' ? r.published_title : str(r, 'title');
+    const excerpt = (typeof r.published_excerpt === 'string' ? r.published_excerpt : str(r, 'excerpt')).trim();
     const published = str(r, 'published_at');
     const modified = str(r, 'published_modified_at');
     const cat = categoryById.get(str(r, 'category_id'));

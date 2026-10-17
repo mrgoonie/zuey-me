@@ -49,3 +49,5 @@ async function poll() {
 - Published-state fields live in `article_editions.published_title`, `published_excerpt` and `published_modified_at`, written only by `publishArticle` (migration `0025_article_published_metadata.sql`). Category, tags and access are article-level and take effect as soon as they are saved, as on the article pages.
 - The endpoint is in the OpenAPI spec (`/api/openapi.json`, Scalar `/docs`) and advertised in every page head.
 - Follow-ups intentionally out of scope: RSS/Atom, per-partner keys, full-text licensing, webhooks, tombstone sync, partner analytics.
+- Rollout: apply migration `0025` immediately before the code deploy and avoid publishing in between (a publish by the old code leaves stale snapshot columns; the backfill `UPDATE` is idempotent and can be re-run). Editions published before migration `0009` have no publish revision, so their snapshot is backfilled from the current title/excerpt; confirm they have no unsaved draft edits or republish them.
+- `image` comes from the public part at publish time; switching an article to paid without republishing keeps the old image URL (never body text).

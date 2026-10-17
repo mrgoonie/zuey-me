@@ -164,6 +164,17 @@ describe('published snapshot', () => {
   });
 });
 
+describe('empty published values', () => {
+  it('do not fall back to a draft excerpt or title edited later', async () => {
+    const d1 = createTestD1();
+    const a = await publish(d1, { slug: 'blank', title: 'Real title', excerpt: '' });
+    await updateArticle(d1, 'blank', { excerpt: 'SECRET DRAFT EXCERPT' }, a.revision);
+    const [item] = (await feedOf(d1)).items;
+    expect(item.summary).toBe('Real title');
+    expect(JSON.stringify(item)).not.toContain('SECRET');
+  });
+});
+
 describe('locale', () => {
   it('returns exactly the requested published locale and never falls back', async () => {
     const d1 = createTestD1();

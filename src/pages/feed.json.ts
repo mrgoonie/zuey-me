@@ -37,6 +37,7 @@ export const GET: APIRoute = async ({ request, locals }) => {
       'Cache-Control': CACHE_CONTROL,
       ETag: etag,
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Expose-Headers': 'ETag',
       'X-Content-Type-Options': 'nosniff',
     };
     if (etagMatches(request.headers.get('if-none-match'), etag)) return new Response(null, { status: 304, headers });
@@ -44,6 +45,7 @@ export const GET: APIRoute = async ({ request, locals }) => {
   } catch (err) {
     const res = errorResponse(err);
     res.headers.set('Cache-Control', 'no-store');
+    res.headers.set('Access-Control-Allow-Origin', '*');
     return res;
   }
 };
