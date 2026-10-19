@@ -522,6 +522,39 @@ describe('runs, abort and quota', () => {
     expect(next.map(e => e.event)).toEqual(['sources', 'delta', 'done']);
   });
 
+  it('reports server-measured latency and estimated cost on done, and latency on error frames', async () => {
+    const m = await member('ai@example.com', ['ai']);
+    const sessionId = await newSession(m);
+    const ok = answers('Xin chào từ Zuey AI.');
+    // The gateway takes 1.2 s to answer: the clock moves while the run is in flight.
+    script = (req, s) => {
+      if (req.method === 'chat.send') aiRuntime.now = () => T0 + 1234;
+      ok(req, s);
+    };
+    try {
+      const done = (await askAndRead(m, sessionId, 'Độ trễ?')).find(e => e.event === 'done');
+      expect(field(done?.data, 'latency_ms')).toBe(1234);
+      expect(typeof field(done?.data, 'cost_cents')).toBe('number');
+      expect(field(done?.data, 'usage')).toEqual({ prompt_tokens: 1000, completion_tokens: 50 });
+
+      aiRuntime.now = () => T0;
+      script = (req, s) => {
+        if (req.method === 'connect') s.push({ type: 'res', id: req.id, ok: true, payload: { protocol: 3, role: 'admin' } });
+        if (req.method === 'chat.send') {
+          aiRuntime.now = () => T0 + 250;
+          s.push(agentEvent(req, 'run.started', {}));
+          s.push(agentEvent(req, 'run.failed', { error: 'model overloaded' }));
+          s.push({ type: 'res', id: req.id, ok: false, error: { code: 'run_failed', message: 'model overloaded' } });
+        }
+      };
+      const error = (await askAndRead(m, sessionId, 'Lỗi?')).find(e => e.event === 'error');
+      expect(error).toBeDefined();
+      expect(field(error?.data, 'latency_ms')).toBe(250);
+    } finally {
+      aiRuntime.now = () => T0;
+    }
+  });
+
   it('returns 429 ai_quota_exceeded over the monthly limit', async () => {
     const env = baseEnv({ AI_MONTHLY_REQUEST_LIMIT: '2' });
     const m = await member('ai@example.com', ['ai']);

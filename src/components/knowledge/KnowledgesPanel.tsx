@@ -4,6 +4,8 @@ import type { PublicTaxonomy } from '../../lib/taxonomy/public';
 import { ArticleCard } from './ArticleCard';
 import type { CardArticle } from './ArticleCard';
 import { knowledgeStrings } from './strings';
+import { track } from '../../lib/analytics/client';
+import { filterValue } from '../../lib/analytics/engagement';
 
 interface Filters { q: string; category: string; label: string; sort: 'new' | 'title' }
 const EMPTY: Filters = { q: '', category: '', label: '', sort: 'new' };
@@ -52,13 +54,17 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
     if (filters.sort !== 'new' || !filters.q) params.set('sort', filters.sort);
     setError(false);
     fetch(`/api/v1/articles?${params}`, { signal: ctrl.signal, credentials: 'same-origin' })
-      .then(res => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error(`http_${res.status}`))))
       .then((data: unknown) => {
         const body = isObj(data) && 'data' in data ? data.data : data;
-        setItems(toCards(body).slice(0, PANEL_LIMIT));
+        const cards = toCards(body).slice(0, PANEL_LIMIT);
+        setItems(cards);
+        // The length of the search text, never the text itself.
+        if (filters.q) track('knowledge_search', { surface: 'home', query_length: filters.q.length, results: cards.length });
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
+        track('feature_error', { feature: 'knowledge_panel', reason: err instanceof Error && /^http_\d{3}$/.test(err.message) ? err.message : 'network_error' });
         setError(true);
         setItems([]);
       });
@@ -76,6 +82,11 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
   }, [open, locale, taxonomy]);
 
   const apply = (next: Filters) => { setDraft(next); setFilters(next); };
+  /** Applies a chip, select or reset change and records which filter moved (public slugs only). */
+  const applyFilter = (filter: 'category' | 'label' | 'sort' | 'reset', next: Filters) => {
+    apply(next);
+    track('knowledge_filter_applied', { surface: 'home', filter, value: filter === 'reset' ? 'all' : filterValue(next[filter]) });
+  };
   const browseHref = `/articles?lang=${locale}${filters.q ? `&q=${encodeURIComponent(filters.q)}` : ''}${filters.category ? `&category=${encodeURIComponent(filters.category)}` : ''}${filters.label ? `&label=${encodeURIComponent(filters.label)}` : ''}`;
   const chip = (pressed: boolean) =>
     `rounded-full border px-2.5 py-1 text-[11.5px] font-semibold ${pressed ? 'bg-stone-900 text-white border-stone-900' : 'bg-white/80 text-stone-700 border-stone-200 hover:bg-white'}`;
@@ -119,10 +130,10 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
           </div>
           {taxonomy && taxonomy.categories.length > 0 && (
             <div role="group" aria-label={t.category} className="flex flex-wrap gap-1.5">
-              <button type="button" aria-pressed={filters.category === ''} className={chip(filters.category === '')} onClick={() => apply({ ...draft, category: '' })}>{t.all}</button>
+              <button type="button" aria-pressed={filters.category === ''} className={chip(filters.category === '')} onClick={() => applyFilter('category', { ...draft, category: '' })}>{t.all}</button>
               {taxonomy.categories.map(c => (
                 <button key={c.id} type="button" aria-pressed={filters.category === c.slug} className={chip(filters.category === c.slug)}
-                  onClick={() => apply({ ...draft, category: filters.category === c.slug ? '' : c.slug })}>{c.name}</button>
+                  onClick={() => applyFilter('category', { ...draft, category: filters.category === c.slug ? '' : c.slug })}>{c.name}</button>
               ))}
             </div>
           )}
@@ -131,7 +142,7 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
               <summary className="cursor-pointer text-xs font-bold text-stone-700">{t.labelsAndFreshness}</summary>
               <label className="sr-only" htmlFor={`${ids}-label`}>{t.labelsAndFreshness}</label>
               <select
-                id={`${ids}-label`} value={draft.label} onChange={e => apply({ ...draft, label: e.target.value })}
+                id={`${ids}-label`} value={draft.label} onChange={e => applyFilter('label', { ...draft, label: e.target.value })}
                 className="mt-2 w-full rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm"
               >
                 <option value="">{t.anyLabel}</option>
@@ -141,10 +152,10 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
           )}
           <div className="flex items-center justify-between gap-2">
             <div role="group" aria-label={t.sort} className="flex gap-1.5">
-              <button type="button" aria-pressed={filters.sort === 'new'} className={chip(filters.sort === 'new')} onClick={() => apply({ ...draft, sort: 'new' })}>{t.sortNew}</button>
-              <button type="button" aria-pressed={filters.sort === 'title'} className={chip(filters.sort === 'title')} onClick={() => apply({ ...draft, sort: 'title' })}>{t.sortTitle}</button>
+              <button type="button" aria-pressed={filters.sort === 'new'} className={chip(filters.sort === 'new')} onClick={() => applyFilter('sort', { ...draft, sort: 'new' })}>{t.sortNew}</button>
+              <button type="button" aria-pressed={filters.sort === 'title'} className={chip(filters.sort === 'title')} onClick={() => applyFilter('sort', { ...draft, sort: 'title' })}>{t.sortTitle}</button>
             </div>
-            {active && <button type="button" className="text-xs font-bold text-stone-600 underline hover:text-stone-900" onClick={() => apply(EMPTY)}>{t.reset}</button>}
+            {active && <button type="button" className="text-xs font-bold text-stone-600 underline hover:text-stone-900" onClick={() => applyFilter('reset', EMPTY)}>{t.reset}</button>}
           </div>
         </form>
       )}

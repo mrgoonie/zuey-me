@@ -15,6 +15,8 @@ Destination today: PostHog project **Zuey.me** (env setup: [env-setup.vi.md §14
 | `src/lib/analytics/client.ts` | Browser API: `track()`, `trackOnce()`, `identify()`, `reset()`, `signOutAnalytics()`, `optOut()`, `optIn()`, `bootAnalytics()` |
 | `src/lib/analytics/attribution.ts` | Session attribution: allowlisted UTM values and the referrer origin, stored per tab session |
 | `src/lib/analytics/funnel.ts` | Helpers shared by the funnel events (`failureReason`, `daysAhead`, `moneyProps`) |
+| `src/lib/analytics/engagement.ts` | Helpers shared by the engagement events (`publicSlug`, `filterValue`, `siteDomain`, scroll depth and engaged threshold, AI surface and backend metrics, `PERFORMANCE_CAPTURE_OPTIONS`) |
+| `src/scripts/article-analytics.ts`, `src/scripts/knowledge-search-analytics.ts` | Page scripts for the server-rendered article and `/articles` pages (they read a hidden `data-*` element, never the page text) |
 | `src/lib/analytics/server.ts` | Server API: `captureServerEvent()` (typed), `sendServerEvent()` (by name, for the outbox), `serverDestinations()` |
 | `src/lib/analytics/destinations/posthog.ts` | PostHog config from env, browser adapter (`window.posthog`), server adapter (HTTP capture API), `before_send` scrubber |
 | `src/pages/api/members/auth/identity.ts` | `GET /api/members/auth/identity` → `{ member_id }` for the session cookie |
@@ -33,7 +35,7 @@ Email, name, avatar, phone number; passwords, sign-in links, tokens, API keys, O
 
 ## Automatic PostHog data
 
-PostHog still records `$pageview`, `$pageleave` and autocapture clicks. Before anything leaves the browser, `before_send` (`scrubCaptureResult`) deep-scrubs `properties`, `$set` and `$set_once`:
+PostHog still records `$pageview`, `$pageleave` and autocapture clicks, plus `$web_vitals` (LCP, CLS, INP, FCP; `capture_performance: { web_vitals: true, network_timing: false }`) and `$exception` for unhandled errors and promise rejections (`capture_exceptions`); console errors and network timing are not captured. Both options are set in `PERFORMANCE_CAPTURE_OPTIONS` and posthog-js loads their extensions lazily, so they add no bundle weight and follow the same consent gate. Before anything leaves the browser, `before_send` (`scrubCaptureResult`) deep-scrubs `properties`, `$set` and `$set_once`:
 
 - URLs (`$current_url`, `$referrer`, `$initial_*`, `href` attributes) lose these parameters (case-insensitive): `token`, `code`, `email`, `key`, `secret`, `sig`, `signature`, `state`, `session`, `password`, `pass`, `pwd`, `auth`, `otp`, `api_key`, `apikey`, `access_token`, `refresh_token`, `id_token`, `client_secret`, `confirm_email`, `new_email`, `jwt`, `hmac`, `nonce`, `ticket`, `manage` (booking manage token), `payerid` (PayPal), plus any name containing `token`, `secret`, `password`, `email`, `session` or `signature`. URL user-info is removed.
 - URLs of private pages (`/account`, `/login`, `/billing`, `/booking`, `/chat`, `/connect`, `/oauth`, `/studio`, `/courses/orders`) lose the whole query string and fragment, e.g. the PayPal booking return `/booking/{id}?manage=…&paypal=return&token=…&PayerID=…`.
@@ -108,6 +110,35 @@ Sign-up, pricing, checkout and booking steps sent from the browser. They follow 
 | `booking_slot_selected` | 1 | A slot is picked | `duration_min` number, `days_ahead` number (whole days, not the date) | same | revenue |
 | `booking_hold_created` | 1 | The slot hold (booking request) succeeded | `payment_method` (`sepay` \| `paypal`), `discounted` boolean, `free` boolean | same | revenue |
 | `booking_checkout_started` | 1 | The booking payment was started (PayPal order or VietQR shown) | `payment_method`, `value`?, `currency`? | same | revenue |
+
+### Product engagement events (client)
+
+Knowledges, Reads, articles, Zuey AI, ZueyOS, community and surveys. Same consent gate as every client event (Do Not Track, GPC, opt-out and blocked storage send nothing). Properties are enums, public slugs, counts, lengths and backend metrics only: a search sends `query_length`, never the query; a chat message sends `chars`, never the text; a survey vote sends how many options were picked, never which; filter values and Reads source kinds pass `publicSlug()` (anything that is not a lowercase taxonomy slug becomes `other`), and a Reads domain is a bare host (`siteDomain()`), never a URL. Owner `product` unless noted.
+
+| Event | Version | Trigger | Properties | Emitted in |
+|---|---|---|---|---|
+| `knowledge_search` | 1 | Results for a typed query are shown: `/articles` (first page, once per page load), the home Knowledges panel (each search), Reads (after typing settles for 1 s) | `surface` (`articles` \| `home` \| `reads`), `query_length` number, `results` number, `semantic`? boolean (`/articles` only) | `src/scripts/knowledge-search-analytics.ts`, `src/components/knowledge/KnowledgesPanel.tsx`, `src/components/reads/ReadsBrowser.tsx` |
+| `knowledge_filter_applied` | 1 | A category, tag, label, sort or Reads source filter is applied, or the filters are reset | `surface`, `filter` (`category` \| `tag` \| `label` \| `sort` \| `source` \| `reset`), `value` slug (`all` when cleared) | same |
+| `article_opened` | 1 | An article page is shown (once per page load; not for Studio previews) | `slug`, `locale`, `access` (article access level), `locked` boolean (body truncated for this reader), `reading_minutes` | `src/scripts/article-analytics.ts` via `src/pages/articles/[slug].astro` |
+| `article_engaged` | 1 | 30 s with the tab visible and 50 % of the readable body scrolled (once per page load) | `slug`, `locale`, `access`, `seconds`, `depth` (bucket 0/25/50/75/100) | same |
+| `paywall_viewed` | 1 | The members-only lock box scrolls 40 % into view (once per page load). Owner `revenue` | `slug`, `locale`, `locked_sections` (count of locked headings) | same |
+| `article_unlocked` | 1 | A members-only article is shown in full to a reader whose plan includes it (once per page load). Owner `revenue` | `slug`, `locale` | same |
+| `reads_opened` | 1 | The Reads list is shown (once per page load) | `surface` (`reads_page` \| `home`), `items` number | `src/components/reads/ReadsBrowser.tsx` |
+| `read_source_clicked` | 1 | A read is opened at its source | `source_kind` slug, `domain` bare host, `position` (1-based) | same |
+| `ai_chat_started` | 1 | The first question creates a new Zuey AI session | `surface` (`article` \| `chat_page` \| `window`) | `src/components/ai/ZueyAiPanel.tsx` |
+| `ai_message_submitted` | 1 | A question is sent | `surface`, `chars` (length only), `quoted` boolean, `retry` boolean | same |
+| `ai_response_completed` | 1 | The reply stream finished | `surface`, `sources`, `artifacts`, `latency_ms`?, `prompt_tokens`?, `completion_tokens`?, `cost_cents`? (all four from the backend `done` frame) | same |
+| `ai_response_failed` | 1 | The request was refused, the stream sent an error, ended incomplete, was stopped, or the network failed | `surface`, `stage` (`request` \| `stream` \| `network`), `reason` (error code, `cancelled`, `incomplete`, `network_error`), `retryable` boolean, `latency_ms`? (backend `error` frame) | same |
+| `ai_quota_reached` | 1 | The monthly request quota or AI budget is used up, on send or shown on load (once per page load). Owner `revenue` | `surface`, `kind` (`requests` \| `budget`), `stage` (`send` \| `load`) | same |
+| `app_opened` | 1 | A ZueyOS window is opened or brought to front (`openApp()`, including deep links) | `app` (app id), `already_open` boolean (window was already open and not minimised) | `src/components/os/ZueyOS.tsx` |
+| `community_invite_requested` | 1 | A single-use Telegram invite link was created | `chat` (community chat key) | `src/components/home/CommunityAccess.tsx` |
+| `community_joined` | 1 | The community card sees an invited membership turn joined | `chat` | same |
+| `survey_submitted` | 1 | A survey vote is accepted | `slug` (article), `options` (count of choices), `multiple` boolean | `src/components/blocks/SurveyBlock.tsx` |
+| `feature_error` | 1 | A feature could not load or complete its request (not sent for sign-in walls or expected conflicts) | `feature` (`knowledge_search` \| `knowledge_panel` \| `ai_chat` \| `community` \| `community_invite` \| `survey_vote`), `reason` (API error code, `http_<status>`, `network_error`, `load_failed`) | the files above |
+
+**AI metrics.** `latency_ms` (from accepting the question to the end of the reply) and `cost_cents` (the estimated cost counted against the plan's AI budget) are measured by the server and sent in the chat SSE `done` frame next to `usage`; the `error` frame carries `latency_ms`. The browser only copies those numbers, so it never measures or sends message content. A route-level failure before the run starts has no latency.
+
+**Known limits.** `community_joined` is observed by the browser, not by the Telegram webhook: the card re-checks memberships when the member returns to the tab (focus or visibility change) after requesting an invite, so a join on another device, or after the page was closed, is not counted. `article_engaged` needs both thresholds and counts only visible seconds. The engagement events never carry the search text, but the `/articles?q=…` page address itself still does in PostHog's automatic URL properties (`$current_url`, `$session_entry_url`, `$pageview`), because `q` is not on the scrubbed parameter list.
 
 **Late hydration.** React islands can hydrate before the layout's boot script decides consent. `track()` calls made before that are queued (at most 50, `MAX_PENDING_EVENTS`) and sent once analytics activates, or dropped when it stays off (DNT, GPC, opt-out, blocked storage, non-production host). Mount-time events use `trackOnce(key, …)`, which sends a key once per page load, so React StrictMode double effects and remounts do not double count.
 

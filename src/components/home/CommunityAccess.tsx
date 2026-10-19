@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, Send, Users } from 'lucide-react';
 import type { CommunityChat, CommunityStatus, MembershipView } from '../../lib/experience/community';
 import type { Locale } from '../../lib/i18n/locales';
 import { LOCALE_LABELS } from '../../lib/i18n/locales';
 import { fmt } from './home-i18n';
 import { apiFetch, parseCommunity, parseMembership } from './api-client';
+import { track } from '../../lib/analytics/client';
+import { failureReason } from '../../lib/analytics/funnel';
 
 const STRINGS = {
   en: {
@@ -86,14 +88,42 @@ export const CommunityAccess: React.FC<CommunityAccessProps> = ({ locale }) => {
   const [messages, setMessages] = useState<Partial<Record<CommunityChat, string>>>({});
   const timeFmt = new Intl.DateTimeFormat(LOCALE_LABELS[locale].htmlLang, { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
 
-  const load = useCallback(async () => {
-    setView({ kind: 'loading' });
-    const res = await apiFetch('/api/v1/community', parseCommunity);
-    if (res.ok) setView(res.data.signed_in ? { kind: 'ready', status: res.data } : { kind: 'signedOut' });
-    else setView(res.status === 401 ? { kind: 'signedOut' } : { kind: 'error' });
+  // Memberships seen as an open invite in this page session: community_joined fires when one of them turns joined.
+  const invitedIds = useRef(new Set<string>());
+
+  const observe = useCallback((memberships: MembershipView[]) => {
+    for (const m of memberships) {
+      if (m.status === 'invited') invitedIds.current.add(m.id);
+      else if (m.status === 'joined' && invitedIds.current.delete(m.id)) track('community_joined', { chat: m.chat });
+    }
   }, []);
 
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setView({ kind: 'loading' });
+    const res = await apiFetch('/api/v1/community', parseCommunity);
+    if (res.ok) {
+      observe(res.data.memberships);
+      setView(res.data.signed_in ? { kind: 'ready', status: res.data } : { kind: 'signedOut' });
+    } else if (!quiet) {
+      setView(res.status === 401 ? { kind: 'signedOut' } : { kind: 'error' });
+      if (res.status !== 401) track('feature_error', { feature: 'community', reason: failureReason(res.code) });
+    }
+  }, [observe]);
+
   useEffect(() => { void load(); }, [load]);
+
+  // While an invite is open, re-check quietly when the visitor comes back from Telegram.
+  const awaitingJoin = view.kind === 'ready' && view.status.memberships.some(m => m.status === 'invited');
+  useEffect(() => {
+    if (!awaitingJoin) return;
+    const refresh = () => { if (document.visibilityState === 'visible') void load(true); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [awaitingJoin, load]);
 
   const requestInvite = async (chat: CommunityChat) => {
     setPending(chat);
@@ -106,6 +136,8 @@ export const CommunityAccess: React.FC<CommunityAccessProps> = ({ locale }) => {
     setPending(null);
     if (res.ok) {
       const invite = res.data;
+      observe([invite]);
+      track('community_invite_requested', { chat });
       setView(v => (v.kind === 'ready'
         ? { kind: 'ready', status: { ...v.status, memberships: [invite, ...v.status.memberships.filter(m => m.id !== invite.id)] } }
         : v));
@@ -116,6 +148,7 @@ export const CommunityAccess: React.FC<CommunityAccessProps> = ({ locale }) => {
         : res.code === 'community_unconfigured' ? s.unconfigured
           : res.status === 401 ? s.signIn : s.failed;
     setMessages(m => ({ ...m, [chat]: message }));
+    if (res.code !== 'already_joined') track('feature_error', { feature: 'community_invite', reason: failureReason(res.code) });
     if (res.code === 'already_joined') void load();
   };
 
