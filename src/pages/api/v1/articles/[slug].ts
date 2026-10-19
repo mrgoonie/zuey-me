@@ -3,6 +3,8 @@ import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../li
 import { deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, toWriteReceipt, updateArticle, runtimeWaitUntil } from '../../../../lib/blocks/articles';
 import { localeParam } from '../../../../lib/blocks/params';
 import { requireAdminActor } from '../../../../lib/taxonomy/admin';
+import { idempotentJson } from '../../../../lib/idempotency/rest';
+import { withoutIdempotencyKey } from '../../../../lib/idempotency/store';
 
 /**
  * One edition of a published article (?lang=, default primary), paywalled for non-entitled viewers.
@@ -36,9 +38,11 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
     const { actor } = await requireAdminActor(request, env);
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
-    const input = parseArticleInput(body, 'update');
-    const rec = await updateArticle(env.DB, params.slug ?? '', input, body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
-    return jsonOk({ ...toSummary(rec), receipt: toWriteReceipt(rec, input), document: rec.draft });
+    return await idempotentJson({ request, d1: env.DB, actor, operation: 'article_update', params: { slug: params.slug }, body }, async () => {
+      const input = parseArticleInput(withoutIdempotencyKey(body), 'update');
+      const rec = await updateArticle(env.DB, params.slug ?? '', input, body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
+      return { ...toSummary(rec), receipt: toWriteReceipt(rec, input), document: rec.draft };
+    });
   } catch (err) {
     return errorResponse(err);
   }
@@ -49,8 +53,10 @@ export const DELETE: APIRoute = async ({ params, request, locals }) => {
   const env = locals.runtime?.env ?? {};
   try {
     const { actor } = await requireAdminActor(request, env);
-    await deleteArticle(env.DB, params.slug ?? '', { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
-    return jsonOk({ deleted: true });
+    return await idempotentJson({ request, d1: env.DB, actor, operation: 'article_delete', params: { slug: params.slug } }, async () => {
+      await deleteArticle(env.DB, params.slug ?? '', { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
+      return { deleted: true };
+    });
   } catch (err) {
     return errorResponse(err);
   }
