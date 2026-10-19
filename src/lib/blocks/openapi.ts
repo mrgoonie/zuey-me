@@ -42,6 +42,7 @@ export const BLOCK_SCHEMA_NOTES = [
 ];
 
 const localeEnum = { type: 'string', enum: [...LOCALES] };
+const responseMode = { type: 'string', enum: ['full', 'summary'], description: 'summary: answer with the receipt (document_blocks, content_hash) instead of echoing the document' };
 const publicTag = { type: 'object', properties: { id: { type: 'string' }, slug: { type: 'string' }, name: { type: 'string' } } };
 const publicLabel = {
   type: 'object',
@@ -183,6 +184,7 @@ export const articlesOpenApi: OpenApiFragment = {
         tags: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 40 }, description: 'Topic tag ids, slugs, aliases or names; unknown names create tags' },
         category: { type: ['string', 'null'], description: 'Category id or slug; null clears' },
         document: ref('ArticleDocument'),
+        response_mode: responseMode,
       },
     },
     ArticleEdition: editionSummary,
@@ -270,12 +272,17 @@ export const articlesOpenApi: OpenApiFragment = {
     '/api/v1/articles/{slug}': {
       get: {
         tags, summary: 'Get one published edition (paywalled) or, for admins, its draft with ?draft=1',
-        parameters: [slugParam, localeQuery, { name: 'draft', in: 'query', schema: { type: 'string', enum: ['1'] } }],
+        description: 'mode narrows the read: summary (metadata plus document_blocks and content_hash), outline (block ids, types, labels), translatables (visible text fields keyed by block_id and field_path, paged by cursor and limit), section (one block with its children, needs block_id) or full (default). Every mode applies the same paywall as full.',
+        parameters: [slugParam, localeQuery, { name: 'draft', in: 'query', schema: { type: 'string', enum: ['1'] } },
+          { name: 'mode', in: 'query', schema: { type: 'string', enum: ['summary', 'outline', 'translatables', 'section', 'full'] } },
+          { name: 'block_id', in: 'query', schema: { type: 'string' }, description: 'mode=section: block to return' },
+          { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'mode=translatables: next_cursor of the previous page' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500 }, description: 'mode=translatables: page size (default 100)' }],
         responses: { '200': ok('Article', ref('Article')), '404': notFound, ...errorResponses },
       },
       put: {
         tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
-        requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' } } }] }) },
+        requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' }, response_mode: responseMode } }] }) },
         responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', { allOf: [ref('Article'), { type: 'object', required: ['receipt'], properties: { receipt: ref('WriteReceipt') } }] }), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
       delete: {
@@ -287,11 +294,19 @@ export const articlesOpenApi: OpenApiFragment = {
       post: {
         tags, summary: 'Publish one edition draft (locale, default primary)', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['expected_revision', 'confirm'], properties: {
-          expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum,
+          expected_revision: { type: 'integer' }, confirm: { type: 'boolean', const: true }, locale: localeEnum, response_mode: responseMode,
           published_at: { type: 'string', format: 'date-time', description: 'Backdate the publish time (not in the future), e.g. archive imports' },
           notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
         } }) },
         responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/verify': {
+      get: {
+        tags, summary: 'Verify the live public pages of every published edition as an anonymous visitor', security: adminSecurity,
+        description: 'Compares HTTP status, title, html lang, canonical, hreflang set, og:image, twitter:image, JSON-LD image, the members-only notice on paid editions and image reachability (site and media.zuey.me only) with the stored editions, and reports the published content hash and the pending new-article email. It does not render widgets.',
+        parameters: [slugParam, { name: 'lang', in: 'query', schema: localeEnum, description: 'Repeatable; default every published edition' }, { name: 'images', in: 'query', schema: { type: 'string', enum: ['0'] }, description: '0 skips the image requests' }],
+        responses: { '200': ok('Verification', { type: 'object', properties: { slug: { type: 'string' }, ok: { type: 'boolean' }, checked_at: { type: 'string' }, locales: { type: 'object', additionalProperties: { type: 'object' } }, unpublished_locales: { type: 'array', items: localeEnum }, pending_side_effects: { type: 'object' } } }), '404': notFound, ...errorResponses },
       },
     },
     '/api/v1/articles/notifications/dispatch': {
