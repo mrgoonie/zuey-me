@@ -5,6 +5,7 @@ import { idempotencyKeyProp, runIdempotentTool } from '../idempotency/mcp';
 import type { McpToolModule } from '../mcp/types';
 import { requireDb } from '../taxonomy/common';
 import { MAX_IMAGE_BYTES, deleteMediaAsset, imageBlock, listMediaAssets, storeImage } from './media-asset-store';
+import { reconcileMediaObject } from './media-reconcile';
 import { MAX_INLINE_BYTES, createUploadTicket, decodeBase64Image, importImageFromUrl } from './media-upload-sources';
 
 const MB = 1024 * 1024;
@@ -42,6 +43,21 @@ export const mediaMcpModule: McpToolModule = {
       },
     },
     {
+      name: 'media_reconcile',
+      description: 'Admin: register an image that already exists in the media bucket (e.g. put there by hand) as a managed asset, so article_cover_set and image blocks can use it. Nothing is fetched or guessed: pass its object_key (under articles/) and its sha256; the bytes are read back, re-validated (type, 10 MB cap, hash, optional width/height) and recorded with you as actor. Identical bytes already registered return the existing asset. Prefer media_upload_url / media_import for new files.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          object_key: { type: 'string', description: 'Object key in the bucket, e.g. articles/2026/10/cover.webp' },
+          sha256: { type: 'string', description: 'Lowercase hex SHA-256 of the object bytes' },
+          width: { type: 'integer', minimum: 1, description: 'Expected pixel width; rejected if the image differs' },
+          height: { type: 'integer', minimum: 1, description: 'Expected pixel height; rejected if the image differs' },
+          ...altProp,
+        },
+        required: ['object_key', 'sha256'],
+      },
+    },
+    {
       name: 'media_list',
       description: 'Admin only: list images on the media CDN, newest first, each with a ready image block.',
       inputSchema: {
@@ -66,6 +82,10 @@ export const mediaMcpModule: McpToolModule = {
     if (name === 'media_upload_url') return createUploadTicket(db, ctx.env, siteOrigin(ctx.env, ctx.request), { alt: args.alt, actor });
     if (name === 'media_import') return runIdempotentTool(ctx, actor, name, args, a => importImageFromUrl(db, ctx.env, a.url, { alt: a.alt, actor }));
     if (name === 'media_upload') return runIdempotentTool(ctx, actor, name, args, a => storeImage(db, ctx.env, decodeBase64Image(a.data_base64), { alt: a.alt, actor }));
+    if (name === 'media_reconcile') {
+      const { asset, ...rest } = await reconcileMediaObject(db, ctx.env, args, actor);
+      return { asset, ...rest, block: imageBlock(asset) };
+    }
     if (name === 'media_list') {
       const res = await listMediaAssets(db, { q: typeof args.q === 'string' ? args.q : undefined, limit: optionalNumber(args, 'limit'), page: optionalNumber(args, 'page') });
       return { ...res, items: res.items.map(asset => ({ ...asset, block: imageBlock(asset) })) };

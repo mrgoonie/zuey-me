@@ -16,7 +16,7 @@ function summary(over: Partial<ArticleSummary> = {}): ArticleSummary {
     tags: [], topic_tags: ['AI', 'Security', 'OpenClaw', 'Extra'].map((name, i) => ({ id: `t${i}`, slug: name.toLowerCase(), name })),
     category: null, labels: [], access: 'knowledges', status: 'published', revision: 2, label_revision: 0, published_revision: 2,
     created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', published_at: '2026-10-01T00:00:00Z',
-    has_unpublished_changes: false, available_locales: ['en'], reading_minutes: 9, cover_url: null,
+    has_unpublished_changes: false, available_locales: ['en'], reading_minutes: 9, cover_url: null, cover_asset_id: null, cover_alt: "", social_preview: { mode: "generated_card", asset_id: null },
     ...over,
   } as ArticleSummary;
 }
