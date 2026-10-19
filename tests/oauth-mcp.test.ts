@@ -60,6 +60,7 @@ interface CtxOpts {
   json?: unknown;
   form?: Record<string, string | string[]>;
   params?: Record<string, string>;
+  env?: Partial<RuntimeEnv>;
 }
 
 function makeRequest(opts: CtxOpts): Request {
@@ -80,7 +81,7 @@ function makeRequest(opts: CtxOpts): Request {
 function ctx(opts: CtxOpts): APIContext {
   const request = makeRequest(opts);
   // Handlers only read request/params/locals; a full APIContext is not constructible in tests.
-  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: env() } } };
+  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: { ...env(), ...opts.env } } } };
   return partial as unknown as APIContext;
 }
 
@@ -810,11 +811,47 @@ describe('legacy /api/mcp', () => {
     const list = await body(await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 2, method: 'tools/list' } })));
     const tools = get(list, 'result', 'tools');
     const names = Array.isArray(tools) ? tools.map(t => String(get(t, 'name'))) : [];
-    expect(names).toEqual(expect.arrayContaining(['get_profile', 'update_profile', 'article_list', 'me_keys_list']));
+    expect(names).toEqual(expect.arrayContaining(['get_profile', 'article_list']));
+    expect(names).not.toContain('update_profile');
     const profile = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_profile', arguments: {} } } }));
     expect(profile.status).toBe(200);
     const denied = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'update_profile', arguments: { name: 'x' } } } }));
     expect(denied.status).toBe(401);
+  });
+
+  it('filters tools/list like /mcp: anonymous and member callers never see admin tools', async () => {
+    const listNames = async (headers: Record<string, string> = {}, extraEnv: Partial<RuntimeEnv> = {}): Promise<string[]> => {
+      const res = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, headers, env: extraEnv, json: { jsonrpc: '2.0', id: 1, method: 'tools/list' } }));
+      const tools = get(await body(res), 'result', 'tools');
+      return Array.isArray(tools) ? tools.map(t => String(get(t, 'name'))) : [];
+    };
+    const adminOnly = allMcpTools().map(t => t.name).filter(n => TOOL_ACCESS[n]?.kind === 'admin');
+    expect(adminOnly).toContain('update_profile');
+
+    const anon = await listNames();
+    expect(anon).toContain('get_profile');
+    for (const n of adminOnly) expect(anon).not.toContain(n);
+
+    const lan = await member('lan@example.com');
+    const memberKey = (await createUserKey(d1, lan.userId, { name: 'k', scopes: ['account:read'], expires_in_days: 30 })).secret;
+    const memberNames = await listNames({ Authorization: `Bearer ${memberKey}` });
+    for (const n of adminOnly) expect(memberNames).not.toContain(n);
+
+    const adminKey = (await createApiKey('ops', 'admin', d1)).key;
+    const admin = await listNames({ Authorization: `Bearer ${adminKey}` });
+    for (const n of adminOnly) expect(admin).toContain(n);
+
+    // The dewee service key sees the public tools plus its verifier, and nothing else admin-only.
+    const SERVICE_KEY = 'service-key-'.padEnd(40, 'x');
+    const service = await listNames({ Authorization: `Bearer ${SERVICE_KEY}` }, { CHANNEL_ACCESS_SERVICE_KEY: SERVICE_KEY });
+    expect(service).toContain('channel_access_check');
+    expect(service).not.toContain('update_profile');
+
+    // An admin session that also presents the service key gets every tool exactly once.
+    const boss = await member('boss@example.com');
+    const both = await listNames({ Cookie: boss.cookie, Origin: ORIGIN, Authorization: `Bearer ${SERVICE_KEY}` }, { CHANNEL_ACCESS_SERVICE_KEY: SERVICE_KEY });
+    expect(both).toContain('update_profile');
+    expect(both.filter(n => n === 'channel_access_check')).toHaveLength(1);
   });
 });
 
