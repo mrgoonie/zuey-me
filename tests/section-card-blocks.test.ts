@@ -353,6 +353,136 @@ describe('paywall with sections', () => {
   });
 });
 
+describe('paywall with top-level layouts and toggles', () => {
+  const viewer = { isAdmin: false, entitlements: [] };
+  // Weights: FREE is exactly a third of every document below, so the cut falls right after it.
+  const FREE = 'F'.repeat(150);
+  const SECRETS = ['SECRETY'.repeat(14), 'SECRETW'.repeat(14), 'SECRETZ'.repeat(14)];
+  const cols2 = { base: 1, md: 2, lg: 2 };
+
+  /** Every reader-facing surface built from the paywalled document, plus the teaser email of the source. */
+  function surfacesOf(source: ArticleDocument, kept: ArticleDocument): string[] {
+    const email = renderArticleEmail({
+      locale: 'vi', title: 'Demo', excerpt: 'Tóm tắt', access: 'knowledges', coverUrl: null, document: source,
+      articleUrl: 'https://zuey.me/articles/demo', pricingUrl: 'https://zuey.me/pricing', siteUrl: 'https://zuey.me', mode: 'teaser',
+    });
+    return [
+      JSON.stringify(kept),
+      renderToString(createElement(BlockRenderer, { doc: kept, articleSlug: 'demo' })),
+      documentToMarkdown(kept, { articleUrl: 'https://zuey.me/articles/demo' }),
+      aiDocumentText(kept),
+      documentText(kept),
+      email.html,
+      email.text,
+    ];
+  }
+
+  function expectCut(source: ArticleDocument, hidden: string[] = SECRETS): ArticleDocument {
+    const res = applyPaywall(source, 'knowledges', viewer);
+    expect(res.truncated).toBe(true);
+    expect(validateDocument(res.doc).ok).toBe(true);
+    for (const s of surfacesOf(source, res.doc)) {
+      expect(s).toContain(FREE.slice(0, 40));
+      for (const h of hidden) expect(s).not.toContain(h.slice(0, 14));
+    }
+    return res.doc;
+  }
+
+  it('cuts in the middle of a layout cell and keeps the layout settings', () => {
+    const doc = valid({ version: 1, blocks: [{
+      type: 'layout', variant: 'bento', gap: 'lg', cols: cols2, children: [
+        { span: 2, blocks: [p(FREE), p(SECRETS[0]), p(SECRETS[1])] },
+        { blocks: [p(SECRETS[2])] },
+      ],
+    }] });
+    const kept = expectCut(doc);
+    expect(kept.blocks).toHaveLength(1);
+    expect(kept.blocks[0]).toMatchObject({ type: 'layout', variant: 'bento', gap: 'lg', cols: cols2, children: [{ span: 2, blocks: [{ text: FREE }] }] });
+  });
+
+  it('cuts in the middle of a toggle body and keeps its summary', () => {
+    const doc = valid({ version: 1, blocks: [
+      { type: 'toggle', summary: 'Xem thêm', open: true, blocks: [p(FREE), p(SECRETS[0]), p(SECRETS[1])] },
+      p(SECRETS[2]),
+    ] });
+    const kept = expectCut(doc);
+    const toggle = doc.blocks[0];
+    if (toggle.type !== 'toggle') throw new Error('expected the source toggle');
+    expect(kept.blocks).toEqual([{ ...toggle, blocks: [toggle.blocks[0]] }]);
+  });
+
+  it('splits nested layouts down to the inner cell', () => {
+    const doc = valid({ version: 1, blocks: [{
+      type: 'layout', variant: 'columns', cols: cols2, children: [
+        { blocks: [{ type: 'layout', variant: 'columns', cols: cols2, children: [{ blocks: [p(FREE), p(SECRETS[0])] }, { blocks: [p(SECRETS[1])] }] }] },
+        { blocks: [p(SECRETS[2])] },
+      ],
+    }] });
+    const kept = expectCut(doc);
+    const outer = kept.blocks[0];
+    if (outer?.type !== 'layout') throw new Error('expected the kept outer layout');
+    expect(outer.children).toHaveLength(1);
+    const inner = outer.children[0].blocks[0];
+    if (inner?.type !== 'layout') throw new Error('expected the kept inner layout');
+    expect(inner.children).toHaveLength(1);
+    expect(inner.children[0].blocks.map(b => (b.type === 'paragraph' ? b.text : b.type))).toEqual([FREE]);
+  });
+
+  it('splits a toggle that holds a layout (a stored document the validator would now reject)', () => {
+    const doc: ArticleDocument = { version: 1, blocks: [
+      { id: 't', type: 'toggle', summary: 'Mở', blocks: [{
+        id: 'l', type: 'layout', variant: 'columns', cols: cols2, children: [
+          { blocks: [{ id: 'f', type: 'paragraph', text: FREE }, { id: 'y', type: 'paragraph', text: SECRETS[0] }] },
+          { blocks: [{ id: 'w', type: 'paragraph', text: SECRETS[1] }] },
+        ],
+      }] },
+      { id: 'z', type: 'paragraph', text: SECRETS[2] },
+    ] };
+    const res = applyPaywall(doc, 'knowledges', viewer);
+    expect(res.truncated).toBe(true);
+    for (const s of surfacesOf(doc, res.doc)) {
+      expect(s).toContain(FREE.slice(0, 40));
+      for (const h of SECRETS) expect(s).not.toContain(h.slice(0, 14));
+    }
+    expect(res.outline?.blocks).toBe(3);
+  });
+
+  it('splits a top-level card and drops its footer when part of the body is withheld', () => {
+    const doc = valid({ version: 1, blocks: [
+      { type: 'card', title: 'Thẻ', footer: 'SECRETFOOTER', blocks: [p(FREE), p(SECRETS[0]), p(SECRETS[1])] },
+      p(SECRETS[2]),
+    ] });
+    const kept = expectCut(doc, [...SECRETS, 'SECRETFOOTER']);
+    expect(kept.blocks[0]).toMatchObject({ type: 'card', title: 'Thẻ' });
+  });
+
+  it('lists headings withheld inside layouts and toggles in the outline, never their text', () => {
+    const doc = valid({ version: 1, blocks: [
+      p(FREE + 'F'.repeat(20)),
+      { type: 'toggle', summary: 'SECRETSUMMARY', blocks: [{ type: 'heading', level: 2, text: 'Chương kín' }, p(SECRETS[0])] },
+      { type: 'layout', variant: 'columns', cols: cols2, children: [{ blocks: [p(SECRETS[1])] }, { blocks: [p(SECRETS[2])] }] },
+    ] });
+    const res = applyPaywall(doc, 'knowledges', viewer);
+    expect(res.outline?.headings).toEqual([{ level: 2, text: 'Chương kín' }]);
+    expect(res.outline?.blocks).toBe(4);
+    expect(JSON.stringify(res)).not.toContain('SECRETSUMMARY');
+  });
+
+  it('keeps an all-empty layout as one unit at the top level and inside a section card', () => {
+    const empty = { type: 'layout', variant: 'columns', cols: cols2, children: [{ blocks: [] }, { blocks: [] }] };
+    const top = valid({ version: 1, blocks: [empty, p(FREE), p(SECRETS[0])] });
+    const topRes = applyPaywall(top, 'knowledges', viewer);
+    expect(topRes.doc.blocks.map(b => b.type)).toEqual(['layout', 'paragraph']);
+
+    const card = { type: 'section', width: 'wide', surface: 'none', blocks: [{ type: 'card', title: 'Thẻ rỗng', footer: 'Chân thẻ', blocks: [empty] }] };
+    const kept = applyPaywall(valid({ version: 1, blocks: [card, p(SECRETS[0])] }), 'knowledges', viewer);
+    expect(kept.doc.blocks[0]).toMatchObject({ type: 'section', blocks: [{ type: 'card', title: 'Thẻ rỗng', footer: 'Chân thẻ' }] });
+    const withheld = applyPaywall(valid({ version: 1, blocks: [p(FREE), card] }), 'knowledges', viewer);
+    expect(withheld.outline?.blocks).toBe(1);
+    expect(JSON.stringify(withheld.doc)).not.toContain('Thẻ rỗng');
+  });
+});
+
 describe('block registry', () => {
   it('defines every block type exactly once, in order', () => {
     for (const t of BLOCK_TYPES) expect(BLOCK_REGISTRY[t].type).toBe(t);
