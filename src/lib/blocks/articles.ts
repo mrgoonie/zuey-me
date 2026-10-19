@@ -615,7 +615,7 @@ function scheduleOgRefresh(db: D1DatabaseLike, articleId: string, slug: string, 
   })().catch(err => console.error('Share image refresh failed:', err instanceof Error ? err.message : 'unknown')));
 }
 
-function firstImage(blocks: Block[]): string | null {
+export function firstImage(blocks: Block[]): string | null {
   let url: string | null = null;
   walkBlocks(blocks, b => {
     if (url) return;

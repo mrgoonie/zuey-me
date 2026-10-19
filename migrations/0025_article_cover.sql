@@ -8,3 +8,4 @@ ALTER TABLE article_editions ADD COLUMN cover_alt TEXT NOT NULL DEFAULT '';
 
 -- upload | import | reconcile: how the registry row came to exist.
 ALTER TABLE media_assets ADD COLUMN origin TEXT NOT NULL DEFAULT 'upload';
+UPDATE media_assets SET origin = 'import' WHERE source_url IS NOT NULL;

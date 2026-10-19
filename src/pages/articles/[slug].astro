@@ -7,7 +7,7 @@ import { AI_COPY } from '../../components/ai/copy';
 import { TagBadges } from '../../components/knowledge/TagBadges';
 import { EntitlementIcon } from '../../components/knowledge/EntitlementIcon';
 import { formatKnowledgeDate, knowledgeStrings } from '../../components/knowledge/strings';
-import { getArticleView, resolveViewer } from '../../lib/blocks/articles';
+import { firstImage, getArticleView, resolveViewer } from '../../lib/blocks/articles';
 import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
 import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
@@ -54,6 +54,8 @@ if (view && !preview) Astro.response.headers.set('Link', linkHeader(canonical, a
 const socialAsset = view && !preview && d1 ? await socialPreviewImage(d1, view.social_preview, view.cover_asset_id).catch(() => null) : null;
 const coverAsset = view && d1 && view.cover_asset_id ? await getMediaAsset(d1, view.cover_asset_id).catch(() => null) : null;
 const coverAlt = view ? view.cover_alt || coverAsset?.alt || view.title : '';
+// The cover is shown above the body unless the body's first image is that same image.
+const showCover = Boolean(coverAsset && view && coverAsset.url !== firstImage(view.document.blocks));
 const shareImage = socialAsset?.url ?? (view && !preview ? `${origin}${(await articleOgImage(view)).path}` : undefined);
 const shareImageAlt = socialAsset ? (view?.social_preview.mode === 'cover' ? coverAlt : socialAsset.alt || view?.title) : view?.title;
 const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, shareImage ?? 'https://zuey.me/og.png', socialAsset?.url)) : null;
@@ -133,7 +135,7 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
             )}
           </header>
 
-          {coverAsset && (
+          {showCover && coverAsset && (
             <img
               src={coverAsset.url} alt={coverAlt} width={coverAsset.width ?? undefined} height={coverAsset.height ?? undefined}
               class="mb-7 w-full rounded-2xl border border-stone-200 object-cover" style="aspect-ratio:16/9" fetchpriority="high" decoding="async"
