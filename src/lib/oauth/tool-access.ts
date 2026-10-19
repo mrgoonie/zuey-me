@@ -84,6 +84,7 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   article_cover_set: ADMIN,
   article_revisions: ADMIN,
   article_tags_set: ADMIN,
+  article_verify_public: ADMIN,
   article_labels_set: ADMIN,
   article_labels_revert: ADMIN,
   // Knowledge search & taxonomy (search filters paid text by the caller inside the tool)
