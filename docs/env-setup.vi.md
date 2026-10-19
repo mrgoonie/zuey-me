@@ -56,7 +56,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 
 ## 2b. Ảnh bài viết (media CDN)
 
-1. Chạy migration `0024_media_assets.sql` (xem mục 0).
+1. Chạy migration `0024_media_assets.sql` và `0026_article_cover.sql` (xem mục 0).
 2. R2: bucket public `zuey-media`, custom domain `media.zuey.me` (đã có sẵn trong account Cloudflare của zuey.me). Binding `MEDIA` khai báo trong `wrangler.toml`. Thiếu binding thì các API ảnh trả `503 media_unconfigured`. Ảnh bài viết nằm dưới prefix `articles/`; các prefix `blog/`, `research/` có sẵn không bị đụng tới.
 3. Đưa ảnh lên (chỉ admin, API key read-only không dùng được):
    - Agent có shell: MCP `media_upload_url` (hoặc `POST /api/v1/admin/media/upload-url`) trả về URL dùng một lần, hạn 15 phút. Upload bằng `curl --upload-file ./anh.png '<upload_url>'`. File không phải ảnh hợp lệ thì bị từ chối mà URL vẫn dùng lại được.
@@ -65,7 +65,9 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
    - Kết nối qua `/mcp` (ChatGPT, Claude…): các tool media chỉ hiện trong `tools/list` khi token OAuth có scope `admin`. Scope này chỉ được cấp cho email nằm trong `ADMIN_EMAILS` và phải được tick ở màn hình đồng ý. Connector đã kết nối trước đó (hoặc chỉ xin scope member) sẽ không thấy tool media: ngắt kết nối ở `/account`, kết nối lại và tick `admin`. `tools/list` được cache tối đa 5 phút phía client.
 4. Kết quả có `block` (block `image` kèm `width`/`height`). Chèn block này vào document của bài viết rồi gọi `article_update`. Cùng một file upload lại sẽ trả về ảnh đã có, không tạo bản sao.
 5. Xoá: MCP `media_delete` hoặc `DELETE /api/v1/admin/media/{id}`. Nếu bản nháp hoặc bản đã xuất bản của bài viết hay bài học, hoặc ảnh bìa khoá học, còn dùng ảnh thì bị từ chối (`409 media_in_use`). Các revision cũ không được kiểm tra. Ảnh được cache `immutable` một năm, nên cache CDN và trình duyệt có thể vẫn hiện ảnh đã xoá.
-6. Ảnh trong bài Knowledges vẫn public theo URL (key là hash khó đoán). Paywall chỉ bảo vệ phần chữ, vì email và ảnh chia sẻ mạng xã hội cần URL ảnh public.
+6. Ảnh đã nằm sẵn trong bucket nhưng chưa có bản ghi (ví dụ đẩy tay lên R2): MCP `media_reconcile` hoặc `POST /api/v1/admin/media/reconcile` với `{"object_key": "articles/…", "sha256": "…", "width"?, "height"?}`. Server đọc lại object từ R2, kiểm tra loại ảnh, giới hạn 10 MB, sha256 và kích thước, rồi ghi `media_assets` với `origin = reconcile` và actor. Không fetch URL ngoài, không đoán key; key phải nằm dưới `articles/`. Cùng bytes đã đăng ký thì trả lại asset cũ.
+7. Ảnh bìa bài viết: MCP `article_cover_set` hoặc `PUT /api/v1/articles/{slug}/cover` nhận `asset_id` (không nhận đường dẫn R2) và `expected_revision`. Một asset dùng chung cho mọi bản ngôn ngữ, mỗi bản có alt riêng (`alt`, `alts`), không phải viết lại nội dung bài. Bản đã xuất bản đổi ngay; bản nháp nhận ảnh bìa khi xuất bản. Không đặt ảnh bìa thì vẫn dùng ảnh đầu tiên của phần public như trước. `social_preview.mode` quyết định `og:image`/Twitter/JSON-LD: `generated_card` (mặc định, thẻ chia sẻ tự render), `cover` (ảnh bìa) hoặc `custom_asset` (ảnh riêng, kèm `asset_id`). Ảnh đang làm bìa hoặc ảnh chia sẻ thì `media_delete` bị từ chối.
+8. Ảnh trong bài Knowledges vẫn public theo URL (key là hash khó đoán). Paywall chỉ bảo vệ phần chữ, vì email và ảnh chia sẻ mạng xã hội cần URL ảnh public.
 
 ## 3. Google Calendar / Meet
 
