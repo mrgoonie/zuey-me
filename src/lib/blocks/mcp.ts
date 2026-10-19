@@ -11,6 +11,7 @@ import {
   parseArticleInput, publishArticle, setTagsForArticle, toSummary, toWriteReceipt, updateArticle,
 } from './articles';
 import { discoverArticles } from './discovery';
+import { applyLocalization, prepareLocalization } from './localization-service';
 import { idempotencyKeyProp, runIdempotentTool } from '../idempotency/mcp';
 import { MAX_ARTICLE_PAGE } from './pagination';
 import { documentToMarkdown } from './markdown';
@@ -199,6 +200,16 @@ export const articlesMcpModule: McpToolModule = {
       name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email).',
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, ...responseModeProp, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision', 'confirm'] },
     },
+    {
+      name: 'article_localization_prepare',
+      description: 'Admin: translatable manifest of one edition (default: the primary one) for the target locales: entries {key, block_id, field_path, source_text, source_hash, constraints}, what was skipped and why, the state of each target locale (missing, unmanaged, current, stale; edited_since_apply) and source_hash. Translate only source_text and send the results to article_localization_apply; nothing else of the document travels.',
+      inputSchema: { type: 'object', properties: { ...slugProp, locales: { type: 'array', items: { type: 'string', enum: [...LOCALES] }, description: 'Target locales (default: every locale except the source)' }, source_locale: { type: 'string', enum: [...LOCALES] }, source_revision: { type: 'integer', description: 'Optional: 409 revision_conflict when the article moved on' } }, required: ['slug'] },
+    },
+    {
+      name: 'article_localization_apply',
+      description: 'Admin: merge translations {manifest key: text} into a copy of the source blocks and save them as the draft of one target locale (not published). Requires source_hash from prepare (409 stale_source otherwise). Blocking errors (missing or unknown keys, changed links/code/tokens, invalid diagram or widget text, structure change) write nothing; the report lists coverage, unchanged text, glossary and number/price/date/legal checks. dry_run validates only. A hand-written or hand-edited target edition needs overwrite: true.',
+      inputSchema: { type: 'object', properties: { ...slugProp, locale: { type: 'string', enum: [...LOCALES] }, source_locale: { type: 'string', enum: [...LOCALES] }, source_hash: { type: 'string' }, source_hashes: { type: 'object', description: 'Optional per-key source_hash values from prepare; names the changed keys when the source is stale' }, translations: { type: 'object', description: 'Manifest key to translated text; every key of the manifest is required', additionalProperties: { type: 'string' } }, glossary: { type: 'object', description: 'Optional {source term: required translation} checks', additionalProperties: { type: 'string' } }, expected_revision: { type: 'integer', description: 'Optional; defaults to the revision read by this call' }, overwrite: { type: 'boolean' }, dry_run: { type: 'boolean' } }, required: ['slug', 'locale', 'source_hash', 'translations'] },
+    },
     { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp, ...idempotencyKeyProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     {
@@ -281,6 +292,14 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
       // Clients holding a stale tool schema forward unknown flags as strings.
       if (args.summary_only === true || args.summary_only === 'true' || responseMode === 'summary') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
       return { ...toSummary(rec), document: rec.published };
+    }
+    case 'article_localization_prepare': {
+      await ctx.requireAdmin();
+      return prepareLocalization(d1, requireSlug(args), args);
+    }
+    case 'article_localization_apply': {
+      const actor = await mcpAdminActor(ctx);
+      return applyLocalization(d1, requireSlug(args), args, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
     }
     case 'article_delete': {
       const actor = await mcpAdminActor(ctx);

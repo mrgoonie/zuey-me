@@ -84,6 +84,8 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   article_cover_set: ADMIN,
   article_revisions: ADMIN,
   article_tags_set: ADMIN,
+  article_localization_prepare: ADMIN,
+  article_localization_apply: ADMIN,
   article_verify_public: ADMIN,
   article_labels_set: ADMIN,
   article_labels_revert: ADMIN,
