@@ -1,10 +1,12 @@
 /**
  * Interactive artifacts in AI replies: ```zuey-interactive fences holding JSON
  * {title, html, css, js, height?, caption?}. Every candidate is validated by the shared
- * article block schema, so an artifact can later be attached to a draft unchanged.
+ * article block rules, so an artifact can later be attached to a draft unchanged. Only the interactive
+ * definition is loaded (not the full block registry), which keeps the lazy Zuey AI panel small.
  */
 import type { InteractiveBlock } from '../blocks/schema';
-import { validateDocument } from '../blocks/validate';
+import { interactive } from '../blocks/definitions/interactive';
+import { validateWith } from '../blocks/validator-core';
 
 export const INTERACTIVE_FENCE = 'zuey-interactive';
 export const MAX_ARTIFACTS_PER_MESSAGE = 3;
@@ -21,10 +23,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Validates one untrusted interactive block through the shared document validator. */
+/** Validates one untrusted interactive block through the shared document validator (interactive blocks only). */
 export function validateInteractiveBlock(input: unknown): { ok: true; block: InteractiveBlock } | { ok: false; errors: string[] } {
   if (!isRecord(input)) return { ok: false, errors: ['artifact must be a JSON object'] };
-  const res = validateDocument({ version: 1, blocks: [{ ...input, type: 'interactive', id: undefined }] });
+  const res = validateWith(type => (type === 'interactive' ? interactive : undefined), { version: 1, blocks: [{ ...input, type: 'interactive', id: undefined }] });
   if (!res.ok) return { ok: false, errors: res.errors.map(e => `${e.path.replace('$.blocks[0]', 'artifact')} ${e.message}`) };
   const block = res.doc.blocks[0];
   if (!block || block.type !== 'interactive') return { ok: false, errors: ['artifact is not an interactive block'] };

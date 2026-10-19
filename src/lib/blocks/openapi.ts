@@ -3,132 +3,28 @@ import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
 import { SORTS } from './articles';
 import { MAX_ARTICLE_PAGE } from './pagination';
-import {
-  BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, EMBED_PROVIDERS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS,
-} from './schema';
-import { ICON_ALIASES, ICON_ALIGNS, ICON_NAMES, ICON_PIXELS, ICON_SIZES, ICON_TONES } from './icons';
+import { BLOCK_TYPES, LIMITS } from './schema';
+import { ICON_NAMES } from './icons';
+import { blockDefinitions } from './registry';
+import { blockId, colsInt } from './definitions/schema-fragments';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
-const inline = { type: 'string', maxLength: LIMITS.text, description: 'Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, `code`, [label](https://...) — no HTML' };
-const short = { type: 'string', maxLength: LIMITS.shortText };
-const id = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: 'Unique within the document; generated when omitted' };
-const httpsUrl = { type: 'string', format: 'uri', pattern: '^https://', maxLength: LIMITS.url };
-const colsInt = { type: 'integer', minimum: 1, maximum: LIMITS.layoutColsMax };
-/** Natural pixel size; send both or neither. Readers reserve the box before the image loads (no layout shift). */
-const imageSize = {
-  width: { type: 'integer', minimum: 1, maximum: LIMITS.imagePixels, description: 'Natural width in pixels; requires height' },
-  height: { type: 'integer', minimum: 1, maximum: LIMITS.imagePixels, description: 'Natural height in pixels; requires width' },
-};
-const imageSizeTogether = { width: ['height'], height: ['width'] };
-const iconName = {
-  type: 'string',
-  enum: [...ICON_NAMES, ...Object.keys(ICON_ALIASES)],
-  description: 'Curated Lucide icon name (https://lucide.dev/icons). Aliases are accepted and stored as the canonical name; anything else is rejected.',
-};
 
-/** Example icon block (also returned by the block_schema MCP tool). */
-export const ICON_BLOCK_EXAMPLE = { type: 'icon', name: 'lightbulb', size: 'lg', tone: 'accent', label: 'Ý tưởng chính', align: 'center' } as const;
-/** Example callout with an icon (also returned by the block_schema MCP tool). */
-export const CALLOUT_ICON_EXAMPLE = { type: 'callout', tone: 'tip', icon: 'rocket', text: 'Deploy **after** the tests pass.' } as const;
-
-function block(type: string, properties: Record<string, unknown>, required: string[] = []) {
-  return {
-    type: 'object',
-    required: ['type', ...required],
-    properties: { id, type: { type: 'string', const: type }, ...properties },
-  };
-}
+export { CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE } from './definitions/text';
+export { CARD_EXAMPLE, SECTION_EXAMPLE } from './definitions/containers';
 
 const schemaName = (type: string) => `Block${type.charAt(0).toUpperCase()}${type.slice(1)}`;
 
-/** JSON Schema for every block type (OpenAPI 3.1 dialect). Also served to agents via the block_schema MCP tool. */
-export const blockSchemas: Record<string, unknown> = {
-  BlockParagraph: block('paragraph', { text: inline }, ['text']),
-  BlockHeading: block('heading', { level: { type: 'integer', enum: [1, 2, 3] }, text: short }, ['level', 'text']),
-  BlockList: block('list', { style: { type: 'string', enum: ['bullet', 'number'] }, items: { type: 'array', minItems: 1, maxItems: LIMITS.listItems, items: inline } }, ['items']),
-  BlockChecklist: block('checklist', {
-    items: { type: 'array', minItems: 1, maxItems: LIMITS.listItems, items: { type: 'object', required: ['text'], properties: { text: inline, checked: { type: 'boolean' } } } },
-  }, ['items']),
-  BlockQuote: block('quote', { text: inline, cite: short }, ['text']),
-  BlockCallout: block('callout', {
-    tone: { type: 'string', enum: [...CALLOUT_TONES] },
-    text: inline,
-    icon: { ...iconName, description: 'Optional allowlisted icon replacing the tone glyph' },
-  }, ['text']),
-  BlockCode: block('code', { language: { type: 'string', maxLength: 40 }, code: { type: 'string', maxLength: LIMITS.code } }, ['code']),
-  BlockDivider: block('divider', {}),
-  BlockImage: { ...block('image', { url: httpsUrl, alt: short, caption: short, ...imageSize }, ['url']), dependentRequired: imageSizeTogether },
-  BlockEmbed: block('embed', {
-    url: httpsUrl,
-    provider: { type: 'string', enum: [...EMBED_PROVIDERS], description: 'Detected from the URL when omitted. When sent it must equal the detected provider, or be `generic` to show a plain link; any other value is rejected with 422 invalid_document. Rendered as a centred embed that loads when scrolled into view (readers can switch to click-to-load per device), with a link to the original URL.' },
-    caption: short,
-  }, ['url']),
-  BlockTable: block('table', {
-    headers: { type: 'array', minItems: 1, maxItems: LIMITS.tableColumns, items: short },
-    rows: { type: 'array', maxItems: LIMITS.tableRows, items: { type: 'array', items: inline, description: 'Same length as headers' } },
-  }, ['headers', 'rows']),
-  BlockChart: block('chart', {
-    kind: { type: 'string', enum: [...CHART_KINDS] },
-    title: short,
-    labels: { type: 'array', minItems: 1, maxItems: LIMITS.chartLabels, items: { type: 'string', maxLength: 120 } },
-    series: {
-      type: 'array', minItems: 1, maxItems: LIMITS.chartSeries,
-      items: { type: 'object', required: ['name', 'data'], properties: { name: { type: 'string', maxLength: 120 }, data: { type: 'array', items: { type: 'number' }, description: 'Same length as labels' } } },
-    },
-  }, ['kind', 'labels', 'series']),
-  BlockDiagram: block('diagram', { syntax: { type: 'string', const: 'mermaid' }, source: { type: 'string', maxLength: LIMITS.mermaid }, caption: short }, ['source']),
-  BlockSurvey: block('survey', {
-    question: short,
-    options: {
-      type: 'array', minItems: LIMITS.surveyOptionsMin, maxItems: LIMITS.surveyOptionsMax,
-      items: { type: 'object', required: ['label'], properties: { id, label: { type: 'string', maxLength: 200 } } },
-    },
-    allowMultiple: { type: 'boolean', default: false },
-  }, ['question', 'options']),
-  BlockLayout: block('layout', {
-    variant: { type: 'string', enum: [...LAYOUT_VARIANTS] },
-    cols: { type: 'object', required: ['base', 'md', 'lg'], properties: { base: colsInt, md: colsInt, lg: colsInt }, description: 'Columns at <768px, ≥768px, ≥1024px' },
-    gap: { type: 'string', enum: [...LAYOUT_GAPS] },
-    children: { type: 'array', minItems: 1, maxItems: LIMITS.layoutChildren, items: ref('LayoutChild') },
-  }, ['cols', 'children']),
-  BlockInteractive: block('interactive', {
-    title: short,
-    html: { type: 'string', maxLength: LIMITS.interactiveField, description: 'Body HTML' },
-    css: { type: 'string', maxLength: LIMITS.interactiveField },
-    js: { type: 'string', maxLength: LIMITS.interactiveField, description: 'Runs in a sandboxed opaque-origin iframe with CSP connect-src none; call zuey.fetch(url) for allowlisted GET requests via the server proxy' },
-    height: { type: 'integer', minimum: LIMITS.interactiveHeightMin, maximum: LIMITS.interactiveHeightMax },
-    caption: short,
-  }, ['title']),
-  BlockMath: block('math', { tex: { type: 'string', maxLength: LIMITS.math, description: 'TeX source; shown as accessible source text' }, caption: short }, ['tex']),
-  BlockGallery: block('gallery', {
-    images: {
-      type: 'array', minItems: 1, maxItems: LIMITS.galleryImages,
-      items: { type: 'object', required: ['url'], properties: { url: httpsUrl, alt: short, caption: short, ...imageSize }, dependentRequired: imageSizeTogether },
-    },
-    caption: short,
-  }, ['images']),
-  BlockAudio: block('audio', { url: httpsUrl, title: short, caption: short }, ['url']),
-  BlockVideo: block('video', { url: httpsUrl, poster: httpsUrl, title: short, caption: short }, ['url']),
-  BlockFile: block('file', { url: httpsUrl, name: short, sizeBytes: { type: 'integer', minimum: 0 }, caption: short }, ['url', 'name']),
-  BlockBookmark: block('bookmark', {
-    url: httpsUrl, title: short, description: { type: 'string', maxLength: 1000 }, image: httpsUrl, siteName: { type: 'string', maxLength: 120 },
-  }, ['url']),
-  BlockToggle: block('toggle', {
-    summary: short,
-    open: { type: 'boolean', default: false },
-    blocks: { type: 'array', maxItems: LIMITS.toggleChildren, items: ref('Block'), description: 'May not contain toggle or layout blocks' },
-  }, ['summary', 'blocks']),
-  BlockIcon: {
-    ...block('icon', {
-      name: iconName,
-      size: { type: 'string', enum: [...ICON_SIZES], default: 'md', description: `Pixels: ${ICON_SIZES.map(s => `${s} ${ICON_PIXELS[s]}`).join(', ')}` },
-      tone: { type: 'string', enum: [...ICON_TONES], default: 'default' },
-      label: { type: 'string', maxLength: LIMITS.iconLabel, description: 'Accessible name for an icon that carries meaning (role="img"); omit for a decorative icon (aria-hidden). Also the Markdown/text fallback.' },
-      align: { type: 'string', enum: [...ICON_ALIGNS], default: 'start' },
-    }, ['name']),
-    examples: [ICON_BLOCK_EXAMPLE],
-  },
-};
+/** JSON Schema for every block type (OpenAPI 3.1 dialect), from the block registry. Also served to agents via the block_schema MCP tool. */
+export const blockSchemas: Record<string, unknown> = Object.fromEntries(blockDefinitions().map(def => {
+  const { properties, required = [], extra = {} } = def.schema;
+  return [schemaName(def.type), {
+    type: 'object',
+    required: ['type', ...required],
+    properties: { id: blockId, type: { type: 'string', const: def.type }, ...properties },
+    ...extra,
+  }];
+}));
 
 export const BLOCK_SCHEMA_NOTES = [
   `Layouts may nest at most ${LIMITS.layoutDepth} levels (a layout inside a layout is fine, a third level is rejected).`,
@@ -137,8 +33,11 @@ export const BLOCK_SCHEMA_NOTES = [
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
   `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,
   'Toggle blocks may contain any block except toggle and layout.',
+  `Section blocks are top-level only (never inside a layout, toggle or card) and may contain any block except section (at most ${LIMITS.sectionChildren}). width picks the reading lane on the article page (prose, wide or full); surface and padding style the band; anchor is an optional unique slug for #links. The paywall counts a section's children one by one, like those of cards, toggles and layout cells.`,
+  `Card blocks may appear anywhere except inside another card (body at most ${LIMITS.cardChildren} blocks, no section or card). A card needs a title, an image or at least one block; level (2, 3 or 4, default 3) sets the heading level of its title; footer is inline text for links.`,
   `Icon blocks and callout.icon accept only the ${ICON_NAMES.length} curated icon names (or their aliases); block_schema returns them under icons. Add label when the icon carries meaning; omit it for decoration.`,
   'Inline text supports **bold**, *italic*, ~~strike~~, ==highlight==, `code` and [label](https://...).',
+  'Host images on https://media.zuey.me instead of hotlinking: media_upload_url (file on disk, upload with curl), media_import (public URL) or media_upload (small base64) return an image block with width and height to insert as is.',
 ];
 
 const localeEnum = { type: 'string', enum: [...LOCALES] };
@@ -233,14 +132,14 @@ export const articlesOpenApi: OpenApiFragment = {
           truncated: { type: 'boolean', description: 'True when the paid remainder was withheld for this viewer' },
           locked_outline: {
             type: 'object',
-            description: 'Only when truncated: the withheld top-level headings (plain text + level) and the withheld size. No other withheld text is returned.',
+            description: 'Only when truncated: the withheld headings (plain text + level) and the withheld size. No other withheld text is returned.',
             required: ['headings', 'blocks', 'words'],
             properties: {
               headings: {
                 type: 'array',
                 items: { type: 'object', required: ['level', 'text'], properties: { level: { type: 'integer', enum: [1, 2, 3] }, text: { type: 'string' } } },
               },
-              blocks: { type: 'integer', description: 'Number of withheld top-level blocks' },
+              blocks: { type: 'integer', description: 'Number of withheld blocks (blocks inside sections, cards, toggles and layout cells count one by one)' },
               words: { type: 'integer', description: 'Approximate number of withheld words' },
             },
           },

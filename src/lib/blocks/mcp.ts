@@ -15,7 +15,7 @@ import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
 import type { ArticleDocument } from './schema';
 import { BLOCK_TYPES, LIMITS } from './schema';
-import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE, blockSchemas } from './openapi';
+import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
 import { iconCatalog } from './icons';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
@@ -148,7 +148,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp }, required: ['slug', 'title'] },
     },
     {
-      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated.',
+      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale; 409 slug_taken when the new slug is used). Translations are written by people, never generated.',
       inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
     },
     {
@@ -181,7 +181,7 @@ export const articlesMcpModule: McpToolModule = {
       case 'block_schema':
         return {
           version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas,
-          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE },
+          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE, section: SECTION_EXAMPLE, card: CARD_EXAMPLE },
         };
       case 'article_list': {
         const query = discoveryFromArgs(args);

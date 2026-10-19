@@ -14,10 +14,11 @@ import { referralsOpenApi } from '../referrals/openapi';
 import { videosOpenApi } from '../videos/openapi';
 import { channelAccessOpenApi } from '../channel-access/openapi';
 import { analyticsOpenApi } from '../analytics/openapi';
+import { mediaOpenApi } from '../media/media-openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
 export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [
   readsOpenApi, coursesOpenApi, coursesAdminOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
   chatOpenApi, oauthOpenApi, experienceOpenApi, videosOpenApi, referralsOpenApi, promosOpenApi,
-  channelAccessOpenApi, analyticsOpenApi,
+  channelAccessOpenApi, analyticsOpenApi, mediaOpenApi,
 ];

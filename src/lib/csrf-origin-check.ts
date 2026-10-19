@@ -10,7 +10,8 @@ const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 /**
  * Machine endpoints that never honour cookies: MCP + OAuth back-channel + discovery (called cross-origin by
  * browser-based MCP clients) and the token-authorized RFC 8058 one-click unsubscribe that mailbox providers POST
- * as a form without an Origin header.
+ * as a form without an Origin header. One-time media upload URLs are authorized by their token alone, so
+ * `curl --upload-file` (no Content-Type, no Origin) works.
  */
 export function isMachineEndpoint(pathname: string): boolean {
   return pathname === '/mcp'
@@ -18,7 +19,8 @@ export function isMachineEndpoint(pathname: string): boolean {
     || pathname === '/oauth/token'
     || pathname === '/oauth/register'
     || pathname === '/oauth/revoke'
-    || pathname.startsWith('/.well-known/oauth-');
+    || pathname.startsWith('/.well-known/oauth-')
+    || pathname.startsWith('/api/v1/media/uploads/');
 }
 
 function isFormContentType(value: string): boolean {

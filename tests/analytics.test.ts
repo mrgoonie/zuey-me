@@ -784,7 +784,7 @@ describe('privacy page third-party processors', () => {
   });
 
   test('blocks that load from any https host are disclosed in both languages', async () => {
-    const validate = await read('../src/lib/blocks/validate.ts');
+    const validate = await read('../src/lib/blocks/validator-core.ts');
     expect(validate).toContain("protocol === 'https:'");
     const rows = await processorRows();
     expect(rows.vi).toMatch(/name: 'Máy chủ ảnh, media và tệp do tác giả chọn', purpose: '[^']*https:\/\/[^']*', data: '[^']*Địa chỉ IP và user agent/);

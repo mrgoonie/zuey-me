@@ -15,10 +15,10 @@ export interface R2ObjectBodyLike {
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
-/** Minimal shape of a Cloudflare R2 bucket binding used by this app (referral KYC images, private course files). */
+/** Minimal shape of a Cloudflare R2 bucket binding used by this app (referral KYC images, private course files, article media). */
 export interface R2BucketLike {
   get(key: string, options?: { range?: { offset: number; length?: number } }): Promise<R2ObjectBodyLike | null>;
-  put(key: string, value: ReadableStream | ArrayBuffer | Uint8Array | string, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
+  put(key: string, value: ReadableStream | ArrayBuffer | Uint8Array | string, options?: { httpMetadata?: { contentType?: string; cacheControl?: string } }): Promise<unknown>;
   delete(keys: string | string[]): Promise<void>;
 }
 
@@ -29,6 +29,8 @@ export interface RuntimeEnv {
   AI?: WorkersAiLike;
   /** Private R2 bucket with course audio and downloadable files (never public). */
   COURSE_FILES?: R2BucketLike;
+  /** Public R2 bucket `zuey-media` served at https://media.zuey.me (article images uploaded by admins). */
+  MEDIA?: R2BucketLike;
   PUBLIC_SITE_URL?: string;
   /** PostHog project API key (project "Zuey.me"); production builds fall back to the built-in key. */
   PUBLIC_POSTHOG_KEY?: string;

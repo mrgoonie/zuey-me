@@ -605,6 +605,51 @@ describe('/mcp resource server', () => {
     expect(cookieOnly.status).toBe(401);
   });
 
+  it('exposes the admin media tools only to admin principals and keeps the catalogue deterministic', async () => {
+    const MEDIA_TOOLS = ['media_upload_url', 'media_import', 'media_upload', 'media_list', 'media_delete'];
+    // Every media tool the server registers must be classified, so none can be hidden by a missing map entry.
+    const registered = allMcpTools().map(t => t.name).filter(n => n.startsWith('media_'));
+    expect(registered.sort()).toEqual([...MEDIA_TOOLS].sort());
+    for (const n of MEDIA_TOOLS) expect(TOOL_ACCESS[n]).toEqual({ kind: 'admin' });
+
+    const lan = await fullFlow('lan@example.com');
+    const bossMember = await fullFlow('boss@example.com', { scope: 'account:read' });
+    const boss = await fullFlow('boss@example.com', { scope: 'account:read admin', approve: ['account:read', 'admin'] });
+    const adminKey = (await createApiKey('ops', 'admin', d1)).key;
+
+    for (const hidden of [lan.access, bossMember.access]) {
+      const names = await toolNames(hidden);
+      for (const n of MEDIA_TOOLS) expect(names).not.toContain(n);
+    }
+    for (const visible of [boss.access, adminKey]) {
+      const names = await toolNames(visible);
+      for (const n of MEDIA_TOOLS) expect(names).toContain(n);
+    }
+
+    // Same principal class, same bytes: a connector that re-captures gets an identical manifest, in both protocol eras.
+    const a = await mcp('tools/list', {}, { token: boss.access });
+    const b = await mcp('tools/list', {}, { token: adminKey });
+    expect(get(a.body, 'result', 'tools')).toEqual(get(b.body, 'result', 'tools'));
+    const legacy = await mcp('tools/list', {}, { token: boss.access, modern: false });
+    expect(get(legacy.body, 'result', 'tools')).toEqual(get(a.body, 'result', 'tools'));
+    // The catalogue carries a version that matches its content and differs between principal classes.
+    const versionKey = 'me.zuey/toolCatalogVersion';
+    const adminVersion = get(a.body, 'result', '_meta', versionKey);
+    expect(adminVersion).toMatch(/^[0-9a-f]{16}$/);
+    expect(get(legacy.body, 'result', '_meta', versionKey)).toBe(adminVersion);
+    const memberList = await mcp('tools/list', {}, { token: lan.access });
+    expect(get(memberList.body, 'result', '_meta', versionKey)).not.toBe(adminVersion);
+    const tools = get(a.body, 'result', 'tools');
+    const mediaImport = Array.isArray(tools) ? tools.find(t => get(t, 'name') === 'media_import') : undefined;
+    expect(get(mediaImport, 'inputSchema', 'required')).toEqual(['url']);
+
+    // A stale or capture-time catalogue never grants access: a member calling a media tool is still refused.
+    const call = await mcp('tools/call', { name: 'media_list', arguments: {} }, { token: lan.access });
+    expect(call.status).toBe(200);
+    expect(get(call.body, 'result', 'isError')).toBe(true);
+    expect(String(get(call.body, 'result', 'content', 0, 'text'))).toMatch(/"status": 40[13]/);
+  });
+
   it('lists key metadata read-only and never exposes secrets', async () => {
     const f = await fullFlow('lan@example.com', { scope: 'account:read' });
     const key = await createUserKey(d1, f.userId, { name: 'laptop', scopes: ['articles:read'], expires_in_days: 30 });

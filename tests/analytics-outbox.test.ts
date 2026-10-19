@@ -422,8 +422,25 @@ describe('Dodo card events', () => {
     now += 60 * 1000;
     await applyDodoEvent(d1, env(), 'wh_2', payment('payment.succeeded', 'pay_2', new Date(now).toISOString()));
     expect(await applyDodoReversal(d1, dispute, dodoEnv())).toEqual({ outcome: 'renewal', card_subscription_id: 'csub_1' });
-    expect(rows('refund').map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_2']);
+    const refunds = rows('refund');
+    expect(refunds.map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_2']);
+    expect(props(refunds[0])).toMatchObject({ reason: 'chargeback', amount: 9, currency: 'USD' });
     expect(reversalLogs()).toBe(1);
+    const logged = d1.raw.query<{ detail: string }, [string]>("SELECT detail FROM user_activity WHERE user_id = ? AND action = 'billing.card_reversal'").get(userId);
+    expect(JSON.parse(logged?.detail ?? '{}')).toMatchObject({ kind: 'dispute_lost', payment_id: 'pay_2', amount: 900 });
+  });
+
+  it('reads a Dodo dispute amount sent as a string of minor units, keeps integers, and drops anything else', () => {
+    const amountOf = (amount?: unknown) => {
+      const data: Record<string, unknown> = { payload_type: 'Dispute', dispute_id: 'dsp_a', payment_id: 'pay_a', business_id: 'bus_1', currency: 'USD', dispute_stage: 'chargeback', dispute_status: 'dispute_lost' };
+      if (amount !== undefined) data.amount = amount;
+      return parseDodoReversalEvent({ business_id: 'bus_1', type: 'dispute.lost', timestamp: new Date(T0).toISOString(), data })?.amount;
+    };
+    expect(amountOf('900')).toBe(900);
+    expect(amountOf(' 1777 ')).toBe(1777);
+    expect(amountOf(1777)).toBe(1777);
+    for (const bad of ['9.00', '1e3', '', '  ', '-500', 'abc', '12abc', '99999999999999999999', 12.5]) expect(amountOf(bad)).toBeNull();
+    expect(amountOf()).toBeNull();
   });
 
   it('asks Dodo to retry a refund that arrives before the first charge, then logs it once', async () => {

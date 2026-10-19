@@ -298,3 +298,97 @@
 @media (prefers-reduced-motion: reduce) {
   .zb-lockbox-btn { transition: none; }
 }
+
+/* Sections: a band of blocks in one reading lane, optionally on a surface. */
+.zb-section { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; border-radius: 1.4rem; scroll-margin-top: 1.5rem; }
+.zb-section > * { min-width: 0; max-width: 100%; }
+.zb-surface-card { background: #ffffff; border: 1px solid #e7e5e4; }
+.zb-surface-soft { background: #fdf6ec; }
+.zb-surface-contrast { background: #1c1917; color: #f5f5f4; }
+.zb-surface-contrast a { color: #fcd34d; }
+.zb-surface-contrast a:hover { color: #fde68a; }
+.zb-surface-contrast .zb-h, .zb-surface-contrast .zb-icon { color: inherit; }
+.zb-surface-contrast :is(.zb-quote footer, .zb-checklist .zb-done, figcaption) { color: #d6d3d1; }
+/* Blocks drawn as light panels keep dark text on a dark band. */
+.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math, .zb-file, .zb-bookmark, .zb-toggle,
+  .zb-embed-placeholder, .zb-embed-notice, .zb-embed-fallback, .zb-layout-bento > .zb-cell) { color: #1c1917; }
+.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-file, .zb-bookmark, .zb-toggle, .zb-layout-bento > .zb-cell) :is(.zb-h, .zb-icon) { color: #0c0a09; }
+.zb-surface-contrast :is(.zb-toggle, .zb-scroll) { background: #fafaf9; }
+.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-file, .zb-toggle, .zb-layout-bento > .zb-cell) a { color: #92400e; }
+.zb-pad-none { padding: 0; }
+.zb-pad-sm { padding: 0.75rem; }
+.zb-pad-md { padding: 1rem; }
+.zb-pad-lg { padding: 1.25rem; }
+@media (min-width: 768px) {
+  .zb-pad-sm { padding: 1rem; }
+  .zb-pad-md { padding: 1.5rem; }
+  .zb-pad-lg { padding: 2.25rem; }
+}
+
+/*
+ * Width lanes. A document with a wide or full section is marked [data-lanes] and its page widens
+ * (.zb-article-lanes): ordinary blocks stay in the prose column, wide sections take a wider lane and
+ * full sections the whole content width. Below the prose width every lane is simply 100%.
+ */
+.zb-doc[data-lanes], .zb-article-lanes { --zb-lane-prose: 764px; --zb-lane-wide: 1040px; }
+.zb-doc[data-lanes] > * { width: 100%; max-width: var(--zb-lane-prose); margin-inline: auto; }
+.zb-doc[data-lanes] > .zb-lane-wide { max-width: var(--zb-lane-wide); }
+.zb-doc[data-lanes] > .zb-lane-full { max-width: 100%; }
+.zb-article-lanes > :not([data-ask-ai-scope]) { max-width: var(--zb-lane-prose); margin-inline: auto; }
+
+/* Cards: media, heading, body and footer; accents tint the icon and the top edge. */
+.zb-card {
+  --zb-card-accent: #d97706;
+  display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; overflow: hidden;
+  border-radius: 1.1rem; border: 1px solid #e7e5e4; border-top: 3px solid var(--zb-card-accent); background: rgba(255, 255, 255, 0.75);
+  color: #1c1917;
+}
+.zb-card-soft { background: #f3ebe1; border-color: transparent; border-top-color: var(--zb-card-accent); }
+.zb-card-elevated { background: #ffffff; border-color: #f5f5f4; border-top-color: var(--zb-card-accent); box-shadow: 0 14px 32px -20px rgba(28, 25, 23, 0.45); }
+.zb-card-plain { background: transparent; border: 0; border-radius: 0; }
+.zb-accent-amber { --zb-card-accent: #d97706; }
+.zb-accent-emerald { --zb-card-accent: #059669; }
+.zb-accent-sky { --zb-card-accent: #0284c7; }
+.zb-accent-rose { --zb-card-accent: #e11d48; }
+.zb-accent-violet { --zb-card-accent: #7c3aed; }
+.zb-accent-stone { --zb-card-accent: #57534e; }
+.zb-card-media { display: block; width: 100%; height: auto; max-height: 22rem; object-fit: cover; background: #e7e5e4; }
+.zb-card-body { display: flex; flex-direction: column; gap: 0.75rem; flex: 1; min-width: 0; padding: 1rem 1.1rem; }
+.zb-card-plain .zb-card-body { padding: 0.25rem 0; }
+.zb-card-head { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.zb-card-icon { flex: none; display: inline-flex; color: var(--zb-card-accent); }
+.zb-card-icon svg { display: block; }
+.zb-card-title { margin: 0; font-size: 1.1rem; line-height: 1.35; font-weight: 800; min-width: 0; }
+.zb-card-content { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.zb-card-content > * { min-width: 0; max-width: 100%; }
+.zb-card-footer { margin-top: auto; padding-top: 0.6rem; border-top: 1px solid #e7e5e4; font-size: 0.9rem; font-weight: 600; }
+.zb-card-align-center { text-align: center; }
+.zb-card-align-center .zb-card-head { flex-direction: column; justify-content: center; }
+/* On a dark band, cards stay light panels with dark text; plain cards follow the band. */
+.zb-surface-contrast .zb-card-outline { background: #fafaf9; }
+.zb-surface-contrast .zb-card-plain { color: inherit; }
+.zb-surface-contrast .zb-card:not(.zb-card-plain) a { color: #92400e; }
+.zb-surface-contrast :is(.zb-card:not(.zb-card-plain), .zb-callout, .zb-toggle, .zb-layout-bento > .zb-cell) :is(.zb-quote footer, .zb-checklist .zb-done, figcaption) { color: #78716c; }
+
+/* Block frame: shared shell (title, toolbar, states) for rich blocks. */
+.zb-frame { position: relative; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.zb-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; min-width: 0; }
+.zb-frame-title { font-weight: 800; min-width: 0; }
+.zb-frame-toolbar { display: inline-flex; flex-wrap: wrap; gap: 0.35rem; margin-left: auto; }
+.zb-frame-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 2rem; padding: 0.25rem 0.7rem;
+  border-radius: 999px; border: 1px solid #d6d3d1; background: #ffffff; color: #44403c; font: inherit; font-size: 0.8rem; font-weight: 700;
+  cursor: pointer; transition: background-color 0.15s ease;
+}
+.zb-frame-btn:hover { background: #f5f5f4; }
+.zb-frame-btn:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+.zb-frame-body { min-width: 0; }
+.zb-frame:fullscreen { background: #f5efeb; padding: 1.5rem; overflow: auto; }
+.zb-frame-loading { min-height: 6rem; border-radius: 1rem; background: #ece6e1; animation: zb-frame-pulse 1.4s ease-in-out infinite; }
+.zb-frame-error { color: #b91c1c; font-size: 0.9rem; }
+.zb-frame figcaption { font-size: 0.85rem; color: #78716c; text-align: center; }
+@keyframes zb-frame-pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .zb-frame-loading { animation: none; }
+  .zb-frame-btn { transition: none; }
+}
