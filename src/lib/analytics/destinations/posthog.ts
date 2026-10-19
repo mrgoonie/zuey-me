@@ -183,6 +183,11 @@ export function postHogInitOptions(
     autocapture: !isSensitivePath(pathname),
     disable_session_recording: true,
     respect_dnt: true,
+    // The site uses no feature flags. posthog-js sends its `/flags` request with `person_properties` built from
+    // the raw `$set` and `$initial_*` values (it stores them before `before_send` runs), so the request stays off.
+    // This also skips remote config: PostHog UI settings (heatmaps, web vitals, surveys, autocapture opt-out) are
+    // ignored and must be enabled here, and autocapture sends the `$elements` array instead of `$elements_chain`.
+    advanced_disable_flags: true,
     before_send: scrubCaptureResult,
     loaded: (ph: LoadedPostHogLike) => {
       if (config.debug && typeof ph.debug === 'function') ph.debug(true);

@@ -60,6 +60,7 @@ interface CtxOpts {
   json?: unknown;
   form?: Record<string, string | string[]>;
   params?: Record<string, string>;
+  env?: Partial<RuntimeEnv>;
 }
 
 function makeRequest(opts: CtxOpts): Request {
@@ -80,7 +81,7 @@ function makeRequest(opts: CtxOpts): Request {
 function ctx(opts: CtxOpts): APIContext {
   const request = makeRequest(opts);
   // Handlers only read request/params/locals; a full APIContext is not constructible in tests.
-  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: env() } } };
+  const partial = { request, params: opts.params ?? {}, url: new URL(request.url), locals: { runtime: { env: { ...env(), ...opts.env } } } };
   return partial as unknown as APIContext;
 }
 
@@ -481,6 +482,38 @@ describe('refresh tokens and revocation', () => {
     expect(get(afterReuse.body, 'error')).toBe('invalid_grant');
   });
 
+  it('leaves the refresh token usable when a refresh is rejected for scope or resource', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const widen = await exchange({ ...base, scope: 'articles:read admin' });
+    expect(widen.status).toBe(400);
+    expect(get(widen.body, 'error')).toBe('invalid_scope');
+    const unknown = await exchange({ ...base, scope: 'articles:read nope:write' });
+    expect(get(unknown.body, 'error')).toBe('invalid_scope');
+    const target = await exchange({ ...base, resource: `${ORIGIN}/elsewhere` });
+    expect(get(target.body, 'error')).toBe('invalid_target');
+    expect((await mcp('ping', {}, { token: f.access })).status).toBe(200);
+
+    const retry = await exchange({ ...base, scope: 'articles:read' });
+    expect(retry.status).toBe(200);
+    expect(get(retry.body, 'scope')).toBe('articles:read');
+    const refresh2 = String(get(retry.body, 'refresh_token'));
+
+    const reuse = await exchange(base);
+    expect(get(reuse.body, 'error')).toBe('invalid_grant');
+    const afterReuse = await exchange({ ...base, refresh_token: refresh2 });
+    expect(get(afterReuse.body, 'error')).toBe('invalid_grant');
+  });
+
+  it('lets only one of two concurrent refreshes rotate the token', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const results = await Promise.all([exchange(base), exchange(base)]);
+    expect(results.filter(r => r.status === 200).length).toBe(1);
+    const loser = results.find(r => r.status !== 200);
+    expect(get(loser?.body, 'error')).toBe('invalid_grant');
+  });
+
   it('refuses refresh tokens presented by another client', async () => {
     const f = await fullFlow('lan@example.com');
     const other = await register();
@@ -606,7 +639,7 @@ describe('/mcp resource server', () => {
   });
 
   it('exposes the admin media tools only to admin principals and keeps the catalogue deterministic', async () => {
-    const MEDIA_TOOLS = ['media_upload_url', 'media_import', 'media_upload', 'media_list', 'media_delete'];
+    const MEDIA_TOOLS = ['media_upload_url', 'media_import', 'media_upload', 'media_reconcile', 'media_list', 'media_delete'];
     // Every media tool the server registers must be classified, so none can be hidden by a missing map entry.
     const registered = allMcpTools().map(t => t.name).filter(n => n.startsWith('media_'));
     expect(registered.sort()).toEqual([...MEDIA_TOOLS].sort());
@@ -706,6 +739,71 @@ describe('/mcp resource server', () => {
   });
 });
 
+const MEDIA_TOOLS = ['media_upload_url', 'media_import', 'media_upload', 'media_list', 'media_delete'];
+
+describe('admin media tool discovery', () => {
+  it('registers every media tool and marks it admin-only in the visibility map', () => {
+    const names = allMcpTools().map(t => t.name);
+    for (const t of MEDIA_TOOLS) {
+      expect(names).toContain(t);
+      expect(TOOL_ACCESS[t]).toEqual({ kind: 'admin' });
+    }
+  });
+
+  it('hides media tools from every principal that lacks the admin grant, and says how to get it', async () => {
+    // Member token with the default scopes (what a client gets when it sends no scope).
+    const defaults = await fullFlow('lan@example.com');
+    // Admin identity that approved only member scopes (the connector never asked for `admin`).
+    const bossNoAdmin = await fullFlow('boss@example.com', { scope: 'articles:read account:read' });
+    for (const f of [defaults, bossNoAdmin]) {
+      const names = await toolNames(f.access);
+      for (const t of MEDIA_TOOLS) expect(names).not.toContain(t);
+    }
+    // Calling a hidden tool is denied with a step-up challenge only for the admin identity.
+    const stepUp = await mcp('tools/call', { name: 'media_upload_url', arguments: {} }, { token: bossNoAdmin.access });
+    expect(stepUp.status).toBe(403);
+    expect(stepUp.res.headers.get('WWW-Authenticate')).toContain('scope="admin"');
+    const plain = await mcp('tools/call', { name: 'media_upload_url', arguments: {} }, { token: defaults.access });
+    expect(plain.status).toBe(200);
+    expect(get(plain.body, 'result', 'isError')).toBe(true);
+  });
+
+  it('lists media tools for an admin grant and an admin API key, never for a member key', async () => {
+    const boss = await fullFlow('boss@example.com', { scope: 'account:read admin', approve: ['account:read', 'admin'] });
+    for (const token of [boss.access, (await createApiKey('ops', 'admin', d1)).key]) {
+      const names = await toolNames(token);
+      for (const t of MEDIA_TOOLS) expect(names).toContain(t);
+    }
+    const lan = await member('mai@example.com');
+    const key = await createUserKey(d1, lan.userId, { name: 'cli', scopes: ['articles:read'], expires_in_days: 30 });
+    for (const t of MEDIA_TOOLS) expect(await toolNames(key.secret)).not.toContain(t);
+  });
+
+  it('lets an admin who explicitly ticks admin obtain it after requesting the advertised scopes', async () => {
+    const prm = await body(await prmMcpApi(ctx({ url: `${ORIGIN}/.well-known/oauth-protected-resource/mcp` })));
+    const advertised = get(prm, 'scopes_supported');
+    expect(Array.isArray(advertised) && advertised.includes('admin')).toBe(true);
+    // A client that requests exactly the advertised scopes gets admin only when the signed-in user is an admin.
+    const scope = (Array.isArray(advertised) ? advertised : []).join(' ');
+    // The consent screen never pre-ticks admin: the admin must choose it explicitly.
+    const optedOut = await fullFlow('boss@example.com', { scope, approve: ['account:read'] });
+    expect(await toolNames(optedOut.access)).not.toContain('media_upload_url');
+    const boss = await fullFlow('boss@example.com', { scope, approve: [...(Array.isArray(advertised) ? advertised.map(String) : [])] });
+    expect(await toolNames(boss.access)).toEqual(expect.arrayContaining(MEDIA_TOOLS));
+    const lan = await fullFlow('lan@example.com', { scope });
+    const names = await toolNames(lan.access);
+    for (const t of MEDIA_TOOLS) expect(names).not.toContain(t);
+  });
+
+  it('keeps list results private and short-lived so a re-authorized client refreshes its captured manifest', async () => {
+    const boss = await fullFlow('boss@example.com', { scope: 'account:read admin', approve: ['account:read', 'admin'] });
+    const list = await mcp('tools/list', {}, { token: boss.access });
+    expect(get(list.body, 'result', 'cacheScope')).toBe('private');
+    expect(get(list.body, 'result', 'ttlMs')).toBe(5 * 60 * 1000);
+    expect(list.res.headers.get('Cache-Control')).toBe('no-store');
+  });
+});
+
 describe('legacy /api/mcp', () => {
   it('still serves initialize, tools/list and public tool calls', async () => {
     const init = await body(await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} } })));
@@ -713,11 +811,47 @@ describe('legacy /api/mcp', () => {
     const list = await body(await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 2, method: 'tools/list' } })));
     const tools = get(list, 'result', 'tools');
     const names = Array.isArray(tools) ? tools.map(t => String(get(t, 'name'))) : [];
-    expect(names).toEqual(expect.arrayContaining(['get_profile', 'update_profile', 'article_list', 'me_keys_list']));
+    expect(names).toEqual(expect.arrayContaining(['get_profile', 'article_list']));
+    expect(names).not.toContain('update_profile');
     const profile = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_profile', arguments: {} } } }));
     expect(profile.status).toBe(200);
     const denied = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, json: { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'update_profile', arguments: { name: 'x' } } } }));
     expect(denied.status).toBe(401);
+  });
+
+  it('filters tools/list like /mcp: anonymous and member callers never see admin tools', async () => {
+    const listNames = async (headers: Record<string, string> = {}, extraEnv: Partial<RuntimeEnv> = {}): Promise<string[]> => {
+      const res = await legacyMcpApi(ctx({ url: `${ORIGIN}/api/mcp`, headers, env: extraEnv, json: { jsonrpc: '2.0', id: 1, method: 'tools/list' } }));
+      const tools = get(await body(res), 'result', 'tools');
+      return Array.isArray(tools) ? tools.map(t => String(get(t, 'name'))) : [];
+    };
+    const adminOnly = allMcpTools().map(t => t.name).filter(n => TOOL_ACCESS[n]?.kind === 'admin');
+    expect(adminOnly).toContain('update_profile');
+
+    const anon = await listNames();
+    expect(anon).toContain('get_profile');
+    for (const n of adminOnly) expect(anon).not.toContain(n);
+
+    const lan = await member('lan@example.com');
+    const memberKey = (await createUserKey(d1, lan.userId, { name: 'k', scopes: ['account:read'], expires_in_days: 30 })).secret;
+    const memberNames = await listNames({ Authorization: `Bearer ${memberKey}` });
+    for (const n of adminOnly) expect(memberNames).not.toContain(n);
+
+    const adminKey = (await createApiKey('ops', 'admin', d1)).key;
+    const admin = await listNames({ Authorization: `Bearer ${adminKey}` });
+    for (const n of adminOnly) expect(admin).toContain(n);
+
+    // The dewee service key sees the public tools plus its verifier, and nothing else admin-only.
+    const SERVICE_KEY = 'service-key-'.padEnd(40, 'x');
+    const service = await listNames({ Authorization: `Bearer ${SERVICE_KEY}` }, { CHANNEL_ACCESS_SERVICE_KEY: SERVICE_KEY });
+    expect(service).toContain('channel_access_check');
+    expect(service).not.toContain('update_profile');
+
+    // An admin session that also presents the service key gets every tool exactly once.
+    const boss = await member('boss@example.com');
+    const both = await listNames({ Cookie: boss.cookie, Origin: ORIGIN, Authorization: `Bearer ${SERVICE_KEY}` }, { CHANNEL_ACCESS_SERVICE_KEY: SERVICE_KEY });
+    expect(both).toContain('update_profile');
+    expect(both.filter(n => n === 'channel_access_check')).toHaveLength(1);
   });
 });
 

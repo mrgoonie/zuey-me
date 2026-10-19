@@ -46,6 +46,8 @@ export function articleJsonLd(
   view: Pick<ArticleSummary, 'title' | 'excerpt' | 'slug' | 'locale' | 'access' | 'published_at' | 'updated_at' | 'cover_url' | 'tags' | 'category'>,
   origin: string,
   imageFallback: string,
+  /** Image chosen by `social_preview` (cover or custom asset); listed first so crawlers prefer it. */
+  socialImage?: string,
 ): Record<string, unknown> {
   const paid = view.access === 'knowledges';
   const url = articleUrl(origin, view.slug, view.locale);
@@ -59,7 +61,7 @@ export function articleJsonLd(
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },
     datePublished: view.published_at ?? undefined,
     dateModified: view.updated_at,
-    image: [view.cover_url ?? imageFallback],
+    image: [...new Set([socialImage, view.cover_url ?? imageFallback].filter((u): u is string => Boolean(u)))],
     keywords: view.tags.length ? view.tags.join(', ') : undefined,
     articleSection: view.category?.name,
     author: { '@type': 'Person', name: 'Duy Nguyen', url: origin },

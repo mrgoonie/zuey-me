@@ -36,8 +36,12 @@ export type ChatTurnEvent =
     artifacts: ChatArtifactView[];
     artifact_errors: string[];
     usage: { prompt_tokens: number; completion_tokens: number } | null;
+    /** Milliseconds from accepting the question to the end of the reply, measured on the server. */
+    latency_ms: number;
+    /** Estimated cost of this reply in US cents (the figure counted against the plan's AI budget). */
+    cost_cents: number;
   }
-  | { type: 'error'; message_id: string; code: string; message: string; retryable: boolean };
+  | { type: 'error'; message_id: string; code: string; message: string; retryable: boolean; latency_ms: number };
 
 export interface QuotaView {
   month: string;
@@ -99,6 +103,7 @@ export interface ChatTurnInput {
  */
 export async function startChatTurn(input: ChatTurnInput): Promise<AsyncGenerator<ChatTurnEvent, void, undefined>> {
   const { d1, env, principal } = input;
+  const startedAt = aiRuntime.now();
   const userId = requireChatUser(principal);
   const question = parseQuestion(input.message);
   await requireOwnedSession(d1, userId, input.sessionId);
@@ -147,7 +152,7 @@ export async function startChatTurn(input: ChatTurnInput): Promise<AsyncGenerato
     throw err;
   }
 
-  return runTurn({ ...input, userId, question, runToken, month, sources, gatewayMessage, assistantId, config });
+  return runTurn({ ...input, userId, question, runToken, month, sources, gatewayMessage, assistantId, config, startedAt });
 }
 
 interface RunState extends ChatTurnInput {
@@ -159,10 +164,12 @@ interface RunState extends ChatTurnInput {
   gatewayMessage: string;
   assistantId: string;
   config: ReturnType<typeof resolveDeweeConfig>;
+  startedAt: number;
 }
 
 async function* runTurn(state: RunState): AsyncGenerator<ChatTurnEvent, void, undefined> {
   const { d1, env, principal, userId, runToken, month, assistantId } = state;
+  const elapsed = () => Math.max(0, aiRuntime.now() - state.startedAt);
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (state.signal?.aborted) controller.abort();
@@ -219,20 +226,22 @@ async function* runTurn(state: RunState): AsyncGenerator<ChatTurnEvent, void, un
           artifacts,
           artifact_errors: extracted.errors,
           usage: usage ? { prompt_tokens: usage.promptTokens, completion_tokens: usage.completionTokens } : null,
+          latency_ms: elapsed(),
+          cost_cents: cost,
         };
       } else if (event.type === 'error') {
         await finishMessage(d1, assistantId, { content, status: 'error', errorCode: event.code, promptTokens: 0, completionTokens: 0, costCents: 0 });
         // Nothing was generated: the request does not count against the monthly quota.
         if (!content && principal.kind !== 'admin') await refundQuota(d1, userId, month);
         finished = true;
-        yield { type: 'error', message_id: assistantId, code: event.code, message: event.message, retryable: event.retryable };
+        yield { type: 'error', message_id: assistantId, code: event.code, message: event.message, retryable: event.retryable, latency_ms: elapsed() };
       }
     }
   } catch (err) {
     if (!finished) {
       finished = true;
       await finishMessage(d1, assistantId, { content, status: 'error', errorCode: 'internal_error', promptTokens: 0, completionTokens: 0, costCents: 0 }).catch(() => undefined);
-      yield { type: 'error', message_id: assistantId, code: 'internal_error', message: 'The reply could not be completed', retryable: true };
+      yield { type: 'error', message_id: assistantId, code: 'internal_error', message: 'The reply could not be completed', retryable: true, latency_ms: elapsed() };
     }
     console.error('Chat turn failed:', err instanceof Error ? err.message : 'unknown');
   } finally {
