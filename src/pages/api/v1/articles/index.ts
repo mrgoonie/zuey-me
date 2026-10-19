@@ -6,6 +6,8 @@ import { discoverArticles } from '../../../../lib/blocks/discovery';
 import { parseDiscoveryQuery } from '../../../../lib/blocks/params';
 import { resolvePrincipal } from '../../../../lib/members/policy';
 import { requireAdminActor } from '../../../../lib/taxonomy/admin';
+import { idempotentJson } from '../../../../lib/idempotency/rest';
+import { withoutIdempotencyKey } from '../../../../lib/idempotency/store';
 
 /**
  * Published articles with discovery filters (?q=&lang=&category=&tag=&label=&access=&sort=&limit=&page=).
@@ -52,8 +54,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const body = await readJsonObject(request);
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
     const responseMode = parseResponseMode(body.response_mode);
-    const rec = await createArticle(env.DB, parseArticleInput(body, 'create'), { actor, env });
-    return jsonOk(responseMode === 'summary' ? { ...toSummary(rec), ...(await documentReceipt(rec.draft)) } : { ...toSummary(rec), document: rec.draft }, 201);
+    return await idempotentJson({ request, d1: env.DB, actor, operation: 'article_create', body, status: 201 }, async () => {
+      const rec = await createArticle(env.DB, parseArticleInput(withoutIdempotencyKey(body), 'create'), { actor, env });
+      return responseMode === 'summary' ? { ...toSummary(rec), ...(await documentReceipt(rec.draft)) } : { ...toSummary(rec), document: rec.draft };
+    });
   } catch (err) {
     return errorResponse(err);
   }

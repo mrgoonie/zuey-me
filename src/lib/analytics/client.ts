@@ -7,6 +7,7 @@ import {
   ATTRIBUTION_STORAGE_KEY, attributionProperties, parseAttribution, parseStoredAttribution, type Attribution,
 } from './attribution';
 import { CONFIG_ELEMENT_ID, PRODUCTION_HOSTNAMES } from './constants';
+import { PERFORMANCE_CAPTURE_OPTIONS } from './engagement';
 import { browserConsentEnvironment, consentState, setOptOut, type ConsentEnvironment, type ConsentState } from './consent';
 import {
   getPostHog, postHogClientDestination, postHogInitOptions, resolvePostHogConfig, type PostHogConfig,
@@ -383,7 +384,7 @@ export function bootAnalytics(): void {
     if (consentState(browserConsentEnvironment()) !== 'granted') return;
     const ph = getPostHog();
     if (!ph) return;
-    ph.init(config.key, postHogInitOptions(config, window.location.pathname));
+    ph.init(config.key, { ...postHogInitOptions(config, window.location.pathname), ...PERFORMANCE_CAPTURE_OPTIONS });
     browserClient.activate(config.debug);
     void browserClient.syncIdentity(window.location.pathname);
   } catch (err) {

@@ -13,7 +13,9 @@ import { AI_COPY, errorCopy } from './copy';
 import { InteractiveFrame } from './InteractiveFrame';
 import type { ArticleChatContext } from './article-chat-context';
 import { MAX_CHAT_MESSAGE_CHARS, QUOTE_RESERVED_CHARS, composeQuotedQuestion, quotePreview, rememberArticleSession, sessionForArticle } from './article-chat-context';
-import { track } from '../../lib/analytics/client';
+import { track, trackOnce } from '../../lib/analytics/client';
+import { aiFailureLatency, aiReplyMetrics, aiSurface } from '../../lib/analytics/engagement';
+import { failureReason } from '../../lib/analytics/funnel';
 
 // ---------------------------------------------------------------------------
 // Data shapes (validated from untrusted JSON)
@@ -228,6 +230,7 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
 
   const busy = run.phase !== 'idle';
   const quotaExceeded = quota !== null && quota.remaining !== null && quota.remaining <= 0;
+  const surface = () => aiSurface(Boolean(articleSlug), window.location.pathname);
 
   const announce = useCallback((text: string) => setLive(text), []);
 
@@ -264,6 +267,7 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
     const res = await callApi('/api/v1/chat/status');
     if (!res.ok || !isRecord(res.data)) {
       setPhase('load_error');
+      track('feature_error', { feature: 'ai_chat', reason: failureReason(res.ok ? 'bad_response' : res.code) });
       return;
     }
     const d = res.data;
@@ -314,6 +318,13 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // At most one quota event per page load, whether the limit shows on load or is hit by a question.
+  useEffect(() => {
+    if (phase !== 'ready' || !quotaExceeded || !quota) return;
+    const kind = quota.budgetCents !== null && quota.spentCents >= quota.budgetCents ? 'budget' : 'requests';
+    trackOnce('ai_quota_reached', 'ai_quota_reached', { surface: aiSurface(Boolean(articleSlug), window.location.pathname), kind, stage: 'load' });
+  }, [phase, quotaExceeded, quota, articleSlug]);
+
   // A newly attached passage (each tooltip click bumps the nonce): show it and wait for the question.
   const quoteNonce = context?.quoteNonce;
   const contextQuote = context?.quote ?? null;
@@ -347,6 +358,11 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
   };
 
   const handlePreStreamError = (code: string, extra: Record<string, unknown>) => {
+    if (code === 'ai_quota_exceeded' || code === 'ai_budget_exceeded') {
+      trackOnce('ai_quota_reached', 'ai_quota_reached', { surface: surface(), kind: code === 'ai_budget_exceeded' ? 'budget' : 'requests', stage: 'send' });
+    } else {
+      track('ai_response_failed', { surface: surface(), stage: 'request', reason: failureReason(code), retryable: code !== 'chat_run_in_progress' });
+    }
     switch (code) {
       case 'ai_quota_exceeded':
         setQuota(q => ({ month: typeof extra.month === 'string' ? extra.month : q?.month ?? '', used: q?.used ?? 0, limit: typeof extra.limit === 'number' ? extra.limit : q?.limit ?? 0, remaining: 0, spentCents: q?.spentCents ?? 0, budgetCents: q?.budgetCents ?? null }));
@@ -392,6 +408,7 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
       setSessions(prev => [session, ...prev]);
       setActiveId(session.id);
       if (articleSlug) rememberArticleSession(articleSlug, session.id);
+      track('ai_chat_started', { surface: surface() });
     }
     const stamp = Date.now();
     const userLocal: Msg = { id: `local-u-${stamp}`, role: 'user', content: question, sources: [], status: 'complete', errorCode: null };
@@ -400,6 +417,8 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
     setInput('');
     if (sentQuote) changeQuote(null);
     if (articleSlug) track('article_ask_ai_sent', { slug: articleSlug, quoted: Boolean(sentQuote) });
+    // Length only: the question itself never leaves for analytics.
+    track('ai_message_submitted', { surface: surface(), chars: question.length, quoted: Boolean(sentQuote), retry: composed });
     lastQuestion.current = question;
     liveBuffer.current = '';
     stickToBottom.current = true;
@@ -408,6 +427,9 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let aiId = aiLocal.id;
+    // Reply outcome already reported (done or error frame), and how many sources grounded it.
+    let settled = false;
+    let replySources = 0;
     try {
       const res = await fetch(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
@@ -429,6 +451,7 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
         const data = isRecord(ev.data) ? ev.data : {};
         if (ev.event === 'sources') {
           const sources = parseSources(data.sources);
+          replySources = sources.length;
           updateAssistant(aiId, m => ({ ...m, sources }));
         } else if (ev.event === 'delta') {
           const text = str(data, 'text');
@@ -450,6 +473,14 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
           }
           flushLive(true);
           if (cancelled) announce(t.stopped);
+          if (cancelled) {
+            track('ai_response_failed', { surface: surface(), stage: 'stream', reason: 'cancelled', retryable: true, ...aiFailureLatency(data) });
+          } else {
+            track('ai_response_completed', {
+              surface: surface(), sources: replySources, artifacts: newArtifacts.length, ...aiReplyMetrics(data),
+            });
+          }
+          settled = true;
         } else if (ev.event === 'error') {
           const code = str(data, 'code') || 'generic';
           const serverId = str(data, 'message_id') || aiId;
@@ -459,9 +490,23 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
           setBanner({ kind: 'error', code, text, retry: data.retryable !== false });
           flushLive(true);
           announce(text);
+          track('ai_response_failed', {
+            surface: surface(), stage: 'stream', reason: failureReason(code), retryable: data.retryable !== false, ...aiFailureLatency(data),
+          });
+          settled = true;
         }
       }
+      if (!settled) {
+        // The stream closed without a done or error frame.
+        track('ai_response_failed', { surface: surface(), stage: 'stream', reason: 'incomplete', retryable: true });
+        settled = true;
+      }
     } catch {
+      if (!settled) {
+        track('ai_response_failed', {
+          surface: surface(), stage: ctrl.signal.aborted ? 'stream' : 'network', reason: ctrl.signal.aborted ? 'cancelled' : 'network_error', retryable: true,
+        });
+      }
       if (ctrl.signal.aborted) {
         updateAssistant(aiId, m => ({ ...m, status: m.status === 'streaming' ? 'cancelled' : m.status }));
         flushLive(true);

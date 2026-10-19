@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { SurveyBlock as SurveyBlockData } from '../../lib/blocks/schema';
 import type { SurveyOptionResult, SurveyResults } from '../../lib/blocks/survey';
+import { track } from '../../lib/analytics/client';
+import { failureReason } from '../../lib/analytics/funnel';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -93,14 +95,18 @@ export function SurveyBlock({ block, articleSlug, interactive = true }: Props) {
       if (res.ok) {
         setResults(parseSurveyResults(env.data));
         setStatus({ text: 'Cảm ơn bạn đã bình chọn!', error: false });
+        // How many choices, never which: vote labels stay private.
+        track('survey_submitted', { slug: articleSlug, options: selected.length, multiple: block.allowMultiple === true });
       } else if (res.status === 409) {
         setResults(parseSurveyResults(env.extra.results));
         setStatus({ text: 'Bạn đã bình chọn khảo sát này rồi.', error: false });
       } else {
         setStatus({ text: ERROR_TEXT[env.code] ?? (env.message || 'Không gửi được bình chọn.'), error: true });
+        track('feature_error', { feature: 'survey_vote', reason: failureReason(env.code || `http_${res.status}`) });
       }
     } catch {
       setStatus({ text: 'Không kết nối được máy chủ. Vui lòng thử lại.', error: true });
+      track('feature_error', { feature: 'survey_vote', reason: 'network_error' });
     } finally {
       setBusy(false);
     }

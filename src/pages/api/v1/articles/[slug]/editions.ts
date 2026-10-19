@@ -3,6 +3,7 @@ import { AppError, errorResponse, jsonError, jsonOk, readJsonObject } from '../.
 import { deleteEdition, getArticle, toSummary, runtimeWaitUntil } from '../../../../../lib/blocks/articles';
 import { localeField } from '../../../../../lib/blocks/params';
 import { requireAdminActor } from '../../../../../lib/taxonomy/admin';
+import { idempotentJson } from '../../../../../lib/idempotency/rest';
 
 /** Admin: every locale edition (draft and published state). Readers use available_locales on the article. */
 export const GET: APIRoute = async ({ params, request, locals }) => {
@@ -26,8 +27,9 @@ export const DELETE: APIRoute = async ({ params, request, locals }) => {
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
     const locale = localeField(body);
     if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
-    const rec = await deleteEdition(env.DB, params.slug ?? '', locale, body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
-    return jsonOk(toSummary(rec));
+    return await idempotentJson({ request, d1: env.DB, actor, operation: 'article_edition_delete', params: { slug: params.slug }, body }, async () => (
+      toSummary(await deleteEdition(env.DB, params.slug ?? '', locale, body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) }))
+    ));
   } catch (err) {
     return errorResponse(err);
   }
