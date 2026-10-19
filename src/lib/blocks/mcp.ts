@@ -211,7 +211,7 @@ export const articlesMcpModule: McpToolModule = {
     },
     {
       name: 'article_verify_public',
-      description: 'Admin: read the live public pages of an article as an anonymous visitor (no credentials) and compare each published locale with its stored edition: HTTP status, title, html lang, canonical, hreflang set, og:image, twitter:image, JSON-LD image, image reachability (site and media.zuey.me only), published content hash and the pending new-article email. Does not render widgets; use scripts/article-widget-smoke.mjs for that.',
+      description: 'Admin: read the live public pages of an article as an anonymous visitor (no credentials) and compare each published locale with its stored edition: HTTP status, title, html lang, canonical, hreflang set, og:image, twitter:image, JSON-LD image, the members-only notice on paid editions, image reachability (site and media.zuey.me only), published content hash and the pending new-article email. Does not render widgets; use scripts/article-widget-smoke.mjs for that.',
       inputSchema: { type: 'object', properties: { ...slugProp, locales: { type: 'array', items: { type: 'string', enum: [...LOCALES] }, description: 'Default: every published edition' }, check_images: { type: 'boolean', description: 'Request cover and share images (default true)' } }, required: ['slug'] },
     },
     {

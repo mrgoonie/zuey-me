@@ -257,7 +257,7 @@ export const articlesOpenApi: OpenApiFragment = {
     '/api/v1/articles/{slug}/verify': {
       get: {
         tags, summary: 'Verify the live public pages of every published edition as an anonymous visitor', security: adminSecurity,
-        description: 'Compares HTTP status, title, html lang, canonical, hreflang set, og:image, twitter:image, JSON-LD image and image reachability (site and media.zuey.me only) with the stored editions, and reports the published content hash and the pending new-article email. It does not render widgets.',
+        description: 'Compares HTTP status, title, html lang, canonical, hreflang set, og:image, twitter:image, JSON-LD image, the members-only notice on paid editions and image reachability (site and media.zuey.me only) with the stored editions, and reports the published content hash and the pending new-article email. It does not render widgets.',
         parameters: [slugParam, { name: 'lang', in: 'query', schema: localeEnum, description: 'Repeatable; default every published edition' }, { name: 'images', in: 'query', schema: { type: 'string', enum: ['0'] }, description: '0 skips the image requests' }],
         responses: { '200': ok('Verification', { type: 'object', properties: { slug: { type: 'string' }, ok: { type: 'boolean' }, checked_at: { type: 'string' }, locales: { type: 'object', additionalProperties: { type: 'object' } }, unpublished_locales: { type: 'array', items: localeEnum }, pending_side_effects: { type: 'object' } } }), '404': notFound, ...errorResponses },
       },

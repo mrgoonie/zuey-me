@@ -5,13 +5,19 @@ import type { Locale } from '../i18n/locales';
 import { getArticleNotification } from '../notifications/article-notification-schedule';
 import type { ArticleNotification } from '../notifications/article-notification-schedule';
 import { getArticle, getPublishedDocuments } from './articles';
+import { applyPaywall } from './paywall';
+import type { Viewer } from './paywall';
 import { documentHash } from './read-modes';
-import { articleAlternates, articleUrl } from './seo';
+import { PAYWALL_SELECTOR, articleAlternates, articleUrl } from './seo';
 
 /** Hosts whose images the check may request besides the site itself (first-party media bucket only). */
 export const VERIFY_IMAGE_HOSTS = ['media.zuey.me'] as const;
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_HTML_BYTES = 2_000_000;
+/** A visitor with no session and no entitlement: what the public page shows to anyone. */
+const ANONYMOUS: Viewer = { isAdmin: false, entitlements: [] };
+/** The notice's class attribute (JSON-LD also names the selector, so a bare substring match would always pass). */
+const PAYWALL_CLASS = new RegExp(`class=["'][^"']*\\b${PAYWALL_SELECTOR.slice(1)}\\b`);
 
 export interface ImageCheck { url: string; role: string; ok: boolean; status: number | null; content_type: string | null; skipped?: string }
 
@@ -28,6 +34,11 @@ export interface LocaleVerification {
   og_image: string | null;
   twitter_image: string | null;
   json_ld_image: string | null;
+  /**
+   * Members-only notice on the anonymous page: expected when the paywall withholds part of this edition from
+   * a visitor without the entitlement. Expected but absent means the paid remainder may be public.
+   */
+  paywall: { expected: boolean; present: boolean | null };
   images: ImageCheck[];
   /** Hash of the published document the public page was built from. */
   content_hash: string;
@@ -116,6 +127,7 @@ async function checkImage(url: string, role: string, origin: string, fetcher: ty
       res = await fetcher(target.toString(), { method: 'GET', headers: { range: 'bytes=0-0' }, redirect: 'manual', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     }
     const type = res.headers.get('content-type');
+    await res.body?.cancel();
     return { url, role, ok: res.status >= 200 && res.status < 300 && (type ?? '').toLowerCase().startsWith('image/'), status: res.status, content_type: type };
   } catch {
     return { url, role, ok: false, status: null, content_type: null, skipped: 'unreachable' };
@@ -165,6 +177,7 @@ export async function verifyPublicArticle(d1: D1DatabaseLike | undefined, slug: 
       canonical: { expected: url, actual: null },
       hreflang: { expected: expectedAlternates, actual: [] },
       cover_url: rec.cover_url, og_image: null, twitter_image: null, json_ld_image: null,
+      paywall: { expected: applyPaywall(doc, rec.access, ANONYMOUS).truncated, present: null },
       images: [], content_hash: await documentHash(doc), translation_provenance: null, problems,
     };
     try {
@@ -173,7 +186,9 @@ export async function verifyPublicArticle(d1: D1DatabaseLike | undefined, slug: 
       if (res.status !== 200) {
         problems.push(`page answered HTTP ${res.status}`);
       } else {
-        const head = parseArticleHead(await readHtml(res));
+        const html = await readHtml(res);
+        const head = parseArticleHead(html);
+        out.paywall.present = PAYWALL_CLASS.test(html);
         out.title.actual = head.title;
         out.html_lang.actual = head.htmlLang;
         out.canonical.actual = head.canonical;
@@ -188,6 +203,7 @@ export async function verifyPublicArticle(d1: D1DatabaseLike | undefined, slug: 
         if (!head.ogImage) problems.push('og:image is missing');
         if (!head.twitterImage) problems.push('twitter:image is missing');
         if (rec.cover_url && head.jsonLdImage !== rec.cover_url) problems.push('JSON-LD image is not the edition cover');
+        if (out.paywall.expected && !out.paywall.present) problems.push('members-only notice is missing on a paid edition (the paid part may be public)');
         if (opts.checkImages !== false) {
           const candidates: Array<[string, string | null]> = [['cover', rec.cover_url], ['og:image', head.ogImage], ['twitter:image', head.twitterImage]];
           const seen = new Set<string>();

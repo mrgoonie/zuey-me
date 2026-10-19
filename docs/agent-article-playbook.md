@@ -60,7 +60,7 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 
 ## Paywall and notifications
 
-- An article with `access: "knowledges"` shows readers without the entitlement the free part only. Anonymous verification therefore sees the free part; use `draft: true` as admin to read everything.
+- An article with `access: "knowledges"` shows readers without the entitlement the free part only. Anonymous verification therefore sees the free part, and `article_verify_public` fails a paid edition whose anonymous page lacks the members-only notice (`paywall.expected` without `paywall.present`), since that means the paid part may be public. Use `draft: true` as admin to read everything.
 - **The first publish of an article emails verified members 30 minutes later** unless `notify: false` (backdated `published_at` defaults to no email). Pass `notify` explicitly. `article_verify_public` reports the pending email under `pending_side_effects`.
 - Share images are re-rendered in the background after writes; a just-published page can take a moment to show its final `og:image`.
 

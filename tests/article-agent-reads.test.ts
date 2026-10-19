@@ -355,6 +355,23 @@ describe('article_verify_public', () => {
     const err = await articlesMcpModule.call('article_verify_public', { slug: 'verify-me' }, mcpCtx(false)).then(() => null, (e: unknown) => e);
     expect(err).toMatchObject({ status: 401 });
   });
+
+  it('requires the members-only notice on the anonymous page of a paid edition', async () => {
+    await seed('verify-paid', 'knowledges');
+    const paidFetcher = (body: string) => (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith(`${ORIGIN}/articles/`)) return new Response(pageHtml('verify-paid', 'vi', ['vi']).replace('<body></body>', `<body>${body}</body>`), { status: 200 });
+      return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
+    }) as typeof fetch;
+    const locked = await verifyPublicArticle(d1, 'verify-paid', { origin: ORIGIN, fetcher: paidFetcher('<div class="zb-lock-outline zb-paywalled"></div>') });
+    expect(locked.locales.vi).toMatchObject({ ok: true, paywall: { expected: true, present: true } });
+    // The JSON-LD hasPart selector names the class too; only the rendered notice counts.
+    const leaked = await verifyPublicArticle(d1, 'verify-paid', { origin: ORIGIN, fetcher: paidFetcher('<script type="application/ld+json">{"cssSelector":".zb-paywalled"}</script><p>whole paid text</p>') });
+    expect(leaked.locales.vi?.paywall).toEqual({ expected: true, present: false });
+    expect(leaked.locales.vi?.problems).toContain('members-only notice is missing on a paid edition (the paid part may be public)');
+    const free = await verifyPublicArticle(d1, 'verify-me', { origin: ORIGIN, fetcher: fetcherFor().fn, locales: ['vi'] });
+    expect(free.locales.vi?.paywall).toEqual({ expected: false, present: false });
+  });
 });
 
 describe('measured payload sizes for a translation round', () => {
