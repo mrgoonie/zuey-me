@@ -7,7 +7,7 @@ import { LOCALES } from '../i18n/locales';
 import { principalActor } from '../taxonomy/admin';
 import {
   SORTS, createArticle, deleteArticle, deleteEdition, getArticle, getArticleView, getRevisionDocument, listArticles, listRevisions,
-  parseArticleInput, publishArticle, setTagsForArticle, toSummary, updateArticle,
+  parseArticleInput, publishArticle, setTagsForArticle, toSummary, toWriteReceipt, updateArticle,
 } from './articles';
 import { discoverArticles } from './discovery';
 import { MAX_ARTICLE_PAGE } from './pagination';
@@ -148,7 +148,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp }, required: ['slug', 'title'] },
     },
     {
-      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale; 409 slug_taken when the new slug is used). Translations are written by people, never generated.',
+      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale; 409 slug_taken when the new slug is used). Translations are written by people, never generated. The response carries a receipt (operation_success, locale, article_revision, edition_draft_revision, published_revision, has_unpublished_changes, submitted_fields, next_action); status still describes the public edition, not this write.',
       inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
     },
     {
@@ -215,7 +215,7 @@ export const articlesMcpModule: McpToolModule = {
         const slug = requireSlug(args);
         const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
         const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return withSavedDocument(toSummary(rec), rec.draft, args);
+        return withSavedDocument({ ...toSummary(rec), receipt: toWriteReceipt(rec, input) }, rec.draft, args);
       }
       case 'article_publish': {
         const actor = await mcpAdminActor(ctx);
