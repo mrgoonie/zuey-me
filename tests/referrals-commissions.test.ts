@@ -366,6 +366,60 @@ describe('Dodo commission and refunds', () => {
     const forged = await dodoWebhook(ctx({ method: 'POST', rawBody: '{}', headers: { 'webhook-id': 'msg_x', 'webhook-timestamp': String(Math.floor(T0 / 1000)), 'webhook-signature': 'v1,AAAA' } }));
     expect(forged.status).toBe(401);
   });
+
+  it('asks Dodo to retry a first-payment refund that beats every card webhook, matched by the card reference, then reverses the commission', async () => {
+    const ref = await referrer('ref@example.com', 15);
+    const m = await member('lan@example.com');
+    const res = await ordersApi(ctx({ method: 'POST', body: { plan: 'combo', provider: 'dodo', referral_code: ref.code }, headers: { cookie: m.cookie, Origin: ORIGIN } }));
+    const cardId = String(field(await dataOf(res), 'id'));
+    const metadata = { user_id: m.userId, plan: 'combo', card_ref: cardId };
+    // Dodo's payment object echoes the checkout metadata; no card webhook has stored `sub_1` yet.
+    membersRuntime.fetch = async (input: string) => input === `${DODO_BASE}/payments/pay_first`
+      ? json({ payment_id: 'pay_first', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' }, metadata })
+      : input === `${DODO_BASE}/payments/pay_other`
+        ? json({ payment_id: 'pay_other', subscription_id: 'sub_other', customer: { customer_id: 'cus_9' }, metadata })
+        : fakeFetch(input);
+    const refund = { payload_type: 'Refund', refund_id: 'rfd_first', payment_id: 'pay_first', amount: 1777, currency: 'USD' };
+    const early = await signedDodo('msg_rfd_first', 'refund.succeeded', refund);
+    expect(early.status).toBe(409);
+    expect(await early.json()).toMatchObject({ success: false, error: { code: 'payment_not_recorded' } });
+
+    const payment = {
+      payload_type: 'Payment', payment_id: 'pay_first', subscription_id: 'sub_1', total_amount: 1777, tax: 162, currency: 'USD', status: 'succeeded',
+      customer: { customer_id: 'cus_1', email: 'lan@example.com' }, metadata,
+    };
+    expect(await sendDodo('payment.succeeded', payment)).toBe('updated');
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('pending');
+    const retried = await signedDodo('msg_rfd_first', 'refund.succeeded', refund);
+    expect(retried.status).toBe(200);
+    expect(await dataOf(retried)).toMatchObject({ outcome: 'reversed', card_subscription_id: cardId });
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+
+    // The card reference does not claim a card already bound to another subscription.
+    const other = await signedDodo('msg_rfd_other', 'refund.succeeded', { ...refund, refund_id: 'rfd_other', payment_id: 'pay_other' });
+    expect(other.status).toBe(200);
+    expect(await dataOf(other)).toMatchObject({ outcome: 'ignored', card_subscription_id: null });
+  });
+
+  it('ignores at once an early reversal whose card reference names a card of another member or plan', async () => {
+    const m = await member('lan@example.com');
+    const res = await ordersApi(ctx({ method: 'POST', body: { plan: 'combo', provider: 'dodo' }, headers: { cookie: m.cookie, Origin: ORIGIN } }));
+    const cardId = String(field(await dataOf(res), 'id'));
+    const mismatched: Record<string, Record<string, string>> = {
+      pay_user: { user_id: 'usr_someone_else', plan: 'combo', card_ref: cardId },
+      pay_plan: { user_id: m.userId, plan: 'ai', card_ref: cardId },
+    };
+    membersRuntime.fetch = async (input: string) => {
+      const paymentId = input.startsWith(`${DODO_BASE}/payments/`) ? input.slice(`${DODO_BASE}/payments/`.length) : '';
+      const metadata = mismatched[paymentId];
+      return metadata ? json({ payment_id: paymentId, subscription_id: 'sub_new', customer: { customer_id: 'cus_1' }, metadata }) : fakeFetch(input);
+    };
+    for (const paymentId of Object.keys(mismatched)) {
+      const res = await signedDodo(`msg_${paymentId}`, 'refund.succeeded', { payload_type: 'Refund', refund_id: `rfd_${paymentId}`, payment_id: paymentId, amount: 1900, currency: 'USD' });
+      expect(res.status).toBe(200);
+      expect(await dataOf(res)).toMatchObject({ outcome: 'ignored', card_subscription_id: null });
+    }
+  });
 });
 
 describe('ledger reversal after approval', () => {

@@ -4,12 +4,13 @@ import '../../styles/blocks.css';
 import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
 import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
 import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
-import { imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
+import { documentLanes, imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
 import { EmbedView } from './EmbedView';
 import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
+import { CardView, SectionView } from './ContainerBlocks';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
 import { IconGlyph as StaticIconGlyph } from './block-icons';
@@ -228,6 +229,17 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
           renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
         />
       );
+    case 'section':
+      return <SectionView block={block} renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)} />;
+    case 'card':
+      return (
+        <CardView
+          block={block}
+          renderInline={text => <Inline text={text} />}
+          renderIcon={name => <IconSlot name={name} size={22} />}
+          renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
+        />
+      );
   }
 }
 
@@ -248,8 +260,10 @@ interface BlockRendererProps {
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
 export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true }: BlockRendererProps) {
   const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds };
+  // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
+  const lanes = documentLanes(doc);
   return (
-    <div className="zb-doc">
+    <div className="zb-doc" data-lanes={lanes.length > 0 ? lanes.join(' ') : undefined}>
       {doc.blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
     </div>
   );

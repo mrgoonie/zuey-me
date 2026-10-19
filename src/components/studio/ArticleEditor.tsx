@@ -3,12 +3,15 @@ import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
-  BLOCK_TYPES, CALLOUT_TONES, CHART_KINDS, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, emptyDocument,
+  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, SECTION_PADDINGS,
+  SECTION_SURFACES, SECTION_WIDTHS, emptyDocument,
 } from '../../lib/blocks/schema';
 import type {
-  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
-  ResponsiveSpan, SurveyBlock, ToggleBlock,
+  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
+  ResponsiveSpan, SectionBlock, SurveyBlock, ToggleBlock,
 } from '../../lib/blocks/schema';
+import { canContain, childContext } from '../../lib/blocks/nesting';
+import type { NestContext } from '../../lib/blocks/nesting';
 import { embedFromPastedText, embedSrc, recognizeEmbed } from '../../lib/blocks/embed';
 import { formatBytes } from '../../lib/blocks/markdown';
 import { validateDocument } from '../../lib/blocks/validate';
@@ -42,7 +45,7 @@ const TYPE_LABELS: Partial<Record<BlockType, string>> = {
   chart: 'Biểu đồ', diagram: 'Sơ đồ Mermaid', survey: 'Khảo sát', layout: 'Bố cục (cột/lưới)',
   math: 'Công thức (TeX)', gallery: 'Bộ sưu tập ảnh', audio: 'Âm thanh (file)', video: 'Video (file)', file: 'Tệp đính kèm',
   bookmark: 'Thẻ liên kết', toggle: 'Mục thu gọn', icon: 'Biểu tượng (icon)',
-  interactive: 'Tương tác (HTML/JS)',
+  interactive: 'Tương tác (HTML/JS)', section: 'Khu vực (section)', card: 'Thẻ (card)',
 };
 
 /** Extra search words for the slash menu (unaccented). */
@@ -53,6 +56,7 @@ const TYPE_HINTS: Partial<Record<BlockType, string>> = {
   diagram: 'mermaid flow', survey: 'poll vote', layout: 'columns grid bento', math: 'latex katex equation formula',
   gallery: 'images album', audio: 'mp3 podcast sound', video: 'mp4', file: 'pdf download attachment', bookmark: 'link card url',
   toggle: 'details collapse accordion', icon: 'icon symbol lucide bieu tuong',
+  section: 'section band wide full width lane khu vuc', card: 'card box panel the',
 };
 
 const typeLabel = (t: BlockType): string => TYPE_LABELS[t] ?? t;
@@ -88,6 +92,8 @@ function newBlock(type: BlockType): Block | null {
     case 'bookmark': return { id, type, url: 'https://' };
     case 'toggle': return { id, type, summary: 'Xem thêm', blocks: [] };
     case 'icon': return { id, type, name: 'sparkles', size: 'lg', tone: 'accent' };
+    case 'section': return { id, type, width: 'wide', surface: 'none', blocks: [] };
+    case 'card': return { id, type, title: 'Tiêu đề thẻ', variant: 'outline', blocks: [] };
     default: return null;
   }
 }
@@ -100,10 +106,19 @@ function embedBlockFrom(text: string, id: string = newId()): Block | null {
 
 const CREATABLE: BlockType[] = BLOCK_TYPES.filter(t => TYPE_LABELS[t] !== undefined);
 
-interface ListCtx { layoutDepth: number; inToggle: boolean; slug: string }
+/** Where a block list sits; `inCard` and `nested` default to false (the document's own top-level list). */
+interface ListCtx { layoutDepth: number; inToggle: boolean; inCard?: boolean; nested?: boolean; slug: string }
+
+const nestOf = (ctx: ListCtx): NestContext => ({
+  layoutDepth: ctx.layoutDepth, inToggle: ctx.inToggle, inCard: ctx.inCard ?? false, nested: ctx.nested ?? false,
+});
+
+/** Context for the body of a container block, following the validator's nesting rules. */
+const bodyCtx = (ctx: ListCtx, type: 'layout' | 'toggle' | 'section' | 'card'): ListCtx => ({ ...ctx, ...childContext(nestOf(ctx), type) });
 
 function allowedTypes(ctx: ListCtx): BlockType[] {
-  return CREATABLE.filter(t => !(t === 'layout' && ctx.layoutDepth >= LIMITS.layoutDepth) && !(ctx.inToggle && (t === 'toggle' || t === 'layout')));
+  const nest = nestOf(ctx);
+  return CREATABLE.filter(t => canContain(nest, t));
 }
 
 const fold = (s: string): string => s.normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/gi, 'd').toLowerCase();
@@ -336,7 +351,7 @@ function LayoutFields({ block, onChange, ctx }: { block: LayoutBlock; onChange: 
             <button type="button" className={btnCls} disabled={block.children.length <= 1}
               onClick={() => onChange({ ...block, children: block.children.filter((_, j) => j !== i) })}>Xoá ô</button>
           </div>
-          <BlockListEditor blocks={child.blocks} onChange={blocks => setChild(i, { ...child, blocks })} ctx={{ ...ctx, layoutDepth: ctx.layoutDepth + 1 }} />
+          <BlockListEditor blocks={child.blocks} onChange={blocks => setChild(i, { ...child, blocks })} ctx={bodyCtx(ctx, 'layout')} />
         </div>
       ))}
       <button type="button" className={btnCls} disabled={block.children.length >= LIMITS.layoutChildren}
@@ -410,8 +425,59 @@ function ToggleFields({ block, onChange, ctx }: { block: ToggleBlock; onChange: 
         Mở sẵn
       </label>
       <div className="rounded-xl border border-dashed border-stone-700 p-2.5">
-        <BlockListEditor blocks={block.blocks} onChange={blocks => onChange({ ...block, blocks })} ctx={{ ...ctx, inToggle: true }} />
+        <BlockListEditor blocks={block.blocks} onChange={blocks => onChange({ ...block, blocks })} ctx={bodyCtx(ctx, 'toggle')} />
       </div>
+    </div>
+  );
+}
+
+function SectionFields({ block, onChange, ctx }: { block: SectionBlock; onChange: (b: Block) => void; ctx: ListCtx }) {
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Select label="Độ rộng" value={block.width} options={SECTION_WIDTHS} onChange={width => onChange({ ...block, width })} />
+        <Select label="Nền" value={block.surface} options={SECTION_SURFACES} onChange={surface => onChange({ ...block, surface })} />
+        <Select label="Đệm" value={block.padding ?? 'auto'} options={['auto', ...SECTION_PADDINGS] as const}
+          onChange={padding => { const { padding: _old, ...rest } = block; onChange(padding === 'auto' ? rest : { ...rest, padding }); }} />
+        <Text label="Neo (#anchor)" value={block.anchor ?? ''} onChange={anchor => onChange({ ...block, anchor: opt(anchor) })} />
+      </div>
+      <p className="text-[11px] text-stone-500">Độ rộng wide/full mở rộng cột đọc của bài; neo chỉ gồm chữ thường, số và dấu gạch (vd. bang-gia).</p>
+      <div className="rounded-xl border border-dashed border-stone-700 p-2.5">
+        <BlockListEditor blocks={block.blocks} onChange={blocks => onChange({ ...block, blocks })} ctx={bodyCtx(ctx, 'section')} />
+      </div>
+    </div>
+  );
+}
+
+function CardFields({ block, onChange, ctx }: { block: CardBlock; onChange: (b: Block) => void; ctx: ListCtx }) {
+  const image = block.image;
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-[1fr_5rem] gap-2">
+        <Text label="Tiêu đề" value={block.title ?? ''} onChange={title => onChange({ ...block, title: opt(title) })} />
+        <NumberSelect label="Cấp" value={block.level ?? DEFAULT_CARD_LEVEL} min={2} max={4}
+          onChange={v => onChange({ ...block, level: v === 2 ? 2 : v === 4 ? 4 : 3 })} />
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <Select label="Kiểu" value={block.variant} options={CARD_VARIANTS} onChange={variant => onChange({ ...block, variant })} />
+        <Select label="Màu nhấn" value={block.accent ?? 'none'} options={['none', ...CARD_ACCENTS] as const}
+          onChange={accent => { const { accent: _old, ...rest } = block; onChange(accent === 'none' ? rest : { ...rest, accent }); }} />
+        <Select label="Căn lề" value={block.align ?? 'start'} options={CARD_ALIGNS} onChange={align => onChange({ ...block, align })} />
+      </div>
+      <IconPicker label="Icon (tuỳ chọn)" value={block.icon} noneLabel="Không có icon"
+        onChange={icon => { const { icon: _old, ...rest } = block; onChange(icon ? { ...rest, icon } : rest); }} />
+      <Text label="Ảnh (https://, tuỳ chọn)" value={image?.url ?? ''}
+        onChange={url => { const { image: _old, ...rest } = block; onChange(url.trim() ? { ...rest, image: { ...(image ? withoutImageSize(image) : { alt: '' }), url } } : rest); }} />
+      {image && (
+        <>
+          <ImageSizeProbe url={image.url} known={hasImageSize(image)} onSize={size => onChange({ ...block, image: { ...image, ...size } })} />
+          <Text label="Alt ảnh" value={image.alt} onChange={alt => onChange({ ...block, image: { ...image, alt } })} />
+        </>
+      )}
+      <div className="rounded-xl border border-dashed border-stone-700 p-2.5">
+        <BlockListEditor blocks={block.blocks} onChange={blocks => onChange({ ...block, blocks })} ctx={bodyCtx(ctx, 'card')} />
+      </div>
+      <Text label="Chân thẻ (tuỳ chọn)" value={block.footer ?? ''} onChange={footer => onChange({ ...block, footer: opt(footer) })} />
     </div>
   );
 }
@@ -623,6 +689,10 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
       );
     case 'toggle':
       return <ToggleFields block={block} onChange={onChange} ctx={ctx} />;
+    case 'section':
+      return <SectionFields block={block} onChange={onChange} ctx={ctx} />;
+    case 'card':
+      return <CardFields block={block} onChange={onChange} ctx={ctx} />;
     default:
       return <p className="text-[11px] text-stone-400">Block này được chỉnh trong tab JSON.</p>;
   }

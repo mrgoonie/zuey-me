@@ -7,15 +7,16 @@ import { LOCALES } from '../i18n/locales';
 import { principalActor } from '../taxonomy/admin';
 import {
   SORTS, createArticle, deleteArticle, deleteEdition, getArticle, getArticleView, getRevisionDocument, listArticles, listRevisions,
-  parseArticleInput, publishArticle, setTagsForArticle, toSummary, updateArticle,
+  parseArticleInput, publishArticle, setTagsForArticle, toSummary, toWriteReceipt, updateArticle,
 } from './articles';
 import { discoverArticles } from './discovery';
+import { idempotencyKeyProp, runIdempotentTool } from '../idempotency/mcp';
 import { MAX_ARTICLE_PAGE } from './pagination';
 import { documentToMarkdown } from './markdown';
 import { localeField, parseDiscoveryQuery } from './params';
 import type { ArticleDocument } from './schema';
 import { BLOCK_TYPES, LIMITS } from './schema';
-import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE, blockSchemas } from './openapi';
+import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
 import { iconCatalog } from './icons';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
@@ -122,6 +123,9 @@ function discoveryFromArgs(args: Record<string, unknown>) {
   return parseDiscoveryQuery(url);
 }
 
+/** Write tools that accept an idempotency_key. */
+const IDEMPOTENT_TOOLS = new Set(['article_create', 'article_update', 'article_publish', 'article_delete', 'article_edition_delete', 'article_tags_set']);
+
 export const articlesMcpModule: McpToolModule = {
   tools: [
     { name: 'block_schema', description: 'Describe the article block document schema (all block types, layout rules, limits, the icon allowlist under icons, and examples).', inputSchema: { type: 'object', properties: {} } },
@@ -145,21 +149,21 @@ export const articlesMcpModule: McpToolModule = {
     },
     {
       name: 'article_create', description: 'Admin: create a draft article; its first edition uses locale (default vi).',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp }, required: ['slug', 'title'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp, ...idempotencyKeyProp }, required: ['slug', 'title'] },
     },
     {
-      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale). Translations are written by people, never generated.',
-      inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' } }, required: ['slug', 'expected_revision'] },
+      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale; 409 slug_taken when the new slug is used). Translations are written by people, never generated. The response carries a receipt (operation_success, locale, article_revision, edition_draft_revision, published_revision, has_unpublished_changes, submitted_fields, next_action); status still describes the public edition, not this write.',
+      inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision'] },
     },
     {
       name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email).',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' } }, required: ['slug', 'expected_revision', 'confirm'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision', 'confirm'] },
     },
-    { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
+    { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp, ...idempotencyKeyProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     {
       name: 'article_edition_delete', description: 'Admin: delete one non-primary locale edition. Requires expected_revision.',
-      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' } }, required: ['slug', 'locale', 'expected_revision'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'locale', 'expected_revision'] },
     },
     {
       name: 'article_revisions', description: 'Admin: revision history; with revision + locale returns that stored document (restore by saving it via article_update) and recovery: null, or {dropped_blocks, degraded_embeds, unreadable} when the snapshot failed validation and was recovered (saving it makes the loss permanent).',
@@ -167,7 +171,7 @@ export const articlesMcpModule: McpToolModule = {
     },
     {
       name: 'article_tags_set', description: 'Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision.',
-      inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' } }, required: ['slug', 'tags', 'expected_revision'] },
+      inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'tags', 'expected_revision'] },
     },
     {
       name: 'survey_results', description: 'Admin: full vote counts for a survey block (draft or published).',
@@ -176,96 +180,102 @@ export const articlesMcpModule: McpToolModule = {
   ],
 
   async call(name, args, ctx) {
-    const d1 = ctx.d1;
-    switch (name) {
-      case 'block_schema':
-        return {
-          version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas,
-          icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE },
-        };
-      case 'article_list': {
-        const query = discoveryFromArgs(args);
-        if (args.include_drafts === true) {
-          await ctx.requireAdmin();
-          const { q: _q, ...filters } = query;
-          return listArticles(d1, { ...filters, includeDrafts: true });
-        }
-        const result = await discoverArticles(await mcpPrincipal(ctx), { ...ctx.env, DB: d1 }, query);
-        return result.items;
-      }
-      case 'article_get': {
-        const viewer = await mcpViewer(ctx);
-        if (args.draft === true && !viewer.isAdmin) throw new AppError(401, 'unauthorized', 'Draft access requires admin');
-        const view = await getArticleView(d1, requireSlug(args), viewer, { draft: args.draft === true, locale: localeField(args) });
-        if (!view) throw new AppError(404, 'not_found', 'Article not found');
-        if (args.format === 'markdown') {
-          const origin = (ctx.env.PUBLIC_SITE_URL || new URL(ctx.request.url).origin).replace(/\/$/, '');
-          return { ...view, document: undefined, markdown: documentToMarkdown(view.document, { articleUrl: articleUrl(origin, view.slug, view.locale) }) };
-        }
-        return view;
-      }
-      case 'article_create': {
-        const actor = await mcpAdminActor(ctx);
-        const input = parseArticleInput(await withFetchedDocument(args), 'create');
-        const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return withSavedDocument(toSummary(rec), rec.draft, args);
-      }
-      case 'article_update': {
-        const actor = await mcpAdminActor(ctx);
-        const slug = requireSlug(args);
-        const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
-        const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return withSavedDocument(toSummary(rec), rec.draft, args);
-      }
-      case 'article_publish': {
-        const actor = await mcpAdminActor(ctx);
-        const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at, notify: args.notify });
-        // Clients holding a stale tool schema forward unknown flags as strings.
-        if (args.summary_only === true || args.summary_only === 'true') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
-        return { ...toSummary(rec), document: rec.published };
-      }
-      case 'article_delete': {
-        const actor = await mcpAdminActor(ctx);
-        await deleteArticle(d1, requireSlug(args), { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-        return { deleted: true };
-      }
-      case 'article_editions': {
-        await ctx.requireAdmin();
-        const rec = await getArticle(d1, requireSlug(args));
-        if (!rec) throw new AppError(404, 'not_found', 'Article not found');
-        return { slug: rec.slug, primary_locale: rec.primary_locale, revision: rec.revision, editions: rec.editions };
-      }
-      case 'article_edition_delete': {
-        const actor = await mcpAdminActor(ctx);
-        const locale = localeField(args);
-        if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
-        return toSummary(await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
-      }
-      case 'article_revisions': {
-        await ctx.requireAdmin();
-        const slug = requireSlug(args);
-        const locale = localeField(args);
-        if (args.revision !== undefined) {
-          if (typeof args.revision !== 'number' || !Number.isInteger(args.revision) || !locale) {
-            throw new AppError(400, 'invalid_field', 'revision (integer) and locale are required together');
-          }
-          const doc = await getRevisionDocument(d1, slug, locale, args.revision);
-          if (!doc) throw new AppError(404, 'not_found', 'Revision not found');
-          return doc;
-        }
-        return listRevisions(d1, slug, locale);
-      }
-      case 'article_tags_set': {
-        const actor = await mcpAdminActor(ctx);
-        return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
-      }
-      case 'survey_results': {
-        await ctx.requireAdmin();
-        const located = await locateSurvey(d1, requireSlug(args, 'article_slug'), requireSlug(args, 'block_id'), { isAdmin: true, entitlements: [] }, { includeDraft: true });
-        return surveyResults(d1, located, null);
-      }
-      default:
-        throw new AppError(404, 'unknown_tool', `Unknown tool ${name}`);
-    }
+    if (!IDEMPOTENT_TOOLS.has(name)) return callArticleTool(name, args, ctx);
+    const actor = await mcpAdminActor(ctx);
+    return runIdempotentTool(ctx, actor, name, args, clean => callArticleTool(name, clean, ctx));
   },
 };
+
+async function callArticleTool(name: string, args: Record<string, unknown>, ctx: McpContext): Promise<unknown> {
+  const d1 = ctx.d1;
+  switch (name) {
+    case 'block_schema':
+      return {
+        version: 1, block_types: BLOCK_TYPES, limits: LIMITS, rules: BLOCK_SCHEMA_NOTES, schemas: blockSchemas,
+        icons: iconCatalog(), examples: { icon: ICON_BLOCK_EXAMPLE, callout_with_icon: CALLOUT_ICON_EXAMPLE, section: SECTION_EXAMPLE, card: CARD_EXAMPLE },
+      };
+    case 'article_list': {
+      const query = discoveryFromArgs(args);
+      if (args.include_drafts === true) {
+        await ctx.requireAdmin();
+        const { q: _q, ...filters } = query;
+        return listArticles(d1, { ...filters, includeDrafts: true });
+      }
+      const result = await discoverArticles(await mcpPrincipal(ctx), { ...ctx.env, DB: d1 }, query);
+      return result.items;
+    }
+    case 'article_get': {
+      const viewer = await mcpViewer(ctx);
+      if (args.draft === true && !viewer.isAdmin) throw new AppError(401, 'unauthorized', 'Draft access requires admin');
+      const view = await getArticleView(d1, requireSlug(args), viewer, { draft: args.draft === true, locale: localeField(args) });
+      if (!view) throw new AppError(404, 'not_found', 'Article not found');
+      if (args.format === 'markdown') {
+        const origin = (ctx.env.PUBLIC_SITE_URL || new URL(ctx.request.url).origin).replace(/\/$/, '');
+        return { ...view, document: undefined, markdown: documentToMarkdown(view.document, { articleUrl: articleUrl(origin, view.slug, view.locale) }) };
+      }
+      return view;
+    }
+    case 'article_create': {
+      const actor = await mcpAdminActor(ctx);
+      const input = parseArticleInput(await withFetchedDocument(args), 'create');
+      const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+      return withSavedDocument(toSummary(rec), rec.draft, args);
+    }
+    case 'article_update': {
+      const actor = await mcpAdminActor(ctx);
+      const slug = requireSlug(args);
+      const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
+      const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+      return withSavedDocument({ ...toSummary(rec), receipt: toWriteReceipt(rec, input) }, rec.draft, args);
+    }
+    case 'article_publish': {
+      const actor = await mcpAdminActor(ctx);
+      const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at, notify: args.notify });
+      // Clients holding a stale tool schema forward unknown flags as strings.
+      if (args.summary_only === true || args.summary_only === 'true') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
+      return { ...toSummary(rec), document: rec.published };
+    }
+    case 'article_delete': {
+      const actor = await mcpAdminActor(ctx);
+      await deleteArticle(d1, requireSlug(args), { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+      return { deleted: true };
+    }
+    case 'article_editions': {
+      await ctx.requireAdmin();
+      const rec = await getArticle(d1, requireSlug(args));
+      if (!rec) throw new AppError(404, 'not_found', 'Article not found');
+      return { slug: rec.slug, primary_locale: rec.primary_locale, revision: rec.revision, editions: rec.editions };
+    }
+    case 'article_edition_delete': {
+      const actor = await mcpAdminActor(ctx);
+      const locale = localeField(args);
+      if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
+      return toSummary(await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+    }
+    case 'article_revisions': {
+      await ctx.requireAdmin();
+      const slug = requireSlug(args);
+      const locale = localeField(args);
+      if (args.revision !== undefined) {
+        if (typeof args.revision !== 'number' || !Number.isInteger(args.revision) || !locale) {
+          throw new AppError(400, 'invalid_field', 'revision (integer) and locale are required together');
+        }
+        const doc = await getRevisionDocument(d1, slug, locale, args.revision);
+        if (!doc) throw new AppError(404, 'not_found', 'Revision not found');
+        return doc;
+      }
+      return listRevisions(d1, slug, locale);
+    }
+    case 'article_tags_set': {
+      const actor = await mcpAdminActor(ctx);
+      return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+    }
+    case 'survey_results': {
+      await ctx.requireAdmin();
+      const located = await locateSurvey(d1, requireSlug(args, 'article_slug'), requireSlug(args, 'block_id'), { isAdmin: true, entitlements: [] }, { includeDraft: true });
+      return surveyResults(d1, located, null);
+    }
+    default:
+      throw new AppError(404, 'unknown_tool', `Unknown tool ${name}`);
+  }
+}

@@ -169,6 +169,35 @@ describe('Dodo course payments, refunds and disputes', () => {
     expect(JSON.parse(refunds[0].properties)).toMatchObject({ provider: 'dodo', order_type: 'course', reason: 'chargeback', amount: 49, currency: 'USD' });
   });
 
+  it('keeps the string amount of a signed Dodo dispute on the payment event and the chargeback report', async () => {
+    await publishedCourse();
+    const lan = await member('lan@example.com');
+    const code = await paidByCard(lan);
+    // Dodo's dispute webhook object: no customer, and the amount as a string of minor units.
+    const body = JSON.stringify({
+      business_id: 'bus_test', type: 'dispute.lost', timestamp: new Date(state.now).toISOString(),
+      data: {
+        payload_type: 'Dispute', dispute_id: 'dsp_course', payment_id: `pay_${code}`, business_id: 'bus_test', amount: '2500', currency: 'USD',
+        created_at: new Date(state.now).toISOString(), dispute_stage: 'chargeback', dispute_status: 'dispute_lost',
+      },
+    });
+    const ts = String(Math.floor(state.now / 1000));
+    const signature = await signDodoPayload('whsec_dGVzdA==', 'evt_dsp_course', ts, body);
+    const res = await read(await dodoWebhook(ctx({
+      method: 'POST', rawBody: body, headers: { 'webhook-id': 'evt_dsp_course', 'webhook-timestamp': ts, 'webhook-signature': signature },
+    })));
+    expect(field(res.data, 'outcome')).toBe('reversed');
+
+    expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+    const logged = state.d1.raw
+      .query<{ amount: number | null; currency: string | null }, [string]>("SELECT amount, currency FROM payment_events WHERE provider = 'dodo' AND event_id = ?")
+      .get('evt_dsp_course');
+    expect(logged).toEqual({ amount: 2500, currency: 'USD' });
+    const refunds = state.d1.raw.query<{ properties: string }, []>("SELECT properties FROM analytics_outbox WHERE event = 'refund'").all();
+    expect(refunds).toHaveLength(1);
+    expect(JSON.parse(refunds[0].properties)).toMatchObject({ order_type: 'course', reason: 'chargeback', amount: 25, currency: 'USD', partial: true });
+  });
+
   it('flags a duplicate purchase and refunding it keeps the original access', async () => {
     const { course } = await publishedCourse();
     const lan = await member('lan@example.com');

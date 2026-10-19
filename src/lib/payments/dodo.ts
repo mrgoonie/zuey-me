@@ -78,6 +78,22 @@ function requireApiKey(env: RuntimeEnv): string {
   return env.DODO_API_KEY;
 }
 
+/**
+ * Upper bound for one Dodo API call, response body included. Dodo normally answers in well under a second; the
+ * bound keeps a checkout from hanging and keeps the webhook's payment lookup inside Dodo's delivery timeout.
+ */
+export const DODO_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * A failed Dodo API call (502 `payment_provider_error`). `upstreamStatus` is the HTTP status Dodo answered with,
+ * or null when Dodo was not reached (network error or timeout), so callers can tell a rejection from an outage.
+ */
+export class DodoApiError extends AppError {
+  constructor(public readonly upstreamStatus: number | null, message: string) {
+    super(502, 'payment_provider_error', message);
+  }
+}
+
 async function dodoRequest(
   env: RuntimeEnv, path: string, init: { method: string; body?: unknown }, fetchImpl: FetchLike, what: string
 ): Promise<Record<string, unknown>> {
@@ -88,12 +104,14 @@ async function dodoRequest(
       method: init.method,
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      signal: AbortSignal.timeout(DODO_REQUEST_TIMEOUT_MS),
     });
-  } catch {
-    throw new AppError(502, 'payment_provider_error', `Could not reach Dodo Payments (${what})`);
+  } catch (err) {
+    const timedOut = err instanceof Error && err.name === 'TimeoutError';
+    throw new DodoApiError(null, timedOut ? `Dodo Payments did not answer in time (${what})` : `Could not reach Dodo Payments (${what})`);
   }
   const body: unknown = await res.json().catch(() => null);
-  if (!res.ok || !isRecord(body)) throw new AppError(502, 'payment_provider_error', `Dodo Payments ${what} failed (HTTP ${res.status})`);
+  if (!res.ok || !isRecord(body)) throw new DodoApiError(res.status, `Dodo Payments ${what} failed (HTTP ${res.status})`);
   return body;
 }
 
@@ -231,10 +249,18 @@ export async function cancelDodoSubscription(env: RuntimeEnv, subscriptionId: st
   return parseSubscriptionData(body);
 }
 
-/** The subscription a Dodo payment charged (`GET /payments/{id}`); null for a one-time payment. Throws when the lookup fails. */
-export async function getDodoPaymentSubscriptionId(env: RuntimeEnv, paymentId: string, fetchImpl: FetchLike): Promise<string | null> {
+export interface DodoPaymentLookup {
+  subscriptionId: string | null;
+  metadata: DodoMetadata;
+}
+
+/**
+ * A Dodo payment (`GET /payments/{id}`): the subscription it charged (null for a one-time payment) and the checkout
+ * metadata it carries. Throws `DodoApiError` when the lookup fails.
+ */
+export async function lookupDodoPayment(env: RuntimeEnv, paymentId: string, fetchImpl: FetchLike): Promise<DodoPaymentLookup> {
   const body = await dodoRequest(env, `/payments/${encodeURIComponent(paymentId)}`, { method: 'GET' }, fetchImpl, 'payment lookup');
-  return strOrNull(body, 'subscription_id');
+  return { subscriptionId: strOrNull(body, 'subscription_id'), metadata: parseMetadata(body.metadata) };
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +331,13 @@ function customerOf(r: Record<string, unknown>): { id: string | null; email: str
 
 function intOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) ? v : null;
+}
+
+/** Minor units sent as an integer or, as Dodo's `Dispute.amount`, a string of digits; null for anything else. */
+export function minorUnitsOrNull(v: unknown): number | null {
+  if (typeof v !== 'string') return intOrNull(v);
+  const s = v.trim();
+  return /^\d+$/.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : null;
 }
 
 export function parseSubscriptionData(d: Record<string, unknown>): DodoSubscriptionData | null {
@@ -391,7 +424,7 @@ export function parseDodoReversalEvent(payload: unknown): DodoReversalEvent | nu
     kind,
     objectId: strOrNull(d, kind === 'refund' ? 'refund_id' : 'dispute_id'),
     paymentId,
-    amount: intOrNull(d.amount),
+    amount: minorUnitsOrNull(d.amount),
     currency: strOrNull(d, 'currency')?.toUpperCase() ?? null,
     isPartial: d.is_partial === true,
   };

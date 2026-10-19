@@ -38,6 +38,14 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   video_delete: ADMIN,
   video_refetch_transcript: ADMIN,
   video_rewrite_transcript: ADMIN,
+  // Article media CDN (media.zuey.me)
+  media_upload_url: ADMIN,
+  media_import: ADMIN,
+  media_upload: ADMIN,
+  media_list: ADMIN,
+  media_delete: ADMIN,
+  // Replay-safe retries
+  idempotency_lookup: ADMIN,
   // Courses (paid lesson bodies are browser-only; the lesson tool returns the denial)
   course_list: PUBLIC,
   course_get: PUBLIC,

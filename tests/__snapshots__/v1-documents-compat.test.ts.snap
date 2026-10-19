@@ -1,0 +1,2199 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`schema v1 documents render unchanged kitchen sink: every v1 block type 1`] = `
+{
+  "aiText": 
+"Tổng quan bài viết
+Đoạn mở đầu với nghiêng, gạch, tô sáng, code và link.
+Dòng thứ hai.
+Danh sách
+Một
+Hai đậm
+Bước 1
+Bước 2
+Xong
+Chưa
+Trích dẫn hay Ai đó
+Không nguồn
+Lưu ý
+Mẹo có icon
+Cảnh báo
+const x: number = 1;
+console.log(x);
+plain text
+Ảnh A Chú thích A
+Video
+Tên | Giá
+A | 1
+B|x | 2
+Doanh thu Q1, Q2
+A, B
+Luồng
+Bạn thích gì? Mèo Chó
+Ô lớn
+Ý tưởng
+Lồng 1
+Lồng 2
+Demo Thử nhé
+E = mc^2 Einstein
+G1 Một G2  Album
+Podcast Tập 1
+Clip
+tai-lieu.pdf Tài liệu
+data.csv
+Bài hay Example Mô tả
+Xem thêm
+Bên trong
+let a = 1;"
+,
+  "articleHtml": 
+"<div class="zb-doc"><h2 class="zb-h zb-h1"><span>Tổng quan <strong>bài viết</strong></span></h2><p><span>Đoạn mở đầu với <em>nghiêng</em>, <s>gạch</s>, <mark>tô sáng</mark>, <code>code</code> và <a href="https://zuey.me" target="_blank" rel="noopener noreferrer nofollow">link</a>.</span><span><br/>Dòng thứ hai.</span></p><h3 class="zb-h zb-h2"><span>Danh sách</span></h3><ul class="zb-list"><li><span>Một</span></li><li><span>Hai <strong>đậm</strong></span></li></ul><ol class="zb-list"><li><span>Bước 1</span></li><li><span>Bước 2</span></li></ol><ul class="zb-checklist"><li><span class="zb-check zb-checked" aria-hidden="true">✓</span><span class="zb-sr-only">Đã xong: </span><span class="zb-done"><span>Xong</span></span></li><li><span class="zb-check" aria-hidden="true"></span><span class="zb-sr-only">Chưa xong: </span><span><span>Chưa</span></span></li></ul><blockquote class="zb-quote"><span>Trích dẫn hay</span><footer>— <!-- -->Ai đó</footer></blockquote><blockquote class="zb-quote"><span>Không nguồn</span></blockquote><aside class="zb-callout zb-callout-info" role="note"><span class="zb-callout-icon" aria-hidden="true">i</span><div style="min-width:0"><span>Lưu ý</span></div></aside><aside class="zb-callout zb-callout-tip" role="note"><span class="zb-callout-icon" aria-hidden="true"><!--$--><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-rocket" focusable="false" data-icon="rocket" aria-hidden="true"><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09"></path><path d="M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05"></path></svg><!--/$--></span><div style="min-width:0"><span>Mẹo có icon</span></div></aside><aside class="zb-callout zb-callout-warn" role="note"><span class="zb-callout-icon" aria-hidden="true">!</span><div style="min-width:0"><span>Cảnh báo</span></div></aside><pre class="zb-code"><span class="zb-code-lang">ts</span><code><span class="zb-tk-keyword">const</span> <span class="zb-tk-constant">x</span><span class="zb-tk-keyword">:</span> <span class="zb-tk-type">number</span> <span class="zb-tk-keyword">=</span> <span class="zb-tk-constant">1</span>;
+console.<span class="zb-tk-function">log</span>(x);</code></pre><pre class="zb-code"><code>plain text</code></pre><hr class="zb-divider"/><figure class="zb-figure zb-figure-center"><img src="https://media.zuey.me/a.png" alt="Ảnh A" loading="lazy" decoding="async" width="800" height="1200" style="--zb-img-ratio:800 / 1200"/><figcaption>Chú thích A</figcaption></figure><figure class="zb-figure zb-figure-center"><img src="https://media.zuey.me/b.png" alt="" loading="lazy" decoding="async"/></figure><figure class="zb-figure zb-embed zb-embed-video zb-embed-youtube"><div class="zb-embed-frame zb-ratio-video"><div class="zb-embed-placeholder"><noscript>Nội dung từ <!-- -->YouTube<!-- --> cần JavaScript để hiển thị tại đây.</noscript></div></div><figcaption>Video</figcaption><div class="zb-embed-meta"><a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer nofollow">Mở bài gốc trên <!-- -->YouTube</a><button type="button" class="zb-embed-link-btn" disabled="" style="visibility:hidden">Không tự tải nội dung nhúng trên thiết bị này</button></div></figure><figure class="zb-figure zb-embed"><div class="zb-embed-fallback"><span class="zb-embed-provider">Link</span><a href="https://example.com/page" target="_blank" rel="noopener noreferrer nofollow">Mở liên kết</a></div></figure><div class="zb-scroll"><table class="zb-table"><thead><tr><th scope="col">Tên</th><th scope="col">Giá</th></tr></thead><tbody><tr><td><span>A</span></td><td><span><strong>1</strong></span></td></tr><tr><td><span>B|x</span></td><td><span>2</span></td></tr></tbody></table></div><figure class="zb-figure zb-chart"><figcaption class="zb-h zb-h3" style="margin-bottom:0.5rem">Doanh thu</figcaption><canvas aria-hidden="true" style="display:none"></canvas><div class="zb-scroll"><table class="zb-table"><caption>Doanh thu</caption><thead><tr><th scope="col">Label</th><th scope="col">2025</th><th scope="col">2026</th></tr></thead><tbody><tr><th scope="row">Q1</th><td class="zb-num">1</td><td class="zb-num">3</td></tr><tr><th scope="row">Q2</th><td class="zb-num">2</td><td class="zb-num">4</td></tr></tbody></table></div></figure><figure class="zb-figure zb-chart"><canvas aria-hidden="true" style="display:none"></canvas><div class="zb-scroll"><table class="zb-table"><caption>pie chart</caption><thead><tr><th scope="col">Label</th><th scope="col">S</th></tr></thead><tbody><tr><th scope="row">A</th><td class="zb-num">60</td></tr><tr><th scope="row">B</th><td class="zb-num">40</td></tr></tbody></table></div></figure><figure class="zb-figure"><pre class="zb-code"><span class="zb-code-lang">mermaid</span><code>graph TD
+  A --&gt; B</code></pre><figcaption>Luồng</figcaption></figure><div class="zb-survey ph-no-capture"><form><fieldset><legend>Bạn thích gì?</legend><label class="zb-survey-option"><input type="checkbox" name="survey-s1" value="o1"/><span>Mèo</span></label><label class="zb-survey-option"><input type="checkbox" name="survey-s1" value="o2"/><span>Chó</span></label></fieldset><div class="zb-survey-actions"><button type="submit" class="zb-btn" disabled="">Bình chọn</button></div></form><p class="zb-status" aria-live="polite" role="status"></p></div><div class="zb-layout zb-layout-bento zb-gap-lg" style="--zl-cols-base:1;--zl-cols-md:2;--zl-cols-lg:3"><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:2;--zl-span-lg:2;--zl-row:2"><p><span>Ô lớn</span></p></div><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><div class="zb-icon zb-icon-center zb-icon-tone-accent"><!--$--><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lightbulb" focusable="false" data-icon="lightbulb" role="img" aria-label="Ý tưởng"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path></svg><!--/$--></div></div><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><div class="zb-layout zb-layout-columns zb-gap-md" style="--zl-cols-base:1;--zl-cols-md:2;--zl-cols-lg:2"><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><p><span>Lồng 1</span></p></div><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><p><span>Lồng 2</span></p></div></div></div></div><figure class="zif" aria-label="Khối tương tác: Demo"><div class="zif-head"><span class="zif-title">Demo</span><span class="zif-actions"><button type="button"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-play" aria-hidden="true"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></svg>Chạy demo</button><button type="button"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-maximize2 lucide-maximize-2" aria-hidden="true"><path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="m3 21 7-7"></path><path d="M9 21H3v-6"></path></svg>Mở toàn màn hình</button></span></div><div class="zif-placeholder"><span>Thử nhé</span></div><figcaption class="zif-note">Chạy trong sandbox cô lập; mạng chỉ qua proxy được duyệt.</figcaption><dialog class="zai-dialog zif-full" aria-label="Demo"><div style="display:flex;justify-content:flex-end;margin-bottom:0.4rem"><button type="button" class="zai-btn zai-btn-ghost"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>Đóng</button></div></dialog></figure><figure class="zb-math"><span class="zb-math-tag" aria-hidden="true">TeX</span><code role="math" aria-label="E = mc^2">E = mc^2</code><figcaption class="zb-caption">Einstein</figcaption></figure><figure class="zb-figure zb-figure-center zb-gallery-wrap"><ul class="zb-gallery" data-count="2"><li><figure><a href="https://media.zuey.me/g1.png" target="_blank" rel="noopener noreferrer nofollow"><img src="https://media.zuey.me/g1.png" alt="G1" loading="lazy" decoding="async" width="640" height="480"/></a><figcaption>Một</figcaption></figure></li><li><figure><a href="https://media.zuey.me/g2.png" target="_blank" rel="noopener noreferrer nofollow"><img src="https://media.zuey.me/g2.png" alt="G2" loading="lazy" decoding="async"/></a></figure></li></ul><figcaption>Album</figcaption></figure><figure class="zb-media"><div class="zb-media-title">Podcast</div><audio controls="" preload="none" src="https://media.zuey.me/a.mp3"><a href="https://media.zuey.me/a.mp3">Podcast</a></audio><figcaption class="zb-caption">Tập 1</figcaption></figure><figure class="zb-media"><div class="zb-media-title">Clip</div><video controls="" preload="none" playsInline="" poster="https://media.zuey.me/p.png" src="https://media.zuey.me/v.mp4" aria-label="Clip"><a href="https://media.zuey.me/v.mp4">Clip</a></video></figure><figure class="zb-media"><div class="zb-file"><span class="zb-file-icon" aria-hidden="true">PDF</span><div class="zb-file-main"><div class="zb-file-name">tai-lieu.pdf</div><div class="zb-file-meta">PDF · 121 KB · media.zuey.me</div></div><div class="zb-file-actions"><button type="button" class="zb-btn" aria-expanded="false">Xem PDF</button><a href="https://media.zuey.me/doc.pdf" target="_blank" rel="noopener noreferrer nofollow">Tải về</a></div></div><figcaption>Tài liệu</figcaption></figure><figure class="zb-media"><div class="zb-file"><span class="zb-file-icon" aria-hidden="true">FILE</span><div class="zb-file-main"><div class="zb-file-name">data.csv</div><div class="zb-file-meta">media.zuey.me</div></div><div class="zb-file-actions"><a href="https://media.zuey.me/data.csv" target="_blank" rel="noopener noreferrer nofollow" download="data.csv">Tải về</a></div></div></figure><a class="zb-bookmark" href="https://example.com/post" target="_blank" rel="noopener noreferrer nofollow"><span class="zb-bookmark-body"><span class="zb-bookmark-title" style="display:block">Bài hay</span><span class="zb-bookmark-desc">Mô tả</span><span class="zb-bookmark-site" style="display:block">Example</span></span><img class="zb-bookmark-img" src="https://example.com/i.png" alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer"/></a><a class="zb-bookmark" href="https://example.org/" target="_blank" rel="noopener noreferrer nofollow"><span class="zb-bookmark-body"><span class="zb-bookmark-title" style="display:block">https://example.org/</span><span class="zb-bookmark-site" style="display:block">example.org</span></span></a><details class="zb-toggle" open=""><summary><span>Xem <strong>thêm</strong></span></summary><div class="zb-toggle-body"><p><span>Bên trong</span></p><pre class="zb-code"><span class="zb-code-lang">js</span><code><span class="zb-tk-keyword">let</span> a <span class="zb-tk-keyword">=</span> <span class="zb-tk-constant">1</span>;</code></pre></div></details><div class="zb-icon zb-icon-start zb-icon-tone-default"><!--$--><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sparkles" focusable="false" data-icon="sparkles" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><!--/$--></div></div>"
+,
+  "emailFull": {
+    "html": 
+"<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo</title></head>
+<body style="margin:0;padding:0;background:#F5EFEB;font-family:Arial,Helvetica,sans-serif;color:#1c1917">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Tóm tắt</div>
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+<p style="font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:#b45309;margin:0 0 8px">Zuey</p>
+<h1 style="font-family:Georgia,serif;font-size:28px;line-height:1.25;margin:0 0 12px"><a href="https://zuey.me/articles/demo" style="color:#1c1917;text-decoration:none">Demo</a></h1>
+<p style="font-size:17px;line-height:1.6;color:#57534e;margin:0 0 20px">Tóm tắt</p>
+<h2 style="font-family:Georgia,serif;font-size:24px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Tổng quan <strong>bài viết</strong></h2>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Đoạn mở đầu với <em>nghiêng</em>, <s>gạch</s>, <span style="background:#fde68a">tô sáng</span>, <code style="font-family:Menlo,Consolas,monospace;font-size:14px;background:#f5f0eb;padding:1px 4px;border-radius:4px">code</code> và <a href="https://zuey.me" style="color:#b45309;text-decoration:underline">link</a>.<br>Dòng thứ hai.</p>
+<h3 style="font-family:Georgia,serif;font-size:20px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Danh sách</h3>
+<ul style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;padding-left:24px"><li style="margin:0 0 6px">Một</li><li style="margin:0 0 6px">Hai <strong>đậm</strong></li></ul>
+<ol style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;padding-left:24px"><li style="margin:0 0 6px">Bước 1</li><li style="margin:0 0 6px">Bước 2</li></ol>
+<ul style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;list-style:none;padding-left:4px"><li style="margin:0 0 6px">☑ Xong</li><li style="margin:0 0 6px">☐ Chưa</li></ul>
+<blockquote style="margin:0 0 16px;padding:4px 0 4px 16px;border-left:3px solid #d6a46b;color:#44403c"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;font-style:italic;margin:0">Trích dẫn hay</p><p style="font-size:14px;color:#78716c;margin:6px 0 0">— Ai đó</p></blockquote>
+<blockquote style="margin:0 0 16px;padding:4px 0 4px 16px;border-left:3px solid #d6a46b;color:#44403c"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;font-style:italic;margin:0">Không nguồn</p></blockquote>
+<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;margin:0">Lưu ý</p></div>
+<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;margin:0">Mẹo có icon</p></div>
+<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;margin:0">Cảnh báo</p></div>
+<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">const x: number = 1;
+console.log(x);</pre>
+<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">plain text</pre>
+<hr style="border:none;border-top:1px solid #e7e0d8;margin:24px 0">
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/a.png" alt="Ảnh A" width="426" height="639" style="display:block;margin:0 auto;width:426px;max-width:100%;height:auto;border-radius:10px"><p style="font-size:13px;color:#78716c;margin:6px 0 0;text-align:center">Chú thích A</p></td></tr></table>
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/b.png" alt="" width="520" style="display:block;margin:0 auto;width:100%;max-width:520px;height:auto;border-radius:10px"></td></tr></table>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#e1" style="color:#b45309;text-decoration:underline">▶ Xem nội dung nhúng trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#e2" style="color:#b45309;text-decoration:underline">▶ Xem nội dung nhúng trên zuey.me</a></p>
+<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px"><tr><th style="padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top;background:#f5f0eb">Tên</th><th style="padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top;background:#f5f0eb">Giá</th></tr><tr><td style="padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top">A</td><td style="padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top"><strong>1</strong></td></tr><tr><td style="padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top">B|x</td><td style="padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top">2</td></tr></table>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#ch1" style="color:#b45309;text-decoration:underline">▶ Xem biểu đồ trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#ch2" style="color:#b45309;text-decoration:underline">▶ Xem biểu đồ trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#dg1" style="color:#b45309;text-decoration:underline">▶ Xem sơ đồ trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#s1" style="color:#b45309;text-decoration:underline">▶ Xem khảo sát trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Ô lớn</p><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Ý tưởng</p><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Lồng 1</p><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Lồng 2</p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#int1" style="color:#b45309;text-decoration:underline">▶ Xem bản tương tác trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#m1" style="color:#b45309;text-decoration:underline">▶ Xem công thức trên zuey.me</a></p>
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/g1.png" alt="G1" width="520" height="390" style="display:block;margin:0 auto;width:520px;max-width:100%;height:auto;border-radius:10px"><p style="font-size:13px;color:#78716c;margin:6px 0 0;text-align:center">Một</p></td></tr></table><table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/g2.png" alt="G2" width="520" style="display:block;margin:0 auto;width:100%;max-width:520px;height:auto;border-radius:10px"></td></tr></table><p style="font-size:13px;color:#78716c;margin:-8px 0 16px;text-align:center">Album</p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#au1" style="color:#b45309;text-decoration:underline">▶ Xem audio trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#v1" style="color:#b45309;text-decoration:underline">▶ Xem video trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://media.zuey.me/doc.pdf" style="color:#b45309;text-decoration:underline">⬇ tai-lieu.pdf</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://media.zuey.me/data.csv" style="color:#b45309;text-decoration:underline">⬇ data.csv</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://example.com/post" style="color:#b45309;text-decoration:underline"><strong>Bài hay</strong></a><br><span style="font-size:14px;color:#57534e">Mô tả</span></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://example.org/" style="color:#b45309;text-decoration:underline"><strong>https://example.org/</strong></a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><strong>Xem <strong>thêm</strong></strong></p><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Bên trong</p><pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">let a = 1;</pre>
+
+<p style="margin:24px 0"><a href="https://zuey.me/articles/demo" style="display:inline-block;background:#1c1917;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 22px;border-radius:999px">Đọc trên zuey.me</a></p>"
+,
+    "subject": "Demo",
+    "text": 
+"Demo
+
+Tóm tắt
+
+TỔNG QUAN BÀI VIẾT
+
+Đoạn mở đầu với nghiêng, gạch, tô sáng, code và link.
+Dòng thứ hai.
+
+DANH SÁCH
+
+- Một
+- Hai đậm
+
+1. Bước 1
+2. Bước 2
+
+[x] Xong
+[ ] Chưa
+
+“Trích dẫn hay” — Ai đó
+
+“Không nguồn”
+
+Lưu ý
+
+Mẹo có icon
+
+Cảnh báo
+
+const x: number = 1;
+console.log(x);
+
+plain text
+
+---
+
+[nội dung nhúng: https://zuey.me/articles/demo]
+
+[nội dung nhúng: https://zuey.me/articles/demo]
+
+Tên | Giá
+A | 1
+B|x | 2
+
+[biểu đồ: https://zuey.me/articles/demo]
+
+[biểu đồ: https://zuey.me/articles/demo]
+
+[sơ đồ: https://zuey.me/articles/demo]
+
+[khảo sát: https://zuey.me/articles/demo]
+
+Ô lớn
+
+Ý tưởng
+
+Lồng 1
+
+Lồng 2
+
+[bản tương tác: https://zuey.me/articles/demo]
+
+[công thức: https://zuey.me/articles/demo]
+
+[audio: https://zuey.me/articles/demo]
+
+[video: https://zuey.me/articles/demo]
+
+Bài hay https://example.com/post
+
+https://example.org/
+
+Xem thêm
+
+Bên trong
+
+let a = 1;
+
+Đọc trên zuey.me: https://zuey.me/articles/demo"
+,
+  },
+  "emailTeaser": {
+    "html": 
+"<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo</title></head>
+<body style="margin:0;padding:0;background:#F5EFEB;font-family:Arial,Helvetica,sans-serif;color:#1c1917">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Tóm tắt</div>
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+<p style="font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:#b45309;margin:0 0 8px">Zuey</p>
+<h1 style="font-family:Georgia,serif;font-size:28px;line-height:1.25;margin:0 0 12px"><a href="https://zuey.me/articles/demo" style="color:#1c1917;text-decoration:none">Demo</a></h1>
+<p style="font-size:17px;line-height:1.6;color:#57534e;margin:0 0 20px">Tóm tắt</p>
+<h2 style="font-family:Georgia,serif;font-size:24px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Tổng quan <strong>bài viết</strong></h2>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Đoạn mở đầu với <em>nghiêng</em>, <s>gạch</s>, <span style="background:#fde68a">tô sáng</span>, <code style="font-family:Menlo,Consolas,monospace;font-size:14px;background:#f5f0eb;padding:1px 4px;border-radius:4px">code</code> và <a href="https://zuey.me" style="color:#b45309;text-decoration:underline">link</a>.<br>Dòng thứ hai.</p>
+<h3 style="font-family:Georgia,serif;font-size:20px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Danh sách</h3>
+<ul style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;padding-left:24px"><li style="margin:0 0 6px">Một</li><li style="margin:0 0 6px">Hai <strong>đậm</strong></li></ul>
+<ol style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;padding-left:24px"><li style="margin:0 0 6px">Bước 1</li><li style="margin:0 0 6px">Bước 2</li></ol>
+<ul style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;list-style:none;padding-left:4px"><li style="margin:0 0 6px">☑ Xong</li><li style="margin:0 0 6px">☐ Chưa</li></ul>
+<blockquote style="margin:0 0 16px;padding:4px 0 4px 16px;border-left:3px solid #d6a46b;color:#44403c"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;font-style:italic;margin:0">Trích dẫn hay</p><p style="font-size:14px;color:#78716c;margin:6px 0 0">— Ai đó</p></blockquote>
+<blockquote style="margin:0 0 16px;padding:4px 0 4px 16px;border-left:3px solid #d6a46b;color:#44403c"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;font-style:italic;margin:0">Không nguồn</p></blockquote>
+<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;margin:0">Lưu ý</p></div>
+<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;margin:0">Mẹo có icon</p></div>
+<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917;margin:0">Cảnh báo</p></div>
+<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">const x: number = 1;
+console.log(x);</pre>
+<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">plain text</pre>
+<hr style="border:none;border-top:1px solid #e7e0d8;margin:24px 0">
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/a.png" alt="Ảnh A" width="426" height="639" style="display:block;margin:0 auto;width:426px;max-width:100%;height:auto;border-radius:10px"><p style="font-size:13px;color:#78716c;margin:6px 0 0;text-align:center">Chú thích A</p></td></tr></table>
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/b.png" alt="" width="520" style="display:block;margin:0 auto;width:100%;max-width:520px;height:auto;border-radius:10px"></td></tr></table>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#e1" style="color:#b45309;text-decoration:underline">▶ Xem nội dung nhúng trên zuey.me</a></p>
+<div style="margin:24px 0 0;padding:20px;border-radius:14px;background:#fbf3e8;text-align:center"><p style="font-family:Georgia,serif;font-size:19px;margin:0 0 8px;color:#1c1917">Phần còn lại dành cho thành viên trả phí</p><p style="font-size:15px;line-height:1.6;margin:0;color:#44403c">Đăng ký gói Knowledges (hoặc gói Kết hợp / Cộng đồng) để đọc trọn bài này và toàn bộ kho kiến thức.</p><p style="margin:24px 0"><a href="https://zuey.me/pricing" style="display:inline-block;background:#1c1917;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 22px;border-radius:999px">Đăng ký để đọc tiếp</a></p></div>"
+,
+    "subject": "Demo",
+    "text": 
+"Demo
+
+Tóm tắt
+
+TỔNG QUAN BÀI VIẾT
+
+Đoạn mở đầu với nghiêng, gạch, tô sáng, code và link.
+Dòng thứ hai.
+
+DANH SÁCH
+
+- Một
+- Hai đậm
+
+1. Bước 1
+2. Bước 2
+
+[x] Xong
+[ ] Chưa
+
+“Trích dẫn hay” — Ai đó
+
+“Không nguồn”
+
+Lưu ý
+
+Mẹo có icon
+
+Cảnh báo
+
+const x: number = 1;
+console.log(x);
+
+plain text
+
+---
+
+[nội dung nhúng: https://zuey.me/articles/demo]
+
+Phần còn lại dành cho thành viên trả phí
+Đăng ký gói Knowledges (hoặc gói Kết hợp / Cộng đồng) để đọc trọn bài này và toàn bộ kho kiến thức.
+Đăng ký để đọc tiếp: https://zuey.me/pricing"
+,
+  },
+  "html": 
+"<div class="zb-doc"><h2 class="zb-h zb-h1"><span>Tổng quan <strong>bài viết</strong></span></h2><p><span>Đoạn mở đầu với <em>nghiêng</em>, <s>gạch</s>, <mark>tô sáng</mark>, <code>code</code> và <a href="https://zuey.me" target="_blank" rel="noopener noreferrer nofollow">link</a>.</span><span><br/>Dòng thứ hai.</span></p><h3 class="zb-h zb-h2"><span>Danh sách</span></h3><ul class="zb-list"><li><span>Một</span></li><li><span>Hai <strong>đậm</strong></span></li></ul><ol class="zb-list"><li><span>Bước 1</span></li><li><span>Bước 2</span></li></ol><ul class="zb-checklist"><li><span class="zb-check zb-checked" aria-hidden="true">✓</span><span class="zb-sr-only">Đã xong: </span><span class="zb-done"><span>Xong</span></span></li><li><span class="zb-check" aria-hidden="true"></span><span class="zb-sr-only">Chưa xong: </span><span><span>Chưa</span></span></li></ul><blockquote class="zb-quote"><span>Trích dẫn hay</span><footer>— <!-- -->Ai đó</footer></blockquote><blockquote class="zb-quote"><span>Không nguồn</span></blockquote><aside class="zb-callout zb-callout-info" role="note"><span class="zb-callout-icon" aria-hidden="true">i</span><div style="min-width:0"><span>Lưu ý</span></div></aside><aside class="zb-callout zb-callout-tip" role="note"><span class="zb-callout-icon" aria-hidden="true"><!--$--><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-rocket" focusable="false" data-icon="rocket" aria-hidden="true"><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09"></path><path d="M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05"></path></svg><!--/$--></span><div style="min-width:0"><span>Mẹo có icon</span></div></aside><aside class="zb-callout zb-callout-warn" role="note"><span class="zb-callout-icon" aria-hidden="true">!</span><div style="min-width:0"><span>Cảnh báo</span></div></aside><pre class="zb-code"><span class="zb-code-lang">ts</span><code>const x: number = 1;
+console.log(x);</code></pre><pre class="zb-code"><code>plain text</code></pre><hr class="zb-divider"/><figure class="zb-figure zb-figure-center"><img src="https://media.zuey.me/a.png" alt="Ảnh A" loading="lazy" decoding="async" width="800" height="1200" style="--zb-img-ratio:800 / 1200"/><figcaption>Chú thích A</figcaption></figure><figure class="zb-figure zb-figure-center"><img src="https://media.zuey.me/b.png" alt="" loading="lazy" decoding="async"/></figure><figure class="zb-figure zb-embed zb-embed-video zb-embed-youtube"><div class="zb-embed-frame zb-ratio-video"><div class="zb-embed-placeholder"><noscript>Nội dung từ <!-- -->YouTube<!-- --> cần JavaScript để hiển thị tại đây.</noscript></div></div><figcaption>Video</figcaption><div class="zb-embed-meta"><a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer nofollow">Mở bài gốc trên <!-- -->YouTube</a><button type="button" class="zb-embed-link-btn" disabled="" style="visibility:hidden">Không tự tải nội dung nhúng trên thiết bị này</button></div></figure><figure class="zb-figure zb-embed"><div class="zb-embed-fallback"><span class="zb-embed-provider">Link</span><a href="https://example.com/page" target="_blank" rel="noopener noreferrer nofollow">Mở liên kết</a></div></figure><div class="zb-scroll"><table class="zb-table"><thead><tr><th scope="col">Tên</th><th scope="col">Giá</th></tr></thead><tbody><tr><td><span>A</span></td><td><span><strong>1</strong></span></td></tr><tr><td><span>B|x</span></td><td><span>2</span></td></tr></tbody></table></div><figure class="zb-figure zb-chart"><figcaption class="zb-h zb-h3" style="margin-bottom:0.5rem">Doanh thu</figcaption><canvas aria-hidden="true" style="display:none"></canvas><div class="zb-scroll"><table class="zb-table"><caption>Doanh thu</caption><thead><tr><th scope="col">Label</th><th scope="col">2025</th><th scope="col">2026</th></tr></thead><tbody><tr><th scope="row">Q1</th><td class="zb-num">1</td><td class="zb-num">3</td></tr><tr><th scope="row">Q2</th><td class="zb-num">2</td><td class="zb-num">4</td></tr></tbody></table></div></figure><figure class="zb-figure zb-chart"><canvas aria-hidden="true" style="display:none"></canvas><div class="zb-scroll"><table class="zb-table"><caption>pie chart</caption><thead><tr><th scope="col">Label</th><th scope="col">S</th></tr></thead><tbody><tr><th scope="row">A</th><td class="zb-num">60</td></tr><tr><th scope="row">B</th><td class="zb-num">40</td></tr></tbody></table></div></figure><figure class="zb-figure"><pre class="zb-code"><span class="zb-code-lang">mermaid</span><code>graph TD
+  A --&gt; B</code></pre><figcaption>Luồng</figcaption></figure><div class="zb-survey ph-no-capture"><form><fieldset disabled=""><legend>Bạn thích gì?</legend><label class="zb-survey-option"><input type="checkbox" name="survey-s1" value="o1"/><span>Mèo</span></label><label class="zb-survey-option"><input type="checkbox" name="survey-s1" value="o2"/><span>Chó</span></label></fieldset><div class="zb-survey-actions"><button type="submit" class="zb-btn" disabled="">Bình chọn</button><span class="zb-status">Bình chọn khả dụng sau khi bài viết được xuất bản.</span></div></form><p class="zb-status" aria-live="polite" role="status"></p></div><div class="zb-layout zb-layout-bento zb-gap-lg" style="--zl-cols-base:1;--zl-cols-md:2;--zl-cols-lg:3"><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:2;--zl-span-lg:2;--zl-row:2"><p><span>Ô lớn</span></p></div><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><div class="zb-icon zb-icon-center zb-icon-tone-accent"><!--$--><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lightbulb" focusable="false" data-icon="lightbulb" role="img" aria-label="Ý tưởng"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path></svg><!--/$--></div></div><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><div class="zb-layout zb-layout-columns zb-gap-md" style="--zl-cols-base:1;--zl-cols-md:2;--zl-cols-lg:2"><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><p><span>Lồng 1</span></p></div><div class="zb-cell" style="--zl-span-base:1;--zl-span-md:1;--zl-span-lg:1;--zl-row:1"><p><span>Lồng 2</span></p></div></div></div></div><figure class="zif" aria-label="Khối tương tác: Demo"><div class="zif-head"><span class="zif-title">Demo</span><span class="zif-actions"><button type="button"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-play" aria-hidden="true"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></svg>Chạy demo</button><button type="button"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-maximize2 lucide-maximize-2" aria-hidden="true"><path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="m3 21 7-7"></path><path d="M9 21H3v-6"></path></svg>Mở toàn màn hình</button></span></div><div class="zif-placeholder"><span>Thử nhé</span></div><figcaption class="zif-note">Chạy trong sandbox cô lập; mạng chỉ qua proxy được duyệt.</figcaption><dialog class="zai-dialog zif-full" aria-label="Demo"><div style="display:flex;justify-content:flex-end;margin-bottom:0.4rem"><button type="button" class="zai-btn zai-btn-ghost"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>Đóng</button></div></dialog></figure><figure class="zb-math"><span class="zb-math-tag" aria-hidden="true">TeX</span><code role="math" aria-label="E = mc^2">E = mc^2</code><figcaption class="zb-caption">Einstein</figcaption></figure><figure class="zb-figure zb-figure-center zb-gallery-wrap"><ul class="zb-gallery" data-count="2"><li><figure><a href="https://media.zuey.me/g1.png" target="_blank" rel="noopener noreferrer nofollow"><img src="https://media.zuey.me/g1.png" alt="G1" loading="lazy" decoding="async" width="640" height="480"/></a><figcaption>Một</figcaption></figure></li><li><figure><a href="https://media.zuey.me/g2.png" target="_blank" rel="noopener noreferrer nofollow"><img src="https://media.zuey.me/g2.png" alt="G2" loading="lazy" decoding="async"/></a></figure></li></ul><figcaption>Album</figcaption></figure><figure class="zb-media"><div class="zb-media-title">Podcast</div><audio controls="" preload="none" src="https://media.zuey.me/a.mp3"><a href="https://media.zuey.me/a.mp3">Podcast</a></audio><figcaption class="zb-caption">Tập 1</figcaption></figure><figure class="zb-media"><div class="zb-media-title">Clip</div><video controls="" preload="none" playsInline="" poster="https://media.zuey.me/p.png" src="https://media.zuey.me/v.mp4" aria-label="Clip"><a href="https://media.zuey.me/v.mp4">Clip</a></video></figure><figure class="zb-media"><div class="zb-file"><span class="zb-file-icon" aria-hidden="true">PDF</span><div class="zb-file-main"><div class="zb-file-name">tai-lieu.pdf</div><div class="zb-file-meta">PDF · 121 KB · media.zuey.me</div></div><div class="zb-file-actions"><button type="button" class="zb-btn" aria-expanded="false">Xem PDF</button><a href="https://media.zuey.me/doc.pdf" target="_blank" rel="noopener noreferrer nofollow">Tải về</a></div></div><figcaption>Tài liệu</figcaption></figure><figure class="zb-media"><div class="zb-file"><span class="zb-file-icon" aria-hidden="true">FILE</span><div class="zb-file-main"><div class="zb-file-name">data.csv</div><div class="zb-file-meta">media.zuey.me</div></div><div class="zb-file-actions"><a href="https://media.zuey.me/data.csv" target="_blank" rel="noopener noreferrer nofollow" download="data.csv">Tải về</a></div></div></figure><a class="zb-bookmark" href="https://example.com/post" target="_blank" rel="noopener noreferrer nofollow"><span class="zb-bookmark-body"><span class="zb-bookmark-title" style="display:block">Bài hay</span><span class="zb-bookmark-desc">Mô tả</span><span class="zb-bookmark-site" style="display:block">Example</span></span><img class="zb-bookmark-img" src="https://example.com/i.png" alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer"/></a><a class="zb-bookmark" href="https://example.org/" target="_blank" rel="noopener noreferrer nofollow"><span class="zb-bookmark-body"><span class="zb-bookmark-title" style="display:block">https://example.org/</span><span class="zb-bookmark-site" style="display:block">example.org</span></span></a><details class="zb-toggle" open=""><summary><span>Xem <strong>thêm</strong></span></summary><div class="zb-toggle-body"><p><span>Bên trong</span></p><pre class="zb-code"><span class="zb-code-lang">js</span><code>let a = 1;</code></pre></div></details><div class="zb-icon zb-icon-start zb-icon-tone-default"><!--$--><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sparkles" focusable="false" data-icon="sparkles" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><!--/$--></div></div>"
+,
+  "markdown": 
+"## Tổng quan **bài viết**
+
+Đoạn mở đầu với *nghiêng*, ~~gạch~~, ==tô sáng==, \`code\` và [link](https://zuey.me).
+Dòng thứ hai.
+
+### Danh sách
+
+- Một
+- Hai **đậm**
+
+1. Bước 1
+2. Bước 2
+
+- [x] Xong
+- [ ] Chưa
+
+> Trích dẫn hay
+>
+> — Ai đó
+
+> Không nguồn
+
+> **INFO:** Lưu ý
+
+> **TIP:** Mẹo có icon
+
+> **WARN:** Cảnh báo
+
+\`\`\`ts
+const x: number = 1;
+console.log(x);
+\`\`\`
+
+\`\`\`
+plain text
+\`\`\`
+
+---
+
+![Ảnh A](https://media.zuey.me/a.png)
+
+*Chú thích A*
+
+![](https://media.zuey.me/b.png)
+
+Video
+
+[YouTube: https://www.youtube.com/watch?v=dQw4w9WgXcQ](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+
+[Link: https://example.com/page](https://example.com/page)
+
+| Tên | Giá |
+| --- | --- |
+| A | **1** |
+| B\\|x | 2 |
+
+**Doanh thu** (bar chart)
+
+| Label | 2025 | 2026 |
+| --- | --- | --- |
+| Q1 | 1 | 3 |
+| Q2 | 2 | 4 |
+
+*pie chart*
+
+| Label | S |
+| --- | --- |
+| A | 60 |
+| B | 40 |
+
+\`\`\`mermaid
+graph TD
+  A --> B
+\`\`\`
+
+*Luồng*
+
+**Survey:** Bạn thích gì?
+
+- Mèo
+- Chó
+
+(vote at https://zuey.me/articles/demo)
+
+Ô lớn
+
+Ý tưởng
+
+Lồng 1
+
+Lồng 2
+
+**Interactive:** Demo
+
+*Thử nhé*
+
+[Open the interactive version](https://zuey.me/articles/demo)
+
+$$
+E = mc^2
+$$
+
+*Einstein*
+
+![G1](https://media.zuey.me/g1.png) — Một
+
+![G2](https://media.zuey.me/g2.png)
+
+*Album*
+
+[Audio: Podcast](https://media.zuey.me/a.mp3)
+
+*Tập 1*
+
+[Video: Clip](https://media.zuey.me/v.mp4)
+
+[PDF: tai-lieu.pdf, 121 KB](https://media.zuey.me/doc.pdf)
+
+*Tài liệu*
+
+[File: data.csv](https://media.zuey.me/data.csv)
+
+[Bài hay](https://example.com/post)
+
+> Example — Mô tả
+
+[https://example.org/](https://example.org/)
+
+**Xem **thêm****
+
+Bên trong
+
+\`\`\`js
+let a = 1;
+\`\`\`"
+,
+  "paywall": {
+    "kept": [
+      "h1",
+      "p1",
+      "h2",
+      "l1",
+      "l2",
+      "c1",
+      "q1",
+      "q2",
+      "co1",
+      "co2",
+      "co3",
+      "code1",
+      "code2",
+      "d1",
+      "img1",
+      "img2",
+      "e1",
+    ],
+    "outline": {
+      "blocks": 22,
+      "headings": [],
+      "words": 56,
+    },
+    "truncated": true,
+  },
+  "searchText": 
+"Tổng quan bài viết
+Đoạn mở đầu với nghiêng, gạch, tô sáng, code và link.
+Dòng thứ hai.
+Danh sách
+Một
+Hai đậm
+Bước 1
+Bước 2
+Xong
+Chưa
+Trích dẫn hay
+Ai đó
+Không nguồn
+Lưu ý
+Mẹo có icon
+Cảnh báo
+const x: number = 1;
+console.log(x);
+plain text
+Ảnh A
+Chú thích A
+Video
+Tên
+Giá
+A
+1
+B|x
+2
+Doanh thu
+Q1
+Q2
+2025
+2026
+A
+B
+S
+Luồng
+Bạn thích gì?
+Mèo
+Chó
+Ô lớn
+Ý tưởng
+Lồng 1
+Lồng 2
+E = mc^2
+Einstein
+G1
+Một
+G2
+Album
+Podcast
+Tập 1
+Clip
+tai-lieu.pdf
+Tài liệu
+data.csv
+Bài hay
+Mô tả
+Example
+Xem thêm
+Bên trong
+let a = 1;"
+,
+  "weights": [
+    [
+      "h1",
+      18,
+    ],
+    [
+      "p1",
+      67,
+    ],
+    [
+      "h2",
+      9,
+    ],
+    [
+      "l1",
+      10,
+    ],
+    [
+      "l2",
+      12,
+    ],
+    [
+      "c1",
+      8,
+    ],
+    [
+      "q1",
+      18,
+    ],
+    [
+      "q2",
+      11,
+    ],
+    [
+      "co1",
+      5,
+    ],
+    [
+      "co2",
+      11,
+    ],
+    [
+      "co3",
+      8,
+    ],
+    [
+      "code1",
+      36,
+    ],
+    [
+      "code2",
+      10,
+    ],
+    [
+      "d1",
+      1,
+    ],
+    [
+      "img1",
+      56,
+    ],
+    [
+      "img2",
+      40,
+    ],
+    [
+      "e1",
+      45,
+    ],
+    [
+      "e2",
+      40,
+    ],
+    [
+      "t1",
+      12,
+    ],
+    [
+      "ch1",
+      56,
+    ],
+    [
+      "ch2",
+      48,
+    ],
+    [
+      "dg1",
+      23,
+    ],
+    [
+      "s1",
+      19,
+    ],
+    [
+      "lay1",
+      25,
+    ],
+    [
+      "int1",
+      51,
+    ],
+    [
+      "m1",
+      16,
+    ],
+    [
+      "g1",
+      92,
+    ],
+    [
+      "au1",
+      52,
+    ],
+    [
+      "v1",
+      44,
+    ],
+    [
+      "f1",
+      40,
+    ],
+    [
+      "f2",
+      28,
+    ],
+    [
+      "bm1",
+      32,
+    ],
+    [
+      "bm2",
+      20,
+    ],
+    [
+      "tg1",
+      27,
+    ],
+    [
+      "i1",
+      1,
+    ],
+  ],
+}
+`;
+
+exports[`schema v1 documents render unchanged prose article 1`] = `
+{
+  "aiText": 
+"Mở đầu
+Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall.
+Bìa
+Phần thành viên
+Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên.
+Kết luận
+Hết bài."
+,
+  "articleHtml": "<div class="zb-doc"><h2 class="zb-h zb-h1"><span>Mở đầu</span></h2><p><span>Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. </span></p><figure class="zb-figure zb-figure-center"><img src="https://media.zuey.me/cover.jpg" alt="Bìa" loading="lazy" decoding="async" width="1600" height="900" style="--zb-img-ratio:1600 / 900"/></figure><h3 class="zb-h zb-h2"><span>Phần thành viên</span></h3><p><span>Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. </span></p><h3 class="zb-h zb-h2"><span>Kết luận</span></h3><p><span>Hết bài.</span></p></div>",
+  "emailFull": {
+    "html": 
+"<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo</title></head>
+<body style="margin:0;padding:0;background:#F5EFEB;font-family:Arial,Helvetica,sans-serif;color:#1c1917">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Tóm tắt</div>
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+<p style="font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:#b45309;margin:0 0 8px">Zuey</p>
+<h1 style="font-family:Georgia,serif;font-size:28px;line-height:1.25;margin:0 0 12px"><a href="https://zuey.me/articles/demo" style="color:#1c1917;text-decoration:none">Demo</a></h1>
+<p style="font-size:17px;line-height:1.6;color:#57534e;margin:0 0 20px">Tóm tắt</p>
+<h2 style="font-family:Georgia,serif;font-size:24px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Mở đầu</h2>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. </p>
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-collapse:collapse"><tr><td align="center" style="text-align:center"><img src="https://media.zuey.me/cover.jpg" alt="Bìa" width="520" height="293" style="display:block;margin:0 auto;width:520px;max-width:100%;height:auto;border-radius:10px"></td></tr></table>
+<h3 style="font-family:Georgia,serif;font-size:20px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Phần thành viên</h3>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. </p>
+<h3 style="font-family:Georgia,serif;font-size:20px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Kết luận</h3>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Hết bài.</p>
+<p style="margin:24px 0"><a href="https://zuey.me/articles/demo" style="display:inline-block;background:#1c1917;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 22px;border-radius:999px">Đọc trên zuey.me</a></p>"
+,
+    "subject": "Demo",
+    "text": 
+"Demo
+
+Tóm tắt
+
+MỞ ĐẦU
+
+Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. 
+
+PHẦN THÀNH VIÊN
+
+Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. 
+
+KẾT LUẬN
+
+Hết bài.
+
+Đọc trên zuey.me: https://zuey.me/articles/demo"
+,
+  },
+  "emailTeaser": {
+    "html": 
+"<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo</title></head>
+<body style="margin:0;padding:0;background:#F5EFEB;font-family:Arial,Helvetica,sans-serif;color:#1c1917">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Tóm tắt</div>
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+<p style="font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:#b45309;margin:0 0 8px">Zuey</p>
+<h1 style="font-family:Georgia,serif;font-size:28px;line-height:1.25;margin:0 0 12px"><a href="https://zuey.me/articles/demo" style="color:#1c1917;text-decoration:none">Demo</a></h1>
+<p style="font-size:17px;line-height:1.6;color:#57534e;margin:0 0 20px">Tóm tắt</p>
+<h2 style="font-family:Georgia,serif;font-size:24px;line-height:1.3;margin:28px 0 12px;color:#1c1917">Mở đầu</h2>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. </p>
+<div style="margin:24px 0 0;padding:20px;border-radius:14px;background:#fbf3e8;text-align:center"><p style="font-family:Georgia,serif;font-size:19px;margin:0 0 8px;color:#1c1917">Phần còn lại dành cho thành viên trả phí</p><p style="font-size:15px;line-height:1.6;margin:0;color:#44403c">Đăng ký gói Knowledges (hoặc gói Kết hợp / Cộng đồng) để đọc trọn bài này và toàn bộ kho kiến thức.</p><p style="margin:24px 0"><a href="https://zuey.me/pricing" style="display:inline-block;background:#1c1917;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 22px;border-radius:999px">Đăng ký để đọc tiếp</a></p></div>"
+,
+    "subject": "Demo",
+    "text": 
+"Demo
+
+Tóm tắt
+
+MỞ ĐẦU
+
+Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. 
+
+Phần còn lại dành cho thành viên trả phí
+Đăng ký gói Knowledges (hoặc gói Kết hợp / Cộng đồng) để đọc trọn bài này và toàn bộ kho kiến thức.
+Đăng ký để đọc tiếp: https://zuey.me/pricing"
+,
+  },
+  "html": "<div class="zb-doc"><h2 class="zb-h zb-h1"><span>Mở đầu</span></h2><p><span>Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. </span></p><figure class="zb-figure zb-figure-center"><img src="https://media.zuey.me/cover.jpg" alt="Bìa" loading="lazy" decoding="async" width="1600" height="900" style="--zb-img-ratio:1600 / 900"/></figure><h3 class="zb-h zb-h2"><span>Phần thành viên</span></h3><p><span>Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. </span></p><h3 class="zb-h zb-h2"><span>Kết luận</span></h3><p><span>Hết bài.</span></p></div>",
+  "markdown": 
+"## Mở đầu
+
+Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. 
+
+![Bìa](https://media.zuey.me/cover.jpg)
+
+### Phần thành viên
+
+Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. 
+
+### Kết luận
+
+Hết bài."
+,
+  "paywall": {
+    "kept": [
+      "a1",
+      "a2",
+    ],
+    "outline": {
+      "blocks": 5,
+      "headings": [
+        {
+          "level": 2,
+          "text": "Phần thành viên",
+        },
+        {
+          "level": 2,
+          "text": "Kết luận",
+        },
+      ],
+      "words": 68,
+    },
+    "truncated": true,
+  },
+  "searchText": 
+"Mở đầu
+Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall. Một đoạn văn dài vừa phải để kiểm tra trọng số paywall.
+Bìa
+Phần thành viên
+Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên. Nội dung dành cho thành viên.
+Kết luận
+Hết bài."
+,
+  "weights": [
+    [
+      "a1",
+      6,
+    ],
+    [
+      "a2",
+      336,
+    ],
+    [
+      "a3",
+      43,
+    ],
+    [
+      "a4",
+      15,
+    ],
+    [
+      "a5",
+      300,
+    ],
+    [
+      "a6",
+      8,
+    ],
+    [
+      "a7",
+      8,
+    ],
+  ],
+}
+`;
+
+exports[`schema v1 documents render unchanged legacy stored document recovered block by block 1`] = `
+{
+  "aiText": 
+"Giữ lại
+Sai nhà cung cấp
+Mở
+Bên trong"
+,
+  "articleHtml": "<div class="zb-doc"><p><span>Giữ lại</span></p><figure class="zb-figure zb-embed"><div class="zb-embed-fallback"><span class="zb-embed-provider">Link</span><a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer nofollow">Mở liên kết</a></div><figcaption>Sai nhà cung cấp</figcaption></figure><details class="zb-toggle"><summary><span>Mở</span></summary><div class="zb-toggle-body"><p><span>Bên trong</span></p></div></details></div>",
+  "emailFull": {
+    "html": 
+"<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo</title></head>
+<body style="margin:0;padding:0;background:#F5EFEB;font-family:Arial,Helvetica,sans-serif;color:#1c1917">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Tóm tắt</div>
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+<p style="font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:#b45309;margin:0 0 8px">Zuey</p>
+<h1 style="font-family:Georgia,serif;font-size:28px;line-height:1.25;margin:0 0 12px"><a href="https://zuey.me/articles/demo" style="color:#1c1917;text-decoration:none">Demo</a></h1>
+<p style="font-size:17px;line-height:1.6;color:#57534e;margin:0 0 20px">Tóm tắt</p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Giữ lại</p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#e1" style="color:#b45309;text-decoration:underline">▶ Xem nội dung nhúng trên zuey.me</a></p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><strong>Mở</strong></p><p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Bên trong</p>
+<p style="margin:24px 0"><a href="https://zuey.me/articles/demo" style="display:inline-block;background:#1c1917;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 22px;border-radius:999px">Đọc trên zuey.me</a></p>"
+,
+    "subject": "Demo",
+    "text": 
+"Demo
+
+Tóm tắt
+
+Giữ lại
+
+[nội dung nhúng: https://zuey.me/articles/demo]
+
+Mở
+
+Bên trong
+
+Đọc trên zuey.me: https://zuey.me/articles/demo"
+,
+  },
+  "emailTeaser": {
+    "html": 
+"<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo</title></head>
+<body style="margin:0;padding:0;background:#F5EFEB;font-family:Arial,Helvetica,sans-serif;color:#1c1917">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Tóm tắt</div>
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+<p style="font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:#b45309;margin:0 0 8px">Zuey</p>
+<h1 style="font-family:Georgia,serif;font-size:28px;line-height:1.25;margin:0 0 12px"><a href="https://zuey.me/articles/demo" style="color:#1c1917;text-decoration:none">Demo</a></h1>
+<p style="font-size:17px;line-height:1.6;color:#57534e;margin:0 0 20px">Tóm tắt</p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917">Giữ lại</p>
+<p style="font-size:16px;line-height:1.65;margin:0 0 16px;color:#1c1917"><a href="https://zuey.me/articles/demo#e1" style="color:#b45309;text-decoration:underline">▶ Xem nội dung nhúng trên zuey.me</a></p>
+<div style="margin:24px 0 0;padding:20px;border-radius:14px;background:#fbf3e8;text-align:center"><p style="font-family:Georgia,serif;font-size:19px;margin:0 0 8px;color:#1c1917">Phần còn lại dành cho thành viên trả phí</p><p style="font-size:15px;line-height:1.6;margin:0;color:#44403c">Đăng ký gói Knowledges (hoặc gói Kết hợp / Cộng đồng) để đọc trọn bài này và toàn bộ kho kiến thức.</p><p style="margin:24px 0"><a href="https://zuey.me/pricing" style="display:inline-block;background:#1c1917;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 22px;border-radius:999px">Đăng ký để đọc tiếp</a></p></div>"
+,
+    "subject": "Demo",
+    "text": 
+"Demo
+
+Tóm tắt
+
+Giữ lại
+
+[nội dung nhúng: https://zuey.me/articles/demo]
+
+Phần còn lại dành cho thành viên trả phí
+Đăng ký gói Knowledges (hoặc gói Kết hợp / Cộng đồng) để đọc trọn bài này và toàn bộ kho kiến thức.
+Đăng ký để đọc tiếp: https://zuey.me/pricing"
+,
+  },
+  "html": "<div class="zb-doc"><p><span>Giữ lại</span></p><figure class="zb-figure zb-embed"><div class="zb-embed-fallback"><span class="zb-embed-provider">Link</span><a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer nofollow">Mở liên kết</a></div><figcaption>Sai nhà cung cấp</figcaption></figure><details class="zb-toggle"><summary><span>Mở</span></summary><div class="zb-toggle-body"><p><span>Bên trong</span></p></div></details></div>",
+  "markdown": 
+"Giữ lại
+
+Sai nhà cung cấp
+
+[Link: https://www.youtube.com/watch?v=dQw4w9WgXcQ](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+
+**Mở**
+
+Bên trong"
+,
+  "paywall": {
+    "kept": [
+      "p1",
+      "e1",
+    ],
+    "outline": {
+      "blocks": 1,
+      "headings": [],
+      "words": 3,
+    },
+    "truncated": true,
+  },
+  "searchText": 
+"Giữ lại
+Sai nhà cung cấp
+Mở
+Bên trong"
+,
+  "weights": [
+    [
+      "p1",
+      7,
+    ],
+    [
+      "e1",
+      56,
+    ],
+    [
+      "t1",
+      11,
+    ],
+  ],
+}
+`;
+
+exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP block_schema) are unchanged 1`] = `
+{
+  "BlockAudio": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "title": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "audio",
+        "type": "string",
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "url",
+    ],
+    "type": "object",
+  },
+  "BlockBookmark": {
+    "properties": {
+      "description": {
+        "maxLength": 1000,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "image": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+      "siteName": {
+        "maxLength": 120,
+        "type": "string",
+      },
+      "title": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "bookmark",
+        "type": "string",
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "url",
+    ],
+    "type": "object",
+  },
+  "BlockCallout": {
+    "properties": {
+      "icon": {
+        "description": "Optional allowlisted icon replacing the tone glyph",
+        "enum": [
+          "arrow-right",
+          "arrow-left",
+          "arrow-up",
+          "arrow-down",
+          "arrow-up-right",
+          "chevron-right",
+          "chevron-down",
+          "refresh-cw",
+          "repeat",
+          "external-link",
+          "check",
+          "x",
+          "circle-check",
+          "circle-x",
+          "circle-alert",
+          "triangle-alert",
+          "info",
+          "circle-help",
+          "ban",
+          "shield-check",
+          "badge-check",
+          "clock",
+          "hourglass",
+          "bell",
+          "flag",
+          "thumbs-up",
+          "thumbs-down",
+          "star",
+          "heart",
+          "sparkles",
+          "zap",
+          "flame",
+          "award",
+          "trophy",
+          "target",
+          "book",
+          "book-open",
+          "bookmark",
+          "file",
+          "file-text",
+          "folder",
+          "image",
+          "camera",
+          "video",
+          "music",
+          "mic",
+          "headphones",
+          "calendar",
+          "map",
+          "map-pin",
+          "globe",
+          "house",
+          "key",
+          "lock",
+          "lock-open",
+          "gift",
+          "package",
+          "shopping-cart",
+          "tag",
+          "paperclip",
+          "pencil",
+          "wrench",
+          "settings",
+          "search",
+          "funnel",
+          "eye",
+          "link",
+          "mail",
+          "phone",
+          "send",
+          "sun",
+          "moon",
+          "cloud",
+          "compass",
+          "rocket",
+          "lightbulb",
+          "puzzle",
+          "layers",
+          "code",
+          "terminal",
+          "cpu",
+          "database",
+          "server",
+          "wifi",
+          "smartphone",
+          "laptop",
+          "monitor",
+          "bot",
+          "brain",
+          "git-branch",
+          "bug",
+          "braces",
+          "keyboard",
+          "graduation-cap",
+          "school",
+          "notebook-pen",
+          "library",
+          "presentation",
+          "calculator",
+          "flask-conical",
+          "atom",
+          "microscope",
+          "languages",
+          "quote",
+          "list-checks",
+          "clipboard-list",
+          "briefcase",
+          "building-2",
+          "chart-column",
+          "chart-line",
+          "chart-pie",
+          "trending-up",
+          "trending-down",
+          "dollar-sign",
+          "wallet",
+          "credit-card",
+          "handshake",
+          "users",
+          "user",
+          "megaphone",
+          "share-2",
+          "message-circle",
+          "message-square",
+          "at-sign",
+          "hash",
+          "rss",
+          "smile",
+          "alert",
+          "warning",
+          "error",
+          "success",
+          "tick",
+          "close",
+          "help",
+          "question",
+          "home",
+          "unlock",
+          "filter",
+          "gear",
+          "idea",
+          "launch",
+          "ai",
+          "time",
+          "location",
+          "email",
+          "chat",
+          "team",
+          "money",
+          "chart",
+          "education",
+          "share",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "text": {
+        "description": "Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, \`code\`, [label](https://...) — no HTML",
+        "maxLength": 20000,
+        "type": "string",
+      },
+      "tone": {
+        "enum": [
+          "info",
+          "warn",
+          "tip",
+        ],
+        "type": "string",
+      },
+      "type": {
+        "const": "callout",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "text",
+    ],
+    "type": "object",
+  },
+  "BlockChart": {
+    "properties": {
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "kind": {
+        "enum": [
+          "bar",
+          "line",
+          "pie",
+          "doughnut",
+        ],
+        "type": "string",
+      },
+      "labels": {
+        "items": {
+          "maxLength": 120,
+          "type": "string",
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array",
+      },
+      "series": {
+        "items": {
+          "properties": {
+            "data": {
+              "description": "Same length as labels",
+              "items": {
+                "type": "number",
+              },
+              "type": "array",
+            },
+            "name": {
+              "maxLength": 120,
+              "type": "string",
+            },
+          },
+          "required": [
+            "name",
+            "data",
+          ],
+          "type": "object",
+        },
+        "maxItems": 12,
+        "minItems": 1,
+        "type": "array",
+      },
+      "title": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "chart",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "kind",
+      "labels",
+      "series",
+    ],
+    "type": "object",
+  },
+  "BlockChecklist": {
+    "properties": {
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "items": {
+        "items": {
+          "properties": {
+            "checked": {
+              "type": "boolean",
+            },
+            "text": {
+              "description": "Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, \`code\`, [label](https://...) — no HTML",
+              "maxLength": 20000,
+              "type": "string",
+            },
+          },
+          "required": [
+            "text",
+          ],
+          "type": "object",
+        },
+        "maxItems": 200,
+        "minItems": 1,
+        "type": "array",
+      },
+      "type": {
+        "const": "checklist",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "items",
+    ],
+    "type": "object",
+  },
+  "BlockCode": {
+    "properties": {
+      "code": {
+        "maxLength": 50000,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "language": {
+        "maxLength": 40,
+        "type": "string",
+      },
+      "type": {
+        "const": "code",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "code",
+    ],
+    "type": "object",
+  },
+  "BlockDiagram": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "source": {
+        "maxLength": 20000,
+        "type": "string",
+      },
+      "syntax": {
+        "const": "mermaid",
+        "type": "string",
+      },
+      "type": {
+        "const": "diagram",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "source",
+    ],
+    "type": "object",
+  },
+  "BlockDivider": {
+    "properties": {
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "type": {
+        "const": "divider",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+    ],
+    "type": "object",
+  },
+  "BlockEmbed": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "provider": {
+        "description": "Detected from the URL when omitted. When sent it must equal the detected provider, or be \`generic\` to show a plain link; any other value is rejected with 422 invalid_document. Rendered as a centred embed that loads when scrolled into view (readers can switch to click-to-load per device), with a link to the original URL.",
+        "enum": [
+          "youtube",
+          "vimeo",
+          "soundcloud",
+          "spotify",
+          "x",
+          "facebook",
+          "instagram",
+          "tiktok",
+          "linkedin",
+          "generic",
+        ],
+        "type": "string",
+      },
+      "type": {
+        "const": "embed",
+        "type": "string",
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "url",
+    ],
+    "type": "object",
+  },
+  "BlockFile": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "name": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "sizeBytes": {
+        "minimum": 0,
+        "type": "integer",
+      },
+      "type": {
+        "const": "file",
+        "type": "string",
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "url",
+      "name",
+    ],
+    "type": "object",
+  },
+  "BlockGallery": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "images": {
+        "items": {
+          "dependentRequired": {
+            "height": [
+              "width",
+            ],
+            "width": [
+              "height",
+            ],
+          },
+          "properties": {
+            "alt": {
+              "maxLength": 500,
+              "type": "string",
+            },
+            "caption": {
+              "maxLength": 500,
+              "type": "string",
+            },
+            "height": {
+              "description": "Natural height in pixels; requires width",
+              "maximum": 50000,
+              "minimum": 1,
+              "type": "integer",
+            },
+            "url": {
+              "format": "uri",
+              "maxLength": 2048,
+              "pattern": "^https://",
+              "type": "string",
+            },
+            "width": {
+              "description": "Natural width in pixels; requires height",
+              "maximum": 50000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          "required": [
+            "url",
+          ],
+          "type": "object",
+        },
+        "maxItems": 24,
+        "minItems": 1,
+        "type": "array",
+      },
+      "type": {
+        "const": "gallery",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "images",
+    ],
+    "type": "object",
+  },
+  "BlockHeading": {
+    "properties": {
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "level": {
+        "enum": [
+          1,
+          2,
+          3,
+        ],
+        "type": "integer",
+      },
+      "text": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "heading",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "level",
+      "text",
+    ],
+    "type": "object",
+  },
+  "BlockIcon": {
+    "examples": [
+      {
+        "align": "center",
+        "label": "Ý tưởng chính",
+        "name": "lightbulb",
+        "size": "lg",
+        "tone": "accent",
+        "type": "icon",
+      },
+    ],
+    "properties": {
+      "align": {
+        "default": "start",
+        "enum": [
+          "start",
+          "center",
+          "end",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "label": {
+        "description": "Accessible name for an icon that carries meaning (role="img"); omit for a decorative icon (aria-hidden). Also the Markdown/text fallback.",
+        "maxLength": 120,
+        "type": "string",
+      },
+      "name": {
+        "description": "Curated Lucide icon name (https://lucide.dev/icons). Aliases are accepted and stored as the canonical name; anything else is rejected.",
+        "enum": [
+          "arrow-right",
+          "arrow-left",
+          "arrow-up",
+          "arrow-down",
+          "arrow-up-right",
+          "chevron-right",
+          "chevron-down",
+          "refresh-cw",
+          "repeat",
+          "external-link",
+          "check",
+          "x",
+          "circle-check",
+          "circle-x",
+          "circle-alert",
+          "triangle-alert",
+          "info",
+          "circle-help",
+          "ban",
+          "shield-check",
+          "badge-check",
+          "clock",
+          "hourglass",
+          "bell",
+          "flag",
+          "thumbs-up",
+          "thumbs-down",
+          "star",
+          "heart",
+          "sparkles",
+          "zap",
+          "flame",
+          "award",
+          "trophy",
+          "target",
+          "book",
+          "book-open",
+          "bookmark",
+          "file",
+          "file-text",
+          "folder",
+          "image",
+          "camera",
+          "video",
+          "music",
+          "mic",
+          "headphones",
+          "calendar",
+          "map",
+          "map-pin",
+          "globe",
+          "house",
+          "key",
+          "lock",
+          "lock-open",
+          "gift",
+          "package",
+          "shopping-cart",
+          "tag",
+          "paperclip",
+          "pencil",
+          "wrench",
+          "settings",
+          "search",
+          "funnel",
+          "eye",
+          "link",
+          "mail",
+          "phone",
+          "send",
+          "sun",
+          "moon",
+          "cloud",
+          "compass",
+          "rocket",
+          "lightbulb",
+          "puzzle",
+          "layers",
+          "code",
+          "terminal",
+          "cpu",
+          "database",
+          "server",
+          "wifi",
+          "smartphone",
+          "laptop",
+          "monitor",
+          "bot",
+          "brain",
+          "git-branch",
+          "bug",
+          "braces",
+          "keyboard",
+          "graduation-cap",
+          "school",
+          "notebook-pen",
+          "library",
+          "presentation",
+          "calculator",
+          "flask-conical",
+          "atom",
+          "microscope",
+          "languages",
+          "quote",
+          "list-checks",
+          "clipboard-list",
+          "briefcase",
+          "building-2",
+          "chart-column",
+          "chart-line",
+          "chart-pie",
+          "trending-up",
+          "trending-down",
+          "dollar-sign",
+          "wallet",
+          "credit-card",
+          "handshake",
+          "users",
+          "user",
+          "megaphone",
+          "share-2",
+          "message-circle",
+          "message-square",
+          "at-sign",
+          "hash",
+          "rss",
+          "smile",
+          "alert",
+          "warning",
+          "error",
+          "success",
+          "tick",
+          "close",
+          "help",
+          "question",
+          "home",
+          "unlock",
+          "filter",
+          "gear",
+          "idea",
+          "launch",
+          "ai",
+          "time",
+          "location",
+          "email",
+          "chat",
+          "team",
+          "money",
+          "chart",
+          "education",
+          "share",
+        ],
+        "type": "string",
+      },
+      "size": {
+        "default": "md",
+        "description": "Pixels: sm 16, md 24, lg 32, xl 48",
+        "enum": [
+          "sm",
+          "md",
+          "lg",
+          "xl",
+        ],
+        "type": "string",
+      },
+      "tone": {
+        "default": "default",
+        "enum": [
+          "default",
+          "muted",
+          "accent",
+          "success",
+          "warning",
+          "danger",
+        ],
+        "type": "string",
+      },
+      "type": {
+        "const": "icon",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "name",
+    ],
+    "type": "object",
+  },
+  "BlockImage": {
+    "dependentRequired": {
+      "height": [
+        "width",
+      ],
+      "width": [
+        "height",
+      ],
+    },
+    "properties": {
+      "alt": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "height": {
+        "description": "Natural height in pixels; requires width",
+        "maximum": 50000,
+        "minimum": 1,
+        "type": "integer",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "type": {
+        "const": "image",
+        "type": "string",
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+      "width": {
+        "description": "Natural width in pixels; requires height",
+        "maximum": 50000,
+        "minimum": 1,
+        "type": "integer",
+      },
+    },
+    "required": [
+      "type",
+      "url",
+    ],
+    "type": "object",
+  },
+  "BlockInteractive": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "css": {
+        "maxLength": 60000,
+        "type": "string",
+      },
+      "height": {
+        "maximum": 1200,
+        "minimum": 120,
+        "type": "integer",
+      },
+      "html": {
+        "description": "Body HTML",
+        "maxLength": 60000,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "js": {
+        "description": "Runs in a sandboxed opaque-origin iframe with CSP connect-src none; call zuey.fetch(url) for allowlisted GET requests via the server proxy",
+        "maxLength": 60000,
+        "type": "string",
+      },
+      "title": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "interactive",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "title",
+    ],
+    "type": "object",
+  },
+  "BlockLayout": {
+    "properties": {
+      "children": {
+        "items": {
+          "$ref": "#/components/schemas/LayoutChild",
+        },
+        "maxItems": 12,
+        "minItems": 1,
+        "type": "array",
+      },
+      "cols": {
+        "description": "Columns at <768px, ≥768px, ≥1024px",
+        "properties": {
+          "base": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer",
+          },
+          "lg": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer",
+          },
+          "md": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer",
+          },
+        },
+        "required": [
+          "base",
+          "md",
+          "lg",
+        ],
+        "type": "object",
+      },
+      "gap": {
+        "enum": [
+          "sm",
+          "md",
+          "lg",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "type": {
+        "const": "layout",
+        "type": "string",
+      },
+      "variant": {
+        "enum": [
+          "columns",
+          "grid",
+          "bento",
+        ],
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "cols",
+      "children",
+    ],
+    "type": "object",
+  },
+  "BlockList": {
+    "properties": {
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "items": {
+        "items": {
+          "description": "Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, \`code\`, [label](https://...) — no HTML",
+          "maxLength": 20000,
+          "type": "string",
+        },
+        "maxItems": 200,
+        "minItems": 1,
+        "type": "array",
+      },
+      "style": {
+        "enum": [
+          "bullet",
+          "number",
+        ],
+        "type": "string",
+      },
+      "type": {
+        "const": "list",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "items",
+    ],
+    "type": "object",
+  },
+  "BlockMath": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "tex": {
+        "description": "TeX source; shown as accessible source text",
+        "maxLength": 10000,
+        "type": "string",
+      },
+      "type": {
+        "const": "math",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "tex",
+    ],
+    "type": "object",
+  },
+  "BlockParagraph": {
+    "properties": {
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "text": {
+        "description": "Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, \`code\`, [label](https://...) — no HTML",
+        "maxLength": 20000,
+        "type": "string",
+      },
+      "type": {
+        "const": "paragraph",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "text",
+    ],
+    "type": "object",
+  },
+  "BlockQuote": {
+    "properties": {
+      "cite": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "text": {
+        "description": "Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, \`code\`, [label](https://...) — no HTML",
+        "maxLength": 20000,
+        "type": "string",
+      },
+      "type": {
+        "const": "quote",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "text",
+    ],
+    "type": "object",
+  },
+  "BlockSurvey": {
+    "properties": {
+      "allowMultiple": {
+        "default": false,
+        "type": "boolean",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "options": {
+        "items": {
+          "properties": {
+            "id": {
+              "description": "Unique within the document; generated when omitted",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string",
+            },
+            "label": {
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+          "required": [
+            "label",
+          ],
+          "type": "object",
+        },
+        "maxItems": 10,
+        "minItems": 2,
+        "type": "array",
+      },
+      "question": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "survey",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "question",
+      "options",
+    ],
+    "type": "object",
+  },
+  "BlockTable": {
+    "properties": {
+      "headers": {
+        "items": {
+          "maxLength": 500,
+          "type": "string",
+        },
+        "maxItems": 20,
+        "minItems": 1,
+        "type": "array",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "rows": {
+        "items": {
+          "description": "Same length as headers",
+          "items": {
+            "description": "Inline text: **bold**, *italic*, ~~strike~~, ==highlight==, \`code\`, [label](https://...) — no HTML",
+            "maxLength": 20000,
+            "type": "string",
+          },
+          "type": "array",
+        },
+        "maxItems": 200,
+        "type": "array",
+      },
+      "type": {
+        "const": "table",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "headers",
+      "rows",
+    ],
+    "type": "object",
+  },
+  "BlockToggle": {
+    "properties": {
+      "blocks": {
+        "description": "May not contain toggle or layout blocks",
+        "items": {
+          "$ref": "#/components/schemas/Block",
+        },
+        "maxItems": 50,
+        "type": "array",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "open": {
+        "default": false,
+        "type": "boolean",
+      },
+      "summary": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "toggle",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "summary",
+      "blocks",
+    ],
+    "type": "object",
+  },
+  "BlockVideo": {
+    "properties": {
+      "caption": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "id": {
+        "description": "Unique within the document; generated when omitted",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string",
+      },
+      "poster": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+      "title": {
+        "maxLength": 500,
+        "type": "string",
+      },
+      "type": {
+        "const": "video",
+        "type": "string",
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "type": "string",
+      },
+    },
+    "required": [
+      "type",
+      "url",
+    ],
+    "type": "object",
+  },
+}
+`;

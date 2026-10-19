@@ -20,10 +20,10 @@ import type { PromoCode } from '../promos/promo-codes';
 import { redeemPromo, releasePromo, reservePromo } from '../promos/promo-redemptions';
 import { applyPercent } from '../referrals/rates';
 import { allowedSubscriptionAmounts, discountNotApplied, minimumChargeCents } from './dodo-card-referral-pricing';
-import type { DodoEvent, DodoMetadata, DodoReversalEvent } from './dodo';
+import type { DodoEvent, DodoMetadata, DodoPaymentLookup, DodoReversalEvent } from './dodo';
 import {
-  cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, getDodoPaymentSubscriptionId, planForDodoProduct,
-  requireDodoPlan,
+  DodoApiError, cancelDodoSubscription, createDodoCheckout, createDodoDiscount, createDodoPortalLink, dodoProductId, lookupDodoPayment,
+  planForDodoProduct, requireDodoPlan,
 } from './dodo';
 
 /**
@@ -605,18 +605,39 @@ async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Ro
   ).bind(chargeKey(paymentId)).first<Row>();
 }
 
-/** The card of a payment with no recorded charge, through Dodo's payment lookup; null when it fails or matches no card. */
+/**
+ * The card of a payment with no recorded charge, through Dodo's payment lookup; null when the lookup cannot run (no API
+ * key), Dodo rejects it (4xx other than 408/429, such as an unknown payment) or it matches no card. A network error, timeout,
+ * Dodo 408/429 or 5xx propagates as 502 so Dodo redelivers the reversal; nothing has been written yet.
+ * Like `locateCard`, it matches the payment's subscription id first, then the checkout's card reference in the payment
+ * metadata, which is the only link while no card webhook has stored the subscription id yet. That fallback, like the
+ * payment path, also requires the metadata's member and plan to be the card's, and skips a card bound to another subscription.
+ */
 async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId: string): Promise<Row | null> {
-  let subscriptionId: string | null;
-  try {
-    subscriptionId = await getDodoPaymentSubscriptionId(env, paymentId, membersRuntime.fetch);
-  } catch (err) {
-    console.warn(`dodo reversal: payment lookup failed (${err instanceof Error ? err.message : 'unknown'}); ignored`);
+  if (!env.DODO_API_KEY) {
+    console.warn('dodo reversal: payment lookup skipped (missing DODO_API_KEY); ignored');
     return null;
   }
-  if (!subscriptionId) return null;
-  const row = await d1.prepare("SELECT id, user_id, plan, first_payment_id FROM card_subscriptions WHERE provider = 'dodo' AND provider_subscription_id = ?")
-    .bind(subscriptionId).first<Row>();
+  let payment: DodoPaymentLookup;
+  try {
+    payment = await lookupDodoPayment(env, paymentId, membersRuntime.fetch);
+  } catch (err) {
+    const status = err instanceof DodoApiError ? err.upstreamStatus : null;
+    // Only a definite rejection is ignored; a rate limit (429) or request timeout (408) is transient, like a 5xx.
+    if (!(err instanceof DodoApiError) || status === null || status < 400 || status >= 500 || status === 408 || status === 429) throw err;
+    console.warn(`dodo reversal: payment lookup rejected (${err.message}); ignored`);
+    return null;
+  }
+  const { subscriptionId, metadata } = payment;
+  const columns = 'SELECT id, user_id, plan, first_payment_id FROM card_subscriptions';
+  let row = subscriptionId
+    ? await d1.prepare(`${columns} WHERE provider = 'dodo' AND provider_subscription_id = ?`).bind(subscriptionId).first<Row>()
+    : null;
+  if (!row && metadata.cardRef) {
+    row = await d1.prepare(
+      `${columns} WHERE provider = 'dodo' AND id = ? AND (provider_subscription_id IS NULL OR provider_subscription_id = ?) AND user_id IS ? AND plan IS ?`
+    ).bind(metadata.cardRef, subscriptionId, metadata.userId, metadata.plan).first<Row>();
+  }
   if (row && strOrNull(row, 'first_payment_id') === null) {
     // The reversal may be of the first payment, whose referral commission is captured when it is recorded.
     throw new AppError(409, 'payment_not_recorded', 'The reversed payment is not recorded yet; retry after its payment.succeeded webhook', { payment_id: paymentId });
@@ -632,10 +653,12 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
  * `payment_events` row keyed by the refund or dispute id gates them across webhook retries.
  *
  * A payment with no recorded charge (a reversal that beats its `payment.succeeded`, or a renewal charged before
- * charge rows existed) is looked up at Dodo (`GET /payments/{id}`, with `env`). If it charged a card subscription that
+ * charge rows existed) is looked up at Dodo (`GET /payments/{id}`, with `env`) and matched to a card by its subscription id or,
+ * before any card webhook has stored that id, by the checkout's card reference in its metadata. If it charged a card subscription that
  * already has a first payment, it is that card's renewal and is applied now. If the card has no first payment yet,
  * this throws a 409 so Dodo redelivers the reversal after the charge is recorded (Dodo's 8 attempts span about 28
- * hours). A failed lookup or a payment of no card here is `ignored`, as before.
+ * hours). A lookup Dodo rejects (4xx other than 408/429), one that cannot run (no API key) or a payment of no card here is `ignored`; a lookup that
+ * fails on a network error, timeout, Dodo 408/429 or 5xx answers 502 so Dodo redelivers the reversal.
  */
 export async function applyDodoReversal(
   d1: D1DatabaseLike, event: DodoReversalEvent, env?: RuntimeEnv,

@@ -166,7 +166,7 @@ export function courseReceiptEmail(input: { code: string; courseTitle: string; a
     p('Cảm ơn bạn! Thanh toán đã được xác nhận và khoá học đã sẵn sàng trong tài khoản của bạn.'),
     table,
     button(input.courseUrl, 'Bắt đầu học'),
-    p(`Khoá học là sản phẩm số và không hoàn tiền sau khi mở khoá (${input.policyUrl}).`),
+    p(`Bạn được hoàn tiền 100% không cần lý do nếu yêu cầu trong 7 ngày kể từ ngày thanh toán (${input.policyUrl}).`),
     p(`English: payment ${input.code} received; ${input.courseTitle} is unlocked for life.`),
   ].join(''));
   const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n') + `\n\nVào học: ${input.courseUrl}\nChính sách: ${input.policyUrl}`;

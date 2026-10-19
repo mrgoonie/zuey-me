@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import { AppError, jsonError } from '../http';
 import { authenticateAdmin } from '../auth';
 import type { ArticleAccess, ArticleDocument, ArticleStatus, Block } from './schema';
@@ -13,7 +13,7 @@ import { DEFAULT_LOCALE, LOCALES, isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import { documentText, readingMinutes, wordCount } from '../search/text';
-import { resolveTagRefs, setArticleTags, tagsForArticles, toPublicTag } from '../taxonomy/tags';
+import { mirrorLegacyTags, resolveTagRefs, setArticleTags, tagsForArticles, toPublicTag } from '../taxonomy/tags';
 import type { PublicTag } from '../taxonomy/tags';
 import { listCategories, resolveCategoryRef, toPublicCategory } from '../taxonomy/categories';
 import type { PublicCategory } from '../taxonomy/categories';
@@ -85,7 +85,7 @@ export interface ArticleRecord extends ArticleSummary {
 export interface ArticleView extends ArticleSummary {
   document: ArticleDocument;
   truncated: boolean;
-  /** Only when truncated: withheld top-level headings (text + level) and withheld size; no other paid text. */
+  /** Only when truncated: withheld headings (text + level) and withheld size; no other paid text. */
   locked_outline?: LockedOutline;
   preview: boolean;
   /** True when the requested locale had no edition and another edition is shown instead. */
@@ -356,6 +356,38 @@ function buildSummary(
   };
 }
 
+/** Compact, unambiguous result of a draft write; `status` stays as the public state of the edition. */
+export interface WriteReceipt {
+  operation_success: true;
+  locale: Locale;
+  /** Article-wide revision read right after the write (the next expected_revision unless another writer got in first). */
+  article_revision: number;
+  /** Edition revision after the save; equals article_revision because a save bumps both together. */
+  edition_draft_revision: number;
+  /** Revision of the edition's currently public snapshot; null when it was never published. */
+  published_revision: number | null;
+  has_unpublished_changes: boolean;
+  /** Fields present in the request (not a diff against the stored values). */
+  submitted_fields: string[];
+  next_action: 'publish' | 'none';
+}
+
+const RECEIPT_FIELDS = ['slug', 'title', 'excerpt', 'primary_locale', 'access', 'tags', 'category', 'document'] as const;
+
+export function toWriteReceipt(rec: ArticleRecord, input: ArticleInput): WriteReceipt {
+  const edition = rec.editions.find(e => e.locale === rec.locale);
+  return {
+    operation_success: true,
+    locale: rec.locale,
+    article_revision: rec.revision,
+    edition_draft_revision: edition?.revision ?? rec.revision,
+    published_revision: rec.published_revision,
+    has_unpublished_changes: rec.has_unpublished_changes,
+    submitted_fields: RECEIPT_FIELDS.filter(f => input[f] !== undefined),
+    next_action: rec.has_unpublished_changes ? 'publish' : 'none',
+  };
+}
+
 export function toSummary(rec: ArticleRecord): ArticleSummary {
   const { draft: _draft, draft_recovery: _r, published: _published, category_id: _c, tag_ids: _t, ...summary } = rec;
   return summary;
@@ -615,9 +647,54 @@ async function recordRevision(
   `).bind(newId('rev_'), articleId, locale, revision, action, title, excerpt, docJson, actor, nowIso()).run();
 }
 
+/**
+ * Condition appended to every write of a revisioned save (bind: article id, expected revision), so inside
+ * the save's batch nothing applies unless the revision bump at the end applies too.
+ */
+const AT_EXPECTED = 'EXISTS (SELECT 1 FROM articles WHERE id = ? AND revision = ? AND deleted_at IS NULL)';
+
+/** A history row written only while the article is still at `expected`. */
+function guardedRevisionStatement(
+  db: D1DatabaseLike, articleId: string, expected: number, locale: Locale,
+  action: 'create' | 'save' | 'publish' | 'delete_edition', title: string, excerpt: string, docJson: string, actor: string, now: string,
+): D1PreparedStatementLike {
+  // The snapshot is the stored JSON itself, so a read-side recovery is never baked into history.
+  return db.prepare(`
+    INSERT INTO article_revisions (id, article_id, locale, revision, action, title, excerpt, document_json, actor, created_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${AT_EXPECTED}
+  `).bind(newId('rev_'), articleId, locale, expected + 1, action, title, excerpt, docJson, actor, now, articleId, expected);
+}
+
+/** Replaces the article's tag rows (same order and semantics as `setArticleTags`) while it is still at `expected`. */
+function guardedTagStatements(db: D1DatabaseLike, articleId: string, expected: number, tagIds: string[], now: string): D1PreparedStatementLike[] {
+  return [
+    db.prepare(`DELETE FROM article_tags WHERE article_id = ? AND ${AT_EXPECTED}`).bind(articleId, articleId, expected),
+    ...tagIds.map((tagId, i) => db.prepare(`
+      INSERT OR IGNORE INTO article_tags (article_id, tag_id, position, created_at) SELECT ?, ?, ?, ? WHERE ${AT_EXPECTED}
+    `).bind(articleId, tagId, i, now, articleId, expected)),
+  ];
+}
+
+/** The compare-and-set that moves the article from `expected` to `expected + 1`. */
+function bumpRevisionStatement(db: D1DatabaseLike, articleId: string, expected: number, now: string): D1PreparedStatementLike {
+  return db.prepare('UPDATE articles SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
+    .bind(now, articleId, expected);
+}
+
+/**
+ * Runs a save's guarded writes, then its revision bump, then derived rebuilds, in one D1 batch (one
+ * transaction): the save applies fully at expected + 1 or not at all. A lost bump is a revision conflict.
+ */
+async function commitAtRevision(
+  db: D1DatabaseLike, articleId: string, writes: D1PreparedStatementLike[], bump: D1PreparedStatementLike, derived: D1PreparedStatementLike[] = [],
+): Promise<void> {
+  const results = await db.batch([...writes, bump, ...derived]);
+  if (!results[writes.length]?.meta?.changes) return conflict(db, articleId);
+}
+
 /** Keeps the legacy single-locale columns of `articles` equal to the primary edition (older builds read them). */
-async function mirrorPrimary(db: D1DatabaseLike, articleId: string): Promise<void> {
-  await db.prepare(`
+function mirrorPrimaryStatement(db: D1DatabaseLike, articleId: string): D1PreparedStatementLike {
+  return db.prepare(`
     UPDATE articles SET
       title = COALESCE((SELECT e.title FROM article_editions e WHERE e.article_id = articles.id AND e.locale = articles.locale AND e.deleted_at IS NULL), title),
       excerpt = COALESCE((SELECT e.excerpt FROM article_editions e WHERE e.article_id = articles.id AND e.locale = articles.locale AND e.deleted_at IS NULL), excerpt),
@@ -626,13 +703,31 @@ async function mirrorPrimary(db: D1DatabaseLike, articleId: string): Promise<voi
       published_at = (SELECT e.published_at FROM article_editions e WHERE e.article_id = articles.id AND e.locale = articles.locale AND e.deleted_at IS NULL),
       status = CASE WHEN EXISTS (SELECT 1 FROM article_editions e WHERE e.article_id = articles.id AND e.locale = articles.locale AND e.deleted_at IS NULL AND e.published_json IS NOT NULL) THEN 'published' ELSE 'draft' END
     WHERE id = ?
-  `).bind(articleId).run();
+  `).bind(articleId);
 }
 
-async function conflict(db: D1DatabaseLike, slug: string): Promise<never> {
-  const current = await loadArticleRow(db, slug);
+/** By id, not slug: a concurrent save may have renamed the article, which is still a revision conflict. */
+async function conflict(db: D1DatabaseLike, articleId: string): Promise<never> {
+  const current = await db.prepare('SELECT revision FROM articles WHERE id = ? AND deleted_at IS NULL').bind(articleId).first<Row>();
   if (!current) throw new AppError(404, 'not_found', 'Article not found');
-  throw new AppError(409, 'revision_conflict', 'Article was changed by someone else; reload and retry', { current_revision: current.revision });
+  throw new AppError(409, 'revision_conflict', 'Article was changed by someone else; reload and retry', { current_revision: n(current, 'revision') });
+}
+
+/** Whether a write was rejected by the unique index on `articles.slug` (D1 and SQLite report it the same way). */
+function isSlugUniqueViolation(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('UNIQUE constraint failed: articles.slug');
+}
+
+/**
+ * Runs a derived-cache rebuild after a save has committed. A failure is logged, not thrown: the save
+ * landed, and the cache is rebuilt by the next save or an admin reindex.
+ */
+async function afterCommit(what: string, task: () => Promise<unknown>): Promise<void> {
+  try {
+    await task();
+  } catch (err) {
+    console.error(`${what} failed after commit:`, err instanceof Error ? err.message : 'unknown');
+  }
 }
 
 function requireRevision(value: unknown): number {
@@ -705,36 +800,46 @@ export async function updateArticle(
   const tagIds = input.tags ? await resolveTagRefs(db, input.tags, { createMissing: true, locale, actor }) : null;
 
   const now = nowIso();
-  const res = await db.prepare(`
-    UPDATE articles SET slug = ?, locale = ?, access = ?, category_id = ?, revision = revision + 1, updated_at = ?
-    WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(nextSlug, primary, input.access ?? art.access, categoryId, now, art.id, expected).run();
-  if (!res.meta?.changes) return conflict(db, slug);
   const revision = expected + 1;
-
   const title = input.title ?? edition?.title ?? '';
   const excerpt = input.excerpt ?? edition?.excerpt ?? '';
+  const writes: D1PreparedStatementLike[] = [];
   if (edition) {
-    await db.prepare('UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, revision = ?, updated_at = ? WHERE article_id = ? AND locale = ?')
-      .bind(title, excerpt, docJson, revision, now, art.id, locale).run();
+    writes.push(db.prepare(`UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, revision = ?, updated_at = ? WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}`)
+      .bind(title, excerpt, docJson, revision, now, art.id, locale, art.id, expected));
   } else if (editionRow) {
     // Re-creating a deleted edition reuses its row (article_id + locale is unique) and starts as a draft.
-    await db.prepare(`
+    writes.push(db.prepare(`
       UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, published_json = NULL, published_revision = NULL,
         status = 'draft', published_words = 0, cover_url = NULL, published_at = NULL, revision = ?, updated_at = ?, deleted_at = NULL
-      WHERE article_id = ? AND locale = ?
-    `).bind(title, excerpt, docJson, revision, now, art.id, locale).run();
+      WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}
+    `).bind(title, excerpt, docJson, revision, now, art.id, locale, art.id, expected));
   } else {
-    await db.prepare(`
+    writes.push(db.prepare(`
       INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, revision, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-    `).bind(newId('ed_'), art.id, locale, title, excerpt, docJson, revision, now, now).run();
+      SELECT ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ? WHERE ${AT_EXPECTED}
+    `).bind(newId('ed_'), art.id, locale, title, excerpt, docJson, revision, now, now, art.id, expected));
   }
-  await recordRevision(db, art.id, locale, revision, edition ? 'save' : 'create', title, excerpt, docJson, actor);
-  if (tagIds) await setArticleTags(db, art.id, tagIds);
-  await mirrorPrimary(db, art.id);
+  writes.push(guardedRevisionStatement(db, art.id, expected, locale, edition ? 'save' : 'create', title, excerpt, docJson, actor, now));
+  if (tagIds) writes.push(...guardedTagStatements(db, art.id, expected, tagIds, now));
+  const bump = db.prepare(`
+    UPDATE articles SET slug = ?, locale = ?, access = ?, category_id = ?, revision = revision + 1, updated_at = ?
+    WHERE id = ? AND revision = ? AND deleted_at IS NULL
+  `).bind(nextSlug, primary, input.access ?? art.access, categoryId, now, art.id, expected);
+  // The primary mirror is derived from the editions, so it is correct to run whether or not this save won.
+  try {
+    await commitAtRevision(db, art.id, writes, bump, [mirrorPrimaryStatement(db, art.id)]);
+  } catch (err) {
+    // Another article took the slug after the check above; the batch rolled back as a whole.
+    if (nextSlug !== art.slug && isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${nextSlug}" is already used`);
+    throw err;
+  }
+
+  // Derived caches rebuilt from the committed rows: the legacy tag names column and the search index
+  // (which also calls Workers AI / Vectorize, so it cannot join a D1 batch). Both are idempotent.
+  if (tagIds) await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
   // Access, tags and category affect what each search tier may contain: always rebuild.
-  await reindexArticle(db, art.id, ctx.env);
+  await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
   const updated = await getArticle(db, nextSlug, { locale });
   if (!updated) throw new AppError(500, 'internal_error', 'Article disappeared after update');
@@ -784,18 +889,18 @@ export async function publishArticle(
     SELECT 1 FROM article_revisions WHERE article_id = ? AND action = 'publish'
     UNION ALL SELECT 1 FROM article_editions WHERE article_id = ? AND published_json IS NOT NULL LIMIT 1
   `).bind(art.id, art.id).first());
-  const res = await db.prepare('UPDATE articles SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
-    .bind(now, art.id, expected).run();
-  if (!res.meta?.changes) return conflict(db, slug);
   const revision = expected + 1;
   const publicPart = applyPaywall(doc, art.access, { isAdmin: false, entitlements: [] }).doc;
-  await db.prepare(`
-    UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
-      published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
-    WHERE article_id = ? AND locale = ?
-  `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale).run();
-  await recordRevision(db, art.id, locale, revision, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin');
-  await mirrorPrimary(db, art.id);
+  // Guarded by the revision, so the draft copied here is the one read above: a save landing in between
+  // bumps the revision and turns this publish into a conflict instead of publishing an unseen draft.
+  await commitAtRevision(db, art.id, [
+    db.prepare(`
+      UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
+        published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
+      WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}
+    `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), firstImage(publicPart.blocks), now, art.id, locale, art.id, expected),
+    guardedRevisionStatement(db, art.id, expected, locale, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
+  ], bumpRevisionStatement(db, art.id, expected, now), [mirrorPrimaryStatement(db, art.id)]);
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
   const nowMs = Date.now();
@@ -818,13 +923,12 @@ export async function deleteEdition(
   const row = await db.prepare('SELECT * FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL').bind(art.id, locale).first<Row>();
   if (!row) throw new AppError(404, 'not_found', `No ${locale} edition`);
   const now = nowIso();
-  const res = await db.prepare('UPDATE articles SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
-    .bind(now, art.id, expected).run();
-  if (!res.meta?.changes) return conflict(db, slug);
   const edition = toEditionRow(row);
-  await db.prepare('UPDATE article_editions SET deleted_at = ?, updated_at = ?, revision = ? WHERE article_id = ? AND locale = ?')
-    .bind(now, now, expected + 1, art.id, locale).run();
-  await recordRevision(db, art.id, locale, expected + 1, 'delete_edition', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin');
+  await commitAtRevision(db, art.id, [
+    db.prepare(`UPDATE article_editions SET deleted_at = ?, updated_at = ?, revision = ? WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}`)
+      .bind(now, now, expected + 1, art.id, locale, art.id, expected),
+    guardedRevisionStatement(db, art.id, expected, locale, 'delete_edition', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
+  ], bumpRevisionStatement(db, art.id, expected, now));
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
   const rec = await getArticle(db, slug);
@@ -855,10 +959,10 @@ export async function setTagsForArticle(
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
   const tagIds = await resolveTagRefs(db, refs, { createMissing: false, locale: art.primary, actor: ctx.actor ?? 'admin' });
-  const res = await db.prepare('UPDATE articles SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
-    .bind(nowIso(), art.id, expected).run();
-  if (!res.meta?.changes) return conflict(db, slug);
-  await setArticleTags(db, art.id, tagIds);
+  const now = nowIso();
+  await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
+  // Derived cache rebuilt from the committed rows (legacy tag names column); idempotent.
+  await mirrorLegacyTags(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
   scheduleOgRefresh(db, art.id, slug, ctx);
   const rec = await getArticle(db, slug);

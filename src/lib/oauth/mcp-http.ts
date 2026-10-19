@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import { allMcpTools, callMcpTool } from '../mcp/dispatch';
-import type { McpContext } from '../mcp/types';
+import type { McpContext, McpTool } from '../mcp/types';
 import type { Principal } from '../members/policy';
 import { can, requireCan } from '../members/policy';
 import type { McpCaller, OAuthGrantInfo } from './caller';
@@ -30,6 +30,7 @@ const INSTRUCTIONS = 'Tools for zuey.me: Duy Nguyen\'s profile, articles (full t
 const META_VERSION = 'io.modelcontextprotocol/protocolVersion';
 const META_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities';
 const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo';
+const META_CATALOG_VERSION = 'me.zuey/toolCatalogVersion';
 
 // Application error codes (outside the JSON-RPC reserved range).
 const ERR_UNAUTHORIZED = -31001;
@@ -93,6 +94,12 @@ function decodeHeaderValue(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Short stable digest of a catalogue, so a connector (or an operator) can tell a stale captured manifest from the live one. */
+async function catalogVersion(tools: McpTool[]): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(tools)));
+  return Array.from(new Uint8Array(digest).slice(0, 8), b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function toolResult(data: unknown): Record<string, unknown> {
@@ -235,7 +242,8 @@ export async function handleMcpPost(request: Request, env: RuntimeEnv, waitUntil
     case 'tools/list': {
       const tools = visibleTools(principal, allMcpTools());
       // 2026-07-28 list results must carry cache hints; the list depends on the caller, so it is private.
-      return ok(era.modern ? { tools, ttlMs: TOOLS_LIST_TTL_MS, cacheScope: 'private' } : { tools });
+      const listMeta = { [META_CATALOG_VERSION]: await catalogVersion(tools) };
+      return ok(era.modern ? { tools, ttlMs: TOOLS_LIST_TTL_MS, cacheScope: 'private', _meta: listMeta } : { tools, _meta: listMeta });
     }
     case 'tools/call': {
       const name = typeof params.name === 'string' ? params.name : '';
