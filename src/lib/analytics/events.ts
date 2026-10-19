@@ -154,6 +154,85 @@ export const ANALYTICS_EVENTS = {
     props: { payment_method: str, value: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true } },
   },
 
+  // Product engagement (Knowledges, Reads, Zuey AI, ZueyOS, community, surveys). Properties are enums, public
+  // slugs, counts, lengths and backend metrics only: never the search text, chat text, vote labels or a URL.
+  knowledge_search: {
+    version: 1, source: 'client', owner: 'product', trigger: 'Search results for a typed query are shown (Knowledges page or panel, Reads)',
+    props: { surface: str, query_length: num, results: num, semantic: { kind: 'boolean', optional: true } },
+  },
+  knowledge_filter_applied: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A category, tag, label, sort or source filter is applied or cleared',
+    props: { surface: str, filter: str, value: str },
+  },
+  article_opened: {
+    version: 1, source: 'client', owner: 'product', trigger: 'An article page is shown (once per page load)',
+    props: { slug: str, locale: str, access: str, locked: bool, reading_minutes: num },
+  },
+  article_engaged: {
+    version: 1, source: 'client', owner: 'product', trigger: 'The reader spent 30 s with the article visible and scrolled through half of its readable body (once per page load)',
+    props: { slug: str, locale: str, access: str, seconds: num, depth: num },
+  },
+  paywall_viewed: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The members-only lock box of a truncated article scrolls into view (once per page load)',
+    props: { slug: str, locale: str, locked_sections: num },
+  },
+  article_unlocked: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'A members-only article is shown in full to a reader whose plan includes it (once per page load)',
+    props: { slug: str, locale: str },
+  },
+  reads_opened: {
+    version: 1, source: 'client', owner: 'product', trigger: 'The Zuey Reads list is shown (once per page load)',
+    props: { surface: str, items: num },
+  },
+  read_source_clicked: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A recommended read is opened at its source',
+    props: { source_kind: str, domain: str, position: num },
+  },
+  ai_chat_started: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A new Zuey AI chat session is created by the first question',
+    props: { surface: str },
+  },
+  ai_message_submitted: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A question is sent to Zuey AI (length only, never the text)',
+    props: { surface: str, chars: num, quoted: bool, retry: bool },
+  },
+  ai_response_completed: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A Zuey AI reply stream finished successfully; metrics come from the backend',
+    props: {
+      surface: str, sources: num, artifacts: num,
+      latency_ms: { kind: 'number', optional: true }, prompt_tokens: { kind: 'number', optional: true },
+      completion_tokens: { kind: 'number', optional: true }, cost_cents: { kind: 'number', optional: true },
+    },
+  },
+  ai_response_failed: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A Zuey AI reply failed, was refused before streaming, or was stopped',
+    props: { surface: str, stage: str, reason: str, retryable: bool, latency_ms: { kind: 'number', optional: true } },
+  },
+  ai_quota_reached: {
+    version: 1, source: 'client', owner: 'revenue', trigger: 'The monthly Zuey AI request quota or budget is used up (on send, or shown on load)',
+    props: { surface: str, kind: str, stage: str },
+  },
+  app_opened: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A ZueyOS window is opened or brought to front (openApp)',
+    props: { app: str, already_open: bool },
+  },
+  community_invite_requested: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A single-use Telegram invite link was created for the member',
+    props: { chat: str },
+  },
+  community_joined: {
+    version: 1, source: 'client', owner: 'product', trigger: 'The community card sees an invited membership turn joined (Telegram confirmed the join)',
+    props: { chat: str },
+  },
+  survey_submitted: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A survey vote in an article is accepted (count of choices only, never which)',
+    props: { slug: str, options: num, multiple: bool },
+  },
+  feature_error: {
+    version: 1, source: 'client', owner: 'product', trigger: 'A product feature could not load or complete its request',
+    props: { feature: str, reason: str },
+  },
+
   // Server events. Written to the analytics outbox right after the verified state change, as a separate
   // statement (`src/lib/analytics/outbox.ts`), and delivered by the scheduler; never emitted from the browser.
   sign_up: {

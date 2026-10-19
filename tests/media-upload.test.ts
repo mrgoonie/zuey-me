@@ -259,7 +259,7 @@ describe('media REST', () => {
 
   it('documents every endpoint in OpenAPI', () => {
     expect(Object.keys(mediaOpenApi.paths).sort()).toEqual([
-      '/api/v1/admin/media', '/api/v1/admin/media/upload-url', '/api/v1/admin/media/{id}', '/api/v1/media/uploads/{token}',
+      '/api/v1/admin/media', '/api/v1/admin/media/reconcile', '/api/v1/admin/media/upload-url', '/api/v1/admin/media/{id}', '/api/v1/media/uploads/{token}',
     ]);
   });
 });

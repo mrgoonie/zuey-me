@@ -112,10 +112,10 @@ const pageTitle = view ? `Cho phép ${view.client_name} truy cập Zuey?` : (fai
               <legend class="text-sm font-semibold mb-1">Quyền ứng dụng yêu cầu (bạn có thể bỏ bớt)</legend>
               {view.scopes.map(choice => (
                 <label class="flex gap-2 items-start text-sm min-w-0">
-                  <input type="checkbox" name="scope" value={choice.scope} checked={choice.requested} class="mt-1 accent-stone-900 shrink-0" />
+                  <input type="checkbox" name="scope" value={choice.scope} checked={choice.requested && choice.scope !== 'admin'} class="mt-1 accent-stone-900 shrink-0" />
                   <span class="min-w-0">
                     <span class="font-mono text-xs break-all">{choice.scope}</span>
-                    <span class="block text-xs text-stone-600">{scopeLabel(choice.scope)}{choice.requested ? '' : ' (ứng dụng không yêu cầu)'}</span>
+                    <span class="block text-xs text-stone-600">{scopeLabel(choice.scope)}{choice.scope === 'admin' ? ' (không tick sẵn, hãy tự chọn nếu cần)' : choice.requested ? '' : ' (ứng dụng không yêu cầu)'}</span>
                   </span>
                 </label>
               ))}

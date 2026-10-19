@@ -70,6 +70,8 @@ const activeTag = facets.tags.find(tag => tag.slug === query.tag);
 const chip = (pressed: boolean) =>
   `inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${pressed ? 'bg-stone-900 text-white border-stone-900' : 'bg-white/80 text-stone-700 border-stone-200 hover:bg-white'}`;
 const origin = Astro.url.origin;
+// What the sort select shows as chosen when the page renders (mirrors the selected logic below).
+const initialSort = query.sort ?? (query.q ? 'relevance' : 'new');
 ---
 
 <Layout
@@ -80,6 +82,8 @@ const origin = Astro.url.origin;
 >
   {hasMore && <link slot="head" rel="next" href={nextHref} />}
   <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 md:py-12 px-2.5 sm:px-4 md:px-6">
+    {/* Search outcome for analytics: the query length only, never the query text. */}
+    <div hidden data-knowledge-search data-query-length={query.q?.length ?? 0} data-results={total} data-semantic={semantic ? '1' : '0'} data-page={page} data-failed={failed ? '1' : '0'}></div>
     <section class="w-full max-w-[820px] min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9">
       <nav class="text-xs font-semibold text-stone-500 mb-5 flex flex-wrap justify-between gap-3">
         <a href="/" class="hover:text-stone-900">{t.back}</a>
@@ -102,7 +106,7 @@ const origin = Astro.url.origin;
           </span>
           <span class="text-xs font-semibold text-stone-500">{t.results(total)}</span>
         </summary>
-        <form method="get" action="/articles" role="search" class="flex flex-col gap-3 px-4 pb-4">
+        <form method="get" action="/articles" role="search" class="flex flex-col gap-3 px-4 pb-4" data-knowledge-form>
           {query.locale && <input type="hidden" name="lang" value={query.locale} />}
           <div class="flex gap-2">
             <label for="kq" class="sr-only">{t.searchLabel}</label>
@@ -114,9 +118,9 @@ const origin = Astro.url.origin;
             <fieldset>
               <legend class="text-xs font-bold text-stone-600 mb-1.5">{t.category}</legend>
               <div class="flex flex-wrap gap-1.5">
-                <a href={hrefWith({ category: undefined })} class={chip(!query.category)} aria-current={!query.category ? 'true' : undefined}>{t.all}</a>
+                <a href={hrefWith({ category: undefined })} data-knowledge-filter="category" data-knowledge-value="" class={chip(!query.category)} aria-current={!query.category ? 'true' : undefined}>{t.all}</a>
                 {facets.categories.map(c => (
-                  <a href={hrefWith({ category: query.category === c.slug ? undefined : c.slug })} class={chip(query.category === c.slug)}
+                  <a href={hrefWith({ category: query.category === c.slug ? undefined : c.slug })} data-knowledge-filter="category" data-knowledge-value={query.category === c.slug ? '' : c.slug} class={chip(query.category === c.slug)}
                     aria-current={query.category === c.slug ? 'true' : undefined}>{c.name} <span class="opacity-60">{c.published_count}</span></a>
                 ))}
               </div>
@@ -128,7 +132,7 @@ const origin = Astro.url.origin;
             {facets.labels.length > 0 && (
               <label class="flex flex-col gap-1 text-xs font-bold text-stone-600">
                 {t.labelsAndFreshness}
-                <select name="label" class="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm font-normal text-stone-800">
+                <select name="label" data-knowledge-filter="label" data-initial={query.label ?? ''} class="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm font-normal text-stone-800">
                   <option value="">{t.anyLabel}</option>
                   {['claim', 'freshness', 'domain', 'tool', 'model', 'workflow', 'mindset', 'extension'].map(kind => {
                     const group = facets.labels.filter(l => l.kind === kind);
@@ -143,7 +147,7 @@ const origin = Astro.url.origin;
             )}
             <label class="flex flex-col gap-1 text-xs font-bold text-stone-600">
               {t.sort}
-              <select name="sort" class="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm font-normal text-stone-800">
+              <select name="sort" data-knowledge-filter="sort" data-initial={initialSort} class="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm font-normal text-stone-800">
                 {query.q && <option value="relevance" selected={!query.sort || query.sort === 'relevance'}>{t.sortRelevance}</option>}
                 <option value="new" selected={query.sort === 'new' || (!query.q && !query.sort)}>{t.sortNew}</option>
                 <option value="old" selected={query.sort === 'old'}>{t.sortOld}</option>
@@ -156,7 +160,7 @@ const origin = Astro.url.origin;
               <legend class="text-xs font-bold text-stone-600 mb-1.5">{t.tags}</legend>
               <div class="flex flex-wrap gap-1.5">
                 {facets.tags.slice(0, 30).map(tag => (
-                  <a href={hrefWith({ tag: query.tag === tag.slug ? undefined : tag.slug })} class={chip(query.tag === tag.slug)}
+                  <a href={hrefWith({ tag: query.tag === tag.slug ? undefined : tag.slug })} data-knowledge-filter="tag" data-knowledge-value={query.tag === tag.slug ? '' : tag.slug} class={chip(query.tag === tag.slug)}
                     aria-current={query.tag === tag.slug ? 'true' : undefined}>#{tag.name}</a>
                 ))}
               </div>
@@ -164,13 +168,13 @@ const origin = Astro.url.origin;
           )}
           <div class="flex flex-wrap items-center gap-3">
             <button type="submit" class="rounded-full border border-stone-300 bg-white px-4 py-1.5 text-xs font-bold text-stone-800 hover:bg-stone-50">{t.apply}</button>
-            {filtering && <a href={`/articles${query.locale ? `?lang=${query.locale}` : ''}`} class="text-xs font-bold text-stone-600 underline hover:text-stone-900">{t.reset}</a>}
+            {filtering && <a href={`/articles${query.locale ? `?lang=${query.locale}` : ''}`} data-knowledge-filter="reset" class="text-xs font-bold text-stone-600 underline hover:text-stone-900">{t.reset}</a>}
             {query.q && !semantic && <span class="text-[11px] text-stone-500">{t.semanticOff}</span>}
           </div>
         </form>
       </details>
 
-      {activeTag && <p class="mt-4 text-sm text-stone-600">#{activeTag.name} — <a href={hrefWith({ tag: undefined })} class="underline">{t.reset}</a></p>}
+      {activeTag && <p class="mt-4 text-sm text-stone-600">#{activeTag.name} — <a href={hrefWith({ tag: undefined })} data-knowledge-filter="tag" data-knowledge-value="" class="underline">{t.reset}</a></p>}
 
       <div aria-live="polite">
         {failed ? (
@@ -178,7 +182,7 @@ const origin = Astro.url.origin;
         ) : items.length === 0 ? (
           <div class="mt-10 text-center">
             <p class="text-stone-500">{filtering ? t.noResults : t.noArticles}</p>
-            {filtering && <a href="/articles" class="mt-4 inline-flex rounded-full bg-stone-900 text-white px-5 py-2 text-sm font-bold">{t.reset}</a>}
+            {filtering && <a href="/articles" data-knowledge-filter="reset" class="mt-4 inline-flex rounded-full bg-stone-900 text-white px-5 py-2 text-sm font-bold">{t.reset}</a>}
           </div>
         ) : (
           <>
@@ -203,5 +207,7 @@ const origin = Astro.url.origin;
 
 <script>
   import { initArticleInfiniteList } from '../../scripts/article-list-infinite-scroll';
+  import { initKnowledgeSearchAnalytics } from '../../scripts/knowledge-search-analytics';
   initArticleInfiniteList();
+  initKnowledgeSearchAnalytics();
 </script>

@@ -31,9 +31,13 @@ export interface MediaAsset {
   height: number | null;
   alt: string;
   source_url: string | null;
+  /** How the row was registered: a direct upload, a URL import, or a reconciled pre-existing object. */
+  origin: MediaOrigin;
   created_by: string;
   created_at: string;
 }
+
+export type MediaOrigin = 'upload' | 'import' | 'reconcile';
 
 /** Image block ready to drop into an article document (`width`/`height` only when known). */
 export interface MediaImageBlock { type: 'image'; url: string; alt: string; width?: number; height?: number }
@@ -46,12 +50,13 @@ export interface StoredMedia {
   markdown: string;
 }
 
-function rowToAsset(r: Row): MediaAsset {
+export function rowToAsset(r: Row): MediaAsset {
   const int = (v: unknown) => (typeof v === 'number' ? v : null);
   return {
     id: String(r.id), url: String(r.url), object_key: String(r.object_key), sha256: String(r.sha256), mime: String(r.mime),
     size_bytes: Number(r.size_bytes), width: int(r.width), height: int(r.height), alt: String(r.alt ?? ''),
-    source_url: typeof r.source_url === 'string' ? r.source_url : null, created_by: String(r.created_by), created_at: String(r.created_at),
+    source_url: typeof r.source_url === 'string' ? r.source_url : null,
+    origin: r.origin === 'import' || r.origin === 'reconcile' ? r.origin : 'upload', created_by: String(r.created_by), created_at: String(r.created_at),
   };
 }
 
@@ -80,7 +85,7 @@ export async function getMediaAsset(d1: D1DatabaseLike, id: string): Promise<Med
   return row ? rowToAsset(row) : null;
 }
 
-async function sha256Hex(bytes: ImageBytes): Promise<string> {
+export async function sha256Hex(bytes: ImageBytes): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -121,10 +126,10 @@ export async function storeImage(
   const id = randomId('med');
   // A concurrent upload of the same bytes (a retry, a double submit) may have inserted first; that row wins.
   const inserted = await d1.prepare(
-    `INSERT INTO media_assets (id, object_key, url, sha256, mime, size_bytes, width, height, alt, source_url, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+    `INSERT INTO media_assets (id, object_key, url, sha256, mime, size_bytes, width, height, alt, source_url, origin, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
   ).bind(id, objectKey, `${MEDIA_PUBLIC_ORIGIN}/${objectKey}`, sha256, image.mime, bytes.length, image.width, image.height,
-    alt, input.sourceUrl ?? null, input.actor, iso(now)).run();
+    alt, input.sourceUrl ?? null, input.sourceUrl ? 'import' : 'upload', input.actor, iso(now)).run();
   if ((inserted.meta?.changes ?? 0) === 0) {
     const winner = await d1.prepare('SELECT * FROM media_assets WHERE sha256 = ?').bind(sha256).first<Row>();
     if (!winner) throw new AppError(500, 'internal_error', 'Media asset was not persisted');
@@ -153,11 +158,13 @@ export async function listMediaAssets(
 }
 
 /** Articles and course lessons whose current draft or published document uses the URL, and courses using it as cover. */
-export async function mediaReferences(d1: D1DatabaseLike, url: string): Promise<{ articles: string[]; lessons: string[]; courses: string[] }> {
+export async function mediaReferences(d1: D1DatabaseLike, url: string, assetId = ''): Promise<{ articles: string[]; lessons: string[]; courses: string[] }> {
   const articles = await d1.prepare(
-    `SELECT DISTINCT a.slug FROM article_editions e JOIN articles a ON a.id = e.article_id
-     WHERE e.deleted_at IS NULL AND (instr(e.draft_json, ?) > 0 OR instr(COALESCE(e.published_json, ''), ?) > 0 OR e.cover_url = ?)`,
-  ).bind(url, url, url).all<{ slug: string }>();
+    `SELECT DISTINCT a.slug FROM articles a LEFT JOIN article_editions e ON e.article_id = a.id AND e.deleted_at IS NULL
+     WHERE a.deleted_at IS NULL AND (
+       instr(COALESCE(e.draft_json, ''), ?) > 0 OR instr(COALESCE(e.published_json, ''), ?) > 0 OR e.cover_url = ?
+       OR a.cover_asset_id = ? OR a.social_preview_asset_id = ?)`,
+  ).bind(url, url, url, assetId, assetId).all<{ slug: string }>();
   const lessons = await d1.prepare(
     `SELECT DISTINCT slug FROM course_lessons WHERE instr(draft_json, ?) > 0 OR instr(COALESCE(published_json, ''), ?) > 0`,
   ).bind(url, url).all<{ slug: string }>();
@@ -176,7 +183,7 @@ export async function deleteMediaAsset(d1: D1DatabaseLike, env: RuntimeEnv, id: 
   const bucket = requireMediaBucket(env);
   const asset = await getMediaAsset(d1, id);
   if (!asset) throw new AppError(404, 'media_not_found', 'Media asset not found');
-  const refs = await mediaReferences(d1, asset.url);
+  const refs = await mediaReferences(d1, asset.url, asset.id);
   if (refs.articles.length || refs.lessons.length || refs.courses.length) {
     throw new AppError(409, 'media_in_use', 'Remove the image from these documents before deleting it', refs);
   }
