@@ -3,7 +3,7 @@ import { createTestD1 } from './helpers/d1';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
 import type { ArticleRecord } from '../src/lib/blocks/articles';
-import { createArticle, deleteEdition, getArticle, updateArticle } from '../src/lib/blocks/articles';
+import { createArticle, deleteEdition, getArticle, publishArticle, setTagsForArticle, updateArticle } from '../src/lib/blocks/articles';
 import { AppError } from '../src/lib/http';
 
 // A save bumps the revision and writes the draft together: no reader or concurrent save may ever
@@ -18,13 +18,19 @@ function paragraphText(rec: ArticleRecord | null): string {
   return block?.type === 'paragraph' ? block.text : '';
 }
 
-/** Wraps a database so `hook` runs once, right after the first write (run or batch) completes. */
-function pauseAfterFirstWrite(inner: D1DatabaseLike, hook: () => Promise<void>): D1DatabaseLike {
+/** Wraps a database so `hook` runs once, right before or right after the first write (run or batch). */
+function interleaveAtFirstWrite(inner: D1DatabaseLike, when: 'before' | 'after', hook: () => Promise<void>): D1DatabaseLike {
   let fired = false;
   const fire = async (): Promise<void> => {
     if (fired) return;
     fired = true;
     await hook();
+  };
+  const around = async <T>(write: () => Promise<T>): Promise<T> => {
+    if (when === 'before') await fire();
+    const res = await write();
+    if (when === 'after') await fire();
+    return res;
   };
   const unwrap = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
   const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => {
@@ -32,22 +38,14 @@ function pauseAfterFirstWrite(inner: D1DatabaseLike, hook: () => Promise<void>):
       bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
       first: <T = Record<string, unknown>>() => stmt.first<T>(),
       all: <T = Record<string, unknown>>() => stmt.all<T>(),
-      run: async () => {
-        const res = await stmt.run();
-        await fire();
-        return res;
-      },
+      run: () => around(() => stmt.run()),
     };
     unwrap.set(wrapped, stmt);
     return wrapped;
   };
   return {
     prepare: (sql: string) => wrap(inner.prepare(sql)),
-    batch: async (statements: D1PreparedStatementLike[]) => {
-      const res = await inner.batch(statements.map(s => unwrap.get(s) ?? s));
-      await fire();
-      return res;
-    },
+    batch: (statements: D1PreparedStatementLike[]) => around(() => inner.batch(statements.map(s => unwrap.get(s) ?? s))),
   };
 }
 
@@ -95,7 +93,7 @@ describe('updateArticle atomicity (real SQLite)', () => {
     let retried: Outcome | undefined;
     // Save A pauses right after its first write; meanwhile B saves at the same expected revision,
     // then retries at the revision it was told is current (the former lost-update window).
-    const paused = pauseAfterFirstWrite(d1, async () => {
+    const paused = interleaveAtFirstWrite(d1, 'after', async () => {
       const seen = await getArticle(d1, 'post');
       snapshot = { revision: seen?.revision ?? 0, text: paragraphText(seen) };
       sameRevision = await settle(updateArticle(d1, 'post', { document: doc('B') }, 1));
@@ -185,4 +183,97 @@ describe('updateArticle atomicity (real SQLite)', () => {
     expect(d1.raw.query('SELECT COUNT(*) AS n FROM article_revisions').get()).toEqual({ n: 2 });
     expect(storedDraft().draft_json).toBe(JSON.stringify(doc('newer')));
   });
+});
+
+describe('publish, edition delete and tag writes are atomic with the revision bump (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+  // Article at revision 4: primary vi draft, a live en edition, tag "kept" (tag "spare" exists, unassigned).
+  const R = 4;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original') });
+    await updateArticle(d1, 'post', { tags: ['spare'] }, 1);
+    await updateArticle(d1, 'post', { tags: ['kept'] }, 2);
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 3);
+  });
+
+  const state = () => ({
+    articles: d1.raw.query('SELECT * FROM articles').all(),
+    editions: d1.raw.query('SELECT * FROM article_editions ORDER BY locale').all(),
+    tags: d1.raw.query('SELECT article_id, tag_id, position FROM article_tags ORDER BY position').all(),
+    revisions: d1.raw.query('SELECT * FROM article_revisions ORDER BY revision, created_at').all(),
+  });
+
+  type Writer = (db: D1DatabaseLike, expected: number) => Promise<ArticleRecord>;
+  const writers: Array<[string, Writer]> = [
+    ['publishArticle', (db, expected) => publishArticle(db, 'post', expected, true)],
+    ['deleteEdition', (db, expected) => deleteEdition(db, 'post', 'en', expected)],
+    ['setTagsForArticle', (db, expected) => setTagsForArticle(db, 'post', ['spare'], expected)],
+  ];
+
+  for (const [name, write] of writers) {
+    it(`${name}: a save between its read and its write makes it a conflict that writes nothing`, async () => {
+      let afterSave: ReturnType<typeof state> | undefined;
+      const paused = interleaveAtFirstWrite(d1, 'before', async () => {
+        await updateArticle(d1, 'post', { document: doc('B') }, R);
+        afterSave = state();
+      });
+      const outcome = await settle(write(paused, R));
+      expect(conflictRevision(outcome)).toBe(R + 1);
+      if (!afterSave) throw new Error('the interleaved save did not run');
+      expect(state()).toEqual(afterSave);
+    });
+  }
+
+  it('publishArticle publishes the draft it read, even when a save lands right after it', async () => {
+    const paused = interleaveAtFirstWrite(d1, 'after', async () => {
+      await updateArticle(d1, 'post', { document: doc('B') }, R + 1);
+    });
+    await publishArticle(paused, 'post', R, true);
+    const row: unknown = d1.raw.query(`
+      SELECT e.published_json, e.draft_json, r.document_json AS history_json
+      FROM article_editions e JOIN article_revisions r ON r.article_id = e.article_id AND r.locale = e.locale AND r.action = 'publish'
+      WHERE e.locale = 'vi'
+    `).get();
+    expect(row).toEqual({ published_json: JSON.stringify(doc('original')), draft_json: JSON.stringify(doc('B')), history_json: JSON.stringify(doc('original')) });
+  });
+
+  it('deleteEdition never discards a save that lands right after it', async () => {
+    const paused = interleaveAtFirstWrite(d1, 'after', async () => {
+      await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('B') }, R + 1);
+    });
+    await deleteEdition(paused, 'post', 'en', R);
+    expect(d1.raw.query("SELECT draft_json, deleted_at FROM article_editions WHERE locale = 'en'").get())
+      .toEqual({ draft_json: JSON.stringify(doc('B')), deleted_at: null });
+    expect(d1.raw.query('SELECT revision FROM articles').get()).toEqual({ revision: R + 2 });
+  });
+
+  it('setTagsForArticle never overwrites tags saved right after it', async () => {
+    const paused = interleaveAtFirstWrite(d1, 'after', async () => {
+      await updateArticle(d1, 'post', { tags: ['later'] }, R + 1);
+    });
+    await setTagsForArticle(paused, 'post', ['spare'], R);
+    expect(d1.raw.query('SELECT t.slug FROM article_tags at JOIN topic_tags t ON t.id = at.tag_id').all()).toEqual([{ slug: 'later' }]);
+    expect(d1.raw.query('SELECT tags FROM articles').get()).toEqual({ tags: JSON.stringify(['later']) });
+  });
+
+  const failures: Array<[string, string, Writer]> = [
+    ['publishArticle', 'CREATE TRIGGER fail BEFORE INSERT ON article_revisions BEGIN SELECT RAISE(ABORT, \'history write failed\'); END', writers[0][1]],
+    ['deleteEdition', 'CREATE TRIGGER fail BEFORE INSERT ON article_revisions BEGIN SELECT RAISE(ABORT, \'history write failed\'); END', writers[1][1]],
+    ['setTagsForArticle', 'CREATE TRIGGER fail BEFORE INSERT ON article_tags BEGIN SELECT RAISE(ABORT, \'tag write failed\'); END', writers[2][1]],
+  ];
+  for (const [name, trigger, write] of failures) {
+    it(`${name}: a failed write part-way through leaves no partial change, and a retry applies in full`, async () => {
+      const before = state();
+      d1.raw.run(trigger);
+      const failed = await settle(write(d1, R));
+      expect(failed.ok).toBe(false);
+      expect(state()).toEqual(before);
+
+      d1.raw.run('DROP TRIGGER fail');
+      const saved = await write(d1, R);
+      expect(saved.revision).toBe(R + 1);
+    });
+  }
 });
