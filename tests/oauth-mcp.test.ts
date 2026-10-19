@@ -749,6 +749,12 @@ describe('legacy /api/mcp', () => {
     const service = await listNames({ Authorization: `Bearer ${SERVICE_KEY}` }, { CHANNEL_ACCESS_SERVICE_KEY: SERVICE_KEY });
     expect(service).toContain('channel_access_check');
     expect(service).not.toContain('update_profile');
+
+    // An admin session that also presents the service key gets every tool exactly once.
+    const boss = await member('boss@example.com');
+    const both = await listNames({ Cookie: boss.cookie, Origin: ORIGIN, Authorization: `Bearer ${SERVICE_KEY}` }, { CHANNEL_ACCESS_SERVICE_KEY: SERVICE_KEY });
+    expect(both).toContain('update_profile');
+    expect(both.filter(n => n === 'channel_access_check')).toHaveLength(1);
   });
 });
 
