@@ -606,7 +606,7 @@ describe('/mcp resource server', () => {
   });
 
   it('exposes the admin media tools only to admin principals and keeps the catalogue deterministic', async () => {
-    const MEDIA_TOOLS = ['media_upload_url', 'media_import', 'media_upload', 'media_list', 'media_delete'];
+    const MEDIA_TOOLS = ['media_upload_url', 'media_import', 'media_upload', 'media_reconcile', 'media_list', 'media_delete'];
     // Every media tool the server registers must be classified, so none can be hidden by a missing map entry.
     const registered = allMcpTools().map(t => t.name).filter(n => n.startsWith('media_'));
     expect(registered.sort()).toEqual([...MEDIA_TOOLS].sort());
