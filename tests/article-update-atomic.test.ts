@@ -185,6 +185,71 @@ describe('updateArticle atomicity (real SQLite)', () => {
   });
 });
 
+describe('updateArticle race and post-commit errors (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original') });
+  });
+
+  const state = () => ({
+    articles: d1.raw.query("SELECT * FROM articles WHERE id = (SELECT id FROM articles WHERE title = 'Bài viết')").all(),
+    editions: d1.raw.query('SELECT * FROM article_editions ORDER BY article_id, locale').all(),
+    revisions: d1.raw.query('SELECT COUNT(*) AS n FROM article_revisions').get(),
+  });
+
+  it('a slug taken between the check and the write is 409 slug_taken and writes nothing', async () => {
+    let afterTake: ReturnType<typeof state> | undefined;
+    const paused = interleaveAtFirstWrite(d1, 'before', async () => {
+      await createArticle(d1, { slug: 'renamed', title: 'Other' });
+      afterTake = state();
+    });
+    const outcome = await settle(updateArticle(paused, 'post', { slug: 'renamed', document: doc('lost') }, 1));
+    if (outcome.ok || !(outcome.err instanceof AppError)) throw new Error('expected an AppError');
+    expect(outcome.err.status).toBe(409);
+    expect(outcome.err.code).toBe('slug_taken');
+    if (!afterTake) throw new Error('the interleaved create did not run');
+    expect(state()).toEqual(afterTake);
+    expect(paragraphText(await getArticle(d1, 'post'))).toBe('original');
+  });
+
+  it('a conflict with a save that renamed the article is 409 revision_conflict, not 404', async () => {
+    const paused = interleaveAtFirstWrite(d1, 'before', async () => {
+      await updateArticle(d1, 'post', { slug: 'moved' }, 1);
+    });
+    const outcome = await settle(updateArticle(paused, 'post', { document: doc('stale') }, 1));
+    expect(conflictRevision(outcome)).toBe(2);
+    expect(paragraphText(await getArticle(d1, 'moved'))).toBe('original');
+  });
+
+  it('a failed legacy tag mirror after commit still returns the saved article', async () => {
+    d1.raw.run("CREATE TRIGGER fail_mirror BEFORE UPDATE OF tags ON articles BEGIN SELECT RAISE(ABORT, 'mirror failed'); END");
+    const saved = await updateArticle(d1, 'post', { document: doc('saved'), tags: ['kept'] }, 1);
+    expect(saved.revision).toBe(2);
+    expect(paragraphText(saved)).toBe('saved');
+    expect(saved.tag_ids.length).toBe(1);
+    // The derived column catches up on the next save once the mirror works again.
+    d1.raw.run('DROP TRIGGER fail_mirror');
+    await updateArticle(d1, 'post', { tags: ['kept'] }, 2);
+    expect(d1.raw.query("SELECT tags FROM articles WHERE slug = 'post'").get()).toEqual({ tags: JSON.stringify(['kept']) });
+  });
+
+  it('a failed search reindex after commit still returns the saved article', async () => {
+    d1.raw.run('DROP TABLE knowledge_fts');
+    const saved = await updateArticle(d1, 'post', { document: doc('saved') }, 1);
+    expect(saved.revision).toBe(2);
+    expect(paragraphText(saved)).toBe('saved');
+    expect(storedRevision(d1)).toBe(2);
+  });
+});
+
+function storedRevision(d1: ReturnType<typeof createTestD1>): number {
+  const row: unknown = d1.raw.query("SELECT revision FROM articles WHERE slug = 'post'").get();
+  if (!row || typeof row !== 'object' || !('revision' in row) || typeof row.revision !== 'number') throw new Error('article row missing');
+  return row.revision;
+}
+
 describe('publish, edition delete and tag writes are atomic with the revision bump (real SQLite)', () => {
   let d1: ReturnType<typeof createTestD1>;
   // Article at revision 4: primary vi draft, a live en edition, tag "kept" (tag "spare" exists, unassigned).

@@ -45,6 +45,8 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   media_list: ADMIN,
   media_delete: ADMIN,
   media_reconcile: ADMIN,
+  // Replay-safe retries
+  idempotency_lookup: ADMIN,
   // Courses (paid lesson bodies are browser-only; the lesson tool returns the denial)
   course_list: PUBLIC,
   course_get: PUBLIC,

@@ -14,10 +14,11 @@ import { videosMcpModule } from '../videos/mcp';
 import { channelAccessMcpModule } from '../channel-access/mcp';
 import { mediaMcpModule } from '../media/media-mcp';
 import { articleCoverMcpModule } from '../blocks/article-cover-mcp';
+import { idempotencyMcpModule } from '../idempotency/mcp';
 
 /** Feature tool modules served by /api/mcp and /mcp in addition to the built-in profile/link tools. */
 export const MCP_FEATURE_MODULES: McpToolModule[] = [
   readsMcpModule, coursesMcpModule, bookingMcpModule, articlesMcpModule, taxonomyMcpModule, membersMcpModule,
   chatMcpModule, accountMcpModule, experienceMcpModule, videosMcpModule, referralsMcpModule, promosMcpModule,
-  channelAccessMcpModule, mediaMcpModule, articleCoverMcpModule,
+  channelAccessMcpModule, mediaMcpModule, articleCoverMcpModule, idempotencyMcpModule,
 ];

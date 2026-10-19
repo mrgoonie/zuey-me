@@ -1,5 +1,6 @@
 import { adminSecurity, errorResponses } from '../openapi/types';
 import type { OpenApiFragment } from '../openapi/types';
+import { idempotencyKeyParam } from '../idempotency/openapi';
 import { MAX_IMAGE_BYTES, MEDIA_PUBLIC_ORIGIN } from './media-asset-store';
 import { MAX_INLINE_BYTES } from './media-upload-sources';
 
@@ -49,8 +50,9 @@ export const mediaOpenApi: OpenApiFragment = {
       post: {
         tags: [TAG],
         summary: 'Upload or import an image (admin)',
-        description: 'Scripts send JSON (`url` to import a public https image without following redirects, or `data_base64` for a small image). The Studio sends multipart with `file`. For large files from a script, use an upload URL instead.',
+        description: 'Scripts send JSON (`url` to import a public https image without following redirects, or `data_base64` for a small image). The Studio sends multipart with `file`. For large files from a script, use an upload URL instead. `Idempotency-Key` applies to JSON requests only (multipart: 400 `idempotency_unsupported`).',
         security: adminSecurity,
+        parameters: [idempotencyKeyParam],
         requestBody: {
           required: true,
           content: {
@@ -100,7 +102,7 @@ export const mediaOpenApi: OpenApiFragment = {
         tags: [TAG],
         summary: 'Delete an image (admin)',
         security: adminSecurity,
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Media asset id (`med_…`)' }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Media asset id (`med_…`)' }, idempotencyKeyParam],
         responses: {
           '200': { description: 'Deleted', content: envelope({ type: 'object', properties: { deleted: { type: 'boolean' }, id: { type: 'string' }, url: { type: 'string' } } }) },
           ...errorResponses,
