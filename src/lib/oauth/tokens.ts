@@ -148,13 +148,8 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
   const expires = strOrNull(row, 'refresh_expires_at');
   if (!expires || Date.parse(expires) <= now) throw invalidGrant('Refresh token expired');
 
-  const claim = await d1.prepare('UPDATE oauth_tokens SET rotated_at = ? WHERE id = ? AND rotated_at IS NULL AND revoked_at IS NULL')
-    .bind(iso(now), str(row, 'id')).run();
-  if (!claim.meta?.changes) {
-    await revokeFamily(d1, familyId);
-    throw invalidGrant('Refresh token was already used');
-  }
-
+  // Validate everything before rotating, so a rejected request leaves the token usable for a corrected retry.
+  // RFC 6749 §6: a refresh may narrow but never widen; a scope outside the grant is rejected, not intersected.
   const granted = parseStoredScopes(str(row, 'scopes'));
   let scopes = granted;
   if (form.scope !== undefined) {
@@ -170,6 +165,14 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
   if (!(await consentActive(d1, userId, client.client_id))) {
     await revokeFamily(d1, familyId);
     throw invalidGrant('Access was revoked');
+  }
+
+  // Compare-and-set claim: of two concurrent refreshes only one rotates; the loser is treated as reuse.
+  const claim = await d1.prepare('UPDATE oauth_tokens SET rotated_at = ? WHERE id = ? AND rotated_at IS NULL AND revoked_at IS NULL')
+    .bind(iso(now), str(row, 'id')).run();
+  if (!claim.meta?.changes) {
+    await revokeFamily(d1, familyId);
+    throw invalidGrant('Refresh token was already used');
   }
   return issueTokens(d1, { familyId, client, userId, scopes, audience });
 }

@@ -481,6 +481,38 @@ describe('refresh tokens and revocation', () => {
     expect(get(afterReuse.body, 'error')).toBe('invalid_grant');
   });
 
+  it('leaves the refresh token usable when a refresh is rejected for scope or resource', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const widen = await exchange({ ...base, scope: 'articles:read admin' });
+    expect(widen.status).toBe(400);
+    expect(get(widen.body, 'error')).toBe('invalid_scope');
+    const unknown = await exchange({ ...base, scope: 'articles:read nope:write' });
+    expect(get(unknown.body, 'error')).toBe('invalid_scope');
+    const target = await exchange({ ...base, resource: `${ORIGIN}/elsewhere` });
+    expect(get(target.body, 'error')).toBe('invalid_target');
+    expect((await mcp('ping', {}, { token: f.access })).status).toBe(200);
+
+    const retry = await exchange({ ...base, scope: 'articles:read' });
+    expect(retry.status).toBe(200);
+    expect(get(retry.body, 'scope')).toBe('articles:read');
+    const refresh2 = String(get(retry.body, 'refresh_token'));
+
+    const reuse = await exchange(base);
+    expect(get(reuse.body, 'error')).toBe('invalid_grant');
+    const afterReuse = await exchange({ ...base, refresh_token: refresh2 });
+    expect(get(afterReuse.body, 'error')).toBe('invalid_grant');
+  });
+
+  it('lets only one of two concurrent refreshes rotate the token', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const results = await Promise.all([exchange(base), exchange(base)]);
+    expect(results.filter(r => r.status === 200).length).toBe(1);
+    const loser = results.find(r => r.status !== 200);
+    expect(get(loser?.body, 'error')).toBe('invalid_grant');
+  });
+
   it('refuses refresh tokens presented by another client', async () => {
     const f = await fullFlow('lan@example.com');
     const other = await register();
