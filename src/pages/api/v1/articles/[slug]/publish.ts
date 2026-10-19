@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../../lib/http';
+import { errorResponse, jsonError, readJsonObject } from '../../../../../lib/http';
 import { publishArticle, toSummary, runtimeWaitUntil } from '../../../../../lib/blocks/articles';
 import { localeField } from '../../../../../lib/blocks/params';
 import { requireAdminActor } from '../../../../../lib/taxonomy/admin';

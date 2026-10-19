@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../../lib/http';
+import { errorResponse, jsonError, readJsonObject } from '../../../../../lib/http';
 import { setTagsForArticle, toSummary, runtimeWaitUntil } from '../../../../../lib/blocks/articles';
 import { requireAdminActor } from '../../../../../lib/taxonomy/admin';
 import { idempotentJson } from '../../../../../lib/idempotency/rest';

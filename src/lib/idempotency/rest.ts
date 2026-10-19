@@ -27,7 +27,7 @@ export async function idempotentJson(
   const key = idempotencyKeyFrom(opts.request, body);
   if (key === undefined || key === null || key === '') return jsonOk(await run(), status, opts.headers);
   const { result, replayed } = await withIdempotency(
-    { d1: requireDb(opts.d1), actor: opts.actor, operation: opts.operation, key, request: { params: opts.params ?? {}, body: withoutIdempotencyKey(body) } },
+    { d1: requireDb(opts.d1), actor: opts.actor, operation: opts.operation, key, status, request: { params: opts.params ?? {}, body: withoutIdempotencyKey(body) } },
     async () => asObject(await run()),
   );
   return jsonOk(markReplay(result, replayed), status, { ...opts.headers, ...(replayed ? { [IDEMPOTENT_REPLAY_HEADER]: 'true' } : {}) });

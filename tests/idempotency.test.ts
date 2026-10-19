@@ -246,6 +246,8 @@ describe('article REST routes', () => {
     const u2 = await rest(updateApi, 'PUT', '/api/v1/articles/post', upd, headers('rest-update-001'), { slug: 'post' });
     expect(field(u1.data, 'revision')).toBe(2);
     expect([u2.status, u2.replayed, field(u2.data, 'revision')]).toEqual([200, 'true', 2]);
+    expect(field(u1.data, 'receipt', 'operation_success')).toBe(true);
+    expect(field(u2.data, 'receipt')).toEqual(field(u1.data, 'receipt'));
 
     const pub = { expected_revision: 2, confirm: true };
     const p1 = await rest(publishApi, 'POST', '/api/v1/articles/post/publish', pub, headers('rest-publish-001'), { slug: 'post' });
@@ -269,7 +271,7 @@ describe('article REST routes', () => {
   it('serves the lookup route to admins only', async () => {
     await rest(createApi, 'POST', '/api/v1/articles', { slug: 'a', title: 'A', document: doc('v1') }, { 'Idempotency-Key': 'rest-lookup-001' });
     const found = await rest(lookupApi, 'GET', '/api/v1/admin/idempotency/rest-lookup-001', undefined, {}, { key: 'rest-lookup-001' });
-    expect(found.data).toMatchObject({ operation: 'article_create', state: 'done' });
+    expect(found.data).toMatchObject({ operation: 'article_create', state: 'done', status_code: 201 });
     const missing = await rest(lookupApi, 'GET', '/api/v1/admin/idempotency/nope-nope-nope', undefined, {}, { key: 'nope-nope-nope' });
     expect(missing.status).toBe(404);
     const request = new Request(`${ORIGIN}/api/v1/admin/idempotency/rest-lookup-001`);
