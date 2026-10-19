@@ -1,5 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { ReadItem, ReadsSourceFacet } from '../../lib/reads/store';
+import { track, trackOnce } from '../../lib/analytics/client';
+import { filterValue, publicSlug, siteDomain } from '../../lib/analytics/engagement';
+
+/** Quiet time after the last keystroke before a Reads search counts as one search. */
+const SEARCH_SETTLE_MS = 1000;
+
+function readsSurface(): 'reads_page' | 'home' {
+  return window.location.pathname.replace(/\/+$/, '') === '/reads' ? 'reads_page' : 'home';
+}
 
 interface ReadsBrowserProps {
   items: ReadItem[];
@@ -32,6 +41,25 @@ export const ReadsBrowser: React.FC<ReadsBrowserProps> = ({ items, sources, last
     });
   }, [items, query, source]);
 
+  useEffect(() => {
+    trackOnce('reads_opened', 'reads_opened', { surface: readsSurface(), items: items.length });
+  }, [items.length]);
+
+  // Client-side filtering runs per keystroke; record one search once typing settles (length only, never the text).
+  const queryLength = query.trim().length;
+  useEffect(() => {
+    if (queryLength === 0) return;
+    const timer = setTimeout(() => {
+      track('knowledge_search', { surface: 'reads', query_length: queryLength, results: filtered.length });
+    }, SEARCH_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [queryLength, filtered.length]);
+
+  const pickSource = (next: string | null) => {
+    setSource(next);
+    track('knowledge_filter_applied', { surface: 'reads', filter: 'source', value: filterValue(next) });
+  };
+
   const chip = (active: boolean) =>
     `px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
       active ? 'bg-stone-900 text-[#F5EFEB] border-stone-900' : 'bg-white/80 text-stone-700 border-stone-300/80 hover:bg-white'
@@ -63,7 +91,7 @@ export const ReadsBrowser: React.FC<ReadsBrowserProps> = ({ items, sources, last
           />
           {sources.length > 0 && (
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by source">
-              <button type="button" className={chip(source === null)} onClick={() => setSource(null)} aria-pressed={source === null}>
+              <button type="button" className={chip(source === null)} onClick={() => pickSource(null)} aria-pressed={source === null}>
                 All
               </button>
               {sources.map(s => (
@@ -71,7 +99,7 @@ export const ReadsBrowser: React.FC<ReadsBrowserProps> = ({ items, sources, last
                   key={s.source_kind}
                   type="button"
                   className={chip(source === s.source_kind)}
-                  onClick={() => setSource(source === s.source_kind ? null : s.source_kind)}
+                  onClick={() => pickSource(source === s.source_kind ? null : s.source_kind)}
                   aria-pressed={source === s.source_kind}
                 >
                   {s.source_kind} <span className="opacity-60">{s.count}</span>
@@ -87,7 +115,7 @@ export const ReadsBrowser: React.FC<ReadsBrowserProps> = ({ items, sources, last
           </div>
         ) : (
           <ul className="flex flex-col gap-3">
-            {filtered.map(item => {
+            {filtered.map((item, index) => {
               const date = itemDate(item);
               return (
                 <li key={item.id} className="bg-white/80 border border-stone-200/90 rounded-2xl p-4 min-w-0">
@@ -104,6 +132,7 @@ export const ReadsBrowser: React.FC<ReadsBrowserProps> = ({ items, sources, last
                     href={item.url}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => track('read_source_clicked', { source_kind: publicSlug(item.source_kind), domain: siteDomain(item.domain), position: index + 1 })}
                     className="block font-serif text-lg font-bold leading-snug text-stone-900 hover:text-amber-700 break-words"
                   >
                     {item.title || item.url}
