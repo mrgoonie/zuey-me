@@ -85,7 +85,7 @@ export interface ArticleRecord extends ArticleSummary {
 export interface ArticleView extends ArticleSummary {
   document: ArticleDocument;
   truncated: boolean;
-  /** Only when truncated: withheld top-level headings (text + level) and withheld size; no other paid text. */
+  /** Only when truncated: withheld headings (text + level) and withheld size; no other paid text. */
   locked_outline?: LockedOutline;
   preview: boolean;
   /** True when the requested locale had no edition and another edition is shown instead. */

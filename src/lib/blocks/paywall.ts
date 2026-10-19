@@ -1,4 +1,4 @@
-import type { ArticleAccess, ArticleDocument, Block, CardBlock, LayoutBlock, LayoutChild, SectionBlock } from './schema';
+import type { ArticleAccess, ArticleDocument, Block, CardBlock, LayoutBlock, LayoutChild, SectionBlock, ToggleBlock } from './schema';
 import { inlineToPlain } from './inline';
 import { blockDefinition } from './registry';
 import { documentText, wordCount } from '../search/text';
@@ -14,16 +14,16 @@ export interface Viewer {
 /** Entitlement granted by the Knowledges, Kết hợp and Cộng đồng plans. AI-only does not include it. */
 export const READ_FULL_ENTITLEMENT = 'read_full';
 
-/** A withheld top-level heading: plain text and level only, never the body under it. */
+/** A withheld heading: plain text and level only, never the body under it. */
 export interface LockedHeading { level: 1 | 2 | 3; text: string }
 
 /**
- * What a non-entitled reader may know about the withheld part: its top-level headings and its size.
+ * What a non-entitled reader may know about the withheld part: its headings and its size.
  * No other withheld text is ever exposed.
  */
 export interface LockedOutline {
   headings: LockedHeading[];
-  /** Number of withheld top-level blocks (a block inside a top-level section counts on its own). */
+  /** Number of withheld units (a block inside a section, card, toggle or layout cell counts on its own). */
   blocks: number;
   /** Approximate number of withheld words. */
   words: number;
@@ -36,7 +36,7 @@ export interface PaywallResult {
   outline?: LockedOutline;
 }
 
-/** Outline of withheld blocks: top-level heading text + level and the withheld size, nothing else. */
+/** Outline of withheld blocks: heading text + level and the withheld size, nothing else. */
 export function lockedOutline(withheld: Block[]): LockedOutline {
   const headings: LockedHeading[] = [];
   for (const b of withheld) {
@@ -66,30 +66,31 @@ function nestedWeight(blocks: Block[]): number {
   return blocks.reduce((n, b) => n + blockWeight(b), 0);
 }
 
-/** One container a unit sits in: a section or card body, or one cell of a layout. */
-type UnitFrame = { kind: 'body'; block: SectionBlock | CardBlock } | { kind: 'cell'; block: LayoutBlock; cell: LayoutChild };
+/** One container a unit sits in: a section, card or toggle body, or one cell of a layout. */
+type UnitFrame = { kind: 'body'; block: SectionBlock | CardBlock | ToggleBlock } | { kind: 'cell'; block: LayoutBlock; cell: LayoutChild };
 
-/** A unit the paywall keeps or withholds: a top-level block, or a leaf block inside a top-level section. */
+/** A unit the paywall keeps or withholds: a leaf block, with the containers it sits in. */
 interface PaywallUnit { block: Block; path: UnitFrame[] }
 
 /**
- * Inside a top-level section, cards and layouts are split down to their blocks as well, so a section
- * (or a landing-style section of cards) that holds the whole article cannot bypass the paywall.
- * Top-level blocks outside sections stay whole, exactly as before sections existed.
+ * Splits a block into paywall units. Sections, cards and toggles are split down to their body blocks
+ * and layouts cell by cell, at any depth and at the top level alike, so no container that holds the
+ * whole article (or most of it) can bypass the paywall. A container with nothing to split (an empty
+ * body, or a layout whose cells are all empty) is one unit on its own, so it never disappears.
  */
-function sectionUnits(block: Block, path: UnitFrame[]): PaywallUnit[] {
-  if ((block.type === 'section' || block.type === 'card') && block.blocks.length > 0) {
+function blockUnits(block: Block, path: UnitFrame[]): PaywallUnit[] {
+  let units: PaywallUnit[] = [];
+  if (block.type === 'section' || block.type === 'card' || block.type === 'toggle') {
     const inner: UnitFrame[] = [...path, { kind: 'body', block }];
-    return block.blocks.flatMap(child => sectionUnits(child, inner));
+    units = block.blocks.flatMap(child => blockUnits(child, inner));
+  } else if (block.type === 'layout') {
+    units = block.children.flatMap(cell => cell.blocks.flatMap(child => blockUnits(child, [...path, { kind: 'cell', block, cell }])));
   }
-  if (block.type === 'layout') {
-    return block.children.flatMap(cell => cell.blocks.flatMap(child => sectionUnits(child, [...path, { kind: 'cell', block, cell }])));
-  }
-  return [{ block, path }];
+  return units.length > 0 ? units : [{ block, path }];
 }
 
 function paywallUnits(blocks: Block[]): PaywallUnit[] {
-  return blocks.flatMap(block => (block.type === 'section' ? sectionUnits(block, []) : [{ block, path: [] }]));
+  return blocks.flatMap(block => blockUnits(block, []));
 }
 
 /** Number of units inside each card body (at any depth), used to tell a whole card from a partly kept one. */
@@ -110,7 +111,7 @@ function cardUnitCounts(units: PaywallUnit[]): Map<CardBlock, number> {
  */
 function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[] {
   const out: Block[] = [];
-  const bodies = new Map<SectionBlock | CardBlock | LayoutChild, Block[]>();
+  const bodies = new Map<SectionBlock | CardBlock | ToggleBlock | LayoutChild, Block[]>();
   const layouts = new Map<LayoutBlock, LayoutBlock>();
   const cards: Array<[CardBlock, CardBlock]> = [];
   for (const { block, path } of units) {
@@ -119,7 +120,7 @@ function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[
       if (frame.kind === 'body') {
         let body = bodies.get(frame.block);
         if (!body) {
-          const copy: SectionBlock | CardBlock = { ...frame.block, blocks: [] };
+          const copy: SectionBlock | CardBlock | ToggleBlock = { ...frame.block, blocks: [] };
           if (copy.type === 'card' && frame.block.type === 'card') cards.push([frame.block, copy]);
           list.push(copy);
           body = copy.blocks;
@@ -153,8 +154,8 @@ function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[
 }
 
 /**
- * Keeps roughly the first third (by text weight) of top-level blocks (blocks inside top-level sections,
- * their cards and layouts count one by one) for paid articles when the viewer is not entitled. Always keeps at least one unit
+ * Keeps roughly the first third (by text weight) of the article's units (blocks inside sections, cards,
+ * toggles and layout cells count one by one) for paid articles when the viewer is not entitled. Always keeps at least one unit
  * and, when the article has more than one, always withholds at least one.
  */
 export function applyPaywall(doc: ArticleDocument, access: ArticleAccess, viewer: Viewer): PaywallResult {
@@ -170,5 +171,8 @@ export function applyPaywall(doc: ArticleDocument, access: ArticleAccess, viewer
   if (units.length > 1) keep = Math.min(keep, units.length - 1);
   const kept: ArticleDocument = { version: 1, blocks: joinUnits(units.slice(0, keep), cardUnitCounts(units)) };
   if (keep >= units.length) return { doc: kept, truncated: false };
-  return { doc: kept, truncated: true, outline: lockedOutline(units.slice(keep).map(u => u.block)) };
+  const outline = lockedOutline(units.slice(keep).map(u => u.block));
+  // Text around withheld units (a withheld toggle summary, card title or footer) is withheld too.
+  outline.words = Math.max(0, wordCount(documentText(doc)) - wordCount(documentText(kept)));
+  return { doc: kept, truncated: true, outline };
 }
