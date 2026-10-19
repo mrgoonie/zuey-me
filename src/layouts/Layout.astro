@@ -76,6 +76,7 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     <meta name="twitter:image:alt" content={imageAlt} />
 
     <!-- LLM & GEO Friendly Links -->
+    <link rel="alternate" type="application/feed+json" href="https://zuey.me/feed.json" title="Zuey JSON Feed" />
     <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
     <link rel="alternate" type="text/markdown" href="/index.md" title="Markdown representation" />
     <slot name="head" />

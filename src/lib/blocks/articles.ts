@@ -843,7 +843,7 @@ export async function updateArticle(
     // Re-creating a deleted edition reuses its row (article_id + locale is unique) and starts as a draft.
     writes.push(db.prepare(`
       UPDATE article_editions SET title = ?, excerpt = ?, draft_json = ?, published_json = NULL, published_revision = NULL,
-        status = 'draft', published_words = 0, cover_url = NULL, published_at = NULL, revision = ?, updated_at = ?, deleted_at = NULL
+        status = 'draft', published_words = 0, cover_url = NULL, published_at = NULL, published_title = NULL, published_excerpt = NULL, published_modified_at = NULL, revision = ?, updated_at = ?, deleted_at = NULL
       WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}
     `).bind(title, excerpt, docJson, revision, now, art.id, locale, art.id, expected));
   } else {
@@ -929,9 +929,10 @@ export async function publishArticle(
   await commitAtRevision(db, art.id, [
     db.prepare(`
       UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
-        published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
+        published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?,
+        published_title = title, published_excerpt = excerpt, published_modified_at = ?
       WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}
-    `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), coverUrl, now, art.id, locale, art.id, expected),
+    `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), coverUrl, now, now, art.id, locale, art.id, expected),
     guardedRevisionStatement(db, art.id, expected, locale, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
   ], bumpRevisionStatement(db, art.id, expected, now), [mirrorPrimaryStatement(db, art.id)]);
   await reindexArticle(db, art.id, ctx.env);
