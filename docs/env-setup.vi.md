@@ -56,7 +56,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 
 ## 2b. Ảnh bài viết (media CDN)
 
-1. Chạy migration `0024_media_assets.sql` và `0025_article_cover.sql` (xem mục 0).
+1. Chạy migration `0024_media_assets.sql` và `0026_article_cover.sql` (xem mục 0).
 2. R2: bucket public `zuey-media`, custom domain `media.zuey.me` (đã có sẵn trong account Cloudflare của zuey.me). Binding `MEDIA` khai báo trong `wrangler.toml`. Thiếu binding thì các API ảnh trả `503 media_unconfigured`. Ảnh bài viết nằm dưới prefix `articles/`; các prefix `blog/`, `research/` có sẵn không bị đụng tới.
 3. Đưa ảnh lên (chỉ admin, API key read-only không dùng được):
    - Agent có shell: MCP `media_upload_url` (hoặc `POST /api/v1/admin/media/upload-url`) trả về URL dùng một lần, hạn 15 phút. Upload bằng `curl --upload-file ./anh.png '<upload_url>'`. File không phải ảnh hợp lệ thì bị từ chối mà URL vẫn dùng lại được.
