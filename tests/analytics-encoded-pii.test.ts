@@ -94,6 +94,49 @@ describe('percent-encoded emails', () => {
   });
 });
 
+describe('scrubber accuracy', () => {
+  test('emails with a Unicode (IDN) domain are redacted, plain or encoded', () => {
+    expect(redactString('write to user@bücher.example today')).toBe(`write to ${REDACTED} today`);
+    expect(containsPii('user@bücher.example')).toBe(true);
+    const out = scrubUrl('https://ref.example.org/?q=user%40b%C3%BCcher.example&hl=de');
+    expect(out).toBe(`https://ref.example.org/?q=${REDACTED}&hl=de`);
+    expect(containsPii('user%40b%C3%BCcher.example')).toBe(true);
+    expect(redactString('liên hệ ngọc@trường.việt nhé')).toBe(`liên hệ ${REDACTED} nhé`);
+  });
+
+  test('deeper encoding is decoded until stable', () => {
+    for (const at of ['%25252540', '%2525252540']) {
+      const out = scrubUrl(`https://ref.example.org/?q=jane.doe${at}example.com&hl=vi`);
+      expect(leaksEmail(out)).toBe(false);
+      expect(out).toContain('hl=vi');
+      expect(containsPii(`jane.doe${at}example.com`)).toBe(true);
+    }
+  });
+
+  test('a value still encoded after the decoding limit is redacted', () => {
+    const deep = `jane.doe%${'25'.repeat(12)}40example.com`;
+    expect(scrubUrl(`https://ref.example.org/?q=${deep}&hl=vi`)).toBe(`https://ref.example.org/?q=${REDACTED}&hl=vi`);
+    expect(containsPii(deep)).toBe(true);
+    expect(containsPii('100%25 free')).toBe(false);
+  });
+
+  test('redaction keeps encoded Vietnamese text and mailto: intact', () => {
+    expect(scrubUrl('https://www.google.com/search?q=h%E1%BB%8Dc%20jane.doe%40example.com&hl=vi'))
+      .toBe(`https://www.google.com/search?q=h%E1%BB%8Dc%20${REDACTED}&hl=vi`);
+    expect(redactString('mailto:jane.doe%40example.com clicked')).toBe(`mailto:${REDACTED} clicked`);
+    expect(redactString('học:jane.doe%40example.com')).toBe(`học:${REDACTED}`);
+  });
+
+  test('objects nested deeper than the limit are redacted, not passed through', () => {
+    let nested: unknown = { email: EMAIL, url: 'https://x.org/?q=jane.doe%40example.com' };
+    for (let i = 0; i < 10; i++) nested = { child: nested };
+    const out = JSON.stringify(scrubValue({ root: nested }));
+    expect(leaksEmail(out)).toBe(false);
+    expect(out).toContain(REDACTED);
+    expect(scrubValue({ a: { b: { c: 1, d: true, e: null } } })).toEqual({ a: { b: { c: 1, d: true, e: null } } });
+  });
+});
+
 describe('long inputs', () => {
   const MB = 1024 * 1024;
 
@@ -129,6 +172,17 @@ describe('long inputs', () => {
     const [jwt, jwtMs] = timed(() => redactString(`${run}.abcd.efgh`));
     expect(jwtMs).toBeLessThan(10);
     expect(jwt).toBe(REDACTED);
+  });
+
+  test('16 KB of non-ASCII text around @ is scanned in linear time', () => {
+    const shapes = [`${'ọ.'.repeat(8000)}@`, 'ü@ü.'.repeat(4000), `@${'ọ.'.repeat(126)}`.repeat(64)];
+    for (const value of shapes) {
+      const [, ms] = timed(() => scrubValue({ v: value }));
+      expect(ms).toBeLessThan(20);
+    }
+    expect(redactString(`${'ọ'.repeat(100)}@bücher.example`)).toBe(`${'ọ'.repeat(36)}${REDACTED}`);
+    expect(redactString('see \u{1D4B6}bc@example.com')).toBe(`see ${REDACTED}`);
+    expect(redactString('a@b@c.example x@y')).toBe(`a@${REDACTED} x@y`);
   });
 
   test('JWTs are still redacted when glued to other text or encoded spaces', () => {
@@ -200,5 +254,41 @@ describe('PostHog before_send with encoded emails', () => {
     const options = postHogInitOptions({ key: 'phc_testtesttesttesttesttest', host: 'https://us.i.posthog.com', debug: false }, '/');
     const beforeSend = options.before_send;
     expect(beforeSend).toBe(scrubCaptureResult);
+  });
+
+  test('autocapture $elements arrays (sent without remote config) are scrubbed', () => {
+    const href = 'https://zuey.me/contact?q=jane.doe%40example.com&token=abc&utm_source=x';
+    const out = scrubCaptureResult({
+      event: '$autocapture',
+      properties: {
+        $event_type: 'click',
+        $elements: [
+          {
+            tag_name: 'a',
+            $el_text: `Mail ${EMAIL}`,
+            attr__href: href,
+            attr__class: 'btn primary',
+            classes: ['btn', 'primary'],
+            nth_child: 2,
+            nth_of_type: 1,
+            attributes: { attr__href: href, attr__title: `Write to ${EMAIL}` },
+          },
+          { tag_name: 'li', attr__class: 'item', nth_child: 1 },
+        ],
+      },
+    });
+    expect(out).not.toBeNull();
+    expect(leaksEmail(JSON.stringify(out))).toBe(false);
+    const elements = out?.properties?.$elements;
+    expect(Array.isArray(elements)).toBe(true);
+    const first: unknown = Array.isArray(elements) ? elements[0] : null;
+    expect(first).toMatchObject({ tag_name: 'a', $el_text: `Mail ${REDACTED}`, classes: ['btn', 'primary'], nth_child: 2 });
+    expect(JSON.stringify(first)).not.toContain('token');
+    expect(JSON.stringify(first)).toContain('utm_source=x');
+  });
+
+  test('the init options disable the feature-flag request, which bypasses before_send', () => {
+    const options = postHogInitOptions({ key: 'phc_testtesttesttesttesttest', host: 'https://us.i.posthog.com', debug: false }, '/');
+    expect(options.advanced_disable_flags).toBe(true);
   });
 });
