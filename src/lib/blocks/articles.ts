@@ -654,10 +654,10 @@ function bumpRevisionStatement(db: D1DatabaseLike, articleId: string, expected: 
  * transaction): the save applies fully at expected + 1 or not at all. A lost bump is a revision conflict.
  */
 async function commitAtRevision(
-  db: D1DatabaseLike, slug: string, writes: D1PreparedStatementLike[], bump: D1PreparedStatementLike, derived: D1PreparedStatementLike[] = [],
+  db: D1DatabaseLike, articleId: string, writes: D1PreparedStatementLike[], bump: D1PreparedStatementLike, derived: D1PreparedStatementLike[] = [],
 ): Promise<void> {
   const results = await db.batch([...writes, bump, ...derived]);
-  if (!results[writes.length]?.meta?.changes) return conflict(db, slug);
+  if (!results[writes.length]?.meta?.changes) return conflict(db, articleId);
 }
 
 /** Keeps the legacy single-locale columns of `articles` equal to the primary edition (older builds read them). */
@@ -674,10 +674,28 @@ function mirrorPrimaryStatement(db: D1DatabaseLike, articleId: string): D1Prepar
   `).bind(articleId);
 }
 
-async function conflict(db: D1DatabaseLike, slug: string): Promise<never> {
-  const current = await loadArticleRow(db, slug);
+/** By id, not slug: a concurrent save may have renamed the article, which is still a revision conflict. */
+async function conflict(db: D1DatabaseLike, articleId: string): Promise<never> {
+  const current = await db.prepare('SELECT revision FROM articles WHERE id = ? AND deleted_at IS NULL').bind(articleId).first<Row>();
   if (!current) throw new AppError(404, 'not_found', 'Article not found');
-  throw new AppError(409, 'revision_conflict', 'Article was changed by someone else; reload and retry', { current_revision: current.revision });
+  throw new AppError(409, 'revision_conflict', 'Article was changed by someone else; reload and retry', { current_revision: n(current, 'revision') });
+}
+
+/** Whether a write was rejected by the unique index on `articles.slug` (D1 and SQLite report it the same way). */
+function isSlugUniqueViolation(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('UNIQUE constraint failed: articles.slug');
+}
+
+/**
+ * Runs a derived-cache rebuild after a save has committed. A failure is logged, not thrown: the save
+ * landed, and the cache is rebuilt by the next save or an admin reindex.
+ */
+async function afterCommit(what: string, task: () => Promise<unknown>): Promise<void> {
+  try {
+    await task();
+  } catch (err) {
+    console.error(`${what} failed after commit:`, err instanceof Error ? err.message : 'unknown');
+  }
 }
 
 function requireRevision(value: unknown): number {
@@ -777,13 +795,19 @@ export async function updateArticle(
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(nextSlug, primary, input.access ?? art.access, categoryId, now, art.id, expected);
   // The primary mirror is derived from the editions, so it is correct to run whether or not this save won.
-  await commitAtRevision(db, slug, writes, bump, [mirrorPrimaryStatement(db, art.id)]);
+  try {
+    await commitAtRevision(db, art.id, writes, bump, [mirrorPrimaryStatement(db, art.id)]);
+  } catch (err) {
+    // Another article took the slug after the check above; the batch rolled back as a whole.
+    if (nextSlug !== art.slug && isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${nextSlug}" is already used`);
+    throw err;
+  }
 
   // Derived caches rebuilt from the committed rows: the legacy tag names column and the search index
   // (which also calls Workers AI / Vectorize, so it cannot join a D1 batch). Both are idempotent.
-  if (tagIds) await mirrorLegacyTags(db, art.id);
+  if (tagIds) await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
   // Access, tags and category affect what each search tier may contain: always rebuild.
-  await reindexArticle(db, art.id, ctx.env);
+  await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
   const updated = await getArticle(db, nextSlug, { locale });
   if (!updated) throw new AppError(500, 'internal_error', 'Article disappeared after update');
@@ -837,7 +861,7 @@ export async function publishArticle(
   const publicPart = applyPaywall(doc, art.access, { isAdmin: false, entitlements: [] }).doc;
   // Guarded by the revision, so the draft copied here is the one read above: a save landing in between
   // bumps the revision and turns this publish into a conflict instead of publishing an unseen draft.
-  await commitAtRevision(db, slug, [
+  await commitAtRevision(db, art.id, [
     db.prepare(`
       UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
         published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?
@@ -868,7 +892,7 @@ export async function deleteEdition(
   if (!row) throw new AppError(404, 'not_found', `No ${locale} edition`);
   const now = nowIso();
   const edition = toEditionRow(row);
-  await commitAtRevision(db, slug, [
+  await commitAtRevision(db, art.id, [
     db.prepare(`UPDATE article_editions SET deleted_at = ?, updated_at = ?, revision = ? WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}`)
       .bind(now, now, expected + 1, art.id, locale, art.id, expected),
     guardedRevisionStatement(db, art.id, expected, locale, 'delete_edition', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
@@ -904,7 +928,7 @@ export async function setTagsForArticle(
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
   const tagIds = await resolveTagRefs(db, refs, { createMissing: false, locale: art.primary, actor: ctx.actor ?? 'admin' });
   const now = nowIso();
-  await commitAtRevision(db, slug, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
+  await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
   // Derived cache rebuilt from the committed rows (legacy tag names column); idempotent.
   await mirrorLegacyTags(db, art.id);
   await reindexArticle(db, art.id, ctx.env);
