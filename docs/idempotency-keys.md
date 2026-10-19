@@ -28,4 +28,4 @@ Keys are 8–128 characters of letters, digits and `. _ : -`. Generate a fresh r
 
 ## Rollout
 
-Apply migration `0026_idempotency_keys.sql` before deploying code that sends keys; requests without a key behave exactly as before. Keys are purged opportunistically on the next keyed request after they expire.
+Apply migration `0025_idempotency_keys.sql` before deploying code that sends keys; requests without a key behave exactly as before. Keys are purged opportunistically on the next keyed request after they expire.
