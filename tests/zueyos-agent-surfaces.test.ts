@@ -190,6 +190,7 @@ describe('llms.txt and index.md describe Zuey OS', () => {
         expect(text).toContain(app.summary);
         expect(text).toContain(`https://zuey.me/#${app.id}`);
       }
+      expect(text).toContain('About, GitHub, Activity Monitor, Appearance live only on the desktop');
       for (const t of WEBMCP_TOOL_SUMMARIES) expect(text).toContain(`\`${t.name}\``);
       expect(text).toContain('document.modelContext');
       expect(text).toContain('https://zuey.me/mcp');

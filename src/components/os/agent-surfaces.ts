@@ -9,6 +9,7 @@ import { WEBMCP_TOOL_SUMMARIES } from './webmcp-tools';
 
 export const STATIC_INDEX_ID = 'zueyos-index';
 
+/** Index copy for en and vi; zh/ko/ja fall back to the English labels. */
 const COPY: Record<'en' | 'vi', { title: string; how: string; apps: string; agents: string; links: { profile: string; docs: string; mcp: string } }> = {
   en: {
     title: 'Zuey OS apps',

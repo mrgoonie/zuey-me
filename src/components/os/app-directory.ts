@@ -4,7 +4,7 @@
  * llms.txt / index.md and the WebMCP tools, so every agent surface lists the same apps.
  */
 import type { Locale } from '../../lib/i18n/locales';
-import { APPS, DOCK_APPS, type AppId } from './apps';
+import { APPS, APP_IDS, DOCK_APPS, type AppId } from './apps';
 import { osStrings } from './os-i18n';
 
 export const SITE_ORIGIN = 'https://zuey.me';
@@ -25,6 +25,7 @@ const SUMMARIES: { en: Record<AppId, string> } & Partial<Record<Locale, Record<A
     referral: 'Refer friends and earn commission on their memberships.',
     '200lab': '200lab courses Duy recommends, with a 20% referral discount.',
     appearance: 'Change the Zuey OS theme, accent colour and wallpaper.',
+    'activity-monitor': 'Live, anonymous count of who is on zuey.me right now and what they are doing (reading, watching, chatting…).',
   },
   vi: {
     about: 'Duy Nguyễn (Zuey) là ai: tiểu sử, công ty, sản phẩm và mạng xã hội.',
@@ -40,6 +41,7 @@ const SUMMARIES: { en: Record<AppId, string> } & Partial<Record<Locale, Record<A
     referral: 'Giới thiệu bạn bè và nhận hoa hồng từ gói thành viên của họ.',
     '200lab': 'Khoá học 200lab Duy giới thiệu, giảm 20% qua mã giới thiệu.',
     appearance: 'Đổi giao diện, màu nhấn và hình nền của Zuey OS.',
+    'activity-monitor': 'Xem trực tiếp, ẩn danh có bao nhiêu người đang ở zuey.me và họ đang làm gì (đọc bài, xem video, trò chuyện…).',
   },
 };
 
@@ -54,7 +56,7 @@ export interface DirectoryApp {
 }
 
 /** Dock order first, then apps that live outside the dock (Appearance). */
-export const DIRECTORY_APP_IDS: AppId[] = [...DOCK_APPS, ...(Object.keys(APPS) as AppId[]).filter(id => !DOCK_APPS.includes(id))];
+export const DIRECTORY_APP_IDS: AppId[] = [...DOCK_APPS, ...APP_IDS.filter(id => !DOCK_APPS.includes(id))];
 
 export function appDirectory(locale: Locale): DirectoryApp[] {
   const names = osStrings(locale).apps;
