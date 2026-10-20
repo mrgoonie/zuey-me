@@ -202,6 +202,14 @@ function stopHeartbeats(client: VirtualClient): void {
 
 interface ConnectOutcome { ok: boolean; openMs: number | null; error: string | null }
 
+/**
+ * Bun's WebSocket accepts `{ protocols, headers }` as its second argument (needed to send Origin and
+ * CF-Connecting-IP like a browser behind Cloudflare would); the DOM lib typing only knows `string | string[]`,
+ * so the constructor is retyped to that Bun overload.
+ */
+type BunWebSocketInit = { protocols: string[]; headers: Record<string, string> };
+const BunWebSocket = WebSocket as unknown as new (url: string, init: BunWebSocketInit) => WebSocket;
+
 /** Opens one socket with a freshly signed ticket; resolves on open (or on the first failure). */
 async function connect(client: VirtualClient, subscribe: boolean): Promise<ConnectOutcome> {
   const ticket = await signPresenceTicket(secret, {
@@ -216,7 +224,7 @@ async function connect(client: VirtualClient, subscribe: boolean): Promise<Conne
       clearTimeout(guard);
       resolve(outcome);
     };
-    const ws = new WebSocket(`${config.wsBase}/v1/connect`, {
+    const ws = new BunWebSocket(`${config.wsBase}/v1/connect`, {
       protocols: [PRESENCE_SUBPROTOCOL, ticket],
       headers: { Origin: config.origin, 'CF-Connecting-IP': client.ip },
     });
