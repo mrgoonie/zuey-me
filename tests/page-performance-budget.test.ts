@@ -58,6 +58,15 @@ describe('page weight budget', () => {
       expect(faces.some(f => /src: local\('[A-Za-z]+'\); font-weight: 100 /.test(f))).toBe(true);
       expect(faces.some(f => /src: local\('[A-Za-z]+ Bold'\)[^;]*; font-weight: 550 /.test(f))).toBe(true);
       for (const f of faces) expect(f).toMatch(/size-adjust: [\d.]+%; ascent-override: [\d.]+%; descent-override: [\d.]+%; line-gap-override: 0%/);
+      // Overrides are scaled by size-adjust, so every face must give the same ascent and descent once scaled.
+      const scaled = faces.map(f => {
+        const [size, ascent, descent] = ['size-adjust', 'ascent-override', 'descent-override'].map(k => Number(f.match(new RegExp(`${k}: ([\\d.]+)%`))?.[1]));
+        return { ascent: (size * ascent) / 1e4, descent: (size * descent) / 1e4 };
+      });
+      for (const m of scaled) {
+        expect(m.ascent).toBeCloseTo(scaled[0].ascent, 2);
+        expect(m.descent).toBeCloseTo(scaled[0].descent, 2);
+      }
     }
   });
 
