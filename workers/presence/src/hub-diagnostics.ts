@@ -7,7 +7,7 @@ import { PRESENCE_CONTRACT_VERSION, type PresenceDiagnostics } from '../../../sr
 import type { HistoryStats } from './presence-history';
 import { MAX_SOCKETS_PER_IP, MAX_SOCKETS_PER_KEY, MAX_SOCKETS_TOTAL, isLive, type SocketSession } from './presence-state';
 
-/** In-memory hub counters since the object last started (they reset on eviction). */
+/** In-memory hub counters since the object last woke (they reset whenever it hibernates or is evicted). */
 export interface HubCounters {
   startedAt: number;
   connectsAccepted: number;

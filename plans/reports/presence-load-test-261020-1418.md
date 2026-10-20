@@ -77,7 +77,7 @@ Assumptions (all stated, none measured in production):
 - Each connect costs 1 Worker request (`/v1/connect`), 1 DO request, and 1 ticket request (Pages Function). I assumed the ticket request shares the Workers 10M allowance.
 - Snapshot and history reads reach the origin only through the edge cache: one request per 5 s and per 60 s respectively, per 3 PoPs.
 - Worker CPU at about 2 ms per request. This is not measured.
-- Storage writes: history at most 60 per hour, signature writes at most about 1,800 per hour. This is a worst case. The total stays far below 50M per month.
+- Storage writes: history now writes whenever a 5-minute bucket's peak rises (changed after this run, so a peak survives hibernation). A steady crowd costs about 12 per hour. The hard bound is the sum of the twelve bucket peaks per hour: at most 6,000 per hour (about 4.4M per month) at 500 visitors, and at most 60,000 per hour (about 43M per month) at 5,000. Signature writes add at most about 1,800 per hour. Even the 5,000-visitor bound, which needs every bucket to climb from 0, stays under the 50M rows written per month included in Workers Paid.
 
 | Item | V = 50 | V = 500 | V = 5,000 |
 |---|---|---|---|
@@ -88,7 +88,7 @@ Assumptions (all stated, none measured in production):
 | Workers request overage | $0.00 | $0.14 | $23.79 |
 | Workers CPU overage (assumed) | $0.00 | $0.00 | $2.90 |
 | DO duration overage (128 MB) | $0.00 | $0.00 | $0.00 |
-| Storage writes (worst case, 1.36M per month) | $0.00 | $0.00 | $0.00 |
+| Storage writes (within the 50M rows per month included) | $0.00 | $0.00 | $0.00 |
 | Variable total (excludes $5 plan base) | about $0 | about $1.07 | about $37 |
 
 Sensitivity: if the DO holds 256 MB, duration overage is about $3.41 per month regardless of V. If the Pages ticket requests are billed outside the Workers allowance, the Workers request overage at V = 5,000 falls from $23.79 to about $10.65.

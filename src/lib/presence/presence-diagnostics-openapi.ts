@@ -15,7 +15,7 @@ export const presenceDiagnosticsPath = {
     tags: ['Presence'],
     summary: 'Admin: presence Worker diagnostics (read-only)',
     description: [
-      'Socket breakdown, connection limits, counters since the Durable Object last started, alarm timing and history storage of the',
+      'Socket breakdown, connection limits, counters since the Durable Object last woke (they reset after about 10 s idle), alarm timing and history storage of the',
       'presence Worker, read over the `PRESENCE` service binding. Counts and timings only: never keys, IPs, tickets or owner text.',
       'Any admin (Studio session, admin member session or admin key) and read-only Studio keys may read it; it is not owner-only.',
       'Responses are `Cache-Control: no-store`.',
@@ -56,7 +56,7 @@ export const presenceDiagnosticsSchema = {
       messagesDropped: count,
       abuseCloses: count,
       broadcasts: count,
-    }, 'In memory since the Durable Object last started; resets on eviction'),
+    }, 'In memory since the Durable Object last woke; reset whenever it hibernates (about 10 s idle)'),
     alarm: object({ nextAt: timeOrNull, lastRunAt: timeOrNull, lastRunMs: { type: ['number', 'null'], minimum: 0 } }),
     history: object({ buckets: count, oldest: timeOrNull, storageBytes: count }, 'Stored 5-minute aggregate buckets'),
   }),
