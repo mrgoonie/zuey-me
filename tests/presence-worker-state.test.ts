@@ -2,14 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { PRESENCE_MAX_MESSAGE_BYTES, PRESENCE_TTL_MS } from '../src/lib/presence/contract';
 import {
   MAX_SOCKETS_PER_IP, MAX_SOCKETS_PER_KEY, MAX_SOCKETS_TOTAL, MAX_STRIKES, RATE_BURST, RATE_REFILL_MS,
-  applyClientMessage, computeSnapshot, consumeRate, isSocketSession, newSession, nextOwner, ownerOnline, parseClientMessage,
+  applyClientMessage, computeSnapshot, consumeRate, isSocketSession, newSession, parseClientMessage,
   snapshotSignature, withinCaps,
-  type SessionIdentity, type SocketSession, type StoredOwner,
+  type SessionIdentity, type SocketSession,
 } from '../workers/presence/src/presence-state';
+import { nextOwner, ownerConnected, ownerPresence, type StoredOwner } from '../workers/presence/src/owner-status';
 import type { ActivityCategory } from '../src/lib/presence/contract';
 
 const T0 = Date.parse('2026-10-20T04:00:00.000Z');
-const OFFLINE: StoredOwner = { status: 'offline', since: T0 - 60_000 };
+const OFFLINE: StoredOwner = { status: 'offline', onSite: false, text: null, since: T0 - 60_000 };
 
 function identity(k: string, over: Partial<SessionIdentity> = {}): SessionIdentity {
   return { k, c: true, m: false, o: false, ipHash: `ip-${k}`, ...over };
@@ -20,7 +21,7 @@ function live(k: string, cat: ActivityCategory, over: Partial<SessionIdentity> =
   return applyClientMessage(newSession(identity(k, over), at), { t: 'hb', cat }, at);
 }
 
-const snap = (sessions: SocketSession[], now = T0, owner = OFFLINE) => computeSnapshot(sessions, owner, now);
+const snap = (sessions: SocketSession[], now = T0, owner = OFFLINE) => computeSnapshot(sessions, ownerPresence(owner), now);
 
 describe('presence counting', () => {
   it('collapses multiple tabs of one key into one visitor', () => {
@@ -69,18 +70,19 @@ describe('owner presence', () => {
 
   it('marks the owner online only while a fresh, non-idle owner socket exists', () => {
     const owner = live('owner', 'reading', { o: true });
-    expect(ownerOnline([owner], T0)).toBe(true);
-    expect(ownerOnline([owner], T0 + PRESENCE_TTL_MS + 1)).toBe(false);
-    expect(ownerOnline([applyClientMessage(owner, { t: 'idle' }, T0)], T0)).toBe(false);
-    expect(ownerOnline([live('a', 'reading')], T0)).toBe(false);
+    expect(ownerConnected([owner], T0)).toBe(true);
+    expect(ownerConnected([owner], T0 + PRESENCE_TTL_MS + 1)).toBe(false);
+    expect(ownerConnected([applyClientMessage(owner, { t: 'idle' }, T0)], T0)).toBe(false);
+    expect(ownerConnected([live('a', 'reading')], T0)).toBe(false);
   });
 
   it('moves `since` only when the public owner status flips', () => {
-    const first = nextOwner(null, false, T0);
-    expect(first).toEqual({ status: 'offline', since: T0 });
-    expect(nextOwner(first, false, T0 + 5_000)).toBe(first);
-    const online = nextOwner(first, true, T0 + 10_000);
-    expect(online).toEqual({ status: 'online', since: T0 + 10_000 });
+    const offline = { status: 'offline', onSite: false, text: null } as const;
+    const first = nextOwner(null, offline, T0);
+    expect(first).toEqual({ ...offline, since: T0 });
+    expect(nextOwner(first, offline, T0 + 5_000)).toBe(first);
+    const online = nextOwner(first, { status: 'online', onSite: true, text: null }, T0 + 10_000);
+    expect(online).toEqual({ status: 'online', onSite: true, text: null, since: T0 + 10_000 });
     const s = snap([], T0 + 20_000, online);
     expect(s.owner).toEqual({ status: 'online', onSite: true, since: new Date(T0 + 10_000).toISOString() });
     expect(snap([], T0, OFFLINE).owner.onSite).toBe(false);
