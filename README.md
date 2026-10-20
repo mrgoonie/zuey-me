@@ -66,10 +66,11 @@ bun run build    # Typecheck and build production bundle
 - The Pages project, the D1 database and the `zuey.me` DNS zone live in the same Cloudflare account. Export that account's `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` before any wrangler command so a cached OAuth login for another account is never used.
 - **Cloudflare Image Transformations** (zone setting `image_resizing=on` on `zuey.me`) resize article images. `src/lib/media/image-transform.ts` builds `/cdn-cgi/image/width=…,quality=…,format=auto/<source>` URLs for the article body, the article cover and the `/articles` thumbnails.
   - **Sources:** only zone images, meaning `media.zuey.me` and `zuey.me` paths. Other hosts keep their original URLs, as do email and feed HTML.
-  - **Hosts:** transformations are on only when the request host is `zuey.me`. `wrangler pages dev` and `*.pages.dev` have no `/cdn-cgi/image`.
+  - **Hosts:** transformations are on only when the request host is `zuey.me` or `www.zuey.me` (both serve the site). `wrangler pages dev` and `*.pages.dev` have no `/cdn-cgi/image`.
   - **`IMAGE_TRANSFORMS` variable:** `off` disables transformations. An origin such as `https://zuey.me` points a local build at the production transformer.
-  - **Quota:** the free tier allows 5,000 unique transformations a month. Each image and size pair counts once, and the helper uses at most 4 widths per image (2 per thumbnail).
-  - **If the zone setting is turned off,** `/cdn-cgi/image` returns 404 and article images break. Set `IMAGE_TRANSFORMS=off` before disabling it.
+  - **Quota:** the free tier allows 5,000 unique transformations a month. Each distinct source and option set counts once. An article image uses at most 4 widths. A cover shown as a thumbnail uses 2 more per thumbnail size (1x and 2x); the compact (56×64) and regular (80×92) thumbnails are separate sizes, so a cover shown both ways counts 4.
+  - **If the zone setting is turned off,** `/cdn-cgi/image` returns 404 and article images break. Set `IMAGE_TRANSFORMS=off` and wait 11 minutes before disabling it: the edge HTML cache keeps serving pages with transformed URLs for up to that long.
+- **Edge HTML cache:** anonymous `/`, `/articles`, `/articles/<slug>` and `/pricing` are served from the colo's Cache API (60 s fresh, then 10 min stale-while-revalidate, no purge on publish). Rules and debugging: [docs/edge-html-cache.md](docs/edge-html-cache.md).
 - Remote D1 schema migrations (apply every file in `migrations/` in numeric order): `wrangler d1 execute zuey_me_db --remote --file=./migrations/<file>.sql -y`. Record a Time Travel bookmark first (`wrangler d1 time-travel info zuey_me_db`); `wrangler d1 export` refuses databases with FTS5 tables.
 
 ### Environment & Secrets

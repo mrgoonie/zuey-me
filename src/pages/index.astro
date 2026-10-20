@@ -21,6 +21,7 @@ import { USER_KEY_SCOPES } from '../lib/members/api-keys';
 import { resolveMemberSession } from '../lib/members/session';
 import { configuredPaymentMethods } from '../lib/booking/store';
 import { Lab200Window } from '../components/lab200/Lab200Window';
+import { imageTransformsFor } from '../lib/media/image-transform';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
@@ -57,7 +58,7 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
       <ZueyAiPanel client:visible locale={locale} />
     </div>
     <div slot="knowledges" class="min-w-0">
-      <KnowledgesPanel client:visible locale={locale} />
+      <KnowledgesPanel client:visible locale={locale} imageTransforms={imageTransformsFor(Astro.url.hostname, runtimeEnv.IMAGE_TRANSFORMS)} />
     </div>
     <div slot="reads" class="min-w-0">
       <ReadsWindow client:visible locale={locale} />

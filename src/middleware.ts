@@ -48,6 +48,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const rendered = await serveWithEdgeCache(request, url, () => next(), {
     cache: runtime?.caches?.default,
     waitUntil: ctx ? promise => ctx.waitUntil(promise) : undefined,
+    // Astro.cookies are appended by the adapter after this middleware returns, so check them here.
+    canStore: () => [...context.cookies.headers()].length === 0,
   });
   const response = await withRequestId(rendered, requestId);
 

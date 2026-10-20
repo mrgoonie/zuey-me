@@ -17,8 +17,12 @@ const req = (path: string, headers: Record<string, string> = {}, method = 'GET')
 const html = (body = 'page', headers: Record<string, string> = {}, status = 200) =>
   new Response(body, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300', ...headers } });
 
-async function serve(cache: EdgeCache, request: Request, render: () => Promise<Response>, now = 0, jobs: Promise<unknown>[] = []) {
-  return serveWithEdgeCache(request, new URL(request.url), render, { cache, now: () => now, waitUntil: p => { jobs.push(p); } });
+async function serve(
+  cache: EdgeCache, request: Request, render: () => Promise<Response>, now = 0, jobs: Promise<unknown>[] = [], canStore?: () => boolean,
+) {
+  const res = await serveWithEdgeCache(request, new URL(request.url), render, { cache, now: () => now, waitUntil: p => { jobs.push(p); }, canStore });
+  await Promise.all(jobs);
+  return res;
 }
 
 describe('edge HTML cache: which requests use it', () => {
@@ -35,6 +39,7 @@ describe('edge HTML cache: which requests use it', () => {
     expect(reason(req('/articles/a', { cookie: 'zuey_session=admin' }))).toBe('session');
     expect(reason(req('/', { cookie: 'zuey_member_oauth=state' }))).toBe('session');
     expect(reason(req('/articles', { authorization: 'Bearer zk_x' }))).toBe('authorization');
+    expect(reason(req('/articles', { 'x-api-key': 'zk_x' }))).toBe('authorization');
     expect(reason(req('/articles?q=ai'))).toBe('query');
     expect(reason(req('/articles/a?preview=1'))).toBe('query');
     expect(reason(req('/', {}, 'POST'))).toBe('method');
@@ -130,5 +135,58 @@ describe('edge HTML cache: serving', () => {
   test('without a cache binding every request renders', async () => {
     const res = await serveWithEdgeCache(req('/'), new URL('https://zuey.me/'), async () => html('x'), { cache: undefined });
     expect(res.headers.get('X-Edge-Cache')).toBe('BYPASS');
+  });
+
+  test('clients get the page\'s own Cache-Control on HIT and STALE, never the edge lifetime or internal headers', async () => {
+    const cache = memoryCache();
+    const render = async () => html('x', { 'Cache-Control': 'public, max-age=60, s-maxage=300' });
+    const miss = await serve(cache, req('/'), render, 0);
+    const hit = await serve(cache, req('/'), render, 1000);
+    const stale = await serve(cache, req('/'), render, (EDGE_HTML_FRESH_S + 1) * 1000);
+    expect(hit.headers.get('X-Edge-Cache')).toBe('HIT');
+    expect(stale.headers.get('X-Edge-Cache')).toBe('STALE');
+    for (const res of [hit, stale]) {
+      expect(res.headers.get('Cache-Control')).toBe(miss.headers.get('Cache-Control'));
+      expect([...res.headers.keys()].filter(k => k.startsWith('x-edge-') && k !== 'x-edge-cache')).toEqual([]);
+    }
+    const bare = memoryCache();
+    const noHeader = async () => new Response('x', { headers: { 'Content-Type': 'text/html' } });
+    await serve(bare, req('/'), noHeader, 0);
+    expect((await serve(bare, req('/'), noHeader, 1000)).headers.has('Cache-Control')).toBe(false);
+  });
+
+  test('a failed cache write still returns the rendered page', async () => {
+    const broken: EdgeCache = { async match() { return undefined; }, async put() { throw new Error('quota'); } };
+    const res = await serve(broken, req('/'), async () => html('still here'));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('still here');
+    const awaited = await serveWithEdgeCache(req('/'), new URL('https://zuey.me/'), async () => html('no waitUntil'), { cache: broken });
+    expect(await awaited.text()).toBe('no waitUntil');
+  });
+
+  test('nothing is stored when cookies are set after rendering (Astro.cookies)', async () => {
+    const cache = memoryCache();
+    const res = await serve(cache, req('/'), async () => html('x'), 0, [], () => false);
+    expect(res.headers.get('X-Edge-Cache')).toBe('MISS');
+    expect(cache.store.size).toBe(0);
+  });
+
+  test('concurrent STALE hits revalidate once per isolate', async () => {
+    const cache = memoryCache();
+    let renders = 0;
+    let release = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await serve(cache, req('/articles'), async () => { renders++; return html('v1'); }, 0);
+    const slow = async () => { renders++; await gate; return html('v2'); };
+    const jobs: Promise<unknown>[] = [];
+    const at = (EDGE_HTML_FRESH_S + 1) * 1000;
+    const opts = { cache, now: () => at, waitUntil: (p: Promise<unknown>) => { jobs.push(p); } };
+    const url = new URL('https://zuey.me/articles');
+    const results = await Promise.all([1, 2, 3].map(() => serveWithEdgeCache(req('/articles'), url, slow, opts)));
+    expect(results.map(r => r.headers.get('X-Edge-Cache'))).toEqual(['STALE', 'STALE', 'STALE']);
+    release();
+    await Promise.all(jobs);
+    expect(renders).toBe(2);
+    expect(await (await serve(cache, req('/articles'), slow, at + 1000)).text()).toBe('v2');
   });
 });
