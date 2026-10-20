@@ -68,7 +68,7 @@ export const MobileHome: React.FC<MobileHomeProps> = ({ locale, profile, strings
             strings={homeStrings.activity.calendar}
           />
         ) : (
-          <Skeleton label={homeStrings.activity.loading} rows={[96]} />
+          <Skeleton label={homeStrings.activity.loading} rows={[96]} decorative />
         )}
       </button>
 

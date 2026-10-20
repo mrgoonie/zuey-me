@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { X, Download, Copy, Check } from 'lucide-react';
+import { showToast } from './feedback/toast-bus';
+import { useEscapeToClose } from './use-escape-to-close';
 
 interface QrCodeModalProps {
   isOpen: boolean;
@@ -23,6 +25,8 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 }) => {
   const [qrSrc, setQrSrc] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const titleId = useId();
+  useEscapeToClose(isOpen, onClose);
 
   const targetUrl = url || (typeof window !== 'undefined' ? window.location.origin : 'https://zuey.me');
 
@@ -50,12 +54,16 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 
   const handleCopy = async () => {
     try {
+      if (!navigator.clipboard) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(targetUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ignore
+      showToast(lang === 'vi' ? 'Không sao chép được liên kết' : 'Could not copy link', 'error');
+      return;
     }
+    // The button's own "Copied" state is visual only; the shared toast (when mounted) announces it.
+    showToast(lang === 'vi' ? 'Đã sao chép liên kết' : 'Link copied');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDownload = () => {
@@ -68,12 +76,15 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-      <div 
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 sm:p-7 border border-stone-200 text-center animate-scaleUp"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-          <h2 className="text-base font-bold text-stone-900 font-sans tracking-tight">
+          <h2 id={titleId} className="text-base font-bold text-stone-900 font-sans tracking-tight">
             {title ?? (lang === 'vi' ? 'Quét mã QR Profile' : 'Scan Profile QR')}
           </h2>
           <button

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { X, Link2, QrCode, Check } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import type { Profile } from '../db/types';
 import { showToast } from './feedback/toast-bus';
+import { useEscapeToClose } from './use-escape-to-close';
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -21,6 +22,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 }) => {
   /** 'toast' when the shared toast confirmed the copy, 'inline' when this page has no Toaster. */
   const [copied, setCopied] = useState<'toast' | 'inline' | null>(null);
+  const titleId = useId();
+  useEscapeToClose(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -96,13 +99,16 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-      <div 
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 border border-stone-200 overflow-hidden transform transition-all animate-scaleUp"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-stone-100">
-          <h2 className="text-lg font-bold text-stone-900 font-sans tracking-tight">
+          <h2 id={titleId} className="text-lg font-bold text-stone-900 font-sans tracking-tight">
             {lang === 'vi' ? 'Chia sẻ Profile' : 'Share Profile'}
           </h2>
           <button

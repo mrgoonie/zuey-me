@@ -182,12 +182,6 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     showToast(s.look.resetDone);
   }, [changeLook, s.look]);
 
-  /** A change made in the Appearance window: applied, persisted (look effect) and confirmed. The dim slider announces its own value. */
-  const saveLook = useCallback((patch: Partial<Look>) => {
-    changeLook(patch);
-    if (!('dim' in patch)) showToast(s.look.saved);
-  }, [changeLook, s.look]);
-
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
 
@@ -552,7 +546,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
             look={look}
             hasImage={wallImage !== null}
             strings={s.look}
-            onChange={saveLook}
+            onChange={changeLook}
             onImage={f => void setImage(f)}
             onReset={resetLook}
           />

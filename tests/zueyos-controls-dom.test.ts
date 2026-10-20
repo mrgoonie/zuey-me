@@ -318,10 +318,12 @@ describe('Zuey OS dock, menu bar, phone home and appearance', () => {
     const icons = Array.from(root.querySelectorAll<HTMLElement>('.os-home-apps button, .os-home-apps a'));
     expect(icons.length).toBe(apps.DOCK_APPS.length + 3);
     for (const icon of icons) expect(icon.textContent?.trim().length ?? 0).toBeGreaterThan(0);
-    const skel = root.querySelector('.os-home-widget .zf-skel');
-    expect(skel?.getAttribute('role')).toBe('status');
-    expect(skel?.getAttribute('aria-busy')).toBe('true');
-    expect(skel?.getAttribute('aria-label')).toBe(homeI18n.homeStrings('en').activity.loading);
+    // Inside the widget button the skeleton is decorative, so the button's name stays its own text.
+    const widget = root.querySelector<HTMLElement>('.os-home-widget');
+    const skel = widget?.querySelector('.zf-skel');
+    expect(skel?.getAttribute('aria-hidden')).toBe('true');
+    expect(skel?.getAttribute('role')).toBeNull();
+    expect(widget?.textContent).not.toContain(homeI18n.homeStrings('en').activity.loading);
   });
 
   test('appearance controls are labelled radio groups of named radios', () => {
@@ -374,17 +376,46 @@ describe('Zuey OS feedback', () => {
     expect(region?.querySelector('.zf-toast')?.getAttribute('aria-hidden')).toBe('true');
   });
 
-  test('skeleton is a busy status with one bar per row', () => {
+  test('skeleton is a status with a single label and one bar per row', () => {
     const root = mount(React.createElement(skeleton.Skeleton, { label: 'Loading…', rows: [112, 20] }));
     const el = root.querySelector('.zf-skel');
     expect(el?.getAttribute('role')).toBe('status');
-    expect(el?.getAttribute('aria-busy')).toBe('true');
-    expect(el?.getAttribute('aria-label')).toBe('Loading…');
+    expect(el?.hasAttribute('aria-busy')).toBe(false);
+    expect(el?.hasAttribute('aria-label')).toBe(false);
+    expect(el?.textContent).toBe('Loading…');
     expect(Array.from(root.querySelectorAll<HTMLElement>('.zf-skel-bar')).map(b => b.style.height)).toEqual(['112px', '20px']);
   });
 });
 
 describe('Zuey OS desktop keyboard flow', () => {
+  test('Escape in the About window closes the open share modal first, then the window', async () => {
+    offlineFetch();
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
+    const root = mount(React.createElement(os.ZueyOS, { locale: 'en', profile, links: [], signedIn: false }));
+    await settle();
+    React.act(() => { window.location.hash = '#about'; });
+    await settle();
+    const about = () => root.querySelector<HTMLElement>('.osw[data-app="about"]');
+    expect(about()?.hidden).toBe(false);
+
+    const share = about()?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
+    if (!share) throw new Error('No share button');
+    share.focus();
+    React.act(() => share.click());
+    await settle(2);
+    const modal = () => about()?.querySelector('[role="dialog"][aria-modal="true"]') ?? null;
+    expect(modal()).not.toBeNull();
+
+    key(share, { key: 'Escape' });
+    await settle(2);
+    expect(modal()).toBeNull();
+    expect(about()?.hidden).toBe(false);
+
+    key(share, { key: 'Escape' });
+    await settle();
+    expect(about()?.hidden).toBe(true);
+  });
+
   test('Alt+4 opens Reads with focus inside it, and Escape closes it again', async () => {
     offlineFetch();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });

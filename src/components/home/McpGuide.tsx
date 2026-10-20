@@ -68,6 +68,8 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
   const [tab, setTab] = useState<ClientTab>('claudeCode');
   const [origin, setOrigin] = useState('https://zuey.me');
   const [copied, setCopied] = useState<{ index: number; ok: boolean } | null>(null);
+  /** Copy result shown inline only when no shared Toaster is mounted, so it is announced once. */
+  const [inlineStatus, setInlineStatus] = useState('');
   const panelId = useId();
 
   useEffect(() => {
@@ -122,7 +124,8 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
                   const code = e.currentTarget.parentElement?.querySelector('code') ?? null;
                   const ok = await copyText(s.code, code);
                   setCopied({ index: i, ok });
-                  showToast(ok ? strings.copied : strings.copyFailed, ok ? 'success' : 'error');
+                  const message = ok ? strings.copied : strings.copyFailed;
+                  setInlineStatus(showToast(message, ok ? 'success' : 'error') ? '' : message);
                 }}
               >
                 {copied?.index === i && copied.ok ? <Check aria-hidden="true" className="w-4 h-4" /> : <Copy aria-hidden="true" className="w-4 h-4" />}
@@ -130,6 +133,7 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
             </div>
           </div>
         ))}
+        <p className="text-[13px] font-semibold" role="status" aria-live="polite">{inlineStatus}</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <a href="/account#keys" className="home-cta">{strings.keys}</a>

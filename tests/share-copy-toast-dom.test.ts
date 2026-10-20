@@ -19,6 +19,8 @@ let toastBus: typeof import('../src/components/feedback/toast-bus');
 let linkCard: typeof import('../src/components/LinkCard');
 let shareModal: typeof import('../src/components/ShareModal');
 let shareMenu: typeof import('../src/components/knowledge/ShareMenu');
+let mcpGuide: typeof import('../src/components/home/McpGuide');
+let homeI18n: typeof import('../src/components/home/home-i18n');
 
 const mounted: Array<{ root: Root; container: HTMLElement }> = [];
 /** Text written to the stubbed clipboard; `clipboardFails` makes the next writes reject. */
@@ -78,6 +80,8 @@ beforeAll(async () => {
   linkCard = await import('../src/components/LinkCard');
   shareModal = await import('../src/components/ShareModal');
   shareMenu = await import('../src/components/knowledge/ShareMenu');
+  mcpGuide = await import('../src/components/home/McpGuide');
+  homeI18n = await import('../src/components/home/home-i18n');
 });
 
 afterEach(() => {
@@ -114,6 +118,20 @@ describe('profile link card', () => {
     await click(buttonByText(card, 'Copy link'));
     expect(written).toEqual([item.url]);
     expect(toastText()).toBe('Link copied');
+    expect(card.textContent).not.toContain('Copy link');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  test('the menu trigger reports its popup, and Escape closes the menu back onto it', async () => {
+    const card = mount(React.createElement(linkCard.LinkCard, { item, lang: 'en' }));
+    const trigger = card.querySelector<HTMLButtonElement>('button[aria-label="More options"]');
+    if (!trigger) throw new Error('No menu trigger');
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    React.act(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(card.textContent).not.toContain('Copy link');
     expect(document.activeElement).toBe(trigger);
   });
@@ -172,5 +190,26 @@ describe('article share menu', () => {
     clipboardFails = true;
     await click(buttonByText(menu, 'Copy link'));
     expect(inlineStatus(menu)).toBe('Could not copy');
+  });
+});
+
+describe('MCP setup snippets', () => {
+  test('copy confirms once: through the toast when mounted, else through its own live region', async () => {
+    const strings = homeI18n.homeStrings('en').mcp;
+    const status = (root: HTMLElement) => root.querySelector('[role="status"]')?.textContent ?? '';
+
+    mountToaster();
+    const withToaster = mount(React.createElement(mcpGuide.McpGuide, { strings }));
+    await click(withToaster.querySelector('.home-snippet button') ?? withToaster);
+    expect(toastText()).toBe(strings.copied);
+    expect(status(withToaster)).toBe('');
+
+    for (const m of mounted.splice(0)) {
+      React.act(() => m.root.unmount());
+      m.container.remove();
+    }
+    const alone = mount(React.createElement(mcpGuide.McpGuide, { strings }));
+    await click(alone.querySelector('.home-snippet button') ?? alone);
+    expect(status(alone)).toBe(strings.copied);
   });
 });

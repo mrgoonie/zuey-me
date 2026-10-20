@@ -4,6 +4,7 @@ import { BrandIcon } from './BrandIcons';
 import type { LinkItem } from '../db/types';
 import { track } from '../lib/analytics/client';
 import { showToast } from './feedback/toast-bus';
+import { useEscapeToClose } from './use-escape-to-close';
 
 interface LinkCardProps {
   item: LinkItem;
@@ -19,6 +20,10 @@ export const LinkCard: React.FC<LinkCardProps> = ({
   const [showMenu, setShowMenu] = useState(false);
   const [copied, setCopied] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useEscapeToClose(showMenu, () => {
+    setShowMenu(false);
+    menuButtonRef.current?.focus();
+  });
   const title = lang === 'vi' ? item.title_vi || item.title_en : item.title_en;
   const subtitle = lang === 'vi' ? item.subtitle_vi || item.subtitle_en : item.subtitle_en;
 
@@ -130,6 +135,8 @@ export const LinkCard: React.FC<LinkCardProps> = ({
             }}
             className="w-9 h-9 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
             aria-label="More options"
+            aria-haspopup="menu"
+            aria-expanded={showMenu}
           >
             <MoreVertical className="w-4 h-4" />
           </button>

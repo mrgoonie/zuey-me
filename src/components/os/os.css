@@ -339,8 +339,10 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .os-home-prof, .os-home-widget, .os-askbar, .os-ap-prev, .os-wp-th, .os-di > .os-g, .os-home-apps .os-g {
   transition: background-color var(--motion-dur-fast) var(--motion-ease-standard), color var(--motion-dur-fast) var(--motion-ease-standard),
     border-color var(--motion-dur-fast) var(--motion-ease-standard), opacity var(--motion-dur-fast) var(--motion-ease-standard),
-    transform var(--motion-dur-fast) var(--motion-ease-out), filter var(--motion-dur-fast) var(--motion-ease-standard);
+    transform var(--motion-dur-fast) var(--motion-ease-out);
 }
+/* Only the small icon tiles brighten on hover; the large blurred phone cards change background instead. */
+.os-di > .os-g, .os-home-apps .os-g { transition-property: background-color, color, border-color, opacity, transform, filter; }
 /* menubar & menus */
 .os-mb-btn:active, .os-menubar .home-chip:active, .os-mb-acct:active { transform: scale(.95); }
 .os-mb-btn:active, .os-menubar .home-chip:active { background: var(--os-hover-2); }
@@ -352,7 +354,6 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .osw-bar:active { cursor: grabbing; }
 .osw-bar:focus-visible { outline: 2px solid var(--os-acc-fg); outline-offset: -2px; }
 .osw-lights button:hover { transform: scale(1.08); }
-.osw-lights button:active { transform: scale(.86); }
 .osw-lights button:focus-visible { outline: 2px solid var(--os-acc-fg); outline-offset: 2px; }
 .osw-page:active, .osw-back:active { transform: scale(.92); }
 .osw-back:hover { opacity: .8; }
@@ -370,7 +371,11 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .os-home-apps button:hover .os-g, .os-home-apps a:hover .os-g { filter: brightness(1.08); }
 .os-home-apps button:active .os-g, .os-home-apps a:active .os-g { transform: scale(.9); }
 .os-home-prof:active, .os-home-widget:active, .os-askbar:active { transform: scale(.98); }
-.os-home-prof:hover, .os-home-widget:hover, .os-askbar:hover { filter: brightness(1.03); }
+@media (hover: hover) {
+  .os-home-prof:hover { background-color: rgba(252, 249, 247, .98); }
+  .os-home-widget:hover { background-color: color-mix(in srgb, var(--os-glass), var(--os-fg) 6%); }
+  .os-askbar:hover { background-color: color-mix(in srgb, var(--os-glass-2), var(--os-fg) 6%); }
+}
 .os-home-apps button:focus-visible, .os-home-apps a:focus-visible, .os-home-prof:focus-visible, .os-home-widget:focus-visible, .os-askbar:focus-visible { outline: 2px solid var(--os-acc-fg); outline-offset: 3px; border-radius: 16px; }
 /* appearance */
 .os-ap-modes button:active .os-ap-prev, .os-ap-wps button:active .os-wp-th { transform: scale(.96); }
@@ -397,7 +402,8 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
   .osw, .osw.is-expo, .os-di, .os-tip, .os-home, .os-snap-ghost, .os-desk video, .zf-toast { transition: none !important; }
   .os-di:active > .os-g, .os-home-apps button:active .os-g, .os-home-apps a:active .os-g, .os-home-prof:active, .os-home-widget:active, .os-askbar:active,
   .os-mb-btn:active, .os-menubar .home-chip:active, .os-mb-acct:active, .osw-page:active, .osw-back:active, .os-btn:active,
-  .os-ap-acc button:active, .os-ap-acc button:hover, .osw-lights button:hover { transform: none; }
+  .os-ap-acc button:active, .os-ap-acc button:hover, .osw-lights button:hover, .osw-lights button:active,
+  .os-ap-modes button:active .os-ap-prev, .os-ap-wps button:active .os-wp-th { transform: none; }
   .os-expo-lbl:active { transform: translateX(-50%); }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 }
