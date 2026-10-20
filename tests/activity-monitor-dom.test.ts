@@ -119,6 +119,29 @@ describe('Activity Monitor panel', () => {
     expect(root.querySelector('h2')).not.toBeNull();
   });
 
+  test('renders the owner away/busy status with its optional text', async () => {
+    stubWebSocket();
+    let owner: PresenceSnapshot['owner'] = { status: 'busy', onSite: false, text: 'Recording a podcast', since: '2026-10-20T03:00:00.000Z' };
+    stubFetch((url) => (url.endsWith('/v1/snapshot') ? json({ ...snapshot, owner }) : json(grant)));
+    const root = mount();
+    await settle();
+    const card = () => root.querySelector('[data-kpi="owner"]');
+    expect(card()?.querySelector('[data-owner-status]')?.getAttribute('data-owner-status')).toBe('busy');
+    expect(card()?.textContent).toContain('Bận');
+    expect(card()?.textContent).toContain('Không ở zuey.me');
+    expect(root.querySelector('.am-owner-text')?.textContent).toBe('Recording a podcast');
+
+    for (const m of mounted.splice(0)) {
+      React.act(() => m.unmount());
+      m.container.remove();
+    }
+    owner = { status: 'away', onSite: false, since: '2026-10-20T03:00:00.000Z' };
+    const again = mount();
+    await settle();
+    expect(again.querySelector('[data-kpi="owner"]')?.textContent).toContain('Vắng mặt');
+    expect(again.querySelector('.am-owner-text')).toBeNull();
+  });
+
   test('a closed window holds no connection', async () => {
     let calls = 0;
     stubFetch(() => { calls++; return json(snapshot); });

@@ -3,20 +3,28 @@
  *
  * Uses the WebSocket Hibernation API: sockets are accepted with `ctx.acceptWebSocket`, and all per-socket
  * state lives in the socket attachment, so the object can be evicted between messages without losing
- * anyone. In-memory fields below are caches only; owner status and the last broadcast signature are
- * persisted in DO storage. One DO alarm does three jobs, and is armed only while one of them is pending,
+ * anyone. In-memory fields below are caches only; the owner's manual setting, the public owner status and
+ * the last broadcast signature are persisted in DO storage. `/owner` (GET/PUT) is reachable only through the
+ * Worker's authenticated `/internal/owner` route. One DO alarm does three jobs, and is armed only while one of them is pending,
  * so an object holding only idle or silent sockets can sleep:
  *   - TTL sweep: due when the oldest live session would expire (min lastHb + TTL, at least SWEEP_INTERVAL_MS ahead);
  *   - subscriber keepalive: an unchanged snapshot is re-sent to `sub` sockets every KEEPALIVE_INTERVAL_MS,
  *     so a quiet but healthy feed never looks stale;
  *   - coalesced broadcasts (at most one every 2 s).
  */
-import { PRESENCE_SUBPROTOCOL, PRESENCE_TTL_MS, type PresenceServerMessage, type PresenceSnapshot } from '../../../src/lib/presence/contract';
+import {
+  PRESENCE_SUBPROTOCOL, PRESENCE_TTL_MS,
+  type OwnerStatusState, type PresenceServerMessage, type PresenceSnapshot,
+} from '../../../src/lib/presence/contract';
+import {
+  DEFAULT_OWNER_SETTING, derivePublicOwner, isOwnerSetting, nextOwner, ownerConnected, ownerPresence, parseOwnerStatusUpdate,
+  readStoredOwner,
+  type OwnerSetting, type StoredOwner,
+} from './owner-status';
 import {
   CLOSE_OVER_CAPACITY, CLOSE_POLICY, affectsSnapshot, applyClientMessage, computeSnapshot, consumeRate, isLive,
-  isSessionIdentity, isSocketSession, isStoredOwner, newSession, nextOwner, ownerOnline, parseClientMessage,
-  shouldClose, snapshotSignature, strike, withinCaps,
-  type SessionIdentity, type SocketSession, type StoredOwner,
+  isSessionIdentity, isSocketSession, newSession, parseClientMessage, shouldClose, snapshotSignature, strike, withinCaps,
+  type SessionIdentity, type SocketSession,
 } from './presence-state';
 import type { DurableObjectStateLike, HubWebSocket, PairWebSocket, PresenceEnv } from './runtime-types';
 
@@ -33,10 +41,13 @@ export const KEEPALIVE_INTERVAL_MS = 45_000;
 const ALARM_SLACK_MS = 1_000;
 
 const OWNER_KEY = 'owner';
+const OWNER_SETTING_KEY = 'ownerSetting';
 const SIGNATURE_KEY = 'sig';
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
+
+const badRequest = (message: string): Response => json({ success: false, error: { code: 'bad_request', message } }, 400);
 
 function send(ws: HubWebSocket, msg: PresenceServerMessage): void {
   try {
@@ -65,6 +76,7 @@ function readSession(ws: HubWebSocket): SocketSession | null {
 
 export class PresenceHub {
   private owner: StoredOwner | null | undefined;
+  private ownerSetting: OwnerSetting | undefined;
   private lastSignature: string | null | undefined;
   private lastRefreshAt = 0;
   private refreshPending = false;
@@ -78,6 +90,8 @@ export class PresenceHub {
       const { pathname } = new URL(request.url);
       if (pathname === '/connect') return await this.connect(request);
       if (pathname === '/snapshot') return json(await this.current(Date.now()));
+      if (pathname === '/owner' && request.method === 'GET') return json(await this.ownerState(Date.now()));
+      if (pathname === '/owner' && request.method === 'PUT') return await this.updateOwner(request);
       return json({ success: false, error: { code: 'not_found', message: 'Not found' } }, 404);
     } catch (err) {
       console.error('presence hub fetch failed', err instanceof Error ? err.message : 'unknown error');
@@ -227,19 +241,68 @@ export class PresenceHub {
     return out;
   }
 
-  /** Current public snapshot; persists the owner status when it flipped so `since` survives eviction. */
-  private async current(now: number, exclude?: HubWebSocket): Promise<PresenceSnapshot> {
-    const sessions = this.sessions(exclude);
-    if (this.owner === undefined) {
-      const stored = await this.ctx.storage.get(OWNER_KEY);
-      this.owner = isStoredOwner(stored) ? stored : null;
+  private async loadOwnerSetting(): Promise<OwnerSetting> {
+    if (this.ownerSetting === undefined) {
+      const stored = await this.ctx.storage.get(OWNER_SETTING_KEY);
+      this.ownerSetting = isOwnerSetting(stored) ? stored : DEFAULT_OWNER_SETTING;
     }
-    const owner = nextOwner(this.owner, ownerOnline(sessions, now), now);
+    return this.ownerSetting;
+  }
+
+  /**
+   * Current public snapshot plus the owner's connection state; persists the public owner when it changed so
+   * `since` survives eviction.
+   */
+  private async evaluate(now: number, exclude?: HubWebSocket): Promise<{ snapshot: PresenceSnapshot; connected: boolean; owner: StoredOwner }> {
+    const sessions = this.sessions(exclude);
+    if (this.owner === undefined) this.owner = readStoredOwner(await this.ctx.storage.get(OWNER_KEY));
+    const setting = await this.loadOwnerSetting();
+    const connected = ownerConnected(sessions, now);
+    const owner = nextOwner(this.owner, derivePublicOwner(setting, connected), now);
     if (owner !== this.owner) {
       await this.ctx.storage.put(OWNER_KEY, owner);
       this.owner = owner;
     }
-    return computeSnapshot(sessions, owner, now);
+    return { snapshot: computeSnapshot(sessions, ownerPresence(owner), now), connected, owner };
+  }
+
+  private async current(now: number, exclude?: HubWebSocket): Promise<PresenceSnapshot> {
+    return (await this.evaluate(now, exclude)).snapshot;
+  }
+
+  /** The owner's private view: manual setting, connection state and the public value. */
+  private async ownerState(now: number): Promise<OwnerStatusState> {
+    const { connected, owner } = await this.evaluate(now);
+    const setting = await this.loadOwnerSetting();
+    return {
+      mode: setting.mode,
+      text: setting.text,
+      updatedAt: new Date(setting.updatedAt).toISOString(),
+      connected,
+      public: ownerPresence(owner),
+    };
+  }
+
+  /** Stores a new manual setting (re-validated here) and pushes the snapshot when its public part changed. */
+  private async updateOwner(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return badRequest('Body must be JSON');
+    }
+    const update = parseOwnerStatusUpdate(body);
+    if (!update.ok) return badRequest(update.message);
+    const now = Date.now();
+    const prev = await this.loadOwnerSetting();
+    if (prev.mode !== update.mode || prev.text !== update.text) {
+      const next: OwnerSetting = { mode: update.mode, text: update.text, updatedAt: now };
+      await this.ctx.storage.put(OWNER_SETTING_KEY, next);
+      this.ownerSetting = next;
+      // Unchanged public output (e.g. offline <-> invisible) leaves the snapshot signature alone, so nothing is pushed.
+      await this.scheduleRefresh(now);
+    }
+    return json(await this.ownerState(now));
   }
 
   /** Broadcasts now when the last refresh is old enough, else lets an alarm do it within the 2 s window. */

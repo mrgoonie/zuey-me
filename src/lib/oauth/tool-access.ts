@@ -2,20 +2,24 @@ import type { UserKeyScope } from '../members/api-keys';
 import type { Principal } from '../members/policy';
 import { can } from '../members/policy';
 import type { McpTool } from '../mcp/types';
+import { isPresenceOwner } from '../presence/presence-owner-identity';
 
 /**
  * Who may SEE a tool in `tools/list` on `/mcp`. Calls are still authorized inside each tool, so this
  * map only filters the catalogue; it never grants access. Tools missing from the map are treated as
- * admin-only (fail closed) and a test keeps the map complete.
+ * admin-only (fail closed) and a test keeps the map complete. `owner` tools are listed only for the
+ * presence owner (a member id in PRESENCE_OWNER_MEMBER_IDS, never the admin role) holding `scope`.
  */
 export type ToolAccess =
   | { kind: 'public' }
   | { kind: 'member'; scope: UserKeyScope }
+  | { kind: 'owner'; scope: UserKeyScope }
   | { kind: 'admin' };
 
 const PUBLIC: ToolAccess = { kind: 'public' };
 const ADMIN: ToolAccess = { kind: 'admin' };
 const member = (scope: UserKeyScope): ToolAccess => ({ kind: 'member', scope });
+const owner = (scope: UserKeyScope): ToolAccess => ({ kind: 'owner', scope });
 
 export const TOOL_ACCESS: Record<string, ToolAccess> = {
   // Profile & links
@@ -158,19 +162,24 @@ export const TOOL_ACCESS: Record<string, ToolAccess> = {
   channel_access_check: ADMIN,
   channel_identity_get: ADMIN,
   channel_identity_unlink: ADMIN,
+  // Owner presence status (owner member ids only; the admin role alone never sees them)
+  presence_status_get: owner('account:read'),
+  presence_status_set: owner('account:write'),
 };
 
 export function toolAccess(name: string): ToolAccess {
   return TOOL_ACCESS[name] ?? ADMIN;
 }
 
-export function canSeeTool(p: Principal, access: ToolAccess): boolean {
+/** `ownerIds` = presenceOwnerIds(env); without it owner tools stay hidden (fail closed). */
+export function canSeeTool(p: Principal, access: ToolAccess, ownerIds: ReadonlySet<string> = new Set()): boolean {
   if (access.kind === 'public') return true;
   if (access.kind === 'admin') return can(p, 'admin');
+  if (access.kind === 'owner') return isPresenceOwner(p, ownerIds) && (p.scopes === null || p.scopes.includes(access.scope));
   if (p.kind === 'admin') return true;
   return p.userId !== null && (p.scopes === null || p.scopes.includes(access.scope));
 }
 
-export function visibleTools(p: Principal, tools: McpTool[]): McpTool[] {
-  return tools.filter(t => canSeeTool(p, toolAccess(t.name)));
+export function visibleTools(p: Principal, tools: McpTool[], ownerIds: ReadonlySet<string> = new Set()): McpTool[] {
+  return tools.filter(t => canSeeTool(p, toolAccess(t.name), ownerIds));
 }

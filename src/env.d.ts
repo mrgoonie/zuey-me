@@ -22,6 +22,11 @@ export interface R2BucketLike {
   delete(keys: string | string[]): Promise<void>;
 }
 
+/** Minimal shape of a Cloudflare service binding (Fetcher) used by this app. */
+export interface ServiceBindingLike {
+  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+}
+
 export interface RuntimeEnv {
   DB?: D1DatabaseLike;
   /** Private bucket `zuey-referral-kyc`: referrers' national-ID images, deleted when an admin decides. */
@@ -45,6 +50,8 @@ export interface RuntimeEnv {
   PRESENCE_OWNER_MEMBER_IDS?: string;
   /** Origin of the presence Worker (default https://presence.zuey.me); e.g. http://localhost:8787 in dev. */
   PUBLIC_PRESENCE_URL?: string;
+  /** Service binding to the `zuey-me-presence` Worker (owner status `/internal/*`); absent = HTTP to PUBLIC_PRESENCE_URL. */
+  PRESENCE?: ServiceBindingLike;
   ADMIN_MASTER_TOKEN?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
