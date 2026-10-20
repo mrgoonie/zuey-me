@@ -26,6 +26,7 @@ const { KnowledgesPanel } = await import('../src/components/knowledge/Knowledges
 const { ReadsBrowser } = await import('../src/components/reads/ReadsBrowser');
 const { ZueyAiPanel } = await import('../src/components/ai/ZueyAiPanel');
 const { ZueyOS } = await import('../src/components/os/ZueyOS');
+const { openAppFromAgent } = await import('../src/components/os/webmcp-tools');
 const { CommunityAccess } = await import('../src/components/home/CommunityAccess');
 const { SurveyBlock } = await import('../src/components/blocks/SurveyBlock');
 const { initKnowledgeSearchAnalytics } = await import('../src/scripts/knowledge-search-analytics');
@@ -614,6 +615,21 @@ describe('ZueyOS, community and surveys', () => {
     const opened = since(start).filter(e => e.event === 'app_opened');
     // The AI window is open at boot: reopening it is reported as already open.
     expect(opened.map(plain)).toEqual([{ app: 'pricing', already_open: false }, { app: 'ai', already_open: true }]);
+    window.history.replaceState(null, '', '/');
+  });
+
+  test('app_opened from a WebMCP agent is tagged source webmcp', async () => {
+    const profile = { id: 'p', name: 'Duy', handle: 'duy', email: 'duy@example.com', avatar_url: '/avatar.png', intro_en: '', intro_vi: '', theme: 'default' };
+    await mount(createElement(ZueyOS, { locale: 'vi', profile, links: [], signedIn: false }));
+    const start = captured.length;
+    await act(async () => { openAppFromAgent('reads'); });
+    await settle();
+    const opened = since(start).filter(e => e.event === 'app_opened');
+    expect(plain(opened[0])).toEqual({ app: 'reads', already_open: false, source: 'webmcp' });
+    expect(opened.filter(e => e.props.source === 'webmcp')).toHaveLength(1);
+    // ZueyOS acknowledged the event and wrote the deep link itself. (happy-dom, unlike browsers, also fires
+    // hashchange for that replaceState, so a second, untagged already-open event may follow here.)
+    expect(window.location.hash).toBe('#reads');
     window.history.replaceState(null, '', '/');
   });
 

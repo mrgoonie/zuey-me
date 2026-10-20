@@ -4,17 +4,18 @@
  * when either exists; a browser without WebMCP gets a silent no-op. Loaded lazily after idle by
  * ZueyOSStaticIndex.astro, so it never touches LCP or TBT.
  *
- * Every `execute` resolves with a string and never throws: per the draft, a rejection reaches the
- * agent as an opaque UnknownError, while an error string lets it self-correct.
+ * Every `execute` resolves and never throws: results are plain objects/arrays (the draft serializes them
+ * to JSON itself) and failures are `error: …` strings. A rejected promise would reach the agent as an
+ * opaque OperationError, while an error string lets it self-correct.
  */
-import { isLocale, type Locale } from '../../lib/i18n/locales';
-import { APP_IDS, isAppId } from './apps';
+import { LOCALES, isLocale, type Locale } from '../../lib/i18n/locales';
+import { APP_IDS, OPEN_APP_EVENT, isAppId, type AppId, type OpenAppEventDetail } from './apps';
 import { absoluteUrl, appDirectory } from './app-directory';
 
 /** Tool names and one-line purposes, also listed in llms.txt and index.md. */
 export const WEBMCP_TOOL_SUMMARIES = [
   { name: 'zueyos_list_apps', summary: 'List every Zuey OS app with its id, name, summary, standalone route and #app deep link.' },
-  { name: 'zueyos_open_app', summary: 'Open an app window on the Zuey OS desktop by id (sets location.hash to #<id>).' },
+  { name: 'zueyos_open_app', summary: 'Open an app window on the Zuey OS desktop by id (same as the #<id> deep link).' },
   { name: 'zueyos_search_articles', summary: 'Search Duy’s articles (GET /api/v1/search); returns titles, URLs, Markdown URLs and snippets.' },
   { name: 'zueyos_get_profile', summary: 'Get Duy Nguyen’s public profile: name, handle, intro, avatar and contact links.' },
 ] as const;
@@ -27,7 +28,7 @@ export interface WebMcpTool {
   name: WebMcpToolName;
   description: string;
   inputSchema: Record<string, unknown>;
-  execute: (input: unknown) => Promise<string>;
+  execute: (input: unknown) => Promise<unknown>;
   annotations: ToolAnnotations;
 }
 
@@ -41,8 +42,8 @@ export interface WebMcpDeps {
   locale: Locale;
   /** Defaults to `globalThis.fetch`; called with same-origin paths only. */
   fetchImpl?: (path: string, init?: RequestInit) => Promise<Response>;
-  /** Defaults to setting `location.hash`, which ZueyOS's hashchange listener turns into an open window. */
-  openHash?: (hash: string) => void;
+  /** Defaults to `openAppFromAgent`. */
+  openApp?: (id: AppId) => void;
 }
 
 const MAX_RESULT_CHARS = 1500;
@@ -68,13 +69,19 @@ async function readEnvelope(res: Response): Promise<{ data: unknown } | { error:
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
+/**
+ * Asks ZueyOS to open a window on behalf of an agent, so analytics tag it `source: 'webmcp'`. ZueyOS
+ * cancels the event to acknowledge it; if the island has not hydrated, the `#id` hash opens it later.
+ */
+export function openAppFromAgent(id: AppId): void {
+  const detail: OpenAppEventDetail = { id, source: 'webmcp' };
+  const handled = !window.dispatchEvent(new CustomEvent(OPEN_APP_EVENT, { detail, cancelable: true }));
+  if (!handled) window.location.hash = `#${id}`;
+}
+
 export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
   const doFetch = deps.fetchImpl ?? ((path: string, init?: RequestInit) => globalThis.fetch(path, init));
-  const openHash = deps.openHash ?? ((hash: string) => {
-    // An unchanged hash fires no hashchange, so re-announce it to bring a minimized window forward.
-    if (window.location.hash === hash) window.dispatchEvent(new HashChangeEvent('hashchange'));
-    else window.location.hash = hash;
-  });
+  const openApp = deps.openApp ?? openAppFromAgent;
 
   return [
     {
@@ -82,9 +89,9 @@ export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
       description: `${summaryOf('zueyos_list_apps')} Use zueyos_open_app to open one here, or navigate to its route.`,
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true },
-      execute: async () => JSON.stringify(appDirectory(deps.locale).map(app => ({
+      execute: async () => appDirectory(deps.locale).map(app => ({
         id: app.id, name: app.name, summary: app.summary, route: absoluteUrl(app.route), deep_link: absoluteUrl(app.deepLink),
-      }))),
+      })),
     },
     {
       name: 'zueyos_open_app',
@@ -99,9 +106,9 @@ export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
       execute: async input => {
         const id = isRecord(input) ? input.app_id : undefined;
         if (!isAppId(id)) return `error: unknown app_id ${JSON.stringify(id ?? null)}; valid ids: ${APP_IDS.join(', ')}`;
-        openHash(`#${id}`);
+        openApp(id);
         const app = appDirectory(deps.locale).find(a => a.id === id);
-        return `Opened ${app?.name ?? id} (#${id}). Standalone page: ${absoluteUrl(app?.route ?? `/#${id}`)}`;
+        return { opened: id, name: app?.name ?? id, deep_link: absoluteUrl(`/#${id}`), route: absoluteUrl(app?.route ?? `/#${id}`) };
       },
     },
     {
@@ -112,6 +119,7 @@ export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
         properties: {
           query: { type: 'string', minLength: 1, maxLength: 200, description: 'Search words in any language.' },
           limit: { type: 'integer', minimum: 1, maximum: 10, description: 'Max results (default 5).' },
+          locale: { type: 'string', enum: [...LOCALES], description: 'Article language (default: the page language).' },
         },
         required: ['query'],
         additionalProperties: false,
@@ -124,8 +132,11 @@ export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
         const rawLimit = isRecord(input) ? input.limit : undefined;
         const limit = rawLimit === undefined ? 5 : rawLimit;
         if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 10) return 'error: limit must be an integer 1–10';
+        const rawLocale = isRecord(input) ? input.locale : undefined;
+        const locale = rawLocale === undefined ? deps.locale : rawLocale;
+        if (!isLocale(locale)) return `error: locale must be one of ${LOCALES.join(', ')}`;
         try {
-          const params = new URLSearchParams({ q: query, limit: String(limit) });
+          const params = new URLSearchParams({ q: query, limit: String(limit), locale });
           const res = await doFetch(`/api/v1/search?${params}`, { headers: { Accept: 'application/json' } });
           const out = await readEnvelope(res);
           if ('error' in out) return `error: ${out.error}`;
@@ -133,14 +144,9 @@ export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
           const hits = results.filter(isRecord).map(h => ({
             title: str(h.title), url: str(h.url), markdown_url: str(h.markdown_url), access: str(h.access), snippet: str(h.snippet).slice(0, 240),
           }));
-          if (hits.length === 0) return `No articles match "${query}". Browse all at ${absoluteUrl('/articles')}`;
-          // Drop trailing hits until the JSON fits the tool output budget.
-          let json = JSON.stringify(hits);
-          while (json.length > MAX_RESULT_CHARS && hits.length > 1) {
-            hits.pop();
-            json = JSON.stringify(hits);
-          }
-          return json;
+          // Drop trailing hits until the serialized result fits the tool output budget.
+          while (JSON.stringify(hits).length > MAX_RESULT_CHARS && hits.length > 1) hits.pop();
+          return { query, locale, results: hits, browse: absoluteUrl('/articles') };
         } catch (err) {
           return `error: search failed (${errorMessage(err)})`;
         }
@@ -156,10 +162,10 @@ export function createZueyOsTools(deps: WebMcpDeps): WebMcpTool[] {
           const out = await readEnvelope(await doFetch('/api/v1/profile', { headers: { Accept: 'application/json' } }));
           if ('error' in out) return `error: ${out.error}`;
           const p = isRecord(out.data) ? out.data : {};
-          return JSON.stringify({
+          return {
             name: str(p.name), handle: str(p.handle), intro: str(deps.locale === 'vi' ? p.intro_vi : p.intro_en) || str(p.intro_en),
             avatar_url: str(p.avatar_url), email: str(p.email), website: absoluteUrl('/'), markdown: absoluteUrl('/index.md'), links: absoluteUrl('/links.md'),
-          });
+          };
         } catch (err) {
           return `error: profile unavailable (${errorMessage(err)})`;
         }

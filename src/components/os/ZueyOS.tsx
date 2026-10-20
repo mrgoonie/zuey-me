@@ -15,7 +15,7 @@ import { useMediaQuery, useReducedMotion } from '../home/motion';
 import { addDismissed, nextNoticeChange, parseDismissed, pickNotice } from '../home/notice-queue';
 import { STORAGE_KEYS, readStored, writeStored } from '../home/storage';
 import { WeatherBackdrop } from '../home/WeatherBackdrop';
-import { APPS, DOCK_APPS, SLOT_APPS, appFromHash, type AppId, type Rect, type SlotAppId } from './apps';
+import { APPS, DOCK_APPS, OPEN_APP_EVENT, SLOT_APPS, appFromHash, isAppId, type AppId, type OpenAppEventDetail, type Rect, type SlotAppId } from './apps';
 import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
 import { track } from '../../lib/analytics/client';
 import { AppGlyph } from './AppGlyph';
@@ -226,10 +226,10 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     window.history.replaceState(window.history.state, '', url.hash ? url : url.pathname + url.search);
   }, []);
 
-  const openApp = useCallback((id: AppId) => {
+  const openApp = useCallback((id: AppId, source?: OpenAppEventDetail['source']) => {
     // Opening a window never changes the pathname, so pageviews alone miss it.
     const w = winsRef.current[id];
-    track('app_opened', { app: id, already_open: w.open && !w.min });
+    track('app_opened', { app: id, already_open: w.open && !w.min, ...(source ? { source } : {}) });
     setExpo(null);
     dispatch({ type: 'open', id });
     setHash(id);
@@ -279,8 +279,19 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       const id = appFromHash(window.location.hash);
       if (id) openApp(id);
     };
+    // WebMCP tools open windows through an event so analytics can tag them; cancelling acknowledges it.
+    const onAgentOpen = (e: Event) => {
+      const detail: unknown = e instanceof CustomEvent ? e.detail : null;
+      if (typeof detail !== 'object' || detail === null || !('id' in detail) || !isAppId(detail.id)) return;
+      e.preventDefault();
+      openApp(detail.id, 'webmcp');
+    };
     window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    window.addEventListener(OPEN_APP_EVENT, onAgentOpen);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener(OPEN_APP_EVENT, onAgentOpen);
+    };
   }, [openApp]);
 
   /* ---------- Exposé ---------- */

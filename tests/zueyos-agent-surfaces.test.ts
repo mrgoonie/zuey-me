@@ -38,6 +38,21 @@ describe('Zuey OS no-JS index on /', () => {
     });
   }
 
+  it('loads the WebMCP tools only through a feature-detected dynamic import', async () => {
+    const component = await read('../src/components/os/ZueyOSStaticIndex.astro');
+    const script = component.slice(component.indexOf('<script>'));
+    expect(script).toContain("if ('modelContext' in document || 'modelContext' in navigator)");
+    expect(script).toContain("import('./webmcp-tools')");
+    expect(script.indexOf("'modelContext' in document")).toBeLessThan(script.indexOf("import('./webmcp-tools')"));
+    expect(component).not.toMatch(/^\s*import\s[^(]*webmcp-tools/m);
+    expect(script).toContain('requestIdleCallback');
+  });
+
+  it('localizes the agent links', () => {
+    expect(renderStaticIndexHtml('vi', PROFILE)).toContain('<a href="/docs" tabindex="-1">Tài liệu API</a>');
+    expect(renderStaticIndexHtml('en', PROFILE)).toContain('<a href="/docs" tabindex="-1">API docs</a>');
+  });
+
   it('is semantic, visually hidden and escapes profile text', () => {
     const html = renderStaticIndexHtml('en', PROFILE);
     expect(html).toStartWith('<section id="zueyos-index" class="sr-only" data-locale="en"');
@@ -110,18 +125,21 @@ describe('Zuey OS WebMCP tools', () => {
   });
 
   it('zueyos_list_apps returns every app with absolute routes and deep links', async () => {
-    const out = JSON.parse(await tool(createZueyOsTools({ locale: 'vi' }), 'zueyos_list_apps').execute({}));
+    const out = await tool(createZueyOsTools({ locale: 'vi' }), 'zueyos_list_apps').execute({});
+    expect(Array.isArray(out)).toBe(true);
     expect(out).toHaveLength(APP_IDS.length);
     expect(out).toContainEqual(expect.objectContaining({ id: 'pricing', name: 'Gói thành viên', route: 'https://zuey.me/pricing', deep_link: 'https://zuey.me/#pricing' }));
   });
 
-  it('zueyos_open_app validates the id and sets the hash', async () => {
-    const hashes: string[] = [];
-    const open = tool(createZueyOsTools({ locale: 'en', openHash: h => hashes.push(h) }), 'zueyos_open_app');
-    expect(await open.execute({ app_id: 'pricing' })).toContain('Opened Membership (#pricing)');
+  it('zueyos_open_app validates the id and opens it through ZueyOS', async () => {
+    const opened: string[] = [];
+    const open = tool(createZueyOsTools({ locale: 'en', openApp: id => opened.push(id) }), 'zueyos_open_app');
+    expect(await open.execute({ app_id: 'pricing' })).toEqual({
+      opened: 'pricing', name: 'Membership', deep_link: 'https://zuey.me/#pricing', route: 'https://zuey.me/pricing',
+    });
     expect(await open.execute({ app_id: 'nope' })).toStartWith('error: unknown app_id "nope"');
     expect(await open.execute(null)).toStartWith('error: unknown app_id null');
-    expect(hashes).toEqual(['#pricing']);
+    expect(opened).toEqual(['pricing']);
   });
 
   it('zueyos_search_articles calls the public search endpoint and never throws', async () => {
@@ -131,12 +149,18 @@ describe('Zuey OS WebMCP tools', () => {
       return Response.json({ success: true, data: { results: [{ title: 'AI agents', url: 'https://zuey.me/articles/ai', markdown_url: 'https://zuey.me/articles/ai.md', access: 'free', snippet: '**agents**', score: 1 }] } });
     });
     const search = tool(createZueyOsTools({ locale: 'en', fetchImpl }), 'zueyos_search_articles');
-    expect(JSON.parse(await search.execute({ query: 'agents' }))).toEqual([
-      { title: 'AI agents', url: 'https://zuey.me/articles/ai', markdown_url: 'https://zuey.me/articles/ai.md', access: 'free', snippet: '**agents**' },
-    ]);
-    expect(calls).toEqual(['/api/v1/search?q=agents&limit=5']);
+    expect(await search.execute({ query: 'agents' })).toEqual({
+      query: 'agents',
+      locale: 'en',
+      results: [{ title: 'AI agents', url: 'https://zuey.me/articles/ai', markdown_url: 'https://zuey.me/articles/ai.md', access: 'free', snippet: '**agents**' }],
+      browse: 'https://zuey.me/articles',
+    });
+    await search.execute({ query: 'tác tử', limit: 2, locale: 'vi' });
+    expect(calls).toEqual(['/api/v1/search?q=agents&limit=5&locale=en', `/api/v1/search?${new URLSearchParams({ q: 'tác tử', limit: '2', locale: 'vi' })}`]);
     expect(await search.execute({ query: '' })).toStartWith('error:');
     expect(await search.execute({ query: 'x', limit: 99 })).toStartWith('error: limit');
+    expect(await search.execute({ query: 'x', locale: 'fr' })).toStartWith('error: locale');
+    expect(calls).toHaveLength(2);
 
     const failing = tool(createZueyOsTools({ locale: 'en', fetchImpl: (async () => { throw new TypeError('offline'); }) }), 'zueyos_search_articles');
     expect(await failing.execute({ query: 'agents' })).toBe('error: search failed (offline)');
@@ -146,7 +170,7 @@ describe('Zuey OS WebMCP tools', () => {
 
   it('zueyos_get_profile returns public profile fields only', async () => {
     const fetchImpl = (async () => Response.json({ success: true, data: { id: 'x', name: 'Duy', handle: '/zuey/', intro_en: 'Hi', intro_vi: 'Chào', custom_css: 'body{}', email: 'a@b.c', avatar_url: 'https://cdn/x.png' } }));
-    const out = JSON.parse(await tool(createZueyOsTools({ locale: 'vi', fetchImpl }), 'zueyos_get_profile').execute({}));
+    const out = await tool(createZueyOsTools({ locale: 'vi', fetchImpl }), 'zueyos_get_profile').execute({});
     expect(out).toMatchObject({ name: 'Duy', handle: '/zuey/', intro: 'Chào', email: 'a@b.c' });
     expect(out).not.toHaveProperty('custom_css');
   });

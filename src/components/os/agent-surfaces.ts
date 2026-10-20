@@ -9,18 +9,20 @@ import { WEBMCP_TOOL_SUMMARIES } from './webmcp-tools';
 
 export const STATIC_INDEX_ID = 'zueyos-index';
 
-const COPY: Record<'en' | 'vi', { title: string; how: string; apps: string; agents: string }> = {
+const COPY: Record<'en' | 'vi', { title: string; how: string; apps: string; agents: string; links: { profile: string; docs: string; mcp: string } }> = {
   en: {
     title: 'Zuey OS apps',
     how: 'Zuey OS opens each app below as a window on this page. Most apps also have their own page:',
     apps: 'Apps',
-    agents: 'For AI agents: llms.txt, the Markdown profile, the API docs and the MCP server.',
+    agents: 'For AI agents:',
+    links: { profile: 'Markdown profile', docs: 'API docs', mcp: 'MCP server' },
   },
   vi: {
     title: 'Ứng dụng trong Zuey OS',
     how: 'Zuey OS mở từng ứng dụng dưới đây thành cửa sổ trên trang này. Phần lớn ứng dụng cũng có trang riêng:',
     apps: 'Ứng dụng',
-    agents: 'Dành cho AI agent: llms.txt, hồ sơ Markdown, tài liệu API và MCP server.',
+    agents: 'Dành cho AI agent:',
+    links: { profile: 'Hồ sơ Markdown', docs: 'Tài liệu API', mcp: 'MCP server' },
   },
 };
 
@@ -41,8 +43,8 @@ export function renderStaticIndexHtml(locale: Locale, profile: Pick<Profile, 'na
     .map(app => `<li data-app="${escapeHtml(app.id)}"><a href="${escapeHtml(app.route)}" tabindex="-1">${escapeHtml(app.name)}</a>: ${escapeHtml(app.summary)}</li>`)
     .join('');
   const agentLinks = [
-    ['/llms.txt', 'llms.txt'], ['/index.md', 'index.md'], ['/docs', 'API docs'], ['/mcp', 'MCP'],
-  ].map(([href, label]) => `<a href="${href}" tabindex="-1">${label}</a>`).join(' · ');
+    ['/llms.txt', 'llms.txt'], ['/index.md', copy.links.profile], ['/docs', copy.links.docs], ['/mcp', copy.links.mcp],
+  ].map(([href, label]) => `<a href="${href}" tabindex="-1">${escapeHtml(label)}</a>`).join(' · ');
   return `<section id="${STATIC_INDEX_ID}" class="sr-only" data-locale="${escapeHtml(locale)}" aria-labelledby="${STATIC_INDEX_ID}-title">`
     + `<h2 id="${STATIC_INDEX_ID}-title">${escapeHtml(`${profile.name} (${profile.handle})`)}</h2>`
     + (intro ? `<p>${escapeHtml(intro)}</p>` : '')
@@ -59,7 +61,7 @@ export function zueyOsAgentGuideMarkdown(): string {
   const tools = WEBMCP_TOOL_SUMMARIES.map(t => `- \`${t.name}\`: ${t.summary}`).join('\n');
   const desktopOnly = appDirectory('en').filter(app => app.route.startsWith('/#')).map(app => app.name).join(', ');
   return `## Zuey OS (homepage)
-${absoluteUrl('/')} is "Zuey OS", a desktop-style web app: each app below opens as a window, and the deep link \`${absoluteUrl('/#<app-id>')}\` opens its window on the desktop. Apps with their own page link to a standalone route that works without JavaScript; ${desktopOnly} live only on the desktop, so their link is the deep link. The raw HTML of \`/\` also contains this app list.
+${absoluteUrl('/')} is "Zuey OS", a desktop-style web app: each app below opens as a window, and the deep link \`${absoluteUrl('/#<app-id>')}\` opens its window on the desktop. Apps with their own page link to a standalone route: a normal URL that returns the page in its HTML, though interactive apps (chat, account, referral, booking) still need JavaScript and some need sign-in. ${desktopOnly} live only on the desktop, so their link is the deep link. The raw HTML of \`/\` also contains this app list.
 
 ${apps}
 
