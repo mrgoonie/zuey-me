@@ -2,7 +2,8 @@
 import '../styles/global.css';
 import { REF_REDIRECT_SCRIPT } from '../components/referral/ref-redirect';
 import { CONFIG_ELEMENT_ID } from '../lib/analytics/constants';
-import { analyticsEnvFrom, isProductionBuild, resolvePostHogConfig } from '../lib/analytics/destinations/posthog';
+import { analyticsEnvFrom, isProductionBuild, isTruthyFlag, resolvePostHogConfig } from '../lib/analytics/destinations/posthog';
+import { PRESENCE_CONFIG_ELEMENT_ID } from '../lib/presence/presence-beacon-boot';
 
 interface Props {
   title?: string;
@@ -34,6 +35,10 @@ const {
 } = Astro.props;
 
 // Null when analytics must stay off (no key outside production builds, or a malformed key/host).
+const analyticsEnv = analyticsEnvFrom(Astro.locals.runtime?.env);
+const analytics = resolvePostHogConfig(analyticsEnv, { production: isProductionBuild() });
+// Lets the presence beacon run (and log) off the production hostnames while debugging.
+const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
 // The ambient video (~3 MB) is decorative: it starts once the page has loaded so it never competes with
 // first paint, and is skipped on phones and under Save-Data, where the static backdrop stays.
 const AMBIENT_VIDEO_SCRIPT = `(function(){var c=navigator.connection;if(!matchMedia('(min-width: 768px)').matches||(c&&c.saveData))return;function go(){var v=document.querySelector('video[data-ambient]');if(!v)return;v.preload='auto';var p=v.play();if(p&&p.catch)p.catch(function(){})}function idle(){'requestIdleCallback' in window?requestIdleCallback(go,{timeout:2000}):setTimeout(go,200)}document.readyState==='complete'?idle():addEventListener('load',idle,{once:true})})();`;
@@ -41,8 +46,6 @@ const FONTS_URL = 'https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,w
 // Web fonts (~450 KB of woff2) are requested after the load event so they never compete with the LCP image;
 // the metric-matched fallbacks in global.css keep the later swap from shifting layout.
 const FONT_LOADER_SCRIPT = `(function(){function f(){var l=document.createElement('link');l.rel='stylesheet';l.href=${JSON.stringify(FONTS_URL)};document.head.appendChild(l)}document.readyState==='complete'?f():addEventListener('load',f,{once:true})})();`;
-
-const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.env), { production: isProductionBuild() });
 ---
 
 <!doctype html>
@@ -108,9 +111,19 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     {analytics && <script is:inline>
       !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getLoadedAmplitudes".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
     </script>}
+    <!-- Realtime presence: the beacon loads after the page is idle and only connects while analytics consent is granted. -->
+    <meta id={PRESENCE_CONFIG_ELEMENT_ID} name="zuey-presence" data-debug={presenceDebug ? '1' : undefined} />
     <script>
       import { bootAnalytics } from '../lib/analytics/client';
       bootAnalytics();
+
+      const startPresence = (): void => {
+        import('../lib/presence/presence-beacon-boot')
+          .then(m => m.startPresenceBeacon())
+          .catch(() => { /* Presence is optional; a failed chunk load just means this page is not counted. */ });
+      };
+      if ('requestIdleCallback' in window) window.requestIdleCallback(startPresence, { timeout: 5000 });
+      else setTimeout(startPresence, 1500);
     </script>
   </head>
   <body class="bg-[#181513] min-h-screen text-stone-900 selection:bg-amber-200 relative overflow-x-hidden antialiased">
