@@ -1,4 +1,5 @@
 import React from 'react';
+import { CloudCog, ShieldCheck, PanelsTopLeft, Clapperboard, FileText, Film } from 'lucide-react';
 
 interface IconProps {
   name: string;
@@ -128,6 +129,44 @@ export const BrandIcon: React.FC<IconProps> = ({ name, className = 'w-6 h-6', si
       return (
         <div className={`flex items-center justify-center bg-emerald-700 text-white font-bold text-[9px] rounded-full shadow-sm ${className}`} style={style}>
           📊
+        </div>
+      );
+
+    // Distinct inline SVG product icons (no external favicon dependency).
+    case 'cloud':
+      return (
+        <div className={`flex items-center justify-center rounded-full bg-sky-600 text-white ${className}`} style={style}>
+          <CloudCog className="w-[64%] h-[64%]" strokeWidth={2.1} aria-label="Cloud Harness MCP" />
+        </div>
+      );
+    case 'vault':
+      return (
+        <div className={`flex items-center justify-center rounded-full bg-emerald-700 text-white ${className}`} style={style}>
+          <ShieldCheck className="w-[64%] h-[64%]" strokeWidth={2.1} aria-label="AK Vault" />
+        </div>
+      );
+    case 'render':
+      return (
+        <div className={`flex items-center justify-center rounded-full bg-violet-700 text-white ${className}`} style={style}>
+          <PanelsTopLeft className="w-[64%] h-[64%]" strokeWidth={2.1} aria-label="AK Render" />
+        </div>
+      );
+    case 'multix':
+      return (
+        <div className={`flex items-center justify-center rounded-full bg-fuchsia-700 text-white ${className}`} style={style}>
+          <Clapperboard className="w-[64%] h-[64%]" strokeWidth={2.1} aria-label="Multix" />
+        </div>
+      );
+    case 'anymd':
+      return (
+        <div className={`flex items-center justify-center rounded-full bg-teal-700 text-white ${className}`} style={style}>
+          <FileText className="w-[64%] h-[64%]" strokeWidth={2.1} aria-label="AnyMD" />
+        </div>
+      );
+    case 'motion':
+      return (
+        <div className={`flex items-center justify-center rounded-full bg-orange-600 text-white ${className}`} style={style}>
+          <Film className="w-[64%] h-[64%]" strokeWidth={2.1} aria-label="Motion MCP" />
         </div>
       );
 
