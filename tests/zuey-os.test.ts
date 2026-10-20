@@ -93,6 +93,12 @@ describe('Zuey OS look and routing', () => {
     expect(appFromHash('#ai')).toBe('ai');
     expect(appFromHash('#profile')).toBe('about');
     expect(appFromHash('#activity')).toBe('github');
+    expect(appFromHash('#activity-monitor')).toBe('activity-monitor');
     expect(appFromHash('#nope')).toBeNull();
+  });
+
+  test('the legacy #activity anchor still opens GitHub, not the Activity Monitor', () => {
+    expect(appFromHash('#activity')).toBe('github');
+    expect(appFromHash('activity')).toBe('github');
   });
 });
