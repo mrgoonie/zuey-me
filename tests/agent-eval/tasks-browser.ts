@@ -17,7 +17,7 @@ export const BROWSER_TASKS: BrowserTask[] = [
   t('browser-read-article', 'Open the newest article and report its first heading.',
     ['Open the Knowledges app', 'Click the first article'], ['The article body is rendered', 'The first heading is reported']),
   t('browser-find-mcp', 'Find the MCP endpoint URL using the UI only.',
-    ['Open BASE/', 'Open the MCP app (or docs)'], ['The text https://zuey.me/mcp or /api/mcp is shown']),
+    ['Open BASE/', 'Open the MCP app (or docs)'], ['The text BASE/mcp or BASE/api/mcp is shown']),
   t('browser-open-github', 'Open the GitHub app and report the most recent activity item.',
     ['Open BASE/', 'Open the GitHub app'], ['The GitHub window shows recent activity', 'One item is reported']),
   t('browser-change-appearance', 'Open Appearance and switch to a different theme; confirm the desktop changes.',

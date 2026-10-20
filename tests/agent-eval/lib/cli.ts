@@ -18,11 +18,13 @@ export function passRate(results: TaskResult[]): { passed: number; total: number
   return { passed, total: results.length, pct: results.length ? Math.round((passed / results.length) * 100) : 0 };
 }
 
+export const hasErrors = (results: TaskResult[]) => results.some((r) => r.error);
+
 export function formatTable(lane: Lane, base: string, results: TaskResult[]): string {
   const idW = Math.max(4, ...results.map((r) => r.id.length));
-  const rows = results.map((r) => `${r.id.padEnd(idW)}  ${r.passed ? 'PASS' : 'FAIL'}  ${r.reason}`);
+  const rows = results.map((r) => `${r.id.padEnd(idW)}  ${r.error ? 'ERR ' : r.passed ? 'PASS' : 'FAIL'}  ${r.reason}`);
   const { passed, total, pct } = passRate(results);
-  return [`${lane} lane @ ${base}`, `${'task'.padEnd(idW)}  RES   reason`, ...rows, `pass rate: ${passed}/${total} (${pct}%)`].join('\n');
+  return [`${lane} lane @ ${base}`, `${'task'.padEnd(idW)}  RES   reason`, ...rows, `pass rate: ${passed}/${total} (${pct}%)${hasErrors(results) ? `, ${results.filter((r) => r.error).length} runner error(s)` : ''}`].join('\n');
 }
 
 export function writeJson(path: string | undefined, lane: Lane, base: string, results: TaskResult[]): void {

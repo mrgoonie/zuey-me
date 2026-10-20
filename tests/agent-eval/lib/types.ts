@@ -25,8 +25,8 @@ export interface FetchTask extends TaskBase {
   lane: 'fetch';
   /** Entry points an agent would try first; defaults to DEFAULT_ENTRIES. */
   entries?: string[];
-  /** Links whose URL or anchor text matches this regex are followed (agent intent). */
-  follow: string;
+  /** Links whose URL or anchor text matches this regex are followed (a proxy for agent judgement); omit to follow none. */
+  follow?: string;
   maxHops: number;
   /** Ground truth resolved at run time (e.g. latest article title); must appear in fetched text. */
   truth?: 'latest-article-title';
@@ -38,6 +38,8 @@ export interface McpTask extends TaskBase {
   /** `tools/list` or a read-only tool name. */
   tool: string;
   args?: Record<string, unknown>;
+  /** `read-only-surface`: every tool name of tools/list must be a known read-only tool. */
+  check?: 'read-only-surface';
   expect: Expectation;
 }
 
@@ -52,6 +54,8 @@ export interface TaskResult {
   id: string;
   lane: Lane;
   passed: boolean;
+  /** Runner/transport problem (network, 5xx, malformed response): not a task failure. */
+  error?: boolean;
   reason: string;
 }
 
