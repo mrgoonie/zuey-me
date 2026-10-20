@@ -339,6 +339,7 @@ export const OsWindow: React.FC<OsWindowProps> = ({
         role="dialog"
         aria-labelledby={titleId}
         hidden={!shown}
+        tabIndex={-1}
         style={{ zIndex: 10 + state.z, ...expoStyle }}
         onPointerDownCapture={expo ? undefined : onFocus}
         onClickCapture={expo ? e => { e.preventDefault(); e.stopPropagation(); onExpoPick(); } : undefined}
