@@ -4,6 +4,7 @@ import { REF_REDIRECT_SCRIPT } from '../components/referral/ref-redirect';
 import { CONFIG_ELEMENT_ID } from '../lib/analytics/constants';
 import { analyticsEnvFrom, isProductionBuild, isTruthyFlag, resolvePostHogConfig } from '../lib/analytics/destinations/posthog';
 import { PRESENCE_CONFIG_ELEMENT_ID } from '../lib/presence/presence-beacon-boot';
+import { AMBIENT_VIDEO_SCRIPT, FONT_LOADER_SCRIPT, FONTS_URL } from '../lib/page/deferred-asset-scripts';
 
 interface Props {
   title?: string;
@@ -48,7 +49,7 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- ?ref=CODE → /r/CODE (the only route that sets the referral cookie) -->
     <script is:inline set:html={REF_REDIRECT_SCRIPT} />
-    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="canonical" href={url} />
 
     <!-- SEO Meta Tags -->
@@ -85,13 +86,12 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     <link rel="alternate" type="text/markdown" href="/index.md" title="Markdown representation" />
     <slot name="head" />
 
-    <!-- Fonts: Fraunces & Plus Jakarta Sans -->
+    <!-- Fonts: Fraunces & Plus Jakarta Sans, added after the page loads (see FONT_LOADER_SCRIPT);
+         the noscript copy covers visitors without JavaScript. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap"
-      rel="stylesheet"
-    />
+    <script is:inline set:html={FONT_LOADER_SCRIPT} />
+    <noscript><link rel="stylesheet" href={FONTS_URL} /></noscript>
 
     <!-- Analytics: PostHog snippet stub (queues calls; loads nothing until init). bootAnalytics() checks
          the environment, Do Not Track/GPC and the local opt-out before calling init. -->
@@ -124,11 +124,11 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     <!-- Ambient Dimmed Background Video Loop with Tiled Pattern Overlay -->
     {ambient && <div class="fixed inset-0 pointer-events-none -z-10 overflow-hidden" aria-hidden="true">
       <video
-        autoplay
+        data-ambient
         loop
         muted
         playsinline
-        preload="auto"
+        preload="none"
         class="absolute inset-0 w-full h-full object-cover opacity-35 sm:opacity-40 filter brightness-[0.72] contrast-[1.1] scale-105 transition-opacity duration-1000"
       >
         <source src="/loop.mp4" type="video/mp4" />
@@ -139,5 +139,6 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     </div>}
 
     <slot />
+    {ambient && <script is:inline set:html={AMBIENT_VIDEO_SCRIPT} />}
   </body>
 </html>

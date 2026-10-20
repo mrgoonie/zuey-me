@@ -40,6 +40,12 @@ const PHONE_QUERY = '(max-width: 767px)';
 const NOTICE_REFRESH_MS = 5 * 60 * 1000;
 const EXPO_MS = 420;
 
+/** True when the browser asks for reduced data use (Network Information API; absent in most browsers). */
+function saveData(): boolean {
+  const c: unknown = Reflect.get(navigator, 'connection');
+  return typeof c === 'object' && c !== null && 'saveData' in c && c.saveData === true;
+}
+
 type Slots = Partial<Record<SlotAppId, React.ReactNode>>;
 
 interface ZueyOSProps extends Slots {
@@ -185,13 +191,24 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
 
+  // The video wallpaper (~3 MB) is attached once the page has loaded, so it never competes with first paint,
+  // and not at all under Save-Data.
+  const [pageLoaded, setPageLoaded] = useState(false);
+  useEffect(() => {
+    if (document.readyState === 'complete') { setPageLoaded(true); return; }
+    const onLoad = () => setPageLoaded(true);
+    window.addEventListener('load', onLoad, { once: true });
+    return () => window.removeEventListener('load', onLoad);
+  }, []);
+  const videoWallpaper = pageLoaded && look.wallpaper === 'video' && !saveData();
+
   // Video wallpaper: plays only when chosen and motion is allowed.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (look.wallpaper === 'video' && !reduced) void v.play().catch(() => undefined);
+    if (videoWallpaper && !reduced) void v.play().catch(() => undefined);
     else v.pause();
-  }, [look.wallpaper, reduced]);
+  }, [videoWallpaper, reduced]);
 
   // Drop an image anywhere on the desktop to make it the wallpaper.
   useEffect(() => {
@@ -562,7 +579,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       <a href="#os-screen" className="os-skip">{s.skip}</a>
 
       <div className="os-desk" aria-hidden="true">
-        <video ref={videoRef} muted loop playsInline preload="none" src={look.wallpaper === 'video' ? '/loop.mp4' : undefined} />
+        <video ref={videoRef} muted loop playsInline preload="none" src={videoWallpaper ? '/loop.mp4' : undefined} />
         <span className="os-wordmark">zuey</span>
       </div>
       <WeatherBackdrop report={weather} reduced={reduced} />

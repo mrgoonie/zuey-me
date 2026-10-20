@@ -1,3 +1,6 @@
+import { fixedSizeImage } from '../../lib/media/image-transform';
+import type { ImageTransforms } from '../../lib/media/image-transform';
+
 /** Small deterministic hash (FNV-1a) so the same article always gets the same artwork. */
 export function thumbnailSeed(text: string): number {
   let h = 0x811c9dc5;
@@ -25,17 +28,19 @@ interface Props {
   width?: number;
   height?: number;
   className?: string;
+  /** Crop and resize the cover to the thumbnail size at 1x/2x (production zone only). */
+  imageTransforms?: ImageTransforms | null;
 }
 
 /**
  * Portrait thumbnail: the article's cover image when it has one, otherwise a branded SVG whose palette
  * and ornament are derived from the slug (never random). Decorative: the row title carries the meaning.
  */
-export function BrandedThumbnail({ seed, coverUrl, width = 80, height = 92, className }: Props) {
+export function BrandedThumbnail({ seed, coverUrl, width = 80, height = 92, className, imageTransforms }: Props) {
   if (coverUrl) {
     return (
       <img
-        src={coverUrl} alt="" width={width} height={height} loading="lazy" decoding="async" className={className}
+        {...fixedSizeImage(coverUrl, width, height, imageTransforms)} alt="" width={width} height={height} loading="lazy" decoding="async" className={className}
         style={{ width, height, objectFit: 'cover', borderRadius: 14, flex: 'none', background: '#e8dac9' }}
       />
     );

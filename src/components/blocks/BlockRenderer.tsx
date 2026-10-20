@@ -4,7 +4,9 @@ import '../../styles/blocks.css';
 import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
 import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
 import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
-import { documentLanes, imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
+import { childBlockLists, documentLanes, imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
+import { responsiveImage } from '../../lib/media/image-transform';
+import type { ImageTransforms } from '../../lib/media/image-transform';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
 import { EmbedView } from './EmbedView';
@@ -51,6 +53,32 @@ interface RenderContext {
   highlights?: CodeHighlights;
   liveHighlight: boolean;
   autoLoadEmbeds: boolean;
+  /** Id of the image or gallery block whose (first) image is the page's likely LCP element; it loads eagerly at high priority. */
+  leadImageId?: string;
+  /** Resized `srcset` through Cloudflare Image Transformations; absent for HTML fragments (email, feeds), which keep originals. */
+  imageTransforms?: ImageTransforms | null;
+  /** `sizes` for full-width body images (the prose column, or the wider lanes). */
+  imageSizes: string;
+}
+
+/** Only an image this close to the top is likely to be the LCP element. */
+const LEAD_IMAGE_TOP_BLOCKS = 3;
+
+/**
+ * The block holding the document's first image, by the same rule as `firstImage` (a gallery's first image
+ * counts), when it sits in the first few top-level blocks. Images inside a toggle start hidden and are skipped.
+ */
+export function leadImageBlockId(blocks: Block[]): string | undefined {
+  let id: string | undefined;
+  const visit = (list: Block[]) => {
+    for (const b of list) {
+      if (id) return;
+      if (b.type === 'image' || (b.type === 'gallery' && b.images.length > 0)) { id = b.id; return; }
+      if (b.type !== 'toggle') for (const children of childBlockLists(b)) visit(children);
+    }
+  };
+  visit(blocks.slice(0, LEAD_IMAGE_TOP_BLOCKS));
+  return id;
 }
 
 function renderNodes(nodes: InlineNode[]): ReactNode[] {
@@ -182,9 +210,12 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'image': {
       // The ratio lets the stylesheet cap a tall portrait's width so its height stays within the viewport.
       const style: CssVars | undefined = block.width && block.height ? { '--zb-img-ratio': `${block.width} / ${block.height}` } : undefined;
+      const source = responsiveImage(block.url, block.width, ctx.imageSizes, ctx.imageTransforms);
       return (
         <figure className="zb-figure zb-figure-center">
-          <img src={block.url} alt={block.alt} loading="lazy" decoding="async" {...imageSizeAttrs(block)} style={style} />
+          {ctx.leadImageId === block.id
+            ? <img {...source} alt={block.alt} fetchPriority="high" decoding="async" {...imageSizeAttrs(block)} style={style} />
+            : <img {...source} alt={block.alt} loading="lazy" decoding="async" {...imageSizeAttrs(block)} style={style} />}
           {block.caption && <figcaption>{block.caption}</figcaption>}
         </figure>
       );
@@ -225,6 +256,8 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
       return (
         <MediaBlockView
           block={block}
+          imageTransforms={ctx.imageTransforms}
+          eagerFirstImage={ctx.leadImageId === block.id}
           renderInline={text => <Inline text={text} />}
           renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
         />
@@ -255,13 +288,26 @@ interface BlockRendererProps {
   liveHighlight?: boolean;
   /** Third-party embeds load by themselves when scrolled into view (default). False keeps them click-to-load (every Studio preview). */
   autoLoadEmbeds?: boolean;
+  /** Load the first image eagerly at high priority (the article page, where it is usually the LCP element). Off for HTML fragments. */
+  eagerLeadImage?: boolean;
+  /** Serve resized images (see `imageTransformsFor`); only the article page passes it, so fragments keep original URLs. */
+  imageTransforms?: ImageTransforms | null;
+}
+
+/** Article column width in CSS px: max-w-[860px] or the 1240px lanes, minus the card's horizontal padding. */
+function bodyImageSizes(lanes: boolean): string {
+  return lanes ? '(min-width: 1280px) 1150px, 100vw' : '(min-width: 880px) 770px, 100vw';
 }
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
-export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true }: BlockRendererProps) {
-  const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds };
+export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms }: BlockRendererProps) {
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
   const lanes = documentLanes(doc);
+  const ctx: RenderContext = {
+    articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, imageTransforms,
+    leadImageId: eagerLeadImage ? leadImageBlockId(doc.blocks) : undefined,
+    imageSizes: bodyImageSizes(lanes.length > 0),
+  };
   return (
     <div className="zb-doc" data-lanes={lanes.length > 0 ? lanes.join(' ') : undefined}>
       {doc.blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}

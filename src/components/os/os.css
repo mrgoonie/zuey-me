@@ -18,8 +18,8 @@
   --os-tip-bg: #f5efeb; --os-tip-fg: #231f1c;
   --os-wordmark: rgba(245, 239, 235, .045);
   --os-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 30px 60px -20px rgba(0, 0, 0, .65), 0 10px 20px -10px rgba(0, 0, 0, .5);
-  --os-serif: Fraunces, Georgia, serif;
-  --os-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --os-serif: Fraunces, 'Fraunces Fallback', Georgia, serif;
+  --os-sans: "Plus Jakarta Sans", "Plus Jakarta Sans Fallback", "Plus Jakarta Sans Fallback Roboto", system-ui, sans-serif;
   --os-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --os-ease: cubic-bezier(.2, .8, .2, 1);
   --os-bar-h: 36px;
