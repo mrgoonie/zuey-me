@@ -103,6 +103,41 @@ export interface PresenceHistory {
   buckets: PresenceHistoryBucket[];
 }
 
+/** History window: 288 five-minute buckets = 24h, oldest first, gaps filled with peak 0. */
+export const PRESENCE_HISTORY_BUCKET_MS = 5 * 60_000;
+export const PRESENCE_HISTORY_BUCKETS = 288;
+
+/**
+ * Admin diagnostics, Worker → Pages only (`GET /internal/diagnostics`, same internal header as
+ * `/internal/owner`). Counts and timings only: never keys, IPs, tickets or owner text.
+ */
+export interface PresenceDiagnostics {
+  v: typeof PRESENCE_CONTRACT_VERSION;
+  at: string;
+  sockets: {
+    total: number;
+    /** Counted visitor sessions (unique keys), same number as snapshot `active`. */
+    activeSessions: number;
+    /** Open sockets that are counted but idle/hidden, watch-only, or subscribers. */
+    idle: number;
+    watchOnly: number;
+    subscribers: number;
+    owner: number;
+  };
+  limits: { maxTotal: number; maxPerIp: number; maxPerKey: number };
+  /** Since the Durable Object last started (in-memory; resets on eviction). */
+  counters: {
+    startedAt: string;
+    connectsAccepted: number;
+    connectsRejected: number;
+    messagesDropped: number;
+    abuseCloses: number;
+    broadcasts: number;
+  };
+  alarm: { nextAt: string | null; lastRunAt: string | null; lastRunMs: number | null };
+  history: { buckets: number; oldest: string | null; storageBytes: number };
+}
+
 /** Client → Worker WebSocket messages (JSON, ≤ PRESENCE_MAX_MESSAGE_BYTES). */
 export type PresenceClientMessage =
   | { t: 'hb'; cat: ActivityCategory }
