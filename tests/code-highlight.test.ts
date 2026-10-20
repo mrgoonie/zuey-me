@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, beforeAll } from 'bun:test';
 import fs from 'node:fs';
 import { createElement } from 'react';
 import { serializeProps } from 'astro/runtime/server/serialize.js';
@@ -11,6 +11,9 @@ import {
 import type { CodeHighlights, HighlightLanguage, TokenRuns } from '../src/lib/blocks/code-syntax';
 import { documentToMarkdown } from '../src/lib/blocks/markdown';
 import type { ArticleDocument, Block, CodeBlock } from '../src/lib/blocks/schema';
+import { HIGHLIGHTER_WARMUP_TIMEOUT_MS, warmHighlighter } from './helpers/warm-highlighter';
+
+beforeAll(warmHighlighter, HIGHLIGHTER_WARMUP_TIMEOUT_MS);
 
 const code = (id: string, language: string, source: string): CodeBlock => ({ id, type: 'code', language, code: source });
 const runsOf = (...values: number[]): TokenRuns => Uint32Array.from(values);
