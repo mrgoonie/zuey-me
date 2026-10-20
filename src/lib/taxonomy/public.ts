@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import { listArticles } from '../blocks/articles';
+import type { ArticleSummary } from '../blocks/articles';
 import type { Locale } from '../i18n/locales';
 import { listCategories, toPublicCategory } from './categories';
 import type { PublicCategory } from './categories';
@@ -23,8 +24,11 @@ export interface PublicTaxonomy {
  * Public filter facets: only tags/categories/labels used by at least one published edition are listed,
  * with counts over published articles only (draft-only taxonomy never leaks to readers).
  */
-export async function publicTaxonomy(d1: D1DatabaseLike | undefined, locale: Locale): Promise<PublicTaxonomy> {
-  const articles = await listArticles(d1, { locale });
+export async function publicTaxonomy(
+  d1: D1DatabaseLike | undefined, locale: Locale, loaded?: ArticleSummary[],
+): Promise<PublicTaxonomy> {
+  // `loaded` is an already fetched `listArticles(d1, { locale })`, so callers that have it avoid a second D1 read.
+  const articles = loaded ?? await listArticles(d1, { locale });
   const tagCounts = new Map<string, number>();
   const catCounts = new Map<string, number>();
   const labelCounts = new Map<string, number>();
