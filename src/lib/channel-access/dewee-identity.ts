@@ -122,10 +122,13 @@ export type LifecycleOutcome =
   | { status: 'unconfigured' }
   | { status: 'failed'; error: string };
 
-/** A timeout or network failure (no answer), a 429 or a 5xx: worth another attempt. */
+/**
+ * A timeout or network failure (`TRANSPORT_ERROR`), a 429 or a 5xx: worth another attempt. Other SDK-local
+ * errors also carry status 0 (INVALID_ARGUMENT, INVALID_RESPONSE) but would fail the same way again.
+ */
 function isTransient(err: unknown): boolean {
   if (!(err instanceof DeweeIdentityError)) return false;
-  return err.status === 0 || err.status === 429 || err.status >= 500;
+  return err.code === 'TRANSPORT_ERROR' || err.status === 429 || err.status >= 500;
 }
 
 /**

@@ -2,6 +2,8 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { reportMemberLifecycle } from '../channel-access/dewee-identity';
 import { AppError } from '../http';
+import type { WaitUntil } from '../wait-until';
+import { deferBestEffort } from '../wait-until';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { exportReferralData, prepareReferralAccountDeletion, referralAccountScrubStatements } from '../referrals/referral-account-data';
 import type { Row } from './runtime';
@@ -231,7 +233,7 @@ export async function exportAccount(d1: D1DatabaseLike, user: UserRecord): Promi
  * data: national-ID images and the payout profile are deleted, and a mailbox that ever paid is remembered
  * as a hash so re-registering never makes it a "never paid" referee again (`env` reaches the KYC bucket).
  */
-export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: RuntimeEnv = {}): Promise<void> {
+export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: RuntimeEnv = {}, waitUntil?: WaitUntil): Promise<void> {
   await prepareReferralAccountDeletion(d1, env, user);
   const now = nowIso();
   // One D1 batch is one transaction: the profile scrub and every cleanup statement apply together or not at
@@ -252,6 +254,7 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
   // Already deleted: the cleanup above only re-ran idempotent statements on rows that were already clean.
   if (!scrub?.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');
   // Outside the transaction and best-effort (never throws): Dewee revokes the member's sessions and unlinks every
-  // chat account now, so the agent gate stops answering them; a member who never linked one is a no-op.
-  await reportMemberLifecycle(env, user.id, 'delete');
+  // chat account, so the agent gate stops answering them; a member who never linked one is a no-op. With
+  // waitUntil the call (and its retries) runs after the response, so deletion never waits on Dewee.
+  await deferBestEffort(reportMemberLifecycle(env, user.id, 'delete'), waitUntil);
 }

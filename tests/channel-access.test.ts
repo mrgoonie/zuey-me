@@ -450,6 +450,20 @@ describe('Dewee lifecycle on access changes', () => {
     expect([lifecycleCalls().length, sleeps.length]).toEqual([1, 0]);
   });
 
+  it('never retries SDK-local errors that also carry status 0', async () => {
+    // INVALID_ARGUMENT: the SDK refuses the subject before any request.
+    fakeDewee();
+    expect(await reportMemberLifecycle(identityEnv(), 'not@a-subject', 'delete')).toEqual({ status: 'failed', error: 'INVALID_ARGUMENT (0)' });
+    expect([lifecycleCalls().length, sleeps.length]).toEqual([0, 0]);
+
+    // INVALID_RESPONSE: Dewee answered 200 without a JSON object; asking again would get the same answer.
+    const alice = await member('alice@example.com');
+    fetchImpl = async () => new Response('not json', { status: 200 });
+    const outcome = await reportMemberLifecycle(identityEnv(), alice.userId, 'delete');
+    expect(outcome).toEqual({ status: 'failed', error: 'INVALID_RESPONSE (200)' });
+    expect([lifecycleCalls().length, sleeps.length]).toEqual([1, 0]);
+  });
+
   it('logs a NOT_FOUND lifecycle answer with the event name instead of dropping it silently', async () => {
     const alice = await member('alice@example.com');
     fakeDewee({ lifecycleStatus: 404 });
@@ -491,11 +505,32 @@ describe('Dewee lifecycle on access changes', () => {
     expect(lifecycleCalls().length).toBe(1);
   });
 
-  it('threads the runtime waitUntil from both payment webhooks', () => {
-    for (const file of ['sepay.ts', 'dodo.ts']) {
-      const src = fs.readFileSync(path.join(ROOT, 'src', 'pages', 'api', 'webhooks', file), 'utf8');
+  it('threads the runtime waitUntil from both payment webhooks and account deletion', () => {
+    for (const file of [path.join('webhooks', 'sepay.ts'), path.join('webhooks', 'dodo.ts'), path.join('v1', 'me', 'index.ts')]) {
+      const src = fs.readFileSync(path.join(ROOT, 'src', 'pages', 'api', file), 'utf8');
       expect(src).toContain('runtimeWaitUntil(locals.runtime)');
     }
+  });
+
+  it('deletes the account without waiting for Dewee, reporting delete through waitUntil', async () => {
+    const alice = await member('alice@example.com');
+    const user = await getUserById(d1, alice.userId);
+    if (!user) throw new Error('missing user');
+    let release: () => void = () => undefined;
+    const hanging = new Promise<void>(r => { release = r; });
+    fetchImpl = async url => {
+      if (url.endsWith('/v1/identity/principals/lifecycle')) await hanging;
+      return json({ principal_id: 'p', event: 'delete', status: 'deleted', grant_version: 1 });
+    };
+    const deferred: Promise<unknown>[] = [];
+    await deleteAccount(d1, user, identityEnv(), p => { deferred.push(p); });
+    // The account is gone while the Dewee call is still pending.
+    expect(await getUserById(d1, alice.userId)).toBeNull();
+    expect(deferred.length).toBe(1);
+    release();
+    await Promise.all(deferred);
+    expect(lifecycleCalls().length).toBe(1);
+    expect(field(assertionOf(lifecycleCalls()[0]).claims, 'event')).toBe('delete');
   });
 
   it('reports delete with the member as subject when the account is deleted, and exports no chat ids', async () => {
@@ -586,6 +621,20 @@ describe('my linked chat accounts (Dewee me/bindings)', () => {
     expect((await list({})).status).toBe(401);
     // No Dewee principal is created for a refused caller.
     expect(fetchLog.length).toBe(0);
+  });
+
+  it('refuses a request the browser marks as cross-site, such as a top-level navigation from another site', async () => {
+    fakeDewee();
+    const alice = await member('alice@example.com');
+    for (const site of ['cross-site', 'same-site']) {
+      const refused = await read(await list({ cookie: alice.cookie, 'Sec-Fetch-Site': site }));
+      expect([refused.status, refused.code]).toEqual([403, 'cross_site_request']);
+    }
+    expect(fetchLog.length).toBe(0);
+    // The account page's own fetch, a typed URL, and clients that send no Sec-Fetch-Site still work.
+    expect((await list({ cookie: alice.cookie, 'Sec-Fetch-Site': 'same-origin' })).status).toBe(200);
+    expect((await list({ cookie: alice.cookie, 'Sec-Fetch-Site': 'none' })).status).toBe(200);
+    expect((await list({ cookie: alice.cookie })).status).toBe(200);
   });
 
   it('throttles list and unlink to 6 per member per minute before calling Dewee', async () => {

@@ -46,7 +46,7 @@ export const channelAccessOpenApi: OpenApiFragment = {
     '/api/v1/me/channels': {
       get: {
         tags: [TAG], summary: 'Your chat accounts linked in Dewee (browser session)', security: sessionAuth,
-        description: 'Read from Dewee (`GET /v1/identity/me/bindings`) with a one-minute identity session of the signed-in member; opening that session makes Dewee keep a record keyed by the member id. Only Dewee\'s masked sender id (`sender_hint`) is shown. Personal API keys are refused; at most 6 list or unlink calls per member per minute.',
+        description: 'Read from Dewee (`GET /v1/identity/me/bindings`) with a one-minute identity session of the signed-in member; opening that session makes Dewee keep a record keyed by the member id. Only Dewee\'s masked sender id (`sender_hint`) is shown. Personal API keys are refused, as is a request with `Sec-Fetch-Site` other than `same-origin` or `none` (403 `cross_site_request`); at most 6 list or unlink calls per member per minute.',
         responses: {
           '200': ok('Linked chat accounts', { type: 'array', items: ref('ChannelBinding') }),
           '401': errorResponses['401'], '403': errorResponses['403'],

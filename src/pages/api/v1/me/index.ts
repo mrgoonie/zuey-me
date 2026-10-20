@@ -1,3 +1,4 @@
+import { runtimeWaitUntil } from '../../../../lib/blocks/articles';
 import { AppError, jsonOk } from '../../../../lib/http';
 import { NO_STORE, buildMeView, memberRoute, requireJsonBody, requireUser } from '../../../../lib/members/account';
 import { requireCan } from '../../../../lib/members/policy';
@@ -25,7 +26,7 @@ export const PATCH = memberRoute(async ({ request }, { d1, principal }) => {
 });
 
 /** Delete the account. Body: { confirm_email } must equal the account email. Session only. */
-export const DELETE = memberRoute(async ({ request }, { env, d1, principal }) => {
+export const DELETE = memberRoute(async ({ request, locals }, { env, d1, principal }) => {
   requireCan(principal, 'account:security');
   const user = requireUser(principal);
   const body = await requireJsonBody(request);
@@ -33,6 +34,7 @@ export const DELETE = memberRoute(async ({ request }, { env, d1, principal }) =>
   if (confirm !== user.email) {
     throw new AppError(400, 'confirmation_required', 'Type your account email in confirm_email to delete the account', { field: 'confirm_email' });
   }
-  await deleteAccount(d1, user, env);
+  // Dewee is told after the response (best effort with retries), so deletion never waits on it.
+  await deleteAccount(d1, user, env, runtimeWaitUntil(locals.runtime));
   return jsonOk({ deleted: true }, 200, { ...NO_STORE, 'Set-Cookie': clearMemberCookie() });
 });
