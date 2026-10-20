@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getProfile, getLinks } from '../db/store';
+import { zueyOsAgentGuideMarkdown } from '../components/os/agent-surfaces';
 
 export const GET: APIRoute = async ({ locals }) => {
   const d1 = locals.runtime?.env?.DB;
@@ -15,6 +16,7 @@ export const GET: APIRoute = async ({ locals }) => {
 
 Official profile, links, ventures, products, and developer APIs for Duy Nguyen (/zuey/).
 
+${zueyOsAgentGuideMarkdown()}
 ## Contact & Links
 - Website: https://zuey.me
 - Email: ${profile.email}

@@ -18,8 +18,8 @@
   --os-tip-bg: #f5efeb; --os-tip-fg: #231f1c;
   --os-wordmark: rgba(245, 239, 235, .045);
   --os-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 30px 60px -20px rgba(0, 0, 0, .65), 0 10px 20px -10px rgba(0, 0, 0, .5);
-  --os-serif: Fraunces, Georgia, serif;
-  --os-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --os-serif: Fraunces, 'Fraunces Fallback', Georgia, serif;
+  --os-sans: "Plus Jakarta Sans", "Plus Jakarta Sans Fallback", "Plus Jakarta Sans Fallback Roboto", system-ui, sans-serif;
   --os-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* Motion tokens: the only durations and easings OS chrome uses (CSS and, via motion.ts, Web Animations). */
   --motion-dur-instant: 90ms; --motion-dur-fast: 150ms; --motion-dur-base: 200ms; --motion-dur-slow: 340ms; --motion-dur-slower: 440ms;

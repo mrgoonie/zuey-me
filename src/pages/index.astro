@@ -1,11 +1,12 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { ZueyOS } from '../components/os/ZueyOS';
+import ZueyOSStaticIndex from '../components/os/ZueyOSStaticIndex.astro';
 import { LOOK_BOOT_SCRIPT } from '../components/os/look';
 import { ZueyAiPanel } from '../components/ai/ZueyAiPanel';
 import { KnowledgesPanel } from '../components/knowledge/KnowledgesPanel';
-import { ReadsBrowser } from '../components/reads/ReadsBrowser';
-import { ZueytubeBrowser } from '../components/zueytube/ZueytubeBrowser';
+import { ReadsWindow } from '../components/reads/ReadsWindow';
+import { ZueytubeWindow } from '../components/zueytube/ZueytubeWindow';
 import { PricingTable } from '../components/members/PricingTable';
 import { BookingWidget } from '../components/booking/BookingWidget';
 import BusinessIntro from '../components/booking/BusinessIntro.astro';
@@ -20,30 +21,18 @@ import { plansCatalog } from '../lib/members/account';
 import { USER_KEY_SCOPES } from '../lib/members/api-keys';
 import { resolveMemberSession } from '../lib/members/session';
 import { configuredPaymentMethods } from '../lib/booking/store';
-import { getLastSyncedAt, listReads, listReadSources } from '../lib/reads/store';
-import { listVideos } from '../lib/videos/store';
-import { Lab200Courses } from '../components/lab200/Lab200Courses';
-import { runtimeWaitUntil } from '../lib/blocks/articles';
-import { getLab200Snapshot } from '../lib/lab200/store';
-
-/** Reads shown in the desktop window; the full archive lives on /reads. */
-const HOME_READS_LIMIT = 60;
+import { Lab200Window } from '../components/lab200/Lab200Window';
+import { imageTransformsFor } from '../lib/media/image-transform';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
 
-const [profile, links, reads, readSources, readsSyncedAt, member, lab200, videos] = await Promise.all([
+// Reads, Zueytube and 200lab windows load their lists from the API when first opened, so their
+// data is neither queried here nor serialized into the page.
+const [profile, links, member] = await Promise.all([
   getProfile(d1),
   getLinks(d1),
-  // A reads query failure must not take the homepage down: the window shows its empty state.
-  listReads(d1, { limit: HOME_READS_LIMIT }).catch(() => ({ items: [], total: 0 })),
-  listReadSources(d1).catch(() => []),
-  getLastSyncedAt(d1).catch(() => null),
   resolveMemberSession(Astro.request, d1).catch(() => null),
-  // Reads the D1 snapshot only; a stale one is refreshed from 200lab after the response.
-  getLab200Snapshot(d1, { waitUntil: runtimeWaitUntil(Astro.locals.runtime) }).catch(() => ({ courses: [], syncedAt: null })),
-  // Same for Zueytube: no DB or a failed query renders the window's empty state.
-  d1 ? listVideos(d1, { limit: 200 }).catch(() => ({ items: [], total: 0 })) : Promise.resolve({ items: [], total: 0 }),
 ]);
 const catalog = plansCatalog(runtimeEnv);
 const paymentMethods = configuredPaymentMethods(runtimeEnv);
@@ -63,27 +52,27 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
   ambient={false}
 >
   <script is:inline slot="head" set:html={LOOK_BOOT_SCRIPT} />
-  <!-- Fonts for the 200lab app window (200lab design tokens). -->
-  <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" />
+  <!-- Fonts for the 200lab app window (200lab design tokens); the window is closed at first paint, so they never block it. -->
+  <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" media="print" onload="this.media='all'" />
   <ZueyOS client:load locale={locale} profile={profile} links={links} signedIn={member !== null}>
     <div slot="ai" class="min-w-0 h-full">
       <ZueyAiPanel client:visible locale={locale} />
     </div>
     <div slot="knowledges" class="min-w-0">
-      <KnowledgesPanel client:visible locale={locale} />
+      <KnowledgesPanel client:visible locale={locale} imageTransforms={imageTransformsFor(Astro.url.hostname, runtimeEnv.IMAGE_TRANSFORMS)} />
     </div>
     <div slot="reads" class="min-w-0">
-      <ReadsBrowser client:visible items={reads.items} sources={readSources} lastSyncedAt={readsSyncedAt} />
+      <ReadsWindow client:visible locale={locale} />
     </div>
     <div slot="zueytube" class="min-w-0">
-      <ZueytubeBrowser client:visible items={videos.items} locale={locale} />
+      <ZueytubeWindow client:visible locale={locale} />
     </div>
     <div slot="pricing" class="min-w-0 flex flex-col items-center gap-4">
       <PricingTable client:visible catalog={catalog} initialPlan={null} initialMonths={1} />
       <p class="text-xs text-stone-300"><a href="/pricing" class="underline hover:text-white">zuey.me/pricing</a> · <a href="/account#billing" class="underline hover:text-white">Gói của tôi</a></p>
     </div>
     <div slot="200lab" class="min-w-0">
-      <Lab200Courses client:visible snapshot={lab200} locale={locale} variant="window" />
+      <Lab200Window client:visible locale={locale} />
     </div>
     <div slot="business" class="min-w-0 flex flex-col items-center gap-6">
       <BusinessIntro />
@@ -107,4 +96,5 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
       <ReferralApp client:visible locale={locale} signedIn={member !== null} />
     </div>
   </ZueyOS>
+  <ZueyOSStaticIndex locale={locale} profile={profile} />
 </Layout>

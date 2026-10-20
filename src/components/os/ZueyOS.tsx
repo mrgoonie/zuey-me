@@ -15,7 +15,7 @@ import { motionEase, motionMs, useMediaQuery, useReducedMotion } from '../home/m
 import { addDismissed, nextNoticeChange, parseDismissed, pickNotice } from '../home/notice-queue';
 import { STORAGE_KEYS, readStored, writeStored } from '../home/storage';
 import { WeatherBackdrop } from '../home/WeatherBackdrop';
-import { APPS, DOCK_APPS, SLOT_APPS, appFromHash, type AppId, type Rect, type SlotAppId } from './apps';
+import { APPS, DOCK_APPS, OPEN_APP_EVENT, SLOT_APPS, appFromHash, isAppId, type AppId, type OpenAppEventDetail, type Rect, type SlotAppId } from './apps';
 import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
 import { track } from '../../lib/analytics/client';
 import { ActivityMonitorPanel } from '../activity-monitor/ActivityMonitorPanel';
@@ -40,6 +40,12 @@ import './os.css';
 
 const PHONE_QUERY = '(max-width: 767px)';
 const NOTICE_REFRESH_MS = 5 * 60 * 1000;
+
+/** True when the browser asks for reduced data use (Network Information API; absent in most browsers). */
+function saveData(): boolean {
+  const c: unknown = Reflect.get(navigator, 'connection');
+  return typeof c === 'object' && c !== null && 'saveData' in c && c.saveData === true;
+}
 
 type Slots = Partial<Record<SlotAppId, React.ReactNode>>;
 
@@ -185,13 +191,24 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
 
+  // The video wallpaper (~3 MB) is attached once the page has loaded, so it never competes with first paint,
+  // and not at all under Save-Data.
+  const [pageLoaded, setPageLoaded] = useState(false);
+  useEffect(() => {
+    if (document.readyState === 'complete') { setPageLoaded(true); return; }
+    const onLoad = () => setPageLoaded(true);
+    window.addEventListener('load', onLoad, { once: true });
+    return () => window.removeEventListener('load', onLoad);
+  }, []);
+  const videoWallpaper = pageLoaded && look.wallpaper === 'video' && !saveData();
+
   // Video wallpaper: plays only when chosen and motion is allowed.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (look.wallpaper === 'video' && !reduced) void v.play().catch(() => undefined);
+    if (videoWallpaper && !reduced) void v.play().catch(() => undefined);
     else v.pause();
-  }, [look.wallpaper, reduced]);
+  }, [videoWallpaper, reduced]);
 
   // Drop an image anywhere on the desktop to make it the wallpaper.
   useEffect(() => {
@@ -251,10 +268,10 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     });
   }, [focusWindow]);
 
-  const openApp = useCallback((id: AppId) => {
+  const openApp = useCallback((id: AppId, source?: OpenAppEventDetail['source']) => {
     // Opening a window never changes the pathname, so pageviews alone miss it.
     const w = winsRef.current[id];
-    track('app_opened', { app: id, already_open: w.open && !w.min });
+    track('app_opened', { app: id, already_open: w.open && !w.min, ...(source ? { source } : {}) });
     setExpo(null);
     dispatch({ type: 'open', id });
     setHash(id);
@@ -303,13 +320,36 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
 
   // Hash navigation (#ai, #knowledges, legacy #profile / #activity) opens the matching window.
   useEffect(() => {
-    const onHash = () => {
-      const id = appFromHash(window.location.hash);
+    // Read the event's target URL: a render queued before this hashchange may already have rewritten the hash.
+    const onHash = (e: HashChangeEvent) => {
+      const id = appFromHash(new URL(e.newURL).hash);
       if (id) openApp(id);
     };
+    // WebMCP tools open windows through an event so analytics can tag them; cancelling acknowledges it.
+    const onAgentOpen = (e: Event) => {
+      const detail: unknown = e instanceof CustomEvent ? e.detail : null;
+      if (typeof detail !== 'object' || detail === null || !('id' in detail) || !isAppId(detail.id)) return;
+      e.preventDefault();
+      openApp(detail.id, 'webmcp');
+    };
     window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    window.addEventListener(OPEN_APP_EVENT, onAgentOpen);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener(OPEN_APP_EVENT, onAgentOpen);
+    };
   }, [openApp]);
+
+  // A hash naming a window that is no longer on top (focus moved, minimized, closed) is stale: setting
+  // the same hash again fires no hashchange, so the deep link would do nothing. Keep it on the top window.
+  // A clean URL or a non-app hash is left alone.
+  useEffect(() => {
+    if (!ready) return;
+    const current = appFromHash(window.location.hash);
+    if (!current) return;
+    const top = topId(wins);
+    if (top !== current) setHash(top);
+  }, [wins, ready, setHash]);
 
   /* ---------- Exposé ---------- */
   const enterExpo = useCallback(() => {
@@ -566,7 +606,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       <a href="#os-screen" className="os-skip">{s.skip}</a>
 
       <div className="os-desk" aria-hidden="true">
-        <video ref={videoRef} muted loop playsInline preload="none" src={look.wallpaper === 'video' ? '/loop.mp4' : undefined} />
+        <video ref={videoRef} muted loop playsInline preload="none" src={videoWallpaper ? '/loop.mp4' : undefined} />
         <span className="os-wordmark">zuey</span>
       </div>
       <WeatherBackdrop report={weather} reduced={reduced} />

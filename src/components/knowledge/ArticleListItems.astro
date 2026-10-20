@@ -7,6 +7,7 @@
 import { ArticleCard } from './ArticleCard';
 import type { DiscoveryItem } from '../../lib/blocks/discovery';
 import type { Locale } from '../../lib/i18n/locales';
+import { imageTransformsFor } from '../../lib/media/image-transform';
 
 interface Props {
   items: DiscoveryItem[];
@@ -14,6 +15,8 @@ interface Props {
 }
 
 const { items, uiLocale } = Astro.props;
+// Cover thumbnails are resized on the production zone (originals can be several MB).
+const imageTransforms = imageTransformsFor(Astro.url.hostname, Astro.locals.runtime?.env?.IMAGE_TRANSFORMS);
 ---
 
-{items.map(a => <li data-article-slug={a.slug}><ArticleCard article={a} uiLocale={uiLocale} /></li>)}
+{items.map(a => <li data-article-slug={a.slug}><ArticleCard article={a} uiLocale={uiLocale} imageTransforms={imageTransforms} /></li>)}

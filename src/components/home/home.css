@@ -65,7 +65,7 @@ html.home-motion-pending .home-reveal {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif;
   font-weight: 800;
   font-size: 20px;
   letter-spacing: -0.02em;
@@ -74,7 +74,7 @@ html.home-motion-pending .home-reveal {
   padding: 4px 6px;
 }
 .home-wordmark small {
-  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', system-ui, sans-serif;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -323,7 +323,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
 @media (max-width: 1279px) { .home-below { max-width: 740px; } }
 .home-card { padding: 24px; }
 @media (min-width: 640px) { .home-card { padding: 28px; } }
-.home-card h2 { font-family: 'Fraunces', Georgia, serif; font-size: clamp(22px, 2.6vw, 30px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
+.home-card h2 { font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif; font-size: clamp(22px, 2.6vw, 30px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
 .home-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0 20px; }
 @media (min-width: 640px) { .home-plans { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .home-plan {
@@ -336,8 +336,8 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   border: 1px solid var(--home-line);
 }
 .home-plan strong { font-size: 13px; }
-.home-plan .home-price { font-family: 'Fraunces', Georgia, serif; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
-.home-plan .home-price small { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-size: 12px; font-weight: 600; color: var(--home-muted); }
+.home-plan .home-price { font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+.home-plan .home-price small { font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', system-ui, sans-serif; font-size: 12px; font-weight: 600; color: var(--home-muted); }
 .home-plan span:last-child { font-size: 12px; color: var(--home-muted); line-height: 1.4; }
 .home-business { background: linear-gradient(160deg, #f1ece1, #e9e2d3); }
 .home-business .home-credit { border-left: 3px solid #6d8267; padding-left: 12px; margin: 14px 0 18px; font-size: 14px; line-height: 1.6; color: #3f3a33; }
@@ -415,6 +415,9 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
 .zf-skel-bar { display: block; width: 100%; border-radius: 12px; }
 .zf-skel-bar:nth-child(3n + 2) { width: 86%; }
 .zf-skel-bar:nth-child(3n) { width: 64%; }
+/* On the dark stage windows (Reads, Zueytube, 200lab), light bars on the dark surface. */
+.zf-skel--dark { padding: 16px; }
+.zf-skel--dark .zf-skel-bar { border-radius: 16px; background-image: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)); }
 .home-notice-line { margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: #fdf2e3; color: #7c2d12; font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
 
 /* ---------- Dialogs ---------- */
@@ -437,7 +440,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   .home-dialog--palette { margin-top: 12px; max-height: calc(100dvh - 24px); }
 }
 .home-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--home-line); }
-.home-dialog-head h2 { font-family: 'Fraunces', Georgia, serif; font-size: 20px; font-weight: 800; }
+.home-dialog-head h2 { font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif; font-size: 20px; font-weight: 800; }
 .home-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: var(--home-muted); flex-shrink: 0; }
 .home-icon-btn:hover { background: #f3e8dc; color: var(--home-ink); }
 .home-palette-input { display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 18px; border-bottom: 1px solid var(--home-line); }

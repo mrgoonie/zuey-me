@@ -1,0 +1,32 @@
+---
+/**
+ * Agent surfaces for the Zuey OS homepage: a server-rendered, visually hidden index of every app
+ * (readable without JS by crawlers and screen readers) and the lazy WebMCP tool registration.
+ */
+import type { Profile } from '../../db/types';
+import type { Locale } from '../../lib/i18n/locales';
+import { renderStaticIndexHtml } from './agent-surfaces';
+
+interface Props {
+  locale: Locale;
+  profile: Pick<Profile, 'name' | 'handle' | 'intro_en' | 'intro_vi'>;
+}
+
+const { locale, profile } = Astro.props;
+const html = renderStaticIndexHtml(locale, profile);
+---
+
+<Fragment set:html={html} />
+
+<script>
+  // Only browsers exposing WebMCP download the tools chunk, and only once the page is idle.
+  if ('modelContext' in document || 'modelContext' in navigator) {
+    const start = () => {
+      const locale = document.getElementById('zueyos-index')?.dataset.locale;
+      import('./webmcp-tools').then(m => m.startZueyOsWebMcp(locale)).catch(() => {});
+    };
+    const whenIdle = () => ('requestIdleCallback' in window ? window.requestIdleCallback(start, { timeout: 5000 }) : setTimeout(start, 1500));
+    if (document.readyState === 'complete') whenIdle();
+    else window.addEventListener('load', whenIdle, { once: true });
+  }
+</script>

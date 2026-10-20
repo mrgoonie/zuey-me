@@ -1,0 +1,18 @@
+import React from 'react';
+import type { Locale } from '../../lib/i18n/locales';
+import { RemotePanel, remotePanelStrings, useRemoteData } from '../os/remote-panel-data';
+import { ReadsBrowser } from './ReadsBrowser';
+import { parseReadsList } from './reads-api-client';
+
+/** Reads shown in the desktop window; the full archive lives on /reads. */
+export const HOME_READS_LIMIT = 60;
+
+/** Zuey OS Reads window: loads the list when the window is first shown. */
+export const ReadsWindow: React.FC<{ locale: Locale }> = ({ locale }) => {
+  const { state, retry } = useRemoteData(`/api/v1/reads?limit=${HOME_READS_LIMIT}`, parseReadsList);
+  return (
+    <RemotePanel state={state} onRetry={retry} href="/reads" strings={remotePanelStrings(locale)}>
+      {data => <ReadsBrowser items={data.items} sources={data.sources} lastSyncedAt={data.lastSyncedAt} />}
+    </RemotePanel>
+  );
+};

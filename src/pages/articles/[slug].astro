@@ -8,6 +8,7 @@ import { TagBadges } from '../../components/knowledge/TagBadges';
 import { EntitlementIcon } from '../../components/knowledge/EntitlementIcon';
 import { formatKnowledgeDate, knowledgeStrings } from '../../components/knowledge/strings';
 import { firstImage, getArticleView, resolveViewer } from '../../lib/blocks/articles';
+import { imageTransformsFor, responsiveImage } from '../../lib/media/image-transform';
 import { canReadFull, readerCacheControl } from '../../lib/blocks/paywall';
 import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articleUrl, jsonLdScript, linkHeader } from '../../lib/blocks/seo';
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
@@ -56,6 +57,9 @@ const coverAsset = view && d1 && view.cover_asset_id ? await getMediaAsset(d1, v
 const coverAlt = view ? view.cover_alt || coverAsset?.alt || view.title : '';
 // The cover is shown above the body unless the body's first image is that same image.
 const showCover = Boolean(coverAsset && view && coverAsset.url !== firstImage(view.document.blocks));
+// Resized images through the zone's /cdn-cgi/image (production host only; see src/lib/media/image-transform.ts).
+const imageTransforms = imageTransformsFor(Astro.url.hostname, runtimeEnv.IMAGE_TRANSFORMS);
+const coverImage = coverAsset ? responsiveImage(coverAsset.url, coverAsset.width ?? undefined, '(min-width: 880px) 770px, 100vw', imageTransforms) : null;
 const shareImage = socialAsset?.url ?? (view && !preview ? `${origin}${(await articleOgImage(view)).path}` : undefined);
 const shareImageAlt = socialAsset ? (view?.social_preview.mode === 'cover' ? coverAlt : socialAsset.alt || view?.title) : view?.title;
 const jsonLd = view && !preview ? jsonLdScript(articleJsonLd(view, origin, shareImage ?? 'https://zuey.me/og.png', socialAsset?.url)) : null;
@@ -135,16 +139,16 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
             )}
           </header>
 
-          {showCover && coverAsset && (
+          {showCover && coverAsset && coverImage && (
             <img
-              src={coverAsset.url} alt={coverAlt} width={coverAsset.width ?? undefined} height={coverAsset.height ?? undefined}
+              src={coverImage.src} srcset={coverImage.srcSet} sizes={coverImage.sizes} alt={coverAlt} width={coverAsset.width ?? undefined} height={coverAsset.height ?? undefined}
               class="mb-7 w-full rounded-2xl border border-stone-200 object-cover" style="aspect-ratio:16/9" fetchpriority="high" decoding="async"
             />
           )}
 
           {/* Readable body: selections inside it get the "Ask Zuey AI" tooltip; tabindex lets the drawer return focus here. */}
           <div data-ask-ai-scope tabindex="-1" class="focus:outline-none">
-            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} />
+            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} eagerLeadImage={!showCover} imageTransforms={imageTransforms} />
           </div>
 
           {view.truncated && (

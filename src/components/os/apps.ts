@@ -58,3 +58,10 @@ export function appFromHash(hash: string): AppId | null {
   if (h === 'activity') return 'github';
   return isAppId(h) ? h : null;
 }
+
+/**
+ * Window event that opens an app on behalf of a non-human caller (WebMCP tools), so analytics can tell
+ * it apart from a click or a typed deep link. ZueyOS calls `preventDefault()` to acknowledge it.
+ */
+export const OPEN_APP_EVENT = 'zueyos:open-app';
+export interface OpenAppEventDetail { id: AppId; source: 'webmcp' }
