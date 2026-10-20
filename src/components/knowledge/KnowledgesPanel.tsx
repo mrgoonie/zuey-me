@@ -4,6 +4,7 @@ import type { PublicTaxonomy } from '../../lib/taxonomy/public';
 import { ArticleCard } from './ArticleCard';
 import type { CardArticle } from './ArticleCard';
 import { knowledgeStrings } from './strings';
+import { imageTransformsFor } from '../../lib/media/image-transform';
 import { track } from '../../lib/analytics/client';
 import { filterValue } from '../../lib/analytics/engagement';
 
@@ -167,8 +168,9 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
           <p className="text-sm text-stone-500">{active ? t.noResults : t.noArticles}</p>
         )}
         {items !== null && items.length > 0 && (
+          // Items exist only after the client fetch, so `location` is available here.
           <ul className="flex flex-col gap-2 list-none p-0 m-0">
-            {items.map(a => <li key={`${a.slug}-${a.locale}`}><ArticleCard article={a} uiLocale={locale} compact headingLevel={3} /></li>)}
+            {items.map(a => <li key={`${a.slug}-${a.locale}`}><ArticleCard article={a} uiLocale={locale} compact headingLevel={3} imageTransforms={imageTransformsFor(location.hostname)} /></li>)}
           </ul>
         )}
       </div>

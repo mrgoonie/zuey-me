@@ -32,6 +32,8 @@ export interface RuntimeEnv {
   /** Public R2 bucket `zuey-media` served at https://media.zuey.me (article images uploaded by admins). */
   MEDIA?: R2BucketLike;
   PUBLIC_SITE_URL?: string;
+  /** Cloudflare Image Transformations for article images: unset = on for the zuey.me host only, "off", or a zone origin such as "https://zuey.me". */
+  IMAGE_TRANSFORMS?: string;
   /** PostHog project API key (project "Zuey.me"); production builds fall back to the built-in key. */
   PUBLIC_POSTHOG_KEY?: string;
   /** PostHog ingestion host (default https://us.i.posthog.com). */
