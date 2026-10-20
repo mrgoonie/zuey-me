@@ -18,6 +18,7 @@ import { WeatherBackdrop } from '../home/WeatherBackdrop';
 import { APPS, DOCK_APPS, OPEN_APP_EVENT, SLOT_APPS, appFromHash, isAppId, type AppId, type OpenAppEventDetail, type Rect, type SlotAppId } from './apps';
 import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
 import { track } from '../../lib/analytics/client';
+import { ActivityMonitorPanel } from '../activity-monitor/ActivityMonitorPanel';
 import { AppGlyph } from './AppGlyph';
 import { AppearancePanel } from './AppearancePanel';
 import { Dock } from './Dock';
@@ -499,6 +500,15 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   }), [openApp]);
 
   const top = topId(wins);
+
+  /* Tell the presence beacon which app has focus (null: none). Only on change, so it stays cheap. */
+  const announcedApp = useRef<AppId | null | undefined>(undefined);
+  useEffect(() => {
+    if (announcedApp.current === top) return;
+    announcedApp.current = top;
+    window.dispatchEvent(new CustomEvent('zuey:app-focus', { detail: { app: top } }));
+  }, [top]);
+
   const anyVisible = visibleIds(wins).length > 0;
 
   /* ---------- window contents ---------- */
@@ -511,6 +521,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
         return <GithubActivity strings={hs.activity} locale={locale} variant="window" />;
       case 'mcp':
         return <McpGuide strings={hs.mcp} />;
+      case 'activity-monitor':
+        return <ActivityMonitorPanel locale={locale} active={wins['activity-monitor'].open && !wins['activity-monitor'].min} />;
       case 'appearance':
         return (
           <AppearancePanel
