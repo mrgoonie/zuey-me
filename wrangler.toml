@@ -37,8 +37,8 @@ binding = "MEDIA"
 bucket_name = "zuey-media"
 
 # Service binding to the realtime presence Worker (workers/presence). Pages calls its private
-# `/internal/owner` API through it; without the binding (or when it fails, e.g. local `astro dev`
-# with no Worker running) src/lib/presence/presence-owner-client.ts falls back to HTTP.
+# `/internal/owner` API only through it (top-level: every Pages environment). Locally the binding
+# reaches a presence Worker started with `wrangler dev`; without one, owner endpoints answer 503.
 [[services]]
 binding = "PRESENCE"
 service = "zuey-me-presence"

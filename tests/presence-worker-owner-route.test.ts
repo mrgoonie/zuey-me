@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:test';
 import {
-  OWNER_STATUS_TEXT_MAX, PRESENCE_INTERNAL_HEADER, PRESENCE_INTERNAL_LABEL, PRESENCE_TTL_MS,
+  OWNER_STATUS_TEXT_MAX, PRESENCE_INTERNAL_HEADER, PRESENCE_INTERNAL_LABEL, PRESENCE_INTERNAL_MAX_SKEW_MS, PRESENCE_TTL_MS,
   type OwnerStatusState, type PresenceServerMessage, type PresenceSnapshot, type PresenceTicketPayload,
 } from '../src/lib/presence/contract';
 import { hmacBase64Url, signPresenceTicket } from '../src/lib/presence/ticket';
+import { signPresenceInternal } from '../src/lib/presence/internal-auth';
 import { handleRequest } from '../workers/presence/src/index';
 import { INTERNAL_MAX_BODY_BYTES } from '../workers/presence/src/internal-owner-route';
 import { BROADCAST_MIN_INTERVAL_MS, PresenceHub } from '../workers/presence/src/presence-hub';
@@ -141,7 +142,7 @@ beforeEach(async () => {
   state = new FakeState();
   env = makeEnv();
   hub = new PresenceHub(state, env);
-  internalToken = await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL);
+  internalToken = await signPresenceInternal(SECRET, now);
 });
 
 afterEach(() => {
@@ -150,10 +151,15 @@ afterEach(() => {
 
 describe('/internal/owner authentication', () => {
   it('answers 404 without the internal header, with a wrong one, or one signed with another secret; state stays unchanged', async () => {
-    const forged = await hmacBase64Url('another-secret', PRESENCE_INTERNAL_LABEL);
-    const wrongLabel = await hmacBase64Url(SECRET, 'presence-internal:v0');
+    const seconds = Math.floor(now / 1000);
+    const forged = await signPresenceInternal('another-secret', now);
+    const wrongLabel = `${seconds}.${await hmacBase64Url(SECRET, `presence-internal:v0:${seconds}`)}`;
+    const legacyStatic = await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL);
+    const sig = internalToken.split('.')[1] ?? '';
     const attempts: Record<string, string>[] = [{}, { [PRESENCE_INTERNAL_HEADER]: forged }, { [PRESENCE_INTERNAL_HEADER]: wrongLabel },
+      { [PRESENCE_INTERNAL_HEADER]: legacyStatic }, { [PRESENCE_INTERNAL_HEADER]: `${seconds + 1}.${sig}` },
       { [PRESENCE_INTERNAL_HEADER]: `${internalToken}x` }, { [PRESENCE_INTERNAL_HEADER]: internalToken.slice(0, -1) },
+      { [PRESENCE_INTERNAL_HEADER]: `-${internalToken}` }, { [PRESENCE_INTERNAL_HEADER]: `${seconds}.${sig}.x` },
       { [PRESENCE_INTERNAL_HEADER]: 'x'.repeat(5000) }, { Authorization: `Bearer ${internalToken}` }];
     for (const headers of attempts) {
       for (const method of ['GET', 'PUT', 'OPTIONS'] as const) {
@@ -167,6 +173,22 @@ describe('/internal/owner authentication', () => {
     const s = await getState();
     expect(s.mode).toBe('auto');
     expect(s.text).toBeNull();
+  });
+
+  it('accepts the header only within the allowed clock skew, in either direction', async () => {
+    const at = async (offsetMs: number) => {
+      const headers = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, now + offsetMs) };
+      return (await handleRequest(ownerRequest('GET', undefined, headers), env)).status;
+    };
+    expect(await at(0)).toBe(200);
+    expect(await at(-PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(200);
+    expect(await at(PRESENCE_INTERNAL_MAX_SKEW_MS - 1_000)).toBe(200);
+    expect(await at(-PRESENCE_INTERNAL_MAX_SKEW_MS - 1_000)).toBe(404);
+    expect(await at(PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(404);
+    // A once-valid header replayed after the window is refused.
+    const captured = await signPresenceInternal(SECRET, now);
+    setSystemTime(new Date(now + PRESENCE_INTERNAL_MAX_SKEW_MS + 2_000));
+    expect((await handleRequest(ownerRequest('GET', undefined, { [PRESENCE_INTERNAL_HEADER]: captured }), env)).status).toBe(404);
   });
 
   it('answers 503 when the ticket secret is missing, even with a header', async () => {

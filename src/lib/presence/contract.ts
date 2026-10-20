@@ -116,13 +116,16 @@ export type PresenceServerMessage =
   | { t: 'error'; code: 'bad_message' | 'rate_limited' | 'ticket_expired' };
 
 /**
- * Owner status control, Pages → Worker only (service binding `PRESENCE`, HTTP fallback in dev).
+ * Owner status control, Pages → Worker only (service binding `PRESENCE`; HTTP only when unbound, i.e. local dev).
  * `GET /internal/owner` reads, `PUT /internal/owner` with an OwnerStatusUpdate writes; both answer
  * an OwnerStatusState. Every `/internal/*` request carries PRESENCE_INTERNAL_HEADER whose value is
- * `hmacBase64Url(PRESENCE_TICKET_SECRET, PRESENCE_INTERNAL_LABEL)`; anything else gets 404.
+ * `<unixSeconds>.<hmacBase64Url(PRESENCE_TICKET_SECRET, PRESENCE_INTERNAL_LABEL + ':' + unixSeconds)>`
+ * (see `internal-auth.ts`). The Worker accepts it only when |now − unixSeconds| ≤ PRESENCE_INTERNAL_MAX_SKEW_MS
+ * and the HMAC matches (constant-time); anything else gets 404.
  */
 export const PRESENCE_INTERNAL_HEADER = 'X-Presence-Internal';
 export const PRESENCE_INTERNAL_LABEL = 'presence-internal:v1';
+export const PRESENCE_INTERNAL_MAX_SKEW_MS = 120_000;
 
 export interface OwnerStatusUpdate {
   mode: OwnerMode;

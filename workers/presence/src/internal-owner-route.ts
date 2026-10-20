@@ -4,36 +4,23 @@
  *   GET  /internal/owner   OwnerStatusState
  *   PUT  /internal/owner   OwnerStatusUpdate JSON (<= INTERNAL_MAX_BODY_BYTES) -> OwnerStatusState
  *
- * Auth: PRESENCE_INTERNAL_HEADER must equal hmacBase64Url(PRESENCE_TICKET_SECRET, PRESENCE_INTERNAL_LABEL),
- * compared in constant time. A missing or wrong header gets the same 404 as an unknown path, so the route is
+ * Auth: PRESENCE_INTERNAL_HEADER must be a fresh `<unixSeconds>.<hmac>` value (verifyPresenceInternal: within
+ * PRESENCE_INTERNAL_MAX_SKEW_MS of now, HMAC compared in constant time). A missing or wrong header gets the same 404 as an unknown path, so the route is
  * not revealed; a Worker without the secret answers 503. No CORS: browsers never call this route.
  */
-import { PRESENCE_INTERNAL_HEADER, PRESENCE_INTERNAL_LABEL } from '../../../src/lib/presence/contract';
-import { hmacBase64Url } from '../../../src/lib/presence/ticket';
+import { PRESENCE_INTERNAL_HEADER } from '../../../src/lib/presence/contract';
+import { verifyPresenceInternal } from '../../../src/lib/presence/internal-auth';
 import { parseOwnerStatusUpdate, toOwnerStatusUpdate } from './owner-status';
 import type { DurableObjectStubLike, PresenceEnv } from './runtime-types';
 
 export const INTERNAL_OWNER_PATH = '/internal/owner';
 export const INTERNAL_MAX_BODY_BYTES = 1024;
-/** A valid header is a 43-char base64url HMAC-SHA256; anything far longer is refused before hashing. */
-const MAX_HEADER_LENGTH = 128;
-
 export type InternalErrorCode = 'not_found' | 'unavailable' | 'bad_request' | 'payload_too_large' | 'method_not_allowed';
 export type ErrorResponder = (status: number, code: InternalErrorCode, message: string, headers?: Record<string, string>) => Response;
 
-/**
- * Constant-time check of the internal header: both values are HMACed under the secret and the digests compared,
- * so comparison time never depends on how much of the expected value a caller guessed.
- */
-export async function isInternalCaller(request: Request, secret: string): Promise<boolean> {
-  const provided = request.headers.get(PRESENCE_INTERNAL_HEADER);
-  if (!provided || provided.length > MAX_HEADER_LENGTH) return false;
-  const expected = await hmacBase64Url(secret, PRESENCE_INTERNAL_LABEL);
-  const [a, b] = await Promise.all([
-    hmacBase64Url(secret, `internal-compare:${provided}`),
-    hmacBase64Url(secret, `internal-compare:${expected}`),
-  ]);
-  return a === b;
+/** True when the request carries a fresh, correctly signed PRESENCE_INTERNAL_HEADER. */
+export function isInternalCaller(request: Request, secret: string, nowMs = Date.now()): Promise<boolean> {
+  return verifyPresenceInternal(secret, request.headers.get(PRESENCE_INTERNAL_HEADER), nowMs);
 }
 
 /** Reads at most `limit` bytes of the body; null when it is larger. */

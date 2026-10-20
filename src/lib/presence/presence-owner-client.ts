@@ -1,23 +1,24 @@
 /**
  * Pages → presence Worker client for the owner status control (`GET`/`PUT /internal/owner`, see
- * `contract.ts`). Uses the `PRESENCE` service binding when bound and falls back to HTTP against
- * PUBLIC_PRESENCE_URL (or the default origin): local `astro dev` has no running Worker behind the
- * binding, and a binding hiccup must not hide a reachable Worker. Every failure becomes 503
- * `presence_unavailable`; Worker responses are validated before use.
+ * `contract.ts`). With the `PRESENCE` service binding every call goes through it and a failure is a 503
+ * (no retry over the public internet). Only without a binding does it use HTTP to PUBLIC_PRESENCE_URL (or
+ * the default origin), and only to `https:` or loopback `http:`. Redirects are never followed, the internal
+ * header is time-bound (`internal-auth.ts`), Worker responses are validated, and every failure becomes 503
+ * `presence_unavailable`.
  */
 import type { RuntimeEnv, ServiceBindingLike } from '../../env';
 import { AppError } from '../http';
 import {
   OWNER_STATUS_TEXT_MAX,
+  PRESENCE_DEFAULT_ORIGIN,
   PRESENCE_INTERNAL_HEADER,
-  PRESENCE_INTERNAL_LABEL,
   isOwnerMode,
   type OwnerStatusState,
   type OwnerStatusUpdate,
 } from './contract';
 import { isOwnerStatusState, sanitizeOwnerStatusText } from './presence-owner-status-guards';
 import { presenceWorkerOrigin } from './presence-ticket-issuer';
-import { hmacBase64Url } from './ticket';
+import { signPresenceInternal } from './internal-auth';
 
 /** Upper bound for one Worker round trip (per transport attempt). */
 export const PRESENCE_INTERNAL_TIMEOUT_MS = 5_000;
@@ -46,30 +47,45 @@ export function parseOwnerStatusUpdate(body: Record<string, unknown> | null): Ow
   return text ? { mode: body.mode, text } : { mode: body.mode };
 }
 
-/** Value of PRESENCE_INTERNAL_HEADER: `hmacBase64Url(PRESENCE_TICKET_SECRET, PRESENCE_INTERNAL_LABEL)`. */
-export function presenceInternalAuth(secret: string): Promise<string> {
-  return hmacBase64Url(secret, PRESENCE_INTERNAL_LABEL);
-}
-
 export type PresenceTransportKind = 'binding' | 'http';
 
-interface PresenceTransport {
+export interface PresenceTransport {
   kind: PresenceTransportKind;
+  /** Absolute URL of `/internal/owner` for this transport. */
+  url: string;
   fetch(input: string, init: RequestInit): Promise<Response>;
 }
 
-/** Transports in the order they are tried: the service binding first when bound, then public HTTP. */
-export function presenceOwnerTransports(env: RuntimeEnv): PresenceTransport[] {
-  const http: PresenceTransport = { kind: 'http', fetch: (input, init) => fetch(input, init) };
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** HTTP is allowed only to `https:` or to a loopback `http:` host (local `wrangler dev`). */
+export function isAllowedPresenceHttpTarget(url: URL): boolean {
+  return url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname));
+}
+
+/**
+ * The single transport for owner calls. With the `PRESENCE` service binding it is always the binding (a
+ * binding failure is a 503, never a retry over the public internet). Without a binding (local dev) it is
+ * HTTP to PUBLIC_PRESENCE_URL or the default origin, refused (503) unless https or loopback http.
+ */
+export function presenceOwnerTransport(env: RuntimeEnv): PresenceTransport {
   const binding: ServiceBindingLike | undefined = env.PRESENCE;
-  if (!binding) return [http];
-  return [{ kind: 'binding', fetch: (input, init) => binding.fetch(input, init) }, http];
+  if (binding) {
+    // The host is ignored by a service binding; the default origin keeps the URL well formed.
+    return { kind: 'binding', url: `${PRESENCE_DEFAULT_ORIGIN}${PRESENCE_OWNER_PATH}`, fetch: (input, init) => binding.fetch(input, init) };
+  }
+  const url = new URL(`${presenceWorkerOrigin(env)}${PRESENCE_OWNER_PATH}`);
+  if (!isAllowedPresenceHttpTarget(url)) {
+    throw new AppError(503, 'presence_unavailable', 'Realtime presence is misconfigured');
+  }
+  return { kind: 'http', url: url.href, fetch: (input, init) => fetch(input, init) };
 }
 
 const unavailable = (): AppError => new AppError(503, 'presence_unavailable', 'Realtime presence is unavailable right now');
 
 async function readState(res: Response): Promise<OwnerStatusState | null> {
-  if (!res.ok) return null;
+  // `redirect: 'manual'`: a 3xx (or an opaque redirect, status 0) is a failure, never followed.
+  if (!res.ok || res.type === 'opaqueredirect') return null;
   let body: unknown;
   try {
     body = await res.json();
@@ -82,25 +98,26 @@ async function readState(res: Response): Promise<OwnerStatusState | null> {
 async function callOwnerEndpoint(env: RuntimeEnv, method: 'GET' | 'PUT', update?: OwnerStatusUpdate): Promise<OwnerStatusState> {
   const secret = env.PRESENCE_TICKET_SECRET;
   if (!secret) throw new AppError(503, 'presence_unavailable', 'Realtime presence is not configured');
-  const url = `${presenceWorkerOrigin(env)}${PRESENCE_OWNER_PATH}`;
-  const headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: await presenceInternalAuth(secret), Accept: 'application/json' };
+  const transport = presenceOwnerTransport(env);
+  const headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret), Accept: 'application/json' };
   if (update) headers['Content-Type'] = 'application/json';
 
-  for (const transport of presenceOwnerTransports(env)) {
-    try {
-      const res = await transport.fetch(url, {
-        method,
-        headers,
-        body: update ? JSON.stringify(update) : undefined,
-        signal: AbortSignal.timeout(PRESENCE_INTERNAL_TIMEOUT_MS),
-      });
-      const state = await readState(res);
-      if (state) return state;
-      console.error('presence owner: unusable Worker response', transport.kind, method, res.status);
-    } catch (err) {
-      console.error('presence owner: Worker unreachable', transport.kind, method, err instanceof Error ? err.name : 'unknown');
-    }
+  let res: Response;
+  try {
+    res = await transport.fetch(transport.url, {
+      method,
+      headers,
+      body: update ? JSON.stringify(update) : undefined,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(PRESENCE_INTERNAL_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.error('presence owner: Worker unreachable', transport.kind, method, err instanceof Error ? err.name : 'unknown');
+    throw unavailable();
   }
+  const state = await readState(res);
+  if (state) return state;
+  console.error('presence owner: unusable Worker response', transport.kind, method, res.status);
   throw unavailable();
 }
 

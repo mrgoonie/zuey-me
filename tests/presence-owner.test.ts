@@ -12,9 +12,10 @@ import { allMcpTools } from '../src/lib/mcp/dispatch';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { TOOL_ACCESS } from '../src/lib/oauth/tool-access';
 import {
-  OWNER_STATUS_TEXT_MAX, PRESENCE_INTERNAL_HEADER, PRESENCE_INTERNAL_LABEL, type OwnerStatusState,
+  OWNER_STATUS_TEXT_MAX, PRESENCE_INTERNAL_HEADER, PRESENCE_INTERNAL_LABEL, PRESENCE_INTERNAL_MAX_SKEW_MS, type OwnerStatusState,
 } from '../src/lib/presence/contract';
-import { parseOwnerStatusUpdate, presenceInternalAuth, presenceOwnerTransports } from '../src/lib/presence/presence-owner-client';
+import { isAllowedPresenceHttpTarget, parseOwnerStatusUpdate, presenceOwnerTransport } from '../src/lib/presence/presence-owner-client';
+import { signPresenceInternal, verifyPresenceInternal } from '../src/lib/presence/internal-auth';
 import { isOwnerStatusState, sanitizeOwnerStatusText } from '../src/lib/presence/presence-owner-status-guards';
 import { hmacBase64Url } from '../src/lib/presence/ticket';
 import { GET, PUT } from '../src/pages/api/v1/presence/owner';
@@ -48,7 +49,7 @@ class FakeWorker implements ServiceBindingLike {
     if (this.fail === 'throw') throw new Error('Worker down');
     if (this.fail === 'status') return new Response('oops', { status: 500 });
     if (this.fail === 'garbage') return Response.json({ mode: 'sleeping' });
-    if (request.headers.get(PRESENCE_INTERNAL_HEADER) !== await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL)) {
+    if (!(await verifyPresenceInternal(SECRET, request.headers.get(PRESENCE_INTERNAL_HEADER)))) {
       return new Response('Not found', { status: 404 });
     }
     if (request.method === 'PUT' && isRecord(body) && (body.mode === 'auto' || body.mode === 'away' || body.mode === 'busy' || body.mode === 'offline' || body.mode === 'invisible')) {
@@ -245,56 +246,83 @@ describe('owner status validation', () => {
 });
 
 describe('presence Worker client', () => {
-  it('signs every internal call with hmacBase64Url(secret, label)', async () => {
-    const expected = await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL);
-    expect(await presenceInternalAuth(SECRET)).toBe(expected);
+  it('sends a fresh time-bound internal header that only verifies within the skew window', async () => {
+    const before = Math.floor(Date.now() / 1000);
     await call('GET', await ownerSession());
-    expect(worker.calls[0]?.header).toBe(expected);
+    const header = worker.calls[0]?.header ?? '';
+    const [ts, sig] = header.split('.');
+    expect(Number(ts)).toBeGreaterThanOrEqual(before);
+    expect(sig).toBe(await hmacBase64Url(SECRET, `${PRESENCE_INTERNAL_LABEL}:${ts}`));
     expect(worker.calls[0]?.url).toBe('https://presence.zuey.me/internal/owner');
+
+    const now = Date.now();
+    const valid = await signPresenceInternal(SECRET, now);
+    expect(await verifyPresenceInternal(SECRET, valid, now)).toBe(true);
+    expect(await verifyPresenceInternal(SECRET, valid, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(false); // stale
+    expect(await verifyPresenceInternal(SECRET, await signPresenceInternal(SECRET, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000), now)).toBe(false); // future
+    expect(await verifyPresenceInternal('other-secret', valid, now)).toBe(false);
+    for (const bad of [null, '', 'abc', `${valid}x`, `x${valid}`, valid.replace('.', ':'), await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL)]) {
+      expect(await verifyPresenceInternal(SECRET, bad, now)).toBe(false);
+    }
   });
 
-  it('uses the service binding when bound, else HTTP to PUBLIC_PRESENCE_URL', async () => {
-    expect(presenceOwnerTransports(env()).map(t => t.kind)).toEqual(['binding', 'http']);
-    envOverrides = { PRESENCE: undefined };
-    expect(presenceOwnerTransports(env()).map(t => t.kind)).toEqual(['http']);
+  it('uses only the binding when bound: a binding failure is a 503 and never retried over HTTP', async () => {
+    expect(presenceOwnerTransport(env()).kind).toBe('binding');
+    let httpCalls = 0;
+    stubFetch(async () => { httpCalls++; return Response.json(STATE); });
+    for (const fail of ['throw', 'status', 'garbage'] as const) {
+      worker.fail = fail;
+      const r = await call('GET', await ownerSession());
+      expect([r.status, r.code]).toEqual([503, 'presence_unavailable']);
+      expect(r.res.headers.get('Cache-Control')).toBe('no-store');
+    }
+    expect(httpCalls).toBe(0);
+  });
+
+  it('uses HTTP only without a binding, and only to https or loopback http', async () => {
+    expect(isAllowedPresenceHttpTarget(new URL('https://presence.zuey.me'))).toBe(true);
+    for (const host of ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787']) {
+      expect(isAllowedPresenceHttpTarget(new URL(host))).toBe(true);
+    }
+    for (const host of ['http://presence.zuey.me', 'http://10.0.0.5', 'http://localhost.evil.example', 'ftp://localhost']) {
+      expect(isAllowedPresenceHttpTarget(new URL(host))).toBe(false);
+    }
 
     const http = new FakeWorker();
-    stubFetch((input, init) => http.fetch(input, init));
-    try {
-      envOverrides = { PRESENCE: undefined, PUBLIC_PRESENCE_URL: 'http://localhost:8787/' };
-      const r = await call('GET', await ownerSession());
-      expect(r.status).toBe(200);
-      expect(http.calls.map(c => c.url)).toEqual(['http://localhost:8787/internal/owner']);
+    const seen: Array<{ url: string; redirect: RequestRedirect | undefined }> = [];
+    stubFetch((input, init) => {
+      seen.push({ url: typeof input === 'string' ? input : input.url, redirect: init?.redirect });
+      return http.fetch(input, init);
+    });
+    envOverrides = { PRESENCE: undefined, PUBLIC_PRESENCE_URL: 'http://localhost:8787/' };
+    expect(presenceOwnerTransport(env()).kind).toBe('http');
+    expect((await call('GET', await ownerSession())).status).toBe(200);
+    expect(seen).toEqual([{ url: 'http://localhost:8787/internal/owner', redirect: 'manual' }]);
 
-      // A bound but failing binding (e.g. no local Worker in `astro dev`) falls back to HTTP.
-      envOverrides = { PUBLIC_PRESENCE_URL: 'http://localhost:8787' };
-      worker.fail = 'throw';
-      expect((await call('PUT', await ownerSession(), { mode: 'away' })).status).toBe(200);
-      expect(worker.calls).toHaveLength(1);
-      expect(http.calls.at(-1)?.method).toBe('PUT');
-    } finally {
-      restoreFetch();
-    }
+    // Plain http to a non-loopback host is refused before anything is sent (the header never leaves).
+    envOverrides = { PRESENCE: undefined, PUBLIC_PRESENCE_URL: 'http://presence.zuey.me' };
+    expect((await call('PUT', await ownerSession(), { mode: 'away' })).code).toBe('presence_unavailable');
+    envOverrides = { PRESENCE: undefined, PUBLIC_PRESENCE_URL: 'ftp://nope' };
+    expect((await call('GET', await ownerSession())).code).toBe('presence_unavailable');
+    expect(seen).toHaveLength(1);
   });
 
-  it('maps every Worker failure to 503 presence_unavailable', async () => {
-    stubFetch(async () => new Response('down', { status: 502 }));
-    try {
-      const headers = await ownerSession();
-      for (const fail of ['throw', 'status', 'garbage'] as const) {
-        worker.fail = fail;
-        const r = await call('GET', headers);
-        expect([r.status, r.code]).toEqual([503, 'presence_unavailable']);
-        expect(r.res.headers.get('Cache-Control')).toBe('no-store');
-      }
-      worker.fail = null;
-      envOverrides = { PRESENCE_TICKET_SECRET: undefined };
-      expect((await call('PUT', headers, { mode: 'away' })).code).toBe('presence_unavailable');
-      envOverrides = { PUBLIC_PRESENCE_URL: 'ftp://nope' };
-      expect((await call('GET', headers)).code).toBe('presence_unavailable');
-    } finally {
-      restoreFetch();
-    }
+  it('treats a redirect from the Worker as a failure, never following it', async () => {
+    let calls = 0;
+    stubFetch(async () => {
+      calls++;
+      return new Response(null, { status: 302, headers: { Location: 'https://evil.example/collect' } });
+    });
+    envOverrides = { PRESENCE: undefined };
+    const r = await call('GET', await ownerSession());
+    expect([r.status, r.code]).toEqual([503, 'presence_unavailable']);
+    expect(calls).toBe(1);
+  });
+
+  it('answers 503 without the ticket secret', async () => {
+    envOverrides = { PRESENCE_TICKET_SECRET: undefined };
+    expect((await call('PUT', await ownerSession(), { mode: 'away' })).code).toBe('presence_unavailable');
+    expect(worker.calls).toHaveLength(0);
   });
 
   it('validates the Worker owner view strictly', () => {
