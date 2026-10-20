@@ -8,11 +8,15 @@
  *
  * Storage: a single key (HISTORY_STORAGE_KEY) holding every recorded bucket of the window as compact numeric
  * tuples `[startMs, peak, ...countsInActivityCategoryOrder]`, plus `savedAt`. Raw counts stay inside the DO;
- * suppression (PRESENCE_MIN_GROUP) is applied when the history is published. The bucket being filled lives in
- * memory and is written at most once per HISTORY_WRITE_INTERVAL_MS (the throttle survives eviction through
- * `savedAt`), and only when something changed. Nothing is recorded while nobody is live, so idle time costs
- * no writes and no alarms; gaps read back as peak 0. A peak that rose and fell again within the unwritten
- * window right before an eviction can be lost; anyone still live is observed again after the object wakes.
+ * suppression (PRESENCE_MIN_GROUP) is applied when the history is published.
+ *
+ * Write-on-rise: a hibernating Durable Object loses its memory about 10 s after its last event, even with an
+ * alarm pending, so no peak may wait in memory for a later write. The recorder writes during the same
+ * observation whenever the current bucket's peak rises or a new bucket starts with someone live; one
+ * observation writes at most once. Writes per bucket are therefore bounded by the number of times its peak
+ * rises (at most the peak itself). Nothing is recorded while nobody is live, so idle time costs no writes and
+ * no alarms. The in-memory copy is only a cache, loaded lazily from storage after each wake. A failed write
+ * is logged and retried on the next observation.
  */
 import {
   ACTIVITY_CATEGORIES, PRESENCE_CONTRACT_VERSION, PRESENCE_HISTORY_BUCKETS, PRESENCE_HISTORY_BUCKET_MS,
@@ -22,8 +26,6 @@ import { countCategories, suppressedCategories } from './presence-state';
 import type { DurableObjectStorageLike } from './runtime-types';
 
 export const HISTORY_STORAGE_KEY = 'history';
-/** Longest a changed bucket waits in memory before it is written (≤ 60 storage writes per hour). */
-export const HISTORY_WRITE_INTERVAL_MS = 60_000;
 
 const TUPLE_LENGTH = 2 + ACTIVITY_CATEGORIES.length;
 
@@ -86,9 +88,8 @@ export class PresenceHistoryRecorder {
   /** Recorded buckets, oldest first; the last one may be the bucket being filled. */
   private buckets: HistoryBucket[] = [];
   private loaded = false;
-  /** In-memory buckets differ from storage. */
+  /** In-memory buckets differ from storage (only between a failed write and its retry). */
   private dirty = false;
-  private lastWriteAt = Number.NEGATIVE_INFINITY;
   private storageBytes = 0;
 
   constructor(private readonly storage: Pick<DurableObjectStorageLike, 'get' | 'put'>) {}
@@ -100,7 +101,6 @@ export class PresenceHistoryRecorder {
     if (raw !== undefined && stored === null) console.error('presence history in storage is malformed; starting empty');
     if (stored) {
       this.buckets = stored.b.map(toBucket).sort((a, b) => a.t - b.t);
-      this.lastWriteAt = stored.savedAt;
       this.storageBytes = JSON.stringify(stored).length;
     }
     this.loaded = true;
@@ -112,8 +112,9 @@ export class PresenceHistoryRecorder {
   }
 
   /**
-   * Records the current counted visitors (one category per unique key) and writes when the throttle allows.
-   * A storage failure is logged and retried on a later observation; presence itself keeps working.
+   * Records the current counted visitors (one category per unique key) and, when the bucket's peak rose or a
+   * new bucket started, writes before returning. A storage failure is logged and retried on a later
+   * observation; presence itself keeps working.
    */
   async observe(now: number, cats: readonly ActivityCategory[]): Promise<void> {
     await this.load();
@@ -130,13 +131,12 @@ export class PresenceHistoryRecorder {
       this.buckets.push({ t, peak: active, counts: countsOf(cats) });
       this.dirty = true;
     }
-    if (this.dirty && now - this.lastWriteAt >= HISTORY_WRITE_INTERVAL_MS) await this.write(now);
+    if (this.dirty) await this.write(now);
   }
 
   private async write(now: number): Promise<void> {
     this.prune(now);
     const stored: StoredHistory = { savedAt: now, b: this.buckets.map(toTuple) };
-    this.lastWriteAt = now;
     try {
       await this.storage.put(HISTORY_STORAGE_KEY, stored);
       this.dirty = false;
@@ -144,11 +144,6 @@ export class PresenceHistoryRecorder {
     } catch (err) {
       console.error('presence history write failed', err instanceof Error ? err.message : 'unknown error');
     }
-  }
-
-  /** When unwritten changes may be written next, or null when storage is up to date. */
-  flushDueAt(): number | null {
-    return this.dirty ? this.lastWriteAt + HISTORY_WRITE_INTERVAL_MS : null;
   }
 
   /** The published 24 h history: PRESENCE_HISTORY_BUCKETS buckets oldest first, gaps as peak 0, suppressed. */

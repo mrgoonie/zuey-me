@@ -5,7 +5,7 @@ import {
 } from '../src/lib/presence/contract';
 import { PresenceHub } from '../workers/presence/src/presence-hub';
 import {
-  HISTORY_STORAGE_KEY, HISTORY_WRITE_INTERVAL_MS, PresenceHistoryRecorder, bucketStart, windowStart,
+  HISTORY_STORAGE_KEY, PresenceHistoryRecorder, bucketStart, windowStart,
 } from '../workers/presence/src/presence-history';
 import { newSession, type SessionIdentity } from '../workers/presence/src/presence-state';
 import { isPresenceHistory } from '../workers/presence/src/snapshot-cache';
@@ -16,13 +16,18 @@ const T0 = Date.parse('2026-10-20T04:00:00.000Z');
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 
-/** Storage double that records every write. */
+/** Storage double that records every write; `failPuts` makes the next puts throw. */
 class FakeStorage {
   data = new Map<string, unknown>();
   puts: { key: string; at: number }[] = [];
   alarmAt: number | null = null;
+  failPuts = 0;
   get = async (key: string): Promise<unknown> => structuredClone(this.data.get(key));
   put = async (key: string, value: unknown): Promise<void> => {
+    if (this.failPuts > 0) {
+      this.failPuts -= 1;
+      throw new Error('storage unavailable');
+    }
     this.puts.push({ key, at: Date.now() });
     this.data.set(key, structuredClone(value));
   };
@@ -142,32 +147,48 @@ describe('PresenceHistoryRecorder', () => {
       tick(PRESENCE_HISTORY_BUCKET_MS);
     }
     expect(storage.historyPuts()).toHaveLength(0);
-    expect(rec.flushDueAt()).toBeNull();
     expect(await rec.stats(now)).toEqual({ buckets: 0, oldest: null, storageBytes: 0 });
   });
 
-  it('writes at most once a minute under steady traffic, and only when something changed', async () => {
+  it('writes once per peak rise within a bucket and nothing when the peak does not rise', async () => {
     const storage = new FakeStorage();
     const rec = new PresenceHistoryRecorder(storage);
-    // One hour, an observation every 10 s with a peak that keeps rising.
-    for (let i = 0; i < 360; i += 1) {
-      await rec.observe(now, many('reading', 1 + i));
+    for (let i = 1; i <= 5; i += 1) {
+      await rec.observe(now, many('reading', i));
+      expect(storage.historyPuts()).toHaveLength(i); // every rise is stored before observe returns
       tick(10_000);
     }
-    const writes = storage.historyPuts();
-    expect(writes.length).toBeLessThanOrEqual(60);
-    for (let i = 1; i < writes.length; i += 1) expect((writes[i] ?? 0) - (writes[i - 1] ?? 0)).toBeGreaterThanOrEqual(HISTORY_WRITE_INTERVAL_MS);
+    for (let i = 0; i < 10; i += 1) {
+      await rec.observe(now, many('reading', 3)); // below the peak
+      await rec.observe(now, many('reading', 5)); // equal to the peak
+      tick(5_000);
+    }
+    expect(storage.historyPuts()).toHaveLength(5);
+  });
 
-    // A steady, unchanged count costs one write per new bucket at most.
-    const before = storage.historyPuts().length;
+  it('costs one write per bucket for a steady crowd, i.e. 12 per hour', async () => {
+    const storage = new FakeStorage();
+    const rec = new PresenceHistoryRecorder(storage);
     for (let i = 0; i < 360; i += 1) {
       await rec.observe(now, many('reading', 3));
       tick(10_000);
     }
-    expect(storage.historyPuts().length - before).toBeLessThanOrEqual(13);
+    expect(storage.historyPuts()).toHaveLength(12);
   });
 
-  it('survives eviction: a new recorder over the same storage reads the history and keeps the write throttle', async () => {
+  it('retries a failed write on the next observation', async () => {
+    const storage = new FakeStorage();
+    const rec = new PresenceHistoryRecorder(storage);
+    storage.failPuts = 1;
+    await rec.observe(now, many('ai', 4));
+    expect(storage.historyPuts()).toHaveLength(0);
+    tick(10_000);
+    await rec.observe(now, many('ai', 2)); // no rise, but the unwritten peak is still pending
+    expect(storage.historyPuts()).toHaveLength(1);
+    expect(bucketAt(await new PresenceHistoryRecorder(storage).toHistory(now), T0)?.peak).toBe(4);
+  });
+
+  it('survives eviction: a new recorder over the same storage reads the history and writes the next rise at once', async () => {
     const storage = new FakeStorage();
     const first = new PresenceHistoryRecorder(storage);
     await first.observe(now, many('reads', 5));
@@ -178,10 +199,11 @@ describe('PresenceHistoryRecorder', () => {
     tick(10_000);
     const revived = new PresenceHistoryRecorder(storage);
     expect(bucketAt(await revived.toHistory(now), T0)).toMatchObject({ peak: 5, categories: [{ id: 'reads', count: 5 }] });
-    await revived.observe(now, many('reads', 4)); // higher peak, but the last write was 10 s ago
+    await revived.observe(now, many('reads', 3)); // the stored peak, so nothing to write
     expect(storage.historyPuts()).toHaveLength(2);
-    expect(revived.flushDueAt()).toBe(now - 10_000 + HISTORY_WRITE_INTERVAL_MS);
-    expect(bucketAt(await revived.toHistory(now), T0 + PRESENCE_HISTORY_BUCKET_MS)?.peak).toBe(4); // unwritten peak is still served
+    await revived.observe(now, many('reads', 4));
+    expect(storage.historyPuts()).toHaveLength(3);
+    expect(bucketAt(await new PresenceHistoryRecorder(storage).toHistory(now), T0 + PRESENCE_HISTORY_BUCKET_MS)?.peak).toBe(4);
   });
 
   it('prunes buckets older than 24 h from storage and output', async () => {
@@ -234,21 +256,23 @@ describe('PresenceHub history', () => {
     hub = new PresenceHub(state, ENV);
   });
 
-  it('writes the final peak when activity ends, then arms no alarm while idle', async () => {
+  it('stores a rising peak within the event, so it survives hibernation before the next event or alarm', async () => {
     const a = connect('a');
     const b = connect('b');
     await send(a, { t: 'hb', cat: 'reading' });
-    expect(state.storage.historyPuts()).toHaveLength(1); // first observation of the bucket is written at once
-    tick(10_000);
-    await send(b, { t: 'hb', cat: 'reading' }); // peak 2, throttled
     expect(state.storage.historyPuts()).toHaveLength(1);
+    tick(10_000);
+    await send(b, { t: 'hb', cat: 'reading' }); // peak 2: one write in this event
+    expect(state.storage.historyPuts()).toHaveLength(2);
 
-    tick(5_000);
+    // Hibernation: the object's memory is gone; a new instance over the same storage handles what comes next.
+    tick(15_000);
+    hub = new PresenceHub(state, ENV);
     await send(a, { t: 'idle' });
     await send(b, { t: 'idle' });
-    // Drain alarms the way the runtime would until none is armed.
     for (let i = 0; i < 10 && state.storage.alarmAt !== null; i += 1) {
       tick(Math.max(0, state.storage.alarmAt - now));
+      hub = new PresenceHub(state, ENV); // hibernated again before the alarm
       await fireAlarm();
     }
     expect(state.storage.alarmAt).toBeNull();
@@ -260,6 +284,22 @@ describe('PresenceHub history', () => {
     await hub.fetch(new Request('https://hub/snapshot'));
     expect(state.storage.historyPuts()).toHaveLength(2);
     expect(state.storage.alarmAt).toBeNull();
+  });
+
+  it('a coalesced rise is observed by the alarm on a revived instance and stored', async () => {
+    const a = connect('a');
+    const b = connect('b');
+    await send(a, { t: 'hb', cat: 'ai' }); // refreshes at once (peak 1)
+    tick(500);
+    await send(b, { t: 'hb', cat: 'ai' }); // inside the 2 s window: the refresh waits for the alarm
+    expect(state.storage.historyPuts()).toHaveLength(1);
+    expect(state.storage.alarmAt).not.toBeNull();
+
+    hub = new PresenceHub(state, ENV); // hibernated before the alarm
+    tick(Math.max(0, (state.storage.alarmAt ?? now) - now));
+    await fireAlarm();
+    expect(state.storage.historyPuts()).toHaveLength(2);
+    expect(bucketAt(await readHistory(new PresenceHub(state, ENV)), T0)?.peak).toBe(2);
   });
 
   it('keeps the history across eviction and counts only consented non-owner visitors', async () => {
