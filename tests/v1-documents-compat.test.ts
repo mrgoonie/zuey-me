@@ -12,6 +12,7 @@ import { documentText as aiDocumentText } from '../src/lib/ai/context';
 import { documentText } from '../src/lib/search/text';
 import { renderArticleEmail } from '../src/lib/notifications/article-email-render';
 import { KITCHEN_SINK, LEGACY_STORED, PROSE_ARTICLE } from './fixtures/v1-article-documents';
+import { HIGHLIGHTER_WARMUP_TIMEOUT_MS, warmHighlighter } from './helpers/warm-highlighter';
 
 // Snapshots were recorded from the renderer, serializers and schemas as they were before the block
 // registry; every surface must keep producing exactly the same output for stored v1 documents.
@@ -47,6 +48,7 @@ describe('schema v1 documents render unchanged', () => {
   // Server rendering (icons inline); import.meta.env.SSR is the live process.env in Bun.
   const previousSsr = process.env.SSR;
   beforeAll(() => { process.env.SSR = 'true'; });
+  beforeAll(warmHighlighter, HIGHLIGHTER_WARMUP_TIMEOUT_MS);
   afterAll(() => { if (previousSsr === undefined) delete process.env.SSR; else process.env.SSR = previousSsr; });
 
   it('kitchen sink: every v1 block type', () => {

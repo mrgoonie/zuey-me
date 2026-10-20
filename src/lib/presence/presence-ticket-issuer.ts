@@ -10,8 +10,11 @@ import { clientIp, membersRuntime, randomSecret } from '../members/runtime';
 import { isSameOriginRequest, resolveMemberSession } from '../members/session';
 import { PRESENCE_DEFAULT_ORIGIN, PRESENCE_TICKET_TTL_MS, type PresenceTicketPayload } from './contract';
 import { presenceIpKey } from './ip-prefix';
+import { presenceOwnerIds } from './presence-owner-identity';
 import { presenceTicketLimiter } from './presence-rate-limit';
 import { hmacBase64Url, signPresenceTicket } from './ticket';
+
+export { presenceOwnerIds } from './presence-owner-identity';
 
 /** Random browser presence id the client keeps in localStorage `zuey_presence_id`. */
 export const PRESENCE_BROWSER_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
@@ -41,13 +44,8 @@ export function parsePresenceTicketRequest(body: Record<string, unknown> | null)
   return { count: body.count, browserId: typeof raw === 'string' ? raw : null };
 }
 
-/** Trimmed, de-duplicated member ids from PRESENCE_OWNER_MEMBER_IDS (comma-separated). */
-export function presenceOwnerIds(env: RuntimeEnv): Set<string> {
-  return new Set((env.PRESENCE_OWNER_MEMBER_IDS ?? '').split(',').map(id => id.trim()).filter(id => id.length > 0));
-}
-
-/** WebSocket connect URL of the presence Worker: PUBLIC_PRESENCE_URL (or the default origin) as ws(s) + /v1/connect. */
-export function presenceConnectUrl(env: RuntimeEnv): string {
+/** HTTP(S) base URL of the presence Worker: PUBLIC_PRESENCE_URL or the default origin. Throws 503 when misconfigured. */
+export function presenceWorkerBase(env: RuntimeEnv): URL {
   const base = env.PUBLIC_PRESENCE_URL?.trim() || PRESENCE_DEFAULT_ORIGIN;
   let url: URL;
   try {
@@ -58,6 +56,18 @@ export function presenceConnectUrl(env: RuntimeEnv): string {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new AppError(503, 'presence_unavailable', 'Realtime presence is misconfigured');
   }
+  return url;
+}
+
+/** Origin plus base path of the presence Worker, without a trailing slash (e.g. `https://presence.zuey.me`). */
+export function presenceWorkerOrigin(env: RuntimeEnv): string {
+  const url = presenceWorkerBase(env);
+  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+/** WebSocket connect URL of the presence Worker: PUBLIC_PRESENCE_URL (or the default origin) as ws(s) + /v1/connect. */
+export function presenceConnectUrl(env: RuntimeEnv): string {
+  const url = presenceWorkerBase(env);
   const scheme = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${scheme}//${url.host}${url.pathname.replace(/\/+$/, '')}/v1/connect`;
 }

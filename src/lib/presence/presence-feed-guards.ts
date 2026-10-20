@@ -22,7 +22,7 @@ function isCategoryCount(v: unknown): v is CategoryCount {
   return isRecord(v) && isActivityCategory(v.id) && isCount(v.count);
 }
 
-function isOwnerPresence(v: unknown): v is OwnerPresence {
+export function isOwnerPresence(v: unknown): v is OwnerPresence {
   return (
     isRecord(v) &&
     isOwnerStatus(v.status) &&
