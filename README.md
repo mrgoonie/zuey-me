@@ -72,7 +72,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | Feature | Variables / bindings |
 |---|---|
 | Analytics (PostHog) | `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (optional), `PUBLIC_ANALYTICS_DEBUG` (optional; capture on localhost/dev). Event dictionary and privacy rules: [docs/analytics-events.md](docs/analytics-events.md) |
-| Realtime presence | `PRESENCE_TICKET_SECRET` (signs presence connect tickets; must equal the presence Worker's secret), `PRESENCE_OWNER_MEMBER_IDS` (comma-separated owner member ids; never the admin role), `PUBLIC_PRESENCE_URL` (optional; presence Worker origin, default `https://presence.zuey.me`). Rules: [docs/analytics-events.md#realtime-presence](docs/analytics-events.md#realtime-presence) |
+| Realtime presence | `PRESENCE_TICKET_SECRET` (signs presence connect tickets; must equal the presence Worker's secret), `PRESENCE_OWNER_MEMBER_IDS` (comma-separated owner member ids; never the admin role), `PUBLIC_PRESENCE_URL` (optional, read at runtime; presence Worker origin, default `https://presence.zuey.me`). Local Worker only: `PRESENCE_DEV_ORIGINS=1` in `workers/presence/.dev.vars` allows `localhost:4321`. Rules: [docs/analytics-events.md#realtime-presence](docs/analytics-events.md#realtime-presence) |
 | Surveys | `SURVEY_HASH_SALT` |
 | Reads | `ANYMD_API_KEY`, `READS_SUMMARY_MODEL` (optional), Workers AI binding `AI` |
 | Zueytube | `ANYMD_API_KEY` (optional; without it AnyMD's small anonymous quota applies), `OPENROUTER_API_KEY` + `VIDEOS_REWRITE_OPENROUTER_MODEL` (optional), `VIDEOS_REWRITE_MODEL` (optional), `VIDEOS_REWRITE_GLOSSARY` (optional extra proper nouns), Workers AI binding `AI` |
