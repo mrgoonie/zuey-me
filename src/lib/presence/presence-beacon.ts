@@ -11,7 +11,8 @@
  *   expires, while the counting context (consent, browser id) still matches.
  * - Reconnects with capped exponential backoff and full jitter; repeated 401/503 ticket answers (or a
  *   400/403), or MAX_FAILED_SOCKETS sockets in a row that never opened (Worker down, upgrade refused),
- *   stop it for the page lifetime.
+ *   stop it for the page lifetime (the failed-socket count restarts when the tab is shown or goes online).
+ * - A tab opened in the background connects only once it is first shown.
  * - A tab hidden for HIDDEN_GRACE_MS drops its socket and reconnects when shown again.
  * - Consent withdrawn (this tab or another) closes the socket at once.
  *
@@ -260,6 +261,11 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ count: true, browserId: id }),
     });
+    const ticket = res.ok ? parseTicket(await res.json()) : null;
+    // Cache before the generation check: a ticket fetched just before a hide or reconnect is still reusable.
+    if (ticket && deps.consentGranted()) {
+      tickets.put({ ...ticket, exp: requestedAt + PRESENCE_TICKET_TTL_MS, consent: true, kind: 'count', browserId: id });
+    }
     if (gen !== generation || state !== 'running') return null;
     if (res.status === 401 || res.status === 503) {
       unavailable += 1;
@@ -271,15 +277,11 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
       giveUp(`ticket ${res.status}`);
       return null;
     }
-    const ticket = res.ok ? parseTicket(await res.json()) : null;
-    if (gen !== generation || state !== 'running') return null;
     if (!ticket) {
       scheduleReconnect();
       return null;
     }
     unavailable = 0;
-    // Consent is re-checked right before connecting, so a ticket is only ever cached for a consenting visitor.
-    if (deps.consentGranted()) tickets.put({ ...ticket, exp: requestedAt + PRESENCE_TICKET_TTL_MS, consent: true, kind: 'count', browserId: id });
     return ticket;
   }
 
@@ -379,12 +381,22 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
   }
 
   const begin = (): void => {
-    if (state !== 'off' || !deps.consentGranted()) return;
+    if (state !== 'off') return;
+    if (!deps.consentGranted()) {
+      tickets.forget();
+      return;
+    }
     state = 'running';
     attempts = 0;
     lastActivity = deps.now();
     ticker = deps.setTicker(tick, TICK_MS);
-    void connect();
+    // A tab opened in the background connects only once it is shown.
+    if (deps.visible()) void connect();
+    else waitingForVisible = true;
+  };
+
+  const onOnline = (): void => {
+    failedSockets = 0;
   };
 
   const onActivity = (): void => {
@@ -398,6 +410,7 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
       if (state !== 'running') return;
       if (deps.visible()) {
         clearHidden();
+        failedSockets = 0;
         lastActivity = deps.now();
         if (waitingForVisible || (!socket && !connecting && reconnectTimer === null)) {
           waitingForVisible = false;
@@ -463,6 +476,7 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
     [deps.win, PRESENCE_APP_FOCUS_EVENT, onAppFocus, false],
     [deps.win, 'pagehide', onPageHide, false],
     [deps.win, 'pageshow', onPageShow, false],
+    [deps.win, 'online', onOnline, false],
   ];
 
   const listen = (add: boolean): void => {

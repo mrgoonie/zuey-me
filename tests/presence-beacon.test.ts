@@ -99,14 +99,21 @@ class FakeSocket {
 
 interface Timer { id: number; at: number; fn: () => void; every: number | null }
 
-function harness(opts: { consent?: boolean; ticketStatus?: number; session?: Map<string, string>; store?: Map<string, string>; now?: number } = {}) {
+const b64url = (text: string) => btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** A ticket shaped like the issuer's (`base64url(payload).signature`); the beacon only reads `m`/`o`. */
+function fakeTicket(seq: number, member = false, owner = false): string {
+  return `${b64url(JSON.stringify({ k: 'key', c: true, m: member, o: owner, exp: 0, n: `n${seq}` }))}.sig${seq}`;
+}
+const FIRST_TICKET = fakeTicket(1);
+
+function harness(opts: { consent?: boolean; visible?: boolean; ticketStatus?: number; session?: Map<string, string>; store?: Map<string, string>; now?: number } = {}) {
   let now = opts.now ?? 1_000_000;
   let nextId = 1;
   let timers: Timer[] = [];
   const store = opts.store ?? new Map<string, string>();
   const session = opts.session ?? new Map<string, string>();
   let ticketSeq = 0;
-  const state = { consent: opts.consent ?? true, visible: true, ticketStatus: opts.ticketStatus ?? 200, pathname: '/articles/x', hash: '' };
+  const state = { consent: opts.consent ?? true, visible: opts.visible ?? true, member: false, ticketStatus: opts.ticketStatus ?? 200, pathname: '/articles/x', hash: '' };
   const sockets: FakeSocket[] = [];
   const fetches: Array<{ url: string; init: RequestInit }> = [];
   const win = new FakeTarget();
@@ -126,7 +133,7 @@ function harness(opts: { consent?: boolean; ticketStatus?: number; session?: Map
         return new Response(JSON.stringify({ success: false, error: { code: 'x', message: 'x' } }), { status: state.ticketStatus });
       }
       ticketSeq += 1;
-      const ticket = ticketSeq === 1 ? 'tkt.sig' : `tkt${ticketSeq}.sig`;
+      const ticket = fakeTicket(ticketSeq, state.member);
       return new Response(JSON.stringify({ success: true, data: { ticket, url: 'wss://presence.zuey.me/v1/connect', expiresAt: '' } }));
     },
     openSocket: (url, protocols, handlers) => {
@@ -224,7 +231,7 @@ describe('presence beacon', () => {
     expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
     expect(JSON.parse(String(init.body))).toEqual({ count: true, browserId: 'RandomPresenceId_1234567' });
     expect(s.url).toBe('wss://presence.zuey.me/v1/connect');
-    expect(s.protocols).toEqual(['zuey-presence.v1', 'tkt.sig']);
+    expect(s.protocols).toEqual(['zuey-presence.v1', FIRST_TICKET]);
     expect(s.sent).toEqual([{ t: 'hb', cat: 'reading' }]);
   });
 
@@ -302,7 +309,7 @@ describe('presence beacon', () => {
     await h.advance(30_000);
     expect(h.sockets).toHaveLength(2);
     expect(h.fetches).toHaveLength(1);
-    expect(h.last().protocols).toEqual(['zuey-presence.v1', 'tkt.sig']);
+    expect(h.last().protocols).toEqual(['zuey-presence.v1', FIRST_TICKET]);
   });
 
   it('reuses a cached ticket on the next page load in the same tab until 15 s before it expires', async () => {
@@ -316,7 +323,7 @@ describe('presence beacon', () => {
     const second = harness({ session, store, now: first.now() + 60_000 });
     await connected(second);
     expect(second.fetches).toHaveLength(0);
-    expect(second.last().protocols).toEqual(['zuey-presence.v1', 'tkt.sig']);
+    expect(second.last().protocols).toEqual(['zuey-presence.v1', FIRST_TICKET]);
     second.beacon.stop();
 
     const late = harness({ session, store, now: first.now() + PRESENCE_TICKET_TTL_MS - TICKET_REUSE_MARGIN_MS });
@@ -338,6 +345,77 @@ describe('presence beacon', () => {
     const garbled = harness({ session });
     await connected(garbled);
     expect(garbled.fetches).toHaveLength(1);
+  });
+
+  it('never caches member or owner tickets, so a sign-out in the tab cannot reuse them', async () => {
+    const h = harness();
+    h.state.member = true;
+    const s = await connected(h);
+    expect(s.protocols[1]).toBe(fakeTicket(1, true));
+    expect(h.session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(false);
+    s.serverClose();
+    await h.advance(RECONNECT_WAIT);
+    expect(h.fetches).toHaveLength(2);
+    // A member ticket planted in storage is ignored too.
+    h.session.set(PRESENCE_TICKET_STORAGE_KEY, JSON.stringify({
+      ticket: fakeTicket(9, true), url: 'wss://presence.zuey.me/v1/connect', exp: h.now() + 100_000, consent: true, kind: 'count', browserId: 'RandomPresenceId_1234567',
+    }));
+    h.last().serverOpen();
+    h.last().serverClose();
+    await h.advance(RECONNECT_WAIT);
+    expect(h.fetches).toHaveLength(3);
+  });
+
+  it('a tab opened in the background connects only once shown', async () => {
+    const h = harness({ visible: false });
+    h.beacon.start();
+    await h.advance(10 * 60_000);
+    expect(h.fetches).toHaveLength(0);
+    expect(h.sockets).toHaveLength(0);
+    h.setVisible(true);
+    await h.flush();
+    expect(h.sockets).toHaveLength(1);
+  });
+
+  it('starting without consent forgets any cached ticket', () => {
+    const session = new Map([[PRESENCE_TICKET_STORAGE_KEY, 'x']]);
+    const h = harness({ consent: false, session });
+    h.beacon.start();
+    expect(session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(false);
+  });
+
+  it('caches a fetched ticket even when the tab hid while it was in flight', async () => {
+    const h = harness();
+    h.beacon.start();
+    h.win.emit(new Event('pagehide')); // tears down before the ticket answer arrives
+    await h.flush();
+    expect(h.sockets).toHaveLength(0);
+    expect(h.session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(true);
+  });
+
+  it('showing the tab or coming back online restarts the failed-socket count', async () => {
+    for (const reset of ['visible', 'online'] as const) {
+      const h = harness();
+      h.beacon.start();
+      await h.flush();
+      for (let i = 0; i < MAX_FAILED_SOCKETS - 1; i++) {
+        h.last().serverClose();
+        await h.advance(RECONNECT_WAIT);
+      }
+      if (reset === 'online') h.win.emit(new Event('online'));
+      else {
+        h.state.visible = false;
+        h.doc.emit(new Event('visibilitychange'));
+        h.setVisible(true);
+      }
+      for (let i = 0; i < MAX_FAILED_SOCKETS - 1; i++) {
+        h.last().serverClose();
+        await h.advance(RECONNECT_WAIT);
+      }
+      expect(h.sockets).toHaveLength(2 * MAX_FAILED_SOCKETS - 1);
+      expect(h.timerCount()).toBeGreaterThan(0);
+      h.beacon.stop();
+    }
   });
 
   it('withdrawing consent forgets the cached ticket', async () => {

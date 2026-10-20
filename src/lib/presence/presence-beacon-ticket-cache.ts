@@ -2,7 +2,8 @@
  * Ticket handling for the presence beacon: validation of the ticket endpoint's answer and a per-tab
  * sessionStorage cache, so page loads and reconnects reuse one ticket instead of asking for a new one
  * each time. A cached ticket is reused only while it has TICKET_REUSE_MARGIN_MS left and was issued for
- * the same counting context (consent granted, counting kind, same browser id). Storage failures are
+ * the same counting context (consent granted, counting kind, same browser id), and only guest tickets
+ * are cached at all (see isGuestTicket). Storage failures are
  * swallowed: without storage the beacon simply asks for a fresh ticket.
  */
 import { PRESENCE_TICKET_PATTERN } from './contract';
@@ -41,6 +42,24 @@ export function parseTicket(body: unknown): TicketData | null {
   return { ticket: data.ticket, url: data.url };
 }
 
+/**
+ * True only for a guest ticket: its payload says neither member (`m`) nor owner (`o`). Member and owner
+ * tickets are never cached, because a cached ticket would outlive a sign-out or account switch in the tab.
+ * The payload is read without verifying it (the Worker verifies); anything unreadable counts as not a guest.
+ */
+export function isGuestTicket(ticket: string): boolean {
+  const body = ticket.split('.')[0] ?? '';
+  if (!/^[A-Za-z0-9_-]+$/.test(body)) return false;
+  let payload: unknown;
+  try {
+    const bin = atob(body.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (body.length % 4)) % 4));
+    payload = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))));
+  } catch {
+    return false;
+  }
+  return typeof payload === 'object' && payload !== null && 'm' in payload && payload.m === false && 'o' in payload && payload.o === false;
+}
+
 export function parseCachedTicket(raw: string | null): CachedTicket | null {
   if (!raw) return null;
   let v: unknown;
@@ -54,12 +73,14 @@ export function parseCachedTicket(raw: string | null): CachedTicket | null {
   if (!('url' in v) || typeof v.url !== 'string' || !isWsUrl(v.url)) return null;
   if (!('exp' in v) || typeof v.exp !== 'number' || !('browserId' in v) || typeof v.browserId !== 'string') return null;
   if (!('consent' in v) || v.consent !== true || !('kind' in v) || v.kind !== 'count') return null;
+  if (!isGuestTicket(v.ticket)) return null;
   return { ticket: v.ticket, url: v.url, exp: v.exp, consent: true, kind: 'count', browserId: v.browserId };
 }
 
 export interface TicketCache {
   /** The cached ticket for `browserId` when it still has TICKET_REUSE_MARGIN_MS left, else null. */
   get(browserId: string): CachedTicket | null;
+  /** Stores a guest ticket; member and owner tickets are ignored. */
   put(ticket: CachedTicket): void;
   /** Drops the cached ticket (refused socket, consent withdrawn). */
   forget(): void;
@@ -84,6 +105,7 @@ export function createTicketCache(storage: () => SessionStorageLike | null, now:
       }
     },
     put(ticket) {
+      if (!isGuestTicket(ticket.ticket)) return;
       try {
         store()?.setItem(PRESENCE_TICKET_STORAGE_KEY, JSON.stringify(ticket));
       } catch {
