@@ -9,7 +9,7 @@
     "build": "astro check && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "test": "vitest run",
+    "test": "bun test",
     "cli": "node packages/cli/bin/zuey.js",
     "agent-eval:fetch": "bun tests/agent-eval/run-fetch.ts",
     "agent-eval:mcp": "bun tests/agent-eval/run-mcp.ts",
