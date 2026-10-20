@@ -51,8 +51,13 @@ describe('page weight budget', () => {
     for (const d of sans) expect(d).toMatch(/Plus Jakarta Sans Fallback['"], ['"]Plus Jakarta Sans Fallback Roboto['"]/);
     for (const d of serif) expect(d).toContain('Fraunces Fallback');
     const css = await read('../src/styles/global.css');
+    // Each fallback has a regular face and a real bold face: a synthesized bold is narrower than the web font's
+    // bold, so bold titles and badges would rewrap (and shift the page) when the web font arrives.
     for (const face of ['Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', 'Fraunces Fallback']) {
-      expect(css).toMatch(new RegExp(`font-family: '${face}';\\s*src: local\\('[A-Za-z]+'\\);\\s*size-adjust`));
+      const faces = css.match(new RegExp(`@font-face \\{ font-family: '${face}'; [^}]+\\}`, 'g')) ?? [];
+      expect(faces.some(f => /src: local\('[A-Za-z]+'\); font-weight: 100 /.test(f))).toBe(true);
+      expect(faces.some(f => /src: local\('[A-Za-z]+ Bold'\)[^;]*; font-weight: 550 /.test(f))).toBe(true);
+      for (const f of faces) expect(f).toMatch(/size-adjust: [\d.]+%; ascent-override: [\d.]+%; descent-override: [\d.]+%; line-gap-override: 0%/);
     }
   });
 
