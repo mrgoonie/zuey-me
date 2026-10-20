@@ -27,8 +27,7 @@ import { Dock } from './Dock';
 import {
   DEFAULT_LOOK, applyLook, glassEnabled, imageFileToWallpaper, readLook, readWallImage, resolvedTheme, writeLook, writeWallImage, type Look,
 } from './look';
-import { LiquidGlassFilters } from './liquid-glass-filters';
-import { useGlassTier } from './liquid-glass';
+import { LiquidGlass } from './liquid-glass-filters';
 import { MenuBar, type MenuItem } from './MenuBar';
 import { MobileHome } from './MobileHome';
 import { osStrings } from './os-i18n';
@@ -191,8 +190,6 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   }, [changeLook, s.look]);
 
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
-  // Liquid Glass tier for the chrome; stays `off` until hydrated so it never touches first paint.
-  const glass = useGlassTier(ready && glassEnabled(look));
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
 
   // The video wallpaper (~3 MB) is attached once the page has loaded, so it never competes with first paint,
@@ -606,9 +603,12 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     <div
       ref={rootRef}
       className={`os-root${anyVisible ? ' has-sheet' : ''}${expo && !expo.leaving ? ' is-expo' : ''}`}
-      data-glass={glass}
+      // Server and first paint are the plain chrome. The value never changes here, so React never
+      // rewrites it; <LiquidGlass> updates the attribute itself.
+      data-glass="off"
     >
-      {glass === 'liquid' && <LiquidGlassFilters />}
+      {/* Writes the Liquid Glass tier onto this root itself, so a tier change never re-renders the desktop. */}
+      <LiquidGlass target={rootRef} enabled={ready && glassEnabled(look)} reducedMotion={reduced} />
       <a href="#os-screen" className="os-skip">{s.skip}</a>
 
       <div className="os-desk" aria-hidden="true">

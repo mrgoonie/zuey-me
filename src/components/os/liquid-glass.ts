@@ -1,10 +1,8 @@
-import { useEffect, useState } from 'react';
-
 /**
  * Liquid Glass material for the Zuey OS chrome (menubar, dock, window chrome, Appearance window).
  *
- * The tier is written to `.os-root[data-glass]` once the island has hydrated, so the first paint is
- * the plain chrome and the glass never competes with LCP:
+ * The tier is written to `.os-root[data-glass]` by <LiquidGlass> (liquid-glass-filters.tsx) once the
+ * island has hydrated, so the first paint is the plain chrome and the glass never competes with LCP:
  * - `liquid`: Chromium on a desktop-sized, fine-pointer screen. Real refraction through an SVG
  *   `feDisplacementMap` referenced from `backdrop-filter: url(#…)` (only Chromium applies SVG
  *   filters to the backdrop), plus the specular highlight.
@@ -26,8 +24,8 @@ export interface GlassCapabilities {
   reducedTransparency: boolean;
 }
 
+/** Media queries the tier follows besides reduced motion (which ZueyOS already tracks). */
 export const GLASS_QUERIES = {
-  reducedMotion: '(prefers-reduced-motion: reduce)',
   reducedTransparency: '(prefers-reduced-transparency: reduce)',
   compact: '(max-width: 767px), (pointer: coarse)',
 } as const;
@@ -60,36 +58,9 @@ function supportsBackdrop(win: Window): boolean {
   }
 }
 
-function matches(win: Window, query: string): boolean {
-  return typeof win.matchMedia === 'function' && win.matchMedia(query).matches;
-}
-
-/** Reads the capabilities from the live browser. Client-only. */
-export function readGlassCapabilities(win: Window = window): GlassCapabilities {
-  return {
-    chromium: isChromiumEngine(win.navigator),
-    backdropFilter: supportsBackdrop(win),
-    compact: matches(win, GLASS_QUERIES.compact),
-    reducedMotion: matches(win, GLASS_QUERIES.reducedMotion),
-    reducedTransparency: matches(win, GLASS_QUERIES.reducedTransparency),
-  };
-}
-
-/**
- * Live glass tier. Starts `off` (also during SSR and hydration) and follows the switch and the
- * media queries afterwards, so turning on reduced motion or transparency removes the effect at once.
- */
-export function useGlassTier(enabled: boolean): GlassTier {
-  const [tier, setTier] = useState<GlassTier>('off');
-  useEffect(() => {
-    const update = () => setTier(glassTier(enabled, readGlassCapabilities(window)));
-    update();
-    if (typeof window.matchMedia !== 'function') return;
-    const lists = Object.values(GLASS_QUERIES).map(q => window.matchMedia(q));
-    for (const mq of lists) mq.addEventListener('change', update);
-    return () => { for (const mq of lists) mq.removeEventListener('change', update); };
-  }, [enabled]);
-  return tier;
+/** Engine capabilities, fixed for the visit. Client-only. */
+export function readEngineCapabilities(win: Window = window): Pick<GlassCapabilities, 'chromium' | 'backdropFilter'> {
+  return { chromium: isChromiumEngine(win.navigator), backdropFilter: supportsBackdrop(win) };
 }
 
 /** One refraction lens: the edge band (fraction of width and height) and the bend in px. */

@@ -4,9 +4,9 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { Root } from 'react-dom/client';
 import type { Profile } from '../src/db/types';
 import {
-  GLASS_LENSES, displacementMap, glassTier, isChromiumEngine, readGlassCapabilities, type GlassCapabilities,
+  GLASS_LENSES, displacementMap, glassTier, isChromiumEngine, readEngineCapabilities, type GlassCapabilities,
 } from '../src/components/os/liquid-glass';
-import { DEFAULT_LOOK, LOOK_KEY, glassEnabled, parseLook } from '../src/components/os/look';
+import { ACCENTS, DEFAULT_LOOK, LOOK_KEY, glassEnabled, parseLook } from '../src/components/os/look';
 
 // Liquid Glass tiers for the Zuey OS chrome: capability tiering, the Appearance switch (persisted
 // with the look), the reduced-motion / reduced-transparency off switches, and text contrast on the
@@ -115,24 +115,44 @@ function contrast(a: Rgb, b: Rgb): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-// The brightest blurred backdrop behind the chrome per theme: wallpaper bases with their glows
-// composited on top (os.css, "wallpaper"), and the gradient wallpaper glowing in every accent.
-const ACCENT_COLORS: Rgb[] = ['#c4532a', '#c2416b', '#6b4fd6', '#2f7fa8', '#3e8a5c', '#b8862b'].map(hex);
-const DARK_WALLS: Rgb[] = [
-  hex('#2a1d16'), over([240, 140, 90], 0.55, hex('#6b3140')), over([120, 170, 110], 0.3, hex('#17271d')),
-  over([80, 160, 210], 0.35, hex('#0f2233')), over([80, 220, 170], 0.32, hex('#0b1020')), over([140, 110, 240], 0.34, hex('#0b1020')),
-  ...ACCENT_COLORS.map(a => over(a, 0.28, hex('#2a1d16'))),
-];
-const LIGHT_WALLS: Rgb[] = [
-  hex('#eadccf'), over([240, 150, 110], 0.5, hex('#f0b7a4')), hex('#cfe0c4'), hex('#bfd9ea'),
-  ...ACCENT_COLORS.map(a => over(a, 0.28, hex('#f6ebe1'))),
-];
+/** Every rule in os.css (comments dropped), with nested @media / @supports rules flattened. */
+const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ selector: m[1].trim(), body: m[2] }));
+const tokens = { dark: block(':root'), light: block(":root[data-zt='light']") };
+
+/**
+ * Blurred backdrops behind the chrome, read from the wallpaper rules in os.css: every base colour of each
+ * wallpaper, and each glow (rgba or accent mix, in every accent) composited over every base colour.
+ * Light theme: the light wallpaper overrides plus the shared rules built on the theme's wall tokens.
+ */
+function wallpaperBackdrops(theme: 'dark' | 'light'): Rgb[] {
+  const walls = [hex(prop(tokens[theme], '--os-wall-1')), hex(prop(tokens[theme], '--os-wall-2'))];
+  const values = [...css.matchAll(/^:root(\[data-zt='light'\])?(\[data-wp='\w+'\])? \{ --os-wp: (.+); \}$/gm)]
+    .filter(m => m[1] ? theme === 'light' : theme === 'dark' || m[2] === undefined || m[3].includes('var(--os-wall'))
+    .map(m => m[3]);
+  expect(values.length).toBeGreaterThan(theme === 'dark' ? 6 : 4);
+  const out: Rgb[] = [];
+  for (const value of values) {
+    const bases = [...value.matchAll(/#[0-9a-f]{6}/gi)].map(m => hex(m[0]));
+    if (value.includes('var(--os-wall')) bases.push(...walls);
+    const glows = [...value.matchAll(/rgba\([^)]+\)/g)].map(m => rgba(m[0]));
+    for (const m of value.matchAll(/var\(--accent(-hi)?\) (\d+)%/g)) {
+      for (const [accent, , hi] of Object.values(ACCENTS)) glows.push({ rgb: hex(m[1] ? hi : accent), a: Number(m[2]) / 100 });
+    }
+    for (const base of bases) out.push(base, ...glows.map(g => over(g.rgb, g.a, base)));
+  }
+  return out;
+}
+const px = (value: string, re: RegExp): number => {
+  const m = re.exec(value);
+  if (!m) throw new Error(`no ${re} in ${value}`);
+  return Number(m[1]);
+};
 
 describe('text contrast on glass', () => {
   const live = ".os-root:is([data-glass='liquid'], [data-glass='frost'])";
   const themes = [
-    { name: 'dark', root: block(':root'), glass: block(live), sheen: '--lg-sheen-dark', walls: DARK_WALLS },
-    { name: 'light', root: block(":root[data-zt='light']"), glass: block(`:root[data-zt='light'] ${live}`), sheen: '--lg-sheen-light', walls: LIGHT_WALLS },
+    { name: 'dark', root: tokens.dark, glass: block(live), sheen: '--lg-sheen-dark', walls: wallpaperBackdrops('dark') },
+    { name: 'light', root: tokens.light, glass: block(`:root[data-zt='light'] ${live}`), sheen: '--lg-sheen-light', walls: wallpaperBackdrops('light') },
   ];
   const sheenPeak = (name: string) => rgba(prop(block(live), name)).a;
   const menubarSaturation = Number(/saturate\(([\d.]+)\)/.exec(prop(block(`${live} .os-menubar`), 'backdrop-filter'))?.[1]);
@@ -153,27 +173,78 @@ describe('text contrast on glass', () => {
     }
   });
 
-  test('window titles stay AA on the refracting title bars, even over black or white', () => {
-    // Only near-opaque windows get the thinned, refracting title bar; translucent glass windows keep their full tint.
-    const rule = /\.os-root\[data-glass='liquid'\] (\.osw:is\([^)]*\)) > \.osw-bar \{ background-color: color-mix\(in srgb, var\(--osw-bg\) (\d+)%/.exec(css);
-    expect(rule?.[1]).toBe(".osw:is(.osw--paper, .osw--stage, [data-app='ai'])");
-    const mix = Number(rule?.[2]) / 100;
-    expect(mix).toBeGreaterThan(0);
-    const light = { text: hex('#231f1c'), sheen: sheenPeak('--lg-sheen-light') };
-    const surfaces = [
-      { ...light, bg: rgba(prop(block('.osw--paper'), '--osw-bg')) },
-      { ...light, bg: rgba(prop(block(".osw[data-app='ai']"), '--os-glass')) },
-      { text: hex('#f5efeb'), sheen: sheenPeak('--lg-sheen-dark'), bg: rgba(prop(block('.osw--stage'), '--osw-bg')) },
-    ];
+  test('window titles keep at least the plain chrome contrast: the highlight and the thin rims stay off the text', () => {
+    // Title line box inside the 42px bar: 12px type on the root's 1.5 line height, centred.
+    const barHeight = px(prop(block('.osw-bar'), 'height'), /^(\d+)px$/);
+    const lineHeight = Number(prop(block('.os-root'), 'line-height'));
+    const fontSize = px(prop(block('.osw-title'), 'font'), /(\d+)px/);
+    const textTop = (barHeight - fontSize * lineHeight) / 2;
+    const textBottom = barHeight - textTop;
+
+    // Both live tiers: the title-bar highlight has faded out before the text starts.
+    for (const cap of ['--lg-cap-dark', '--lg-cap-light']) expect(px(prop(block(live), cap), /0\) (\d+)px\)$/)).toBeLessThanOrEqual(textTop);
+
+    // Liquid: near-opaque windows tint their title bar with the full window colour across the text band,
+    // exactly the tint the plain frame puts behind the title, and thin it only at the top and bottom rims.
+    const titleRule = rules.find(r => r.selector === ".os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-bar");
+    const tint = prop(titleRule?.body ?? '', 'background-image');
+    expect(px(tint, /var\(--osw-bg\) (\d+)px, var\(--osw-bg\) calc/)).toBeLessThanOrEqual(textTop);
+    expect(barHeight - px(tint, /var\(--osw-bg\) calc\(100% - (\d+)px\)/)).toBeGreaterThanOrEqual(textBottom);
+
+    // That tint alone, with the title's own opacity, is AA even over black or white.
     const titleOpacity = Number(prop(block('.osw-title'), 'opacity'));
+    const surfaces = [
+      { text: hex('#231f1c'), bg: rgba(prop(block('.osw--paper'), '--osw-bg')) },
+      { text: hex('#1c1917'), bg: rgba(prop(block(".osw[data-app='ai']"), '--os-glass')) },
+      { text: hex('#f5efeb'), bg: rgba(prop(block('.osw--stage'), '--osw-bg')) },
+    ];
     for (const s of surfaces) {
-      expect(s.bg.a).toBeGreaterThanOrEqual(0.95);
       for (const behind of [[0, 0, 0], [255, 255, 255], hex('#f5efeb')] satisfies Rgb[]) {
-        const bar = over(s.bg.rgb, s.bg.a * mix, behind);
-        for (const bg of [bar, over([255, 255, 255], s.sheen, bar)]) {
-          expect(contrast(over(s.text, titleOpacity, bg), bg)).toBeGreaterThanOrEqual(4.5);
-        }
+        const bg = over(s.bg.rgb, s.bg.a, behind);
+        expect(contrast(over(s.text, titleOpacity, bg), bg)).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+
+  test('the Appearance switch reads at 3:1 when off and when on', () => {
+    const track = block('.os-ap-switch');
+    const thumb = block('.os-ap-switch > span');
+    expect(prop(track, 'box-shadow')).toBe('inset 0 0 0 2px var(--os-muted)');
+    expect(prop(thumb, 'background')).toBe('var(--os-muted)');
+    // Off: the muted ring and thumb against the glass panel, whatever is behind the panel.
+    for (const theme of ['dark', 'light'] as const) {
+      const muted = hex(prop(tokens[theme], '--os-muted'));
+      const panel = rgba(prop(tokens[theme], '--os-glass'));
+      for (const behind of [[0, 0, 0], [255, 255, 255]] satisfies Rgb[]) {
+        expect({ theme, ratio: contrast(muted, over(panel.rgb, panel.a, behind)) >= 3 }).toEqual({ theme, ratio: true });
+      }
+    }
+    // On: the white thumb against the accent track, in every accent.
+    expect(prop(block(".os-ap-switch[aria-checked='true'] > span"), 'background')).toBe('#fff');
+    for (const [accent] of Object.values(ACCENTS)) expect(contrast([255, 255, 255], hex(accent))).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('glass never breaks window contents or dragging', () => {
+  test('no rule gives a window body a containing block for fixed overlays', () => {
+    // backdrop-filter, filter, transform and friends on .osw-body would trap `position: fixed` modals
+    // (the referral QR code) inside the scrolling body, off-screen.
+    const trapping = /(?<![\w-])(?:-webkit-)?(backdrop-filter|filter|transform|will-change|perspective|contain)\s*:/;
+    const bodyRules = rules.filter(r => r.selector.split(',').some(s => /\.osw-body(?::[\w-]+(?:\([^)]*\))?)*$/.test(s.trim())));
+    expect(bodyRules.some(r => r.selector.includes("[data-glass='liquid']"))).toBe(true);
+    for (const r of bodyRules) expect({ selector: r.selector, trapping: trapping.exec(r.body)?.[1] ?? null }).toEqual({ selector: r.selector, trapping: null });
+  });
+
+  test('a window being dragged or resized drops its refraction lens and keeps the blur', () => {
+    const lensed = rules.filter(r => r.selector.includes('.osw') && /url\(#zos-lg-(?:panel|title)\)/.test(r.body));
+    expect(lensed.length).toBe(2);
+    for (const r of lensed) {
+      const [frame, ...child] = r.selector.split(' > ');
+      const selector = [`${frame}:is(.is-dragging, .is-resizing)`, ...child].join(' > ');
+      const moving = rules.find(m => m.selector === selector);
+      expect(moving?.selector).toBe(selector);
+      const still = prop(r.body, 'backdrop-filter');
+      expect(prop(moving?.body ?? '', 'backdrop-filter')).toBe(still.replace(/\s*url\([^)]*\)/, ''));
     }
   });
 });
@@ -284,11 +355,11 @@ describe('Liquid Glass in Zuey OS', () => {
     globalThis.fetch = (async (_input: RequestInfo | URL) => new Response(JSON.stringify({ success: false, error: { code: 'unavailable', message: 'x' } }), { status: 503, headers: { 'content-type': 'application/json' } })) as typeof fetch;
   }
 
-  test('capabilities are read from the live browser', () => {
+  test('engine capabilities are read from the live browser', () => {
     setChromium(true);
-    expect(readGlassCapabilities(window)).toEqual(DESKTOP_CHROMIUM);
+    expect(readEngineCapabilities(window)).toEqual({ chromium: true, backdropFilter: true });
     setChromium(false);
-    expect(readGlassCapabilities(window).chromium).toBe(false);
+    expect(readEngineCapabilities(window).chromium).toBe(false);
   });
 
   test('Chromium renders the refraction filters; other engines get the fallback without them', async () => {

@@ -15,8 +15,8 @@ export interface Look {
   /** Dim over photo and video wallpapers, 0–80 (%). */
   dim: number;
   /**
-   * Liquid Glass chrome (see liquid-glass.ts). Only stored once the visitor flips the switch, so looks
-   * saved before the switch existed keep parsing unchanged; absent means on.
+   * Liquid Glass chrome (see liquid-glass.ts). Absent in looks saved before the switch existed, which
+   * keep parsing unchanged and mean on; written once the visitor flips the switch or resets the look.
    */
   glass?: boolean;
 }

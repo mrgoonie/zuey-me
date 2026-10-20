@@ -1,5 +1,6 @@
-import React from 'react';
-import { GLASS_LENSES, displacementMap, type GlassLens } from './liquid-glass';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
+import { useMediaQuery } from '../home/motion';
+import { GLASS_LENSES, GLASS_QUERIES, displacementMap, glassTier, readEngineCapabilities, type GlassCapabilities, type GlassLens, type GlassTier } from './liquid-glass';
 
 const Lens: React.FC<{ lens: GlassLens }> = ({ lens }) => (
   <filter id={lens.id} x="0" y="0" width="1" height="1" colorInterpolationFilters="sRGB">
@@ -10,14 +11,38 @@ const Lens: React.FC<{ lens: GlassLens }> = ({ lens }) => (
   </filter>
 );
 
+interface LiquidGlassProps {
+  /** The `.os-root` element that carries `data-glass` for os.css. */
+  target: React.RefObject<HTMLElement | null>;
+  /** The Appearance switch, already false until the saved look has been read. */
+  enabled: boolean;
+  reducedMotion: boolean;
+}
+
 /**
- * The refraction filters that `backdrop-filter: url(#zos-lg-*)` points at in os.css. Rendered by
- * ZueyOS only on the `liquid` tier, so other browsers and phones never download or parse them.
+ * Picks the Liquid Glass tier and writes it to `target[data-glass]` directly, so a tier change only
+ * re-renders this component, never the desktop around it. On the `liquid` tier it also renders the
+ * refraction filters that `backdrop-filter: url(#zos-lg-*)` points at in os.css; other browsers and
+ * phones never get them.
  */
-export const LiquidGlassFilters: React.FC = () => (
-  <svg className="os-lg-defs" width="0" height="0" aria-hidden="true" focusable="false">
-    <defs>
-      {Object.values(GLASS_LENSES).map(lens => <Lens key={lens.id} lens={lens} />)}
-    </defs>
-  </svg>
-);
+export const LiquidGlass: React.FC<LiquidGlassProps> = ({ target, enabled, reducedMotion }) => {
+  const compact = useMediaQuery(GLASS_QUERIES.compact);
+  const reducedTransparency = useMediaQuery(GLASS_QUERIES.reducedTransparency);
+  const [engine, setEngine] = useState<Pick<GlassCapabilities, 'chromium' | 'backdropFilter'> | null>(null);
+  useEffect(() => setEngine(readEngineCapabilities(window)), []);
+
+  const tier: GlassTier = engine ? glassTier(enabled, { ...engine, compact, reducedMotion, reducedTransparency }) : 'off';
+  useLayoutEffect(() => {
+    const el = target.current;
+    if (el) el.dataset.glass = tier;
+  }, [target, tier]);
+
+  if (tier !== 'liquid') return null;
+  return (
+    <svg className="os-lg-defs" width="0" height="0" aria-hidden="true" focusable="false">
+      <defs>
+        {Object.values(GLASS_LENSES).map(lens => <Lens key={lens.id} lens={lens} />)}
+      </defs>
+    </svg>
+  );
+};

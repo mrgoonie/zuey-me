@@ -240,10 +240,10 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .os-ap-hint { font-size: 12px; color: var(--os-muted); margin: 8px 0 0; }
 .os-ap-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .os-ap-switch-row .os-ap-hint { margin: 0; }
-.os-ap-switch { position: relative; flex: none; width: 44px; height: 26px; border-radius: 999px; background: color-mix(in srgb, var(--os-muted) 45%, transparent); box-shadow: inset 0 0 0 1px var(--os-line-2); }
-.os-ap-switch > span { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 .5px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .35); }
+.os-ap-switch { position: relative; flex: none; width: 44px; height: 26px; border-radius: 999px; background: transparent; box-shadow: inset 0 0 0 2px var(--os-muted); }
+.os-ap-switch > span { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--os-muted); }
 .os-ap-switch[aria-checked='true'] { background: var(--accent); box-shadow: none; }
-.os-ap-switch[aria-checked='true'] > span { transform: translateX(18px); }
+.os-ap-switch[aria-checked='true'] > span { background: #fff; box-shadow: 0 0 0 .5px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .35); transform: translateX(18px); }
 .os-ap-dim { display: grid; gap: 6px; margin-top: 14px; }
 .os-ap-dim > span { display: flex; justify-content: space-between; font-weight: 600; }
 .os-ap-dim output { font: 600 12px var(--os-mono); color: var(--os-muted); }
@@ -393,8 +393,9 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .os-btn:focus-visible { outline: 2px solid var(--os-acc-fg); outline-offset: 2px; }
 .os-ap-dim input:focus-visible { outline: 2px solid var(--os-acc-fg); outline-offset: 4px; border-radius: 4px; }
 .os-ap-switch { transition: background-color var(--motion-dur-fast) var(--motion-ease-standard), box-shadow var(--motion-dur-fast) var(--motion-ease-standard); }
-.os-ap-switch > span { transition: transform var(--motion-dur-base) var(--motion-ease-out); }
-.os-ap-switch:hover { box-shadow: inset 0 0 0 1px var(--os-acc-fg); }
+.os-ap-switch > span { transition: transform var(--motion-dur-base) var(--motion-ease-out), background-color var(--motion-dur-fast) var(--motion-ease-standard); }
+.os-ap-switch:hover { box-shadow: inset 0 0 0 2px var(--os-acc-fg); }
+.os-ap-switch:not([aria-checked='true']):hover > span { background: var(--os-acc-fg); }
 .os-ap-switch[aria-checked='true']:hover { background: var(--accent-ink); box-shadow: none; }
 .os-ap-switch:active > span { transform: scale(.9); }
 .os-ap-switch[aria-checked='true']:active > span { transform: translateX(18px) scale(.9); }
@@ -408,20 +409,27 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .zf-toast--error .zf-toast-ic { color: #e5484d; }
 @media (max-width: 767px) { .zf-toaster { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); } }
 
-/* ---------- liquid glass: tier on .os-root[data-glass], set after hydration by liquid-glass.ts ---------- */
+/* ---------- liquid glass: tier on .os-root[data-glass], set after hydration by liquid-glass-filters.tsx ---------- */
 /* Both live tiers (liquid, frost): specular rim, a top sheen and more saturation behind the bars.
-   Menu bar tints only get denser than the plain chrome; title-bar text is checked for AA in
-   tests/zueyos-liquid-glass.test.ts. Phone sheets are left alone. `off` (or none) is the plain chrome. */
+   Menu bar tints only get denser than the plain chrome; title text never loses contrast against the
+   plain chrome (tests/zueyos-liquid-glass.test.ts). Phone sheets are left alone. `off` (or none) is the plain chrome.
+   No rule here may give .osw-body a backdrop-filter, filter or transform: that would make it the containing
+   block of `position: fixed` overlays opened inside a window (QR code modal) and push them off-screen. */
 .os-lg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .os-root:is([data-glass='liquid'], [data-glass='frost']) {
   --lg-sheen-dark: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0) 55%);
   --lg-sheen-light: linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 55%);
   --lg-sheen: var(--lg-sheen-dark);
+  /* Title bars: the same highlight, ending above the title text so it never washes it out. */
+  --lg-cap-dark: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0) 10px);
+  --lg-cap-light: linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 10px);
+  --lg-cap: var(--lg-cap-dark);
   --lg-rim: inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 0 0 1px rgba(255, 255, 255, .05);
   --os-bar-bg: rgba(18, 15, 13, .72);
 }
 :root[data-zt='light'] .os-root:is([data-glass='liquid'], [data-glass='frost']) {
   --lg-sheen: var(--lg-sheen-light);
+  --lg-cap: var(--lg-cap-light);
   --lg-rim: inset 0 1px 0 rgba(255, 255, 255, .95), inset 0 0 0 1px rgba(255, 255, 255, .4);
   --os-bar-bg: rgba(252, 248, 244, .76);
 }
@@ -431,22 +439,37 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
   /* Desktop windows and menus: the rim joins the shadow token, so focus, drag and Exposé rings keep working. */
   .os-root:is([data-glass='liquid'], [data-glass='frost']) :is(.osw, .os-pop) { --os-shadow: var(--lg-rim), 0 30px 60px -20px rgba(0, 0, 0, .65), 0 10px 20px -10px rgba(0, 0, 0, .5); }
   :root[data-zt='light'] .os-root:is([data-glass='liquid'], [data-glass='frost']) :is(.osw, .os-pop) { --os-shadow: var(--lg-rim), 0 30px 60px -24px rgba(70, 45, 25, .32), 0 10px 20px -12px rgba(70, 45, 25, .22); }
-  .os-root:is([data-glass='liquid'], [data-glass='frost']) .osw:is(.osw--paper, [data-app='ai']) { --lg-sheen: var(--lg-sheen-light); }
-  .os-root:is([data-glass='liquid'], [data-glass='frost']) .osw--stage { --lg-sheen: var(--lg-sheen-dark); }
-  .os-root:is([data-glass='liquid'], [data-glass='frost']) .osw-bar { background-image: var(--lg-sheen); }
+  .os-root:is([data-glass='liquid'], [data-glass='frost']) .osw:is(.osw--paper, [data-app='ai']) { --lg-cap: var(--lg-cap-light); }
+  .os-root:is([data-glass='liquid'], [data-glass='frost']) .osw--stage { --lg-cap: var(--lg-cap-dark); }
+  .os-root:is([data-glass='liquid'], [data-glass='frost']) .osw-bar { background-image: var(--lg-cap); }
 }
 /* Liquid (Chromium desktop only): the backdrop is bent through the SVG lenses in liquid-glass-filters.tsx.
-   Near-opaque windows (paper, stage, chat) move their fill and blur to the body, so the title bar sees and
-   refracts the desktop behind it; translucent glass windows (Appearance, Activity Monitor) refract as one pane.
-   Reduced transparency is handled by the tier itself (the attribute drops to `off`). */
+   Near-opaque windows (paper, stage, chat) move their fill and blur to the title bar, so it sees and refracts
+   the desktop behind it; translucent glass windows (Appearance, Activity Monitor) refract as one pane.
+   The title bar is thin only at its top and bottom rims and keeps the full window tint behind the title.
+   While a window is dragged or resized the lens is dropped (blur only), and while it fades or flies
+   (`is-anim`, set by OsWindow) the frame takes its plain frost back. Reduced transparency is handled by
+   the tier itself (the attribute drops to `off`). */
 @media (min-width: 768px) and (prefers-reduced-motion: no-preference) {
   .os-root[data-glass='liquid'] .os-menubar { backdrop-filter: blur(8px) url(#zos-lg-bar) saturate(1.7); }
   .os-root[data-glass='liquid'] .os-dock { backdrop-filter: blur(6px) url(#zos-lg-dock) saturate(1.8); }
   .os-root[data-glass='liquid'] .osw--glass:not([data-app='ai']) { backdrop-filter: blur(14px) url(#zos-lg-panel) saturate(1.5); }
+  .os-root[data-glass='liquid'] .osw--glass:not([data-app='ai']):is(.is-dragging, .is-resizing) { backdrop-filter: blur(14px) saturate(1.5); }
   .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-bar { background-color: color-mix(in srgb, var(--osw-bg) 88%, transparent); backdrop-filter: blur(8px) url(#zos-lg-title) saturate(1.5); }
-  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-bar:hover { background-color: color-mix(in srgb, var(--osw-bg) 92%, transparent); }
-  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-body { background: var(--osw-bg); backdrop-filter: blur(24px) saturate(1.3); -webkit-backdrop-filter: blur(24px) saturate(1.3); }
+  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-bar {
+    background-color: transparent;
+    background-image: var(--lg-cap), linear-gradient(180deg, color-mix(in srgb, var(--osw-bg) 72%, transparent), var(--osw-bg) 12px, var(--osw-bg) calc(100% - 12px), color-mix(in srgb, var(--osw-bg) 72%, transparent));
+    backdrop-filter: blur(8px) url(#zos-lg-title) saturate(1.5);
+  }
+  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']):is(.is-dragging, .is-resizing) > .osw-bar { backdrop-filter: blur(8px) saturate(1.5); }
+  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-body { background: var(--osw-bg); }
+  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']).is-anim { background: var(--osw-bg); backdrop-filter: blur(24px) saturate(1.3); -webkit-backdrop-filter: blur(24px) saturate(1.3); }
+  .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']).is-anim > .osw-bar { background-image: var(--lg-cap); backdrop-filter: none; }
+  /* With no blur under it, the body's last few percent of see-through would show the windows behind
+     it sharply; drop the alpha where relative colours are supported. */
+  @supports (color: rgb(from red r g b)) {
+    .os-root[data-glass='liquid'] .osw:is(.osw--paper, .osw--stage, [data-app='ai']) > .osw-body { background: rgb(from var(--osw-bg) r g b / 1); }
+  }
 }
 
 /* Reduced motion: every token duration drops to zero, so token-driven transitions and the
