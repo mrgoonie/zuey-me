@@ -9,6 +9,8 @@ import { parseReadsList } from '../src/components/reads/reads-api-client';
 import { parseLab200Snapshot } from '../src/components/lab200/lab200-api-client';
 import { lab200OpenApi } from '../src/lib/lab200/openapi';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
+import { AMBIENT_VIDEO_SCRIPT, FONT_LOADER_SCRIPT, FONTS_URL } from '../src/lib/page/deferred-asset-scripts';
+import { RemotePanel } from '../src/components/os/remote-panel-data';
 
 const read = (path: string) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -26,24 +28,32 @@ describe('page weight budget', () => {
     }
   });
 
-  test('fonts and the ambient video stay off the critical path', async () => {
-    const layout = await read('../src/layouts/Layout.astro');
-    expect(layout).toContain('<script is:inline set:html={FONT_LOADER_SCRIPT} />');
-    expect(layout).toContain("addEventListener('load',f,{once:true})");
-    expect(layout).not.toMatch(/<link rel="stylesheet" href=\{FONTS_URL\} \/>\s*(?!<\/noscript>)/);
-    expect(layout).toContain('preload="none"');
-    expect(layout).not.toMatch(/<video[^>]*\sautoplay/);
-    expect(layout).toContain("matchMedia('(min-width: 768px)')");
-    expect(layout).not.toContain('cdn.zuey.me/avatar.png');
+  test('the homepage 200lab fonts load non-blocking', async () => {
     const index = await read('../src/pages/index.astro');
     for (const link of index.match(/<link[^>]*fonts\.googleapis\.com\/css2[^>]*>/g) ?? []) expect(link).toContain('media="print"');
   });
 
-  test('web-font fallbacks are metric-matched so the swap does not shift layout', async () => {
+  test('the layout loads web fonts through the deferred loader and never autoplays the video', async () => {
+    const layout = await read('../src/layouts/Layout.astro');
+    expect(layout).toContain('set:html={FONT_LOADER_SCRIPT}');
+    expect(layout).not.toMatch(/<link rel="stylesheet" href=\{FONTS_URL\} \/>\s*(?!<\/noscript>)/);
+    expect(layout).not.toMatch(/<video[^>]*\sautoplay/);
+    expect(layout).not.toContain('cdn.zuey.me/avatar.png');
+  });
+
+  test('every Plus Jakarta Sans and Fraunces stack names its metric-matched fallback', async () => {
+    const files = ['../src/styles/global.css', '../src/styles/blocks.css', '../src/components/os/os.css', '../src/components/home/home.css'];
+    const stacks = (await Promise.all(files.map(read))).flatMap(css => css.match(/(?:font-family|--os-(?:sans|serif)):[^;]+;/g) ?? []);
+    const sans = stacks.filter(d => /Plus Jakarta Sans['"],/.test(d));
+    const serif = stacks.filter(d => /Fraunces['"]?,/.test(d) && !/Fraunces Fallback['"];/.test(d));
+    expect(sans.length).toBeGreaterThan(3);
+    expect(serif.length).toBeGreaterThan(3);
+    for (const d of sans) expect(d).toMatch(/Plus Jakarta Sans Fallback['"], ['"]Plus Jakarta Sans Fallback Roboto['"]/);
+    for (const d of serif) expect(d).toContain('Fraunces Fallback');
     const css = await read('../src/styles/global.css');
-    expect(css).toContain("font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback'");
-    expect(css).toContain("font-family: 'Fraunces', 'Fraunces Fallback'");
-    expect(css).toMatch(/font-family: 'Plus Jakarta Sans Fallback';[\s\S]*?size-adjust/);
+    for (const face of ['Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', 'Fraunces Fallback']) {
+      expect(css).toMatch(new RegExp(`font-family: '${face}';\\s*src: local\\('[A-Za-z]+'\\);\\s*size-adjust`));
+    }
   });
 
   test('the 200lab endpoint is documented', () => {
@@ -102,5 +112,73 @@ describe('article lead image', () => {
     expect(imgs(html).length).toBeGreaterThan(0);
     for (const img of imgs(html)) expect(img).toContain('loading="lazy"');
     expect(html).not.toContain('rel="preload"');
+  });
+});
+
+interface BootEnv {
+  width?: number;
+  reducedMotion?: boolean;
+  saveData?: boolean;
+  readyState?: 'loading' | 'complete';
+}
+
+/** Runs an inline boot script against a stub browser and reports what it requested. */
+function runBoot(script: string, env: BootEnv = {}) {
+  const listeners: Record<string, () => void> = {};
+  const appended: { rel: string; href: string }[] = [];
+  const video = { preload: 'none', played: false, play() { this.played = true; return Promise.resolve(); } };
+  const stub = {
+    navigator: { connection: env.saveData ? { saveData: true } : undefined },
+    matchMedia: (q: string) => ({
+      matches: q.includes('min-width: 768px') ? (env.width ?? 1280) >= 768 : q.includes('reduce') ? Boolean(env.reducedMotion) : false,
+    }),
+    document: {
+      readyState: env.readyState ?? 'loading',
+      querySelector: (sel: string) => (sel === 'video[data-ambient]' ? video : null),
+      createElement: () => ({ rel: '', href: '' }),
+      head: { appendChild: (el: { rel: string; href: string }) => appended.push(el) },
+    },
+    addEventListener: (type: string, fn: () => void) => { listeners[type] = fn; },
+    setTimeout: (fn: () => void) => fn(),
+  };
+  const window = { ...stub };
+  new Function('window', ...Object.keys(stub), script)(window, ...Object.values(stub));
+  return { listeners, appended, video, load: () => listeners.load?.() };
+}
+
+describe('deferred asset scripts', () => {
+  test('web fonts are requested only after the load event', () => {
+    const run = runBoot(FONT_LOADER_SCRIPT);
+    expect(run.appended).toHaveLength(0);
+    run.load();
+    expect(run.appended).toEqual([{ rel: 'stylesheet', href: FONTS_URL }]);
+    expect(runBoot(FONT_LOADER_SCRIPT, { readyState: 'complete' }).appended).toHaveLength(1);
+  });
+
+  test('the ambient video starts after load on wide screens only', () => {
+    const desktop = runBoot(AMBIENT_VIDEO_SCRIPT);
+    expect(desktop.video.played).toBe(false);
+    desktop.load();
+    expect(desktop.video).toMatchObject({ played: true, preload: 'auto' });
+    for (const env of [{ width: 412 }, { reducedMotion: true }, { saveData: true }] satisfies BootEnv[]) {
+      const run = runBoot(AMBIENT_VIDEO_SCRIPT, env);
+      run.load();
+      expect(run.video.played).toBe(false);
+      expect(run.listeners.load).toBeUndefined();
+    }
+  });
+});
+
+describe('remote panel', () => {
+  const strings = { loading: 'Loading', failed: 'Failed', retry: 'Try again', openPage: 'Open' };
+  const render = (state: Parameters<typeof RemotePanel<string>>[0]['state']) =>
+    renderToString(createElement(RemotePanel<string>, { state, onRetry: () => {}, href: '/reads', strings, children: (d: string) => createElement('p', null, d) }));
+
+  test('one focusable container wraps loading, error and content, so retry can keep focus in the panel', () => {
+    for (const html of [render({ status: 'loading' }), render({ status: 'error', message: 'x' }), render({ status: 'ready', data: 'list' })]) {
+      expect(html).toMatch(/^<div tabindex="-1" class="min-w-0 focus:outline-none"/);
+    }
+    expect(render({ status: 'error', message: 'x' })).toContain('href="/reads"');
+    expect(render({ status: 'ready', data: 'list' })).toContain('<p>list</p>');
   });
 });

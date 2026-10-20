@@ -4,6 +4,7 @@ import { REF_REDIRECT_SCRIPT } from '../components/referral/ref-redirect';
 import { CONFIG_ELEMENT_ID } from '../lib/analytics/constants';
 import { analyticsEnvFrom, isProductionBuild, isTruthyFlag, resolvePostHogConfig } from '../lib/analytics/destinations/posthog';
 import { PRESENCE_CONFIG_ELEMENT_ID } from '../lib/presence/presence-beacon-boot';
+import { AMBIENT_VIDEO_SCRIPT, FONT_LOADER_SCRIPT, FONTS_URL } from '../lib/page/deferred-asset-scripts';
 
 interface Props {
   title?: string;
@@ -39,13 +40,6 @@ const analyticsEnv = analyticsEnvFrom(Astro.locals.runtime?.env);
 const analytics = resolvePostHogConfig(analyticsEnv, { production: isProductionBuild() });
 // Lets the presence beacon run (and log) off the production hostnames while debugging.
 const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
-// The ambient video (~3 MB) is decorative: it starts once the page has loaded so it never competes with
-// first paint, and is skipped on phones and under Save-Data, where the static backdrop stays.
-const AMBIENT_VIDEO_SCRIPT = `(function(){var c=navigator.connection;if(!matchMedia('(min-width: 768px)').matches||(c&&c.saveData))return;function go(){var v=document.querySelector('video[data-ambient]');if(!v)return;v.preload='auto';var p=v.play();if(p&&p.catch)p.catch(function(){})}function idle(){'requestIdleCallback' in window?requestIdleCallback(go,{timeout:2000}):setTimeout(go,200)}document.readyState==='complete'?idle():addEventListener('load',idle,{once:true})})();`;
-const FONTS_URL = 'https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap';
-// Web fonts (~450 KB of woff2) are requested after the load event so they never compete with the LCP image;
-// the metric-matched fallbacks in global.css keep the later swap from shifting layout.
-const FONT_LOADER_SCRIPT = `(function(){function f(){var l=document.createElement('link');l.rel='stylesheet';l.href=${JSON.stringify(FONTS_URL)};document.head.appendChild(l)}document.readyState==='complete'?f():addEventListener('load',f,{once:true})})();`;
 ---
 
 <!doctype html>

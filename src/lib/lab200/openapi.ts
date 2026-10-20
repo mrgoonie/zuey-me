@@ -20,10 +20,12 @@ export const lab200OpenApi: OpenApiFragment = {
               'application/json': {
                 schema: {
                   type: 'object',
+                  required: ['success', 'data'],
                   properties: {
                     success: { type: 'boolean' },
                     data: {
                       type: 'object',
+                      required: ['courses', 'synced_at'],
                       properties: {
                         courses: { type: 'array', items: { $ref: '#/components/schemas/Lab200Course' } },
                         synced_at: { type: 'string', format: 'date-time', nullable: true, description: 'Last successful fetch of courses.md' },
