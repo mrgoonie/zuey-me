@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  BookOpen, Briefcase, CreditCard, Gift, GitBranch, GraduationCap, LayoutGrid, Newspaper, Palette, Plug, Sparkles, SquarePlay, User,
+  Activity, BookOpen, Briefcase, CreditCard, Gift, GitBranch, GraduationCap, LayoutGrid, Newspaper, Palette, Plug, Sparkles, SquarePlay, User,
 } from 'lucide-react';
 import type { AppId } from './apps';
 
@@ -19,6 +19,7 @@ const ICONS: Record<Exclude<AppId, 'about'>, IconType> = {
   referral: Gift,
   appearance: Palette,
   '200lab': GraduationCap,
+  'activity-monitor': Activity,
 };
 
 interface AppGlyphProps {
