@@ -116,6 +116,32 @@ export type PresenceServerMessage =
   | { t: 'error'; code: 'bad_message' | 'rate_limited' | 'ticket_expired' };
 
 /**
+ * Owner status control, Pages → Worker only (service binding `PRESENCE`, HTTP fallback in dev).
+ * `GET /internal/owner` reads, `PUT /internal/owner` with an OwnerStatusUpdate writes; both answer
+ * an OwnerStatusState. Every `/internal/*` request carries PRESENCE_INTERNAL_HEADER whose value is
+ * `hmacBase64Url(PRESENCE_TICKET_SECRET, PRESENCE_INTERNAL_LABEL)`; anything else gets 404.
+ */
+export const PRESENCE_INTERNAL_HEADER = 'X-Presence-Internal';
+export const PRESENCE_INTERNAL_LABEL = 'presence-internal:v1';
+
+export interface OwnerStatusUpdate {
+  mode: OwnerMode;
+  /** Trimmed, ≤ OWNER_STATUS_TEXT_MAX chars, plain text; empty or omitted clears it. */
+  text?: string;
+}
+
+/** Private owner view: the manual setting plus what the public sees right now. */
+export interface OwnerStatusState {
+  mode: OwnerMode;
+  text: string | null;
+  /** ISO time the manual setting last changed. */
+  updatedAt: string;
+  /** True while the owner has a live, counted zuey.me connection. */
+  connected: boolean;
+  public: OwnerPresence;
+}
+
+/**
  * Signed connect ticket payload, issued by POST /api/v1/presence/ticket after server-side checks.
  * `k` is an opaque dedupe key (HMAC of the member id or of the browser presence id), never a raw id.
  */
