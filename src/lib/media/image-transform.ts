@@ -7,7 +7,7 @@
  * a small fixed set of widths.
  *
  * `/cdn-cgi/image` exists only on the production zone: `wrangler pages dev` and `*.pages.dev` previews
- * answer 404. Transformations are therefore off unless the request host is zuey.me, and the
+ * answer 404. Transformations are therefore off unless the request host is zuey.me or www.zuey.me, and the
  * `IMAGE_TRANSFORMS` variable can force them off ("off") or point them at a zone origin
  * ("https://zuey.me"), which lets a local build use the production transformer.
  */

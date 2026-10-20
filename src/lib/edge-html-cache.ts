@@ -100,14 +100,15 @@ function labelled(response: Response, status: EdgeCacheStatus): Response {
 /**
  * Renders the page and, when it may be shared, starts storing a copy. The response is returned at once so it
  * streams to the client; `stored` settles when the copy is in the cache and never rejects (a failed put only
- * means the next visitor renders again).
+ * means the next visitor renders again). A background revalidation sends nothing to a client
+ * (`forClient: false`), so the body goes straight to the cache instead of being cloned and left unread.
  */
 async function renderAndStore(
-  cache: EdgeCache, key: Request, render: () => Promise<Response>, now: number, canStore: () => boolean,
+  cache: EdgeCache, key: Request, render: () => Promise<Response>, now: number, canStore: () => boolean, forClient: boolean,
 ): Promise<{ response: Response; stored: Promise<void> | null }> {
   const response = await render();
   if (!isStorableResponse(response) || !canStore()) return { response, stored: null };
-  const copy = new Response(response.clone().body, response);
+  const copy = new Response(forClient ? response.clone().body : response.body, response);
   copy.headers.set(ORIGIN_CACHE_CONTROL_HEADER, response.headers.get('cache-control') || '');
   copy.headers.set(STORED_AT_HEADER, String(now));
   // The Cache API honours max-age only; the stored copy lives for the fresh and the stale window.
@@ -150,7 +151,7 @@ export async function serveWithEdgeCache(request: Request, url: URL, render: () 
       if (!revalidating.has(key.url)) {
         revalidating.add(key.url);
         waitUntil(
-          renderAndStore(cache, key, render, now, canStore)
+          renderAndStore(cache, key, render, now, canStore, false)
             .then(({ response, stored }) => stored ?? response.body?.cancel())
             .catch(() => undefined)
             .finally(() => revalidating.delete(key.url)),
@@ -159,7 +160,7 @@ export async function serveWithEdgeCache(request: Request, url: URL, render: () 
       return fromCache(cached, 'STALE');
     }
   }
-  const { response, stored } = await renderAndStore(cache, key, render, now, canStore);
+  const { response, stored } = await renderAndStore(cache, key, render, now, canStore, true);
   if (stored) {
     if (waitUntil) waitUntil(stored);
     else await stored;
