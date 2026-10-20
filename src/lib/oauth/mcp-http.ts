@@ -8,6 +8,7 @@ import type { McpCaller, OAuthGrantInfo } from './caller';
 import { resolveMcpCaller } from './caller';
 import { issuerFor, mcpResourceFor, resourceMetadataUrl } from './config';
 import type { ToolAccess } from './tool-access';
+import { presenceOwnerIds } from '../presence/presence-owner-identity';
 import { toolAccess, visibleTools } from './tool-access';
 
 /**
@@ -240,7 +241,7 @@ export async function handleMcpPost(request: Request, env: RuntimeEnv, waitUntil
     case 'ping':
       return ok({});
     case 'tools/list': {
-      const tools = visibleTools(principal, allMcpTools());
+      const tools = visibleTools(principal, allMcpTools(), presenceOwnerIds(env));
       // 2026-07-28 list results must carry cache hints; the list depends on the caller, so it is private.
       const listMeta = { [META_CATALOG_VERSION]: await catalogVersion(tools) };
       return ok(era.modern ? { tools, ttlMs: TOOLS_LIST_TTL_MS, cacheScope: 'private', _meta: listMeta } : { tools, _meta: listMeta });
