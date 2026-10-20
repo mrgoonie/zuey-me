@@ -1,6 +1,7 @@
 import { defineMiddleware } from 'astro:middleware';
 import { isForbiddenCrossSiteSubmission, isMachineEndpoint } from './lib/csrf-origin-check';
 import { REQUEST_ID_HEADER, resolveRequestId, withRequestId } from './lib/http';
+import { serveWithEdgeCache } from './lib/edge-html-cache';
 
 const MACHINE_ALLOW_HEADERS = 'Content-Type, Authorization, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID, X-Request-Id';
 const EXPOSE_HEADERS = 'WWW-Authenticate, X-Request-Id, MCP-Protocol-Version';
@@ -41,7 +42,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return withRequestId(new Response(`Cross-site ${request.method} form submissions are forbidden`, { status: 403 }), requestId);
   }
 
-  const response = await withRequestId(await next(), requestId);
+  // Anonymous HTML of the public landing pages is served from the colo's cache (see edge-html-cache.ts).
+  const runtime = context.locals.runtime;
+  const ctx = runtime?.ctx;
+  const rendered = await serveWithEdgeCache(request, url, () => next(), {
+    cache: runtime?.caches?.default,
+    waitUntil: ctx ? promise => ctx.waitUntil(promise) : undefined,
+  });
+  const response = await withRequestId(rendered, requestId);
 
   if (machine) {
     setMachineCors(response.headers);

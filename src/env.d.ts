@@ -170,6 +170,8 @@ declare global {
         env?: RuntimeEnv;
         /** Cloudflare execution context: work passed to waitUntil keeps running after the response. */
         ctx?: { waitUntil(promise: Promise<unknown>): void };
+        /** Cloudflare Cache API (the colo-local default cache), used for anonymous page HTML. */
+        caches?: { default: import('./lib/edge-html-cache').EdgeCache };
       };
     }
   }
