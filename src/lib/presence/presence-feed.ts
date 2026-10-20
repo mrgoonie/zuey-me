@@ -5,17 +5,21 @@
  *   POST /api/v1/presence/ticket (watch-only)  ->  GET {origin}/v1/snapshot  ->  wss (ticket as subprotocol)  ->  {t:'sub'}
  *
  * The Worker origin comes from the ticket answer (the server's runtime PUBLIC_PRESENCE_URL), so the
- * snapshot and the socket always hit the Worker the ticket was signed for. The first snapshot comes
+ * snapshot and the socket always hit the Worker the ticket was signed for. When the ticket endpoint
+ * fails (503, 429, network), the feed still shows numbers: it polls GET /v1/snapshot every `pollMs`
+ * from the last learned origin (else the build-time PUBLIC_PRESENCE_URL or the default origin) and
+ * retries the ticket with its own backoff; only an unreachable snapshot reads as lost/unavailable. The first snapshot comes
  * from plain HTTP so numbers show before the socket is up; the hub then pushes on every change and a
  * keepalive at least every 45 s, so a quiet healthy socket never turns stale. Failures never
  * invent data: the state keeps the last valid snapshot (or null) and says why it is not live.
  * Reconnects use exponential backoff with jitter and a fresh ticket; a page hidden for a while
  * drops the socket and resumes when it becomes visible again.
  */
-import { PRESENCE_SUBPROTOCOL, type PresenceSnapshot } from './contract';
+import { PRESENCE_DEFAULT_ORIGIN, PRESENCE_SUBPROTOCOL, type PresenceSnapshot } from './contract';
 import { isPresenceSnapshot, parseServerFrame, parseTicketGrant, type TicketGrant } from './presence-feed-guards';
 
-export type FeedConnection = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'unavailable';
+/** `polling`: no live socket (the ticket endpoint failed), but numbers refresh over HTTP every `pollMs`. */
+export type FeedConnection = 'connecting' | 'live' | 'reconnecting' | 'polling' | 'offline' | 'unavailable';
 
 export interface FeedState {
   snapshot: PresenceSnapshot | null;
@@ -54,11 +58,18 @@ export interface FeedDeps {
   staleMs: number;
   /** How long a hidden page keeps its socket before dropping it. */
   hiddenGraceMs: number;
+  /** Worker origin for snapshots before any ticket named one (build-time PUBLIC_PRESENCE_URL or the default). */
+  fallbackOrigin: string;
+  /** Snapshot polling interval while no ticket can be had. */
+  pollMs: number;
+  /** Ceiling of the ticket retry backoff while polling (the backoff starts at `pollMs`). */
+  ticketRetryMaxMs: number;
 }
 
 const INITIAL_STATE: FeedState = { snapshot: null, connection: 'connecting', updatedAt: null };
 
 type Loaded = { kind: 'ok'; data: PresenceSnapshot } | { kind: 'unavailable' } | { kind: 'failed'; error: string };
+type TicketResult = { kind: 'ok'; grant: TicketGrant } | { kind: 'failed'; error: string };
 
 function browserSocket(url: string, protocols: string[], handlers: SocketHandlers): FeedSocket {
   const ws = new WebSocket(url, protocols);
@@ -78,6 +89,9 @@ function defaultDeps(): FeedDeps {
     maxDelayMs: 30_000,
     staleMs: FEED_STALE_MS,
     hiddenGraceMs: 60_000,
+    fallbackOrigin: (import.meta.env?.PUBLIC_PRESENCE_URL || PRESENCE_DEFAULT_ORIGIN).replace(/\/+$/, ''),
+    pollMs: 20_000,
+    ticketRetryMaxMs: 300_000,
   };
 }
 
@@ -102,6 +116,9 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
   let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
   /** Worker origin learned from the latest ticket grant; null until one arrives. */
   let origin: string | null = null;
+  /** Consecutive failed ticket requests, and the epoch ms before which no new one is tried. */
+  let ticketFailures = 0;
+  let ticketRetryAt = 0;
 
   const set = (next: FeedState) => {
     state = next;
@@ -127,7 +144,7 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
   };
 
   const applySnapshot = (snapshot: PresenceSnapshot, live: boolean) => {
-    const keep = state.connection === 'live' || state.connection === 'connecting' || state.connection === 'reconnecting';
+    const keep = state.connection === 'live' || state.connection === 'connecting' || state.connection === 'reconnecting' || state.connection === 'polling';
     const connection: FeedConnection = live ? 'live' : keep ? state.connection : everLive ? 'reconnecting' : 'connecting';
     set({ snapshot, connection, updatedAt: deps.now() });
   };
@@ -159,19 +176,41 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
 
   async function run(g: number): Promise<void> {
     if (g !== gen) return;
-    const grant = await requestTicket(g);
-    if (!grant || g !== gen) return;
-    origin = grant.origin;
-    const snap = await loadSnapshot(grant.origin);
+    let grant: TicketGrant | null = null;
+    let ticketError = 'ticket_backoff';
+    if (deps.now() >= ticketRetryAt) {
+      const ticket = await requestTicket();
+      if (g !== gen) return;
+      if (ticket.kind === 'ok') {
+        grant = ticket.grant;
+        origin = grant.origin;
+        ticketFailures = 0;
+        ticketRetryAt = 0;
+      } else {
+        ticketError = ticket.error;
+        ticketFailures++;
+        const backoff = Math.min(deps.ticketRetryMaxMs, deps.pollMs * 2 ** (ticketFailures - 1)) * (0.5 + deps.random() * 0.5);
+        ticketRetryAt = deps.now() + backoff;
+      }
+    }
+    const snap = await loadSnapshot(grant?.origin ?? origin ?? deps.fallbackOrigin);
     if (g !== gen) return;
     if (snap.kind === 'unavailable') return fail(g, true, 'snapshot_503');
     if (snap.kind === 'failed') return fail(g, false, snap.error);
+    if (!grant) {
+      // No ticket, but the Worker answers: keep the numbers fresh over HTTP and retry the ticket later.
+      attempt = 0;
+      set({ snapshot: snap.data, connection: 'polling', updatedAt: deps.now(), error: ticketError });
+      clearRetry();
+      retryTimer = setTimeout(() => void run(g), deps.pollMs);
+      return;
+    }
     applySnapshot(snap.data, false);
     openSocket(g, grant);
   }
 
-  /** A watch-only ticket grant, or null after recording the failure. */
-  async function requestTicket(g: number): Promise<TicketGrant | null> {
+  /** A watch-only ticket grant, or the machine reason it could not be had. */
+  async function requestTicket(): Promise<TicketResult> {
     let res: Response;
     try {
       res = await deps.fetchImpl('/api/v1/presence/ticket', {
@@ -180,27 +219,16 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
         body: JSON.stringify({ count: false }),
       });
     } catch {
-      fail(g, false, 'ticket_network');
-      return null;
+      return { kind: 'failed', error: 'ticket_network' };
     }
-    if (g !== gen) return null;
-    if (res.status === 503) {
-      fail(g, true, 'ticket_503');
-      return null;
-    }
-    if (!res.ok) {
-      fail(g, false, res.status === 429 ? 'ticket_rate_limited' : `ticket_${res.status}`);
-      return null;
-    }
+    if (!res.ok) return { kind: 'failed', error: res.status === 429 ? 'ticket_rate_limited' : `ticket_${res.status}` };
     let grant: TicketGrant | null;
     try {
       grant = parseTicketGrant(await res.json());
     } catch {
       grant = null;
     }
-    if (g !== gen) return null;
-    if (!grant) fail(g, false, 'ticket_invalid');
-    return grant;
+    return grant ? { kind: 'ok', grant } : { kind: 'failed', error: 'ticket_invalid' };
   }
 
   function openSocket(g: number, grant: TicketGrant): void {
@@ -247,6 +275,8 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
     paused = false;
     gen++;
     attempt = 0;
+    ticketFailures = 0;
+    ticketRetryAt = 0;
     clearRetry();
     closeSocket();
     set(everLive || state.snapshot ? { ...state, connection: 'connecting', error: undefined } : INITIAL_STATE);

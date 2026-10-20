@@ -17,6 +17,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const grant = { success: true, data: { ticket: 'tkt-1.sig_2', url: 'wss://presence.test/v1/connect', expiresAt: '2026-10-20T04:02:00.000Z' } };
 
 /** Lets queued promise continuations (fetch → json → connect) settle. */
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0)); };
 
 interface Harness {
@@ -31,6 +32,9 @@ function harness(routes: { snapshot: () => Response | Promise<Response>; ticket:
   h.feed = createPresenceFeed({
     baseDelayMs: 5,
     maxDelayMs: 10,
+    fallbackOrigin: 'https://fallback.test',
+    pollMs: 15,
+    ticketRetryMaxMs: 15,
     random: () => 0,
     now,
     fetchImpl: async (input) => {
@@ -102,12 +106,48 @@ describe('presence feed state machine', () => {
     unsub();
   });
 
-  test('503 from the ticket endpoint is unavailable, with no snapshot invented', async () => {
-    const h = harness({ snapshot: () => json(snap(2)), ticket: () => json({ success: false }, 503) });
+  for (const [label, ticket] of [
+    ['503', () => json({ success: false }, 503)],
+    ['429', () => json({ success: false }, 429)],
+    ['a network error', () => { throw new TypeError('network'); }],
+  ] as const) {
+    test(`ticket ${label}: numbers still show from the fallback origin, polled over HTTP`, async () => {
+      const h = harness({ snapshot: () => json(snap(2)), ticket });
+      const unsub = h.feed.subscribeFeed(() => undefined);
+      await settle();
+      expect(h.feed.getFeedState()).toMatchObject({ connection: 'polling', snapshot: { active: 2 } });
+      expect(h.calls).toContain('https://fallback.test/v1/snapshot');
+      expect(h.sockets).toHaveLength(0);
+      const polls = h.calls.filter((c) => c.endsWith('/v1/snapshot')).length;
+      await wait(60);
+      expect(h.calls.filter((c) => c.endsWith('/v1/snapshot')).length).toBeGreaterThan(polls);
+      expect(h.feed.getFeedState().connection).toBe('polling');
+      unsub();
+    });
+  }
+
+  test('ticket and snapshot both failing reads as lost connection, never invented numbers', async () => {
+    const h = harness({ snapshot: () => { throw new TypeError('network'); }, ticket: () => json({ success: false }, 503) });
     const unsub = h.feed.subscribeFeed(() => undefined);
     await settle();
-    expect(h.feed.getFeedState()).toMatchObject({ connection: 'unavailable', snapshot: null });
-    expect(h.calls.some((c) => c.endsWith('/v1/snapshot'))).toBe(false);
+    expect(h.feed.getFeedState()).toMatchObject({ connection: 'offline', snapshot: null, error: 'snapshot_network' });
+    unsub();
+  });
+
+  test('once a ticket succeeds after polling, its url is used for the snapshot and the socket', async () => {
+    let ticketOk = false;
+    const remote = { success: true, data: { ticket: 'a.b', url: 'wss://runtime.test/v1/connect', expiresAt: '' } };
+    const h = harness({ snapshot: () => json(snap(2)), ticket: () => (ticketOk ? json(remote) : json({ success: false }, 503)) });
+    const unsub = h.feed.subscribeFeed(() => undefined);
+    await settle();
+    expect(h.feed.getFeedState().connection).toBe('polling');
+    ticketOk = true;
+    await wait(80);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0].url).toBe('wss://runtime.test/v1/connect');
+    expect(h.calls.at(-1)).toBe('https://runtime.test/v1/snapshot');
+    h.sockets[0].handlers.onMessage(JSON.stringify({ t: 'snapshot', data: snap(6) }));
+    expect(h.feed.getFeedState()).toMatchObject({ connection: 'live', snapshot: { active: 6 } });
     unsub();
   });
 

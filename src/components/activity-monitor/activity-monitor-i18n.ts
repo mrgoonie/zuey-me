@@ -9,6 +9,7 @@ const en = {
     connecting: 'Connecting…',
     live: 'Live',
     reconnecting: 'Reconnecting…',
+    polling: 'Periodic updates',
     offline: 'Offline',
     unavailable: 'Unavailable',
   } satisfies Record<FeedConnection, string>,
@@ -46,6 +47,7 @@ const en = {
     offline: 'You appear to be offline. Retrying automatically.',
     unavailable: 'The live feed is not available right now. Retrying automatically.',
     reconnecting: 'Connection lost, retrying. The numbers below may be out of date.',
+    polling: 'Live updates are paused; the numbers refresh about every 20 seconds.',
   },
   noData: 'No data yet',
   note: 'Counts are approximate and anonymous. Only a coarse activity type is shared, never pages, names or identifiers, and only for visitors who allowed analytics.',
@@ -61,6 +63,7 @@ const vi: ActivityMonitorStrings = {
     connecting: 'Đang kết nối…',
     live: 'Trực tiếp',
     reconnecting: 'Đang kết nối lại…',
+    polling: 'Cập nhật định kỳ',
     offline: 'Ngoại tuyến',
     unavailable: 'Chưa khả dụng',
   },
@@ -98,6 +101,7 @@ const vi: ActivityMonitorStrings = {
     offline: 'Có vẻ bạn đang ngoại tuyến. Sẽ tự thử lại.',
     unavailable: 'Luồng trực tiếp hiện chưa khả dụng. Sẽ tự thử lại.',
     reconnecting: 'Mất kết nối, đang thử lại. Số liệu bên dưới có thể đã cũ.',
+    polling: 'Cập nhật trực tiếp đang tạm dừng; số liệu được làm mới khoảng mỗi 20 giây.',
   },
   noData: 'Chưa có dữ liệu',
   note: 'Số liệu chỉ mang tính ước lượng và ẩn danh. Chỉ chia sẻ loại hoạt động chung chung, không bao giờ là trang, tên hay mã định danh, và chỉ với khách đã cho phép phân tích.',
@@ -107,7 +111,7 @@ const vi: ActivityMonitorStrings = {
 
 const zh: ActivityMonitorStrings = {
   heading: '此刻谁在 zuey.me',
-  connection: { connecting: '连接中…', live: '实时', reconnecting: '正在重新连接…', offline: '离线', unavailable: '暂不可用' },
+  connection: { connecting: '连接中…', live: '实时', reconnecting: '正在重新连接…', polling: '定期更新', offline: '离线', unavailable: '暂不可用' },
   stale: '近期无更新',
   updated: (s) => (s < 5 ? '刚刚更新' : s < 60 ? `${s} 秒前更新` : `${Math.floor(s / 60)} 分钟前更新`),
   noUpdateYet: '尚未收到数据',
@@ -142,6 +146,7 @@ const zh: ActivityMonitorStrings = {
     offline: '你似乎已离线，将自动重试。',
     unavailable: '实时数据暂不可用，将自动重试。',
     reconnecting: '连接中断，正在重试。下方数字可能已过期。',
+    polling: '实时更新已暂停，数字约每 20 秒刷新一次。',
   },
   noData: '暂无数据',
   note: '数字为近似值且匿名。仅共享粗略的活动类型，绝不包含页面、姓名或标识符，且仅限允许分析的访客。',
@@ -151,7 +156,7 @@ const zh: ActivityMonitorStrings = {
 
 const ko: ActivityMonitorStrings = {
   heading: '지금 zuey.me에 있는 사람',
-  connection: { connecting: '연결 중…', live: '실시간', reconnecting: '다시 연결 중…', offline: '오프라인', unavailable: '사용 불가' },
+  connection: { connecting: '연결 중…', live: '실시간', reconnecting: '다시 연결 중…', polling: '주기적 업데이트', offline: '오프라인', unavailable: '사용 불가' },
   stale: '최근 업데이트 없음',
   updated: (s) => (s < 5 ? '방금 업데이트됨' : s < 60 ? `${s}초 전 업데이트` : `${Math.floor(s / 60)}분 전 업데이트`),
   noUpdateYet: '아직 받은 데이터가 없습니다',
@@ -186,6 +191,7 @@ const ko: ActivityMonitorStrings = {
     offline: '오프라인 상태로 보입니다. 자동으로 다시 시도합니다.',
     unavailable: '실시간 피드를 지금 사용할 수 없습니다. 자동으로 다시 시도합니다.',
     reconnecting: '연결이 끊어져 다시 시도 중입니다. 아래 수치는 오래된 것일 수 있습니다.',
+    polling: '실시간 업데이트가 일시 중지되었습니다. 수치는 약 20초마다 새로 고쳐집니다.',
   },
   noData: '아직 데이터 없음',
   note: '수치는 대략적이며 익명입니다. 대략적인 활동 유형만 공유하며 페이지, 이름, 식별자는 절대 공유하지 않고 분석을 허용한 방문자에게만 해당합니다.',
@@ -195,7 +201,7 @@ const ko: ActivityMonitorStrings = {
 
 const ja: ActivityMonitorStrings = {
   heading: '今 zuey.me にいる人',
-  connection: { connecting: '接続中…', live: 'ライブ', reconnecting: '再接続中…', offline: 'オフライン', unavailable: '利用不可' },
+  connection: { connecting: '接続中…', live: 'ライブ', reconnecting: '再接続中…', polling: '定期更新', offline: 'オフライン', unavailable: '利用不可' },
   stale: '最近の更新なし',
   updated: (s) => (s < 5 ? 'たった今更新' : s < 60 ? `${s}秒前に更新` : `${Math.floor(s / 60)}分前に更新`),
   noUpdateYet: 'まだデータを受信していません',
@@ -230,6 +236,7 @@ const ja: ActivityMonitorStrings = {
     offline: 'オフラインのようです。自動的に再試行します。',
     unavailable: 'ライブフィードは現在利用できません。自動的に再試行します。',
     reconnecting: '接続が切れました。再試行中です。以下の数値は古い可能性があります。',
+    polling: 'リアルタイム更新は一時停止中です。数値は約20秒ごとに更新されます。',
   },
   noData: 'データなし',
   note: '数値は概算で匿名です。共有されるのは大まかな活動の種類のみで、ページ・名前・識別子は一切含まれず、分析を許可した訪問者のみが対象です。',

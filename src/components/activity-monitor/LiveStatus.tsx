@@ -11,7 +11,9 @@ interface LiveStatusProps {
 /** Connection indicator: a dot plus a text label (never colour alone) and how fresh the numbers are. */
 export const LiveStatus: React.FC<LiveStatusProps> = ({ feed, now, strings }) => {
   const stale = isFeedStale(feed, now);
-  const tone = feed.connection === 'live' && !stale ? 'live' : feed.connection === 'connecting' || feed.connection === 'reconnecting' || stale ? 'wait' : 'down';
+  const tone = feed.connection === 'live' && !stale ? 'live' : feed.connection === 'connecting' || feed.connection === 'reconnecting' || feed.connection === 'polling' || stale
+      ? 'wait'
+      : 'down';
   const label = stale ? strings.stale : strings.connection[feed.connection];
   const seconds = feed.updatedAt === null ? null : Math.max(0, Math.round((now - feed.updatedAt) / 1000));
 
