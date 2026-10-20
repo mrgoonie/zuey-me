@@ -259,6 +259,7 @@ describe('presence Worker client', () => {
     const valid = await signPresenceInternal(SECRET, now);
     expect(await verifyPresenceInternal(SECRET, valid, now)).toBe(true);
     expect(await verifyPresenceInternal(SECRET, valid, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(false); // stale
+    expect(await verifyPresenceInternal(SECRET, `0${valid}`, now)).toBe(false); // non-canonical timestamp
     expect(await verifyPresenceInternal(SECRET, await signPresenceInternal(SECRET, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000), now)).toBe(false); // future
     expect(await verifyPresenceInternal('other-secret', valid, now)).toBe(false);
     for (const bad of [null, '', 'abc', `${valid}x`, `x${valid}`, valid.replace('.', ':'), await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL)]) {

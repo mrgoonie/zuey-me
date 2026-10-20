@@ -6,8 +6,8 @@
 import { PRESENCE_INTERNAL_LABEL, PRESENCE_INTERNAL_MAX_SKEW_MS } from './contract';
 import { hmacBase64Url } from './ticket';
 
-/** Seconds (up to 12 digits) `.` a 43-character base64url HMAC-SHA256. */
-const INTERNAL_AUTH_PATTERN = /^(\d{1,12})\.([A-Za-z0-9_-]{43})$/;
+/** Canonical seconds (no leading zero, up to 12 digits) `.` a 43-character base64url HMAC-SHA256. */
+const INTERNAL_AUTH_PATTERN = /^([1-9]\d{0,11})\.([A-Za-z0-9_-]{43})$/;
 
 const signature = (secret: string, seconds: number): Promise<string> =>
   hmacBase64Url(secret, `${PRESENCE_INTERNAL_LABEL}:${seconds}`);
