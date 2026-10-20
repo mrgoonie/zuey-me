@@ -42,6 +42,7 @@ const keys: ApiKey[] = isAuthenticated ? await listApiKeys(d1) : [];
       sessionVia={access.via}
       adminEmail={access.email}
       deniedEmail={access.deniedEmail}
+      presenceOwner={access.presenceOwner}
     />
   </body>
 </html>
