@@ -214,7 +214,8 @@ export const ANALYTICS_EVENTS = {
   },
   app_opened: {
     version: 1, source: 'client', owner: 'product', trigger: 'A ZueyOS window is opened or brought to front (openApp)',
-    props: { app: str, already_open: bool },
+    // `source: 'webmcp'` marks windows an in-browser agent opened through the WebMCP tools; absent for people.
+    props: { app: str, already_open: bool, source: { kind: 'string', optional: true } },
   },
   community_invite_requested: {
     version: 1, source: 'client', owner: 'product', trigger: 'A single-use Telegram invite link was created for the member',
