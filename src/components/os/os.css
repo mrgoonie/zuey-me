@@ -316,7 +316,7 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
   .osw { position: fixed; left: 0 !important; top: calc(env(safe-area-inset-top, 0px) + 10px) !important; width: 100% !important; height: calc(100% - 10px - env(safe-area-inset-top, 0px)) !important; border-radius: 18px 18px 0 0; border: 0; border-top: 1px solid var(--os-line-2); box-shadow: 0 -20px 50px -10px rgba(0, 0, 0, .6); backdrop-filter: none; -webkit-backdrop-filter: none; }
   /* Sheets stack on phones and backdrop-filter is off, so a translucent tint lets the sheet below bleed through. */
   .osw--glass { background: #181412; }
-  :root[data-zt='light'] .osw--glass { background: #fdfaf7; }
+  :where(:root[data-zt='light']) .osw--glass { background: #fdfaf7; }
   .osw[data-app='ai'] { background: #f5efeb; }
   .osw-rz, .osw-lights { display: none; }
   .osw-bar { height: 54px; padding: 6px 6px 0; cursor: default; }
