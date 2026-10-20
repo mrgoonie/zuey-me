@@ -2,15 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Metric-matched local fallbacks (Capsize metrics): the web fonts load without blocking render, so the
+   fallback must occupy the same space or the swap shifts the layout (CLS). */
+@font-face {
+  font-family: 'Plus Jakarta Sans Fallback';
+  src: local('Arial');
+  size-adjust: 104.98%;
+  ascent-override: 98.88%;
+  descent-override: 21.15%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Fraunces Fallback';
+  src: local('Georgia');
+  size-adjust: 105.2%;
+  ascent-override: 92.97%;
+  descent-override: 24.24%;
+  line-gap-override: 0%;
+}
+
 @layer base {
   body {
     background-color: #F5EFEB;
     color: #1c1917;
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', system-ui, -apple-system, sans-serif;
   }
 
   h1, h2, h3, .font-serif {
-    font-family: 'Fraunces', Georgia, serif;
+    font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif;
   }
 }
 

@@ -34,6 +34,10 @@ const {
 } = Astro.props;
 
 // Null when analytics must stay off (no key outside production builds, or a malformed key/host).
+// The ambient video (~3 MB) starts once the page has loaded so it never competes with first paint.
+const AMBIENT_VIDEO_SCRIPT = `(function(){function go(){var v=document.querySelector('video[data-ambient]');if(!v)return;v.preload='auto';var p=v.play();if(p&&p.catch)p.catch(function(){})}function idle(){'requestIdleCallback' in window?requestIdleCallback(go,{timeout:2000}):setTimeout(go,200)}document.readyState==='complete'?idle():addEventListener('load',idle,{once:true})})();`;
+const FONTS_URL = 'https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap';
+
 const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.env), { production: isProductionBuild() });
 ---
 
@@ -44,7 +48,7 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- ?ref=CODE → /r/CODE (the only route that sets the referral cookie) -->
     <script is:inline set:html={REF_REDIRECT_SCRIPT} />
-    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="canonical" href={url} />
 
     <!-- SEO Meta Tags -->
@@ -81,13 +85,12 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     <link rel="alternate" type="text/markdown" href="/index.md" title="Markdown representation" />
     <slot name="head" />
 
-    <!-- Fonts: Fraunces & Plus Jakarta Sans -->
+    <!-- Fonts: Fraunces & Plus Jakarta Sans. Loaded without blocking first paint (display=swap shows
+         the fallback font until they arrive); the noscript copy covers visitors without JavaScript. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap"
-      rel="stylesheet"
-    />
+    <link rel="stylesheet" href={FONTS_URL} media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href={FONTS_URL} /></noscript>
 
     <!-- Analytics: PostHog snippet stub (queues calls; loads nothing until init). bootAnalytics() checks
          the environment, Do Not Track/GPC and the local opt-out before calling init. -->
@@ -110,11 +113,11 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     <!-- Ambient Dimmed Background Video Loop with Tiled Pattern Overlay -->
     {ambient && <div class="fixed inset-0 pointer-events-none -z-10 overflow-hidden" aria-hidden="true">
       <video
-        autoplay
+        data-ambient
         loop
         muted
         playsinline
-        preload="auto"
+        preload="none"
         class="absolute inset-0 w-full h-full object-cover opacity-35 sm:opacity-40 filter brightness-[0.72] contrast-[1.1] scale-105 transition-opacity duration-1000"
       >
         <source src="/loop.mp4" type="video/mp4" />
@@ -125,5 +128,6 @@ const analytics = resolvePostHogConfig(analyticsEnvFrom(Astro.locals.runtime?.en
     </div>}
 
     <slot />
+    {ambient && <script is:inline set:html={AMBIENT_VIDEO_SCRIPT} />}
   </body>
 </html>

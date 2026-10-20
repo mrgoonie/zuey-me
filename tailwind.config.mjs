@@ -24,8 +24,8 @@ export default {
         }
       },
       fontFamily: {
-        serif: ['"Fraunces"', '"Playfair Display"', 'Georgia', 'serif'],
-        sans: ['"Plus Jakarta Sans"', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        serif: ['"Fraunces"', '"Fraunces Fallback"', '"Playfair Display"', 'Georgia', 'serif'],
+        sans: ['"Plus Jakarta Sans"', '"Plus Jakarta Sans Fallback"', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
       },
       boxShadow: {
         'card': '0 2px 8px -2px rgba(0, 0, 0, 0.05), 0 1px 3px -1px rgba(0, 0, 0, 0.03)',
