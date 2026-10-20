@@ -1,0 +1,20 @@
+# Realtime presence Worker for zuey.me (https://presence.zuey.me): WebSocket hub in one Durable Object plus the
+# public aggregated snapshot. CI deploys it on push to main (.github/workflows/deploy.yml); do not deploy it by hand.
+# One-time secret, kept across deploys (same value as the Pages secret that signs connect tickets):
+#   wrangler secret put PRESENCE_TICKET_SECRET --config workers/presence/wrangler.toml
+name = "zuey-me-presence"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = false
+routes = [{ pattern = "presence.zuey.me", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "PRESENCE_HUB"
+class_name = "PresenceHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PresenceHub"]
+
+[observability]
+enabled = true
