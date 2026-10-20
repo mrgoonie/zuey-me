@@ -6,7 +6,7 @@
    fallback must occupy the same space or the swap shifts the layout (CLS). */
 @font-face {
   font-family: 'Plus Jakarta Sans Fallback';
-  src: local('Arial');
+  src: local('Arial'), local('Roboto');
   size-adjust: 104.98%;
   ascent-override: 98.88%;
   descent-override: 21.15%;

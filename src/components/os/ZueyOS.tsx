@@ -39,6 +39,12 @@ const PHONE_QUERY = '(max-width: 767px)';
 const NOTICE_REFRESH_MS = 5 * 60 * 1000;
 const EXPO_MS = 420;
 
+/** True when the browser asks for reduced data use (Network Information API; absent in most browsers). */
+function saveData(): boolean {
+  const c: unknown = Reflect.get(navigator, 'connection');
+  return typeof c === 'object' && c !== null && 'saveData' in c && c.saveData === true;
+}
+
 type Slots = Partial<Record<SlotAppId, React.ReactNode>>;
 
 interface ZueyOSProps extends Slots {
@@ -184,7 +190,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
 
-  // The video wallpaper (~3 MB) is attached once the page has loaded, so it never competes with first paint.
+  // The video wallpaper (~3 MB) is attached once the page has loaded, so it never competes with first paint,
+  // and not at all under Save-Data.
   const [pageLoaded, setPageLoaded] = useState(false);
   useEffect(() => {
     if (document.readyState === 'complete') { setPageLoaded(true); return; }
@@ -192,7 +199,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     window.addEventListener('load', onLoad, { once: true });
     return () => window.removeEventListener('load', onLoad);
   }, []);
-  const videoWallpaper = pageLoaded && look.wallpaper === 'video';
+  const videoWallpaper = pageLoaded && look.wallpaper === 'video' && !saveData();
 
   // Video wallpaper: plays only when chosen and motion is allowed.
   useEffect(() => {

@@ -28,9 +28,12 @@ describe('page weight budget', () => {
 
   test('fonts and the ambient video stay off the critical path', async () => {
     const layout = await read('../src/layouts/Layout.astro');
-    expect(layout).toMatch(/rel="stylesheet" href=\{FONTS_URL\} media="print" onload="this.media='all'"/);
+    expect(layout).toContain('<script is:inline set:html={FONT_LOADER_SCRIPT} />');
+    expect(layout).toContain("addEventListener('load',f,{once:true})");
+    expect(layout).not.toMatch(/<link rel="stylesheet" href=\{FONTS_URL\} \/>\s*(?!<\/noscript>)/);
     expect(layout).toContain('preload="none"');
     expect(layout).not.toMatch(/<video[^>]*\sautoplay/);
+    expect(layout).toContain("matchMedia('(min-width: 768px)')");
     expect(layout).not.toContain('cdn.zuey.me/avatar.png');
     const index = await read('../src/pages/index.astro');
     for (const link of index.match(/<link[^>]*fonts\.googleapis\.com\/css2[^>]*>/g) ?? []) expect(link).toContain('media="print"');
