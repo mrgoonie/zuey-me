@@ -5,7 +5,7 @@
  *   PUT  /internal/owner   OwnerStatusUpdate JSON (<= INTERNAL_MAX_BODY_BYTES) -> OwnerStatusState
  *
  * Auth: PRESENCE_INTERNAL_HEADER must be a fresh `<unixSeconds>.<hmac>` value (verifyPresenceInternal: within
- * PRESENCE_INTERNAL_MAX_SKEW_MS of now, HMAC compared in constant time). A missing or wrong header gets the same 404 as an unknown path, so the route is
+ * PRESENCE_INTERNAL_MAX_SKEW_MS of now, HMAC over method and path compared in constant time). A missing or wrong header gets the same 404 as an unknown path, so the route is
  * not revealed; a Worker without the secret answers 503. No CORS: browsers never call this route.
  */
 import { PRESENCE_INTERNAL_HEADER } from '../../../src/lib/presence/contract';
@@ -18,9 +18,9 @@ export const INTERNAL_MAX_BODY_BYTES = 1024;
 export type InternalErrorCode = 'not_found' | 'unavailable' | 'bad_request' | 'payload_too_large' | 'method_not_allowed';
 export type ErrorResponder = (status: number, code: InternalErrorCode, message: string, headers?: Record<string, string>) => Response;
 
-/** True when the request carries a fresh, correctly signed PRESENCE_INTERNAL_HEADER. */
+/** True when the request carries a fresh PRESENCE_INTERNAL_HEADER signed for this request's method and path. */
 export function isInternalCaller(request: Request, secret: string, nowMs = Date.now()): Promise<boolean> {
-  return verifyPresenceInternal(secret, request.headers.get(PRESENCE_INTERNAL_HEADER), nowMs);
+  return verifyPresenceInternal(secret, request.headers.get(PRESENCE_INTERNAL_HEADER), request.method, new URL(request.url).pathname, nowMs);
 }
 
 /** Reads at most `limit` bytes of the body; null when it is larger. */
