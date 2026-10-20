@@ -119,6 +119,33 @@ describe('Activity Monitor 24h history', () => {
     expect(root.querySelectorAll('.am-hist-tip li')).toHaveLength(0);
   });
 
+  test('pointer moves update only the visual tooltip; focus and keys update the live region', async () => {
+    stubFetch(() => json(history));
+    const { root } = mount();
+    await settle();
+    const plot = root.querySelector<HTMLElement>('.am-hist-plot');
+    const live = () => root.querySelector('[data-history-announcement]');
+    const tip = () => root.querySelector('.am-hist-tip')?.textContent ?? '';
+    expect(live()?.getAttribute('aria-live')).toBe('polite');
+    expect(root.querySelector('.am-hist-tip')?.getAttribute('aria-hidden')).toBe('true');
+    expect(root.querySelectorAll('.am-hist-chart [aria-live]')).toHaveLength(1);
+    if (!plot) throw new Error('no plot');
+    plot.getBoundingClientRect = () => new DOMRect(0, 0, 288, 100);
+
+    for (const x of [10, 100, 287.5]) {
+      React.act(() => { plot.dispatchEvent(new PointerEvent('pointermove', { clientX: x, bubbles: true })); });
+    }
+    expect(tip()).toContain('Peak: 2'); // the latest slot, under the pointer
+    expect(live()?.textContent).toBe('');
+
+    React.act(() => plot.focus());
+    expect(live()?.textContent).toContain('Peak: 2');
+    React.act(() => { plot.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); });
+    expect(live()?.textContent).toContain('Peak: 7');
+    React.act(() => { plot.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(live()?.textContent).toBe('');
+  });
+
   test('a failing history shows "unavailable" while the live numbers keep working', async () => {
     stubFetch(() => json({ success: false }, 503));
     const { root } = mount();

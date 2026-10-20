@@ -1,6 +1,6 @@
 import React, { useId, useMemo, useState } from 'react';
 import type { ActivityCategory } from '../../lib/presence/contract';
-import { formatHistorySlot, formatHistoryTime, historyTicks, type HistorySeries } from '../../lib/presence/presence-history-chart';
+import { formatHistorySlot, formatHistoryTime, historyTicks, type HistoryPoint, type HistorySeries } from '../../lib/presence/presence-history-chart';
 import type { ActivityHistoryStrings } from './activity-history-i18n';
 
 interface HistoryChartProps {
@@ -13,17 +13,22 @@ interface HistoryChartProps {
 const H = 100; // viewBox height; the width is one unit per slot
 const STEP = { ArrowLeft: -1, ArrowRight: 1, PageUp: -12, PageDown: 12 } as const;
 const isStepKey = (k: string): k is keyof typeof STEP => k in STEP;
+const byCount = (p: HistoryPoint) => [...p.categories].sort((a, b) => b.count - a.count);
 
 /**
  * Inline SVG area chart of `peak` per 5-minute slot. Pointer hover and keyboard focus (arrows, Page Up/Down
  * = one hour, Home/End) select a slot; its local time, peak and (when shared) category breakdown are shown in
- * a polite live region. Colours come from the Zuey OS theme tokens via CSS.
+ * a visual tooltip. Only keyboard focus and keyboard selection update a separate, visually hidden polite live
+ * region, so moving the pointer across 288 slots never floods a screen reader. The plot's label is the
+ * accessible summary (highest peak and when). Colours come from the Zuey OS theme tokens via CSS.
  */
 export const HistoryChart: React.FC<HistoryChartProps> = ({ series, strings, categoryNames, locale }) => {
   const { points, max, maxIndex } = series;
   const n = points.length;
   const [selected, setSelected] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
+  /** Slot announced to screen readers; changed by focus and keys only, never by the pointer. */
+  const [announced, setAnnounced] = useState<number | null>(null);
   const hintId = useId();
 
   const area = useMemo(() => {
@@ -48,14 +53,28 @@ export const HistoryChart: React.FC<HistoryChartProps> = ({ series, strings, cat
     if (isStepKey(e.key)) next = clamp(from + STEP[e.key]);
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = n - 1;
-    else if (e.key === 'Escape') setSelected(null);
+    else if (e.key === 'Escape') {
+      setSelected(null);
+      setAnnounced(null);
+    }
     if (next === null) return;
     e.preventDefault();
     setSelected(next);
+    setAnnounced(next);
   };
 
   const point = selected === null ? null : points[selected];
-  const breakdown = point ? [...point.categories].sort((a, b) => b.count - a.count) : [];
+  const breakdown = point ? byCount(point) : [];
+  const announcedPoint = announced === null ? null : points[announced];
+  const announcement = announcedPoint
+    ? [
+      formatHistorySlot(announcedPoint.t, locale),
+      announcedPoint.gap ? strings.noBucket : strings.peak(fmt(announcedPoint.peak)),
+      announcedPoint.categories.length > 0
+        ? `${strings.breakdown}: ${byCount(announcedPoint).map((c) => `${categoryNames[c.id]} ${fmt(c.count)}`).join(', ')}`
+        : '',
+    ].filter(Boolean).join('. ')
+    : '';
 
   return (
     <div className="am-hist-chart">
@@ -67,8 +86,13 @@ export const HistoryChart: React.FC<HistoryChartProps> = ({ series, strings, cat
         aria-describedby={hintId}
         onPointerMove={onPointerMove}
         onPointerLeave={() => { if (!focused) setSelected(null); }}
-        onFocus={() => { setFocused(true); setSelected((s) => s ?? n - 1); }}
-        onBlur={() => { setFocused(false); setSelected(null); }}
+        onFocus={() => {
+          const at = selected ?? n - 1;
+          setFocused(true);
+          setSelected(at);
+          setAnnounced(at);
+        }}
+        onBlur={() => { setFocused(false); setSelected(null); setAnnounced(null); }}
         onKeyDown={onKeyDown}
       >
         <svg viewBox={`0 0 ${n} ${H}`} preserveAspectRatio="none" aria-hidden="true" focusable="false">
@@ -85,8 +109,10 @@ export const HistoryChart: React.FC<HistoryChartProps> = ({ series, strings, cat
         </ol>
       </div>
       <p id={hintId} className="am-sr">{strings.keyboardHint}</p>
+      <p className="am-sr" role="status" aria-live="polite" aria-atomic="true" data-history-announcement>{announcement}</p>
 
-      <div className="am-hist-tip" role="status" aria-live="polite" aria-atomic="true">
+      {/* Visual only: the live region above carries the same content for keyboard users. */}
+      <div className="am-hist-tip" aria-hidden="true">
         {point && (
           <>
             <b>{formatHistorySlot(point.t, locale)}</b>
