@@ -8,6 +8,7 @@ import { motionEase, motionMs, parseCssTime } from '../src/components/home/motio
 const root = join(import.meta.dir, '..');
 const osCss = readFileSync(join(root, 'src/components/os/os.css'), 'utf8');
 const homeCss = readFileSync(join(root, 'src/components/home/home.css'), 'utf8');
+const activityCss = readFileSync(join(root, 'src/components/activity-monitor/activity-monitor.css'), 'utf8');
 const DURATIONS = ['instant', 'fast', 'base', 'slow', 'slower'];
 const EASINGS = ['standard', 'out', 'in', 'spring', 'genie'];
 
@@ -33,11 +34,11 @@ describe('motion tokens', () => {
   });
 
   test('OS chrome transitions use tokens, never ad-hoc durations or easings', () => {
-    for (const [name, css] of [['os.css', osCss], ['home.css', homeCss]] as const) {
+    for (const [name, css] of [['os.css', osCss], ['home.css', homeCss], ['activity-monitor.css', activityCss]] as const) {
       for (const value of motionDeclarations(css)) {
         if (value === 'none' || value.startsWith('none ')) continue;
         // Long ambient loops (aurora, clouds, shimmer, entrance fallback) are keyframe animations, not chrome feedback.
-        if (/^(os-aurora|home-cloud-drift|home-shimmer|home-reveal-fallback)\b/.test(value)) continue;
+        if (/^(os-aurora|home-cloud-drift|home-shimmer|home-reveal-fallback|am-pulse)\b/.test(value)) continue;
         const stripped = value.replace(/var\([^()]*\)/g, '').replace(/calc\([^()]*\)/g, '');
         expect({ file: name, value, raw: /\d*\.?\d+m?s\b|cubic-bezier|\bease(-in|-out|-in-out)?\b/.test(stripped) }).toEqual({ file: name, value, raw: false });
       }

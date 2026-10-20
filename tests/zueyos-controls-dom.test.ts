@@ -151,6 +151,18 @@ describe('Zuey OS window', () => {
     expect(root.querySelector('.osw-page')?.getAttribute('aria-label')).toBe('Open as page: Zuey Reads');
   });
 
+  test('every app window, Activity Monitor included, is a dialog named by its title with labelled controls', () => {
+    const s = i18n.osStrings('en');
+    for (const id of Object.keys(apps.APPS) as Array<keyof typeof apps.APPS>) {
+      const root = mount(React.createElement(win.OsWindow, windowProps({ app: apps.APPS[id], title: s.apps[id], state: store.initialWins([id])[id] })));
+      const dialog = root.querySelector('section.osw');
+      expect(dialog?.getAttribute('role')).toBe('dialog');
+      expect(dialog && nameOf(dialog)).toBe(s.apps[id]);
+      for (const b of Array.from(root.querySelectorAll('button, a'))) expect(nameOf(b).length).toBeGreaterThan(0);
+    }
+    expect(Object.keys(apps.APPS)).toContain('activity-monitor');
+  });
+
   test('Escape closes the window when focus is inside it, but not while typing or with a popup open', () => {
     let closed = 0;
     const root = mount(React.createElement(win.OsWindow, windowProps({ onClose: () => { closed += 1; } })));
