@@ -6,15 +6,17 @@ import type { OsStrings } from './os-i18n';
 interface AppearancePanelProps {
   look: Look;
   hasImage: boolean;
-  message: string;
   strings: OsStrings['look'];
   onChange: (patch: Partial<Look>) => void;
   onImage: (file: File) => void;
   onReset: () => void;
 }
 
-/** Appearance window: theme mode, accent colour, wallpaper presets, photo upload and dim. */
-export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage, message, strings, onChange, onImage, onReset }) => {
+/**
+ * Appearance window: theme mode, accent colour, wallpaper presets, photo upload and dim.
+ * Confirmations and upload errors are reported by the caller through the shared toast.
+ */
+export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage, strings, onChange, onImage, onReset }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const dimId = useId();
   const modeId = useId();
@@ -96,7 +98,6 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage
           <button type="button" className="os-btn os-btn--ghost" onClick={onReset}>{strings.reset}</button>
         </div>
         <p className="os-ap-hint">{strings.uploadHint}</p>
-        <p className="os-ap-msg" role="status" aria-live="polite">{message}</p>
         {(look.wallpaper === 'image' || look.wallpaper === 'video') && (
           <label className="os-ap-dim" htmlFor={dimId}>
             <span>{strings.dim}<output htmlFor={dimId}>{look.dim}%</output></span>

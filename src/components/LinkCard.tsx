@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { MoreVertical, ExternalLink, Copy, Share2, Check } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import type { LinkItem } from '../db/types';
 import { track } from '../lib/analytics/client';
+import { showToast } from './feedback/toast-bus';
+import { useEscapeToClose } from './use-escape-to-close';
 
 interface LinkCardProps {
   item: LinkItem;
@@ -17,6 +19,11 @@ export const LinkCard: React.FC<LinkCardProps> = ({
 }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [copied, setCopied] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useEscapeToClose(showMenu, () => {
+    setShowMenu(false);
+    menuButtonRef.current?.focus();
+  });
   const title = lang === 'vi' ? item.title_vi || item.title_en : item.title_en;
   const subtitle = lang === 'vi' ? item.subtitle_vi || item.subtitle_en : item.subtitle_en;
 
@@ -33,15 +40,24 @@ export const LinkCard: React.FC<LinkCardProps> = ({
     e.preventDefault();
     e.stopPropagation();
     try {
+      if (!navigator.clipboard) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(item.url);
-      setCopied(true);
-      setTimeout(() => {
-        setCopied(false);
-        setShowMenu(false);
-      }, 1500);
     } catch {
-      // ignore
+      showToast(lang === 'vi' ? 'Không sao chép được liên kết' : 'Could not copy link', 'error');
+      return;
     }
+    if (showToast(lang === 'vi' ? 'Đã sao chép liên kết' : 'Link copied')) {
+      // The shared toast is the feedback: close the menu and keep focus on its trigger.
+      setShowMenu(false);
+      menuButtonRef.current?.focus();
+      return;
+    }
+    // No Toaster on this page: confirm inline in the menu item instead.
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+      setShowMenu(false);
+    }, 1500);
   };
 
   const handleShare = (e: React.MouseEvent) => {
@@ -110,6 +126,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
         {/* Right 3-dots Menu Button (Sibling to Anchor, NOT nested inside!) */}
         <div className="flex-shrink-0 relative z-50">
           <button
+            ref={menuButtonRef}
             type="button"
             onClick={(e) => {
               e.preventDefault();
@@ -118,6 +135,8 @@ export const LinkCard: React.FC<LinkCardProps> = ({
             }}
             className="w-9 h-9 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
             aria-label="More options"
+            aria-haspopup="menu"
+            aria-expanded={showMenu}
           >
             <MoreVertical className="w-4 h-4" />
           </button>

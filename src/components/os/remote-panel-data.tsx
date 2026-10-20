@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { apiFetch } from '../home/api-client';
+import { Skeleton } from '../feedback/Skeleton';
 
 /**
  * Data for a Zuey OS window panel, fetched when the panel hydrates instead of being serialized
@@ -55,10 +56,7 @@ export function RemotePanel<T>({ state, onRetry, href, strings, children }: Remo
     <div ref={region} tabIndex={-1} className="min-w-0 focus:outline-none" aria-busy={state.status === 'loading'}>
       {state.status === 'ready' && children(state.data)}
       {state.status === 'loading' && (
-        <div className="flex flex-col gap-3 p-4" role="status">
-          <span className="sr-only">{strings.loading}</span>
-          {[0, 1, 2, 3].map(i => <div key={i} className="h-20 rounded-2xl bg-white/10 animate-pulse" aria-hidden="true" />)}
-        </div>
+        <Skeleton label={strings.loading} rows={[80, 80, 80, 80]} className="zf-skel--dark" />
       )}
       {state.status === 'error' && (
         <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-stone-200" role="alert">
