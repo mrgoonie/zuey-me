@@ -330,13 +330,12 @@ interface Decorations {
 
 async function loadDecorations(db: D1DatabaseLike, picks: Array<{ articleId: string; locale: Locale }>): Promise<Decorations> {
   const ids = picks.map(p => p.articleId);
-  const tags = await tagsForArticles(db, ids);
-  const categories = new Map((await listCategories(db)).map(c => [c.id, c]));
-  const labels = new Map<string, Map<string, PublicLabel[]>>();
-  for (const locale of LOCALES) {
-    const forLocale = picks.filter(p => p.locale === locale).map(p => p.articleId);
-    if (forLocale.length) labels.set(locale, await publicLabelsFor(db, forLocale, locale));
-  }
+  const labelLoads = LOCALES.map(locale => ({ locale, ids: picks.filter(p => p.locale === locale).map(p => p.articleId) }))
+    .filter(l => l.ids.length)
+    .map(async l => [l.locale, await publicLabelsFor(db, l.ids, l.locale)] as const);
+  const [tags, categoryList, labelEntries] = await Promise.all([tagsForArticles(db, ids), listCategories(db), Promise.all(labelLoads)]);
+  const categories = new Map(categoryList.map(c => [c.id, c]));
+  const labels = new Map<string, Map<string, PublicLabel[]>>(labelEntries);
   return { tags, categories, labels };
 }
 
@@ -436,9 +435,12 @@ export interface ListOptions {
 
 export async function listArticles(d1: D1DatabaseLike | undefined, opts: ListOptions = {}): Promise<ArticleSummary[]> {
   if (!d1) return [];
-  const { results } = await d1.prepare('SELECT * FROM articles WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500').all<Row>();
+  // Independent reads run concurrently: every sequential D1 query costs a round trip to the database.
+  const [{ results }, editionsBy] = await Promise.all([
+    d1.prepare('SELECT * FROM articles WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500').all<Row>(),
+    loadEditions(d1, null),
+  ]);
   const articles = (results ?? []).map(toArticleRow);
-  const editionsBy = await loadEditions(d1, null);
   const idFilter = opts.ids ? new Set(opts.ids) : null;
 
   const picked: Array<{ art: ArticleRowData; edition: EditionRow; editions: EditionRow[] }> = [];
