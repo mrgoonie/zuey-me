@@ -16,5 +16,11 @@ class_name = "PresenceHub"
 tag = "v1"
 new_sqlite_classes = ["PresenceHub"]
 
+# Console logs stay on; invocation logs are off because they record request headers, and the
+# WebSocket handshake carries the connect ticket in Sec-WebSocket-Protocol.
 [observability]
 enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = false
