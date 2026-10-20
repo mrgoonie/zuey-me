@@ -4,10 +4,14 @@
  * Uses the WebSocket Hibernation API: sockets are accepted with `ctx.acceptWebSocket`, and all per-socket
  * state lives in the socket attachment, so the object can be evicted between messages without losing
  * anyone. In-memory fields below are caches only; owner status and the last broadcast signature are
- * persisted in DO storage. A DO alarm sweeps heartbeat TTL expiry every 15 s while sockets exist and
- * doubles as the timer for coalesced broadcasts (at most one every 2 s).
+ * persisted in DO storage. One DO alarm does three jobs, and is armed only while one of them is pending,
+ * so an object holding only idle or silent sockets can sleep:
+ *   - TTL sweep: due when the oldest live session would expire (min lastHb + TTL, at least SWEEP_INTERVAL_MS ahead);
+ *   - subscriber keepalive: an unchanged snapshot is re-sent to `sub` sockets every KEEPALIVE_INTERVAL_MS,
+ *     so a quiet but healthy feed never looks stale;
+ *   - coalesced broadcasts (at most one every 2 s).
  */
-import type { PresenceServerMessage, PresenceSnapshot } from '../../../src/lib/presence/contract';
+import { PRESENCE_SUBPROTOCOL, PRESENCE_TTL_MS, type PresenceServerMessage, type PresenceSnapshot } from '../../../src/lib/presence/contract';
 import {
   CLOSE_OVER_CAPACITY, CLOSE_POLICY, affectsSnapshot, applyClientMessage, computeSnapshot, consumeRate, isLive,
   isSessionIdentity, isSocketSession, isStoredOwner, newSession, nextOwner, ownerOnline, parseClientMessage,
@@ -23,6 +27,10 @@ export const SESSION_HEADER = 'X-Presence-Session';
 
 export const BROADCAST_MIN_INTERVAL_MS = 2_000;
 export const SWEEP_INTERVAL_MS = 15_000;
+/** Longest gap between snapshot pushes to a subscriber; under the feed's 60 s staleness threshold. */
+export const KEEPALIVE_INTERVAL_MS = 45_000;
+/** An alarm that fires this early still counts as due for a keepalive. */
+const ALARM_SLACK_MS = 1_000;
 
 const OWNER_KEY = 'owner';
 const SIGNATURE_KEY = 'sig';
@@ -60,6 +68,8 @@ export class PresenceHub {
   private lastSignature: string | null | undefined;
   private lastRefreshAt = 0;
   private refreshPending = false;
+  /** Epoch ms of the last snapshot push to subscribers (in memory: after eviction the next alarm simply pushes). */
+  private lastPushAt = 0;
 
   constructor(private readonly ctx: DurableObjectStateLike, _env: PresenceEnv) {}
 
@@ -101,10 +111,9 @@ export class PresenceHub {
       closeQuietly(server, CLOSE_OVER_CAPACITY, 'over_capacity');
       return upgradeResponse(client);
     }
-    const now = Date.now();
+    // A fresh socket is neither live nor subscribed, so it arms no alarm until its first `hb` or `sub`.
     this.ctx.acceptWebSocket(server, [`ip:${identity.ipHash}`, `k:${identity.k}`]);
-    server.serializeAttachment(newSession(identity, now));
-    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(now + SWEEP_INTERVAL_MS);
+    server.serializeAttachment(newSession(identity, Date.now()));
     return upgradeResponse(client);
   }
 
@@ -133,7 +142,12 @@ export class PresenceHub {
       }
       const next = applyClientMessage({ ...session, rate: decision.rate }, msg, now);
       ws.serializeAttachment(next);
-      if (msg.t === 'sub') send(ws, { t: 'snapshot', data: await this.current(now) });
+      if (msg.t === 'sub') {
+        send(ws, { t: 'snapshot', data: await this.current(now) });
+        await this.armNoLaterThan(now + KEEPALIVE_INTERVAL_MS);
+      }
+      // A session that just became live needs the sweep to notice when it expires.
+      if (!isLive(session, now) && isLive(next, now)) await this.armNoLaterThan(Math.max(now + SWEEP_INTERVAL_MS, next.lastHb + PRESENCE_TTL_MS + 1));
       if (affectsSnapshot(session, next, now)) await this.scheduleRefresh(now);
     } catch (err) {
       console.error('presence hub message failed', err instanceof Error ? err.message : 'unknown error');
@@ -153,8 +167,11 @@ export class PresenceHub {
     try {
       const now = Date.now();
       this.refreshPending = false;
-      await this.refresh(now);
-      if (this.ctx.getWebSockets().length > 0) await this.ctx.storage.setAlarm(now + SWEEP_INTERVAL_MS);
+      const subscribers = this.subscribers();
+      const keepalive = subscribers.length > 0 && now - this.lastPushAt >= KEEPALIVE_INTERVAL_MS - ALARM_SLACK_MS;
+      await this.refresh(now, undefined, keepalive);
+      const next = this.nextAlarm(now, subscribers.length > 0);
+      if (next !== null) await this.ctx.storage.setAlarm(next);
     } catch (err) {
       console.error('presence hub alarm failed', err instanceof Error ? err.message : 'unknown error');
       // Keep sweeping; the runtime also retries a failed alarm.
@@ -171,6 +188,33 @@ export class PresenceHub {
     } catch (err) {
       console.error('presence hub close failed', err instanceof Error ? err.message : 'unknown error');
     }
+  }
+
+  /** Sockets that asked for snapshot pushes. */
+  private subscribers(exclude?: HubWebSocket): HubWebSocket[] {
+    return this.ctx.getWebSockets().filter(ws => ws !== exclude && readSession(ws)?.sub === true);
+  }
+
+  /**
+   * When the alarm must fire next, or null when nothing needs it: the oldest live session's TTL expiry
+   * (at least SWEEP_INTERVAL_MS ahead) and, while subscribers exist, the next keepalive.
+   */
+  private nextAlarm(now: number, hasSubscribers: boolean): number | null {
+    let next: number | null = null;
+    let oldestHb = Number.POSITIVE_INFINITY;
+    for (const s of this.sessions()) if (isLive(s, now)) oldestHb = Math.min(oldestHb, s.lastHb);
+    if (Number.isFinite(oldestHb)) next = Math.max(now + SWEEP_INTERVAL_MS, oldestHb + PRESENCE_TTL_MS + 1);
+    if (hasSubscribers) {
+      const keepaliveAt = Math.max(now + ALARM_SLACK_MS, this.lastPushAt + KEEPALIVE_INTERVAL_MS);
+      next = next === null ? keepaliveAt : Math.min(next, keepaliveAt);
+    }
+    return next;
+  }
+
+  /** Makes sure the alarm fires no later than `at` (an earlier pending alarm recomputes its successor itself). */
+  private async armNoLaterThan(at: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
   }
 
   private sessions(exclude?: HubWebSocket): SocketSession[] {
@@ -211,8 +255,8 @@ export class PresenceHub {
     if (alarm === null || alarm > due) await this.ctx.storage.setAlarm(due);
   }
 
-  /** Pushes the snapshot to subscribers only when its public content changed. */
-  private async refresh(now: number, exclude?: HubWebSocket): Promise<void> {
+  /** Pushes the snapshot to subscribers when its public content changed, or always when `keepalive` is set. */
+  private async refresh(now: number, exclude?: HubWebSocket, keepalive = false): Promise<void> {
     this.lastRefreshAt = now;
     const snapshot = await this.current(now, exclude);
     const signature = snapshotSignature(snapshot);
@@ -220,19 +264,23 @@ export class PresenceHub {
       const stored = await this.ctx.storage.get(SIGNATURE_KEY);
       this.lastSignature = typeof stored === 'string' ? stored : null;
     }
-    if (signature === this.lastSignature) return;
-    this.lastSignature = signature;
-    await this.ctx.storage.put(SIGNATURE_KEY, signature);
-    const msg: PresenceServerMessage = { t: 'snapshot', data: snapshot };
-    for (const ws of this.ctx.getWebSockets()) {
-      if (ws === exclude) continue;
-      if (readSession(ws)?.sub) send(ws, msg);
+    const changed = signature !== this.lastSignature;
+    if (!changed && !keepalive) return;
+    if (changed) {
+      this.lastSignature = signature;
+      await this.ctx.storage.put(SIGNATURE_KEY, signature);
     }
+    const msg: PresenceServerMessage = { t: 'snapshot', data: snapshot };
+    for (const ws of this.subscribers(exclude)) send(ws, msg);
+    this.lastPushAt = now;
   }
 }
 
 function upgradeResponse(client: PairWebSocket): Response {
   // `webSocket` is a Workers-only ResponseInit field; a typed variable avoids widening ResponseInit globally.
-  const init: ResponseInit & { webSocket: PairWebSocket } = { status: 101, webSocket: client };
+  // The client offered `[PRESENCE_SUBPROTOCOL, ticket]`; the handshake must select one of them, never the ticket.
+  const init: ResponseInit & { webSocket: PairWebSocket } = {
+    status: 101, webSocket: client, headers: { 'Sec-WebSocket-Protocol': PRESENCE_SUBPROTOCOL },
+  };
   return new Response(null, init);
 }

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:test';
 import { PRESENCE_MAX_MESSAGE_BYTES, PRESENCE_TTL_MS, type PresenceServerMessage } from '../src/lib/presence/contract';
-import { BROADCAST_MIN_INTERVAL_MS, PresenceHub, SWEEP_INTERVAL_MS } from '../workers/presence/src/presence-hub';
+import { BROADCAST_MIN_INTERVAL_MS, KEEPALIVE_INTERVAL_MS, PresenceHub, SESSION_HEADER, SWEEP_INTERVAL_MS } from '../workers/presence/src/presence-hub';
 import { CLOSE_POLICY, MAX_SOCKETS_PER_KEY, MAX_STRIKES, isSocketSession, newSession, type SessionIdentity } from '../workers/presence/src/presence-state';
 import type { DurableObjectStateLike, HubWebSocket } from '../workers/presence/src/runtime-types';
 
 const T0 = Date.parse('2026-10-20T04:00:00.000Z');
+const MIN_GAP = 5_000;
 
 class FakeSocket implements HubWebSocket {
   sent: PresenceServerMessage[] = [];
@@ -70,6 +71,12 @@ function connect(k: string, over: Partial<SessionIdentity> = {}): FakeSocket {
 
 const send = (ws: FakeSocket, msg: unknown) => hub.webSocketMessage(ws, typeof msg === 'string' ? msg : JSON.stringify(msg));
 
+/** Fires the pending alarm the way the runtime does: the alarm is consumed before the handler runs. */
+async function fireAlarm(): Promise<void> {
+  state.alarmAt = null;
+  await hub.alarm();
+}
+
 beforeEach(() => {
   now = T0;
   setSystemTime(new Date(now));
@@ -108,9 +115,10 @@ describe('PresenceHub', () => {
     expect(state.alarmAt).toBe(T0 + 2 * BROADCAST_MIN_INTERVAL_MS);
 
     tick(BROADCAST_MIN_INTERVAL_MS);
-    await hub.alarm();
+    await fireAlarm();
     expect(watcher.snapshots().at(-1)?.active).toBe(2);
-    expect(state.alarmAt).toBe(now + SWEEP_INTERVAL_MS);
+    // Next: the subscriber keepalive, which comes before the oldest live session's TTL expiry.
+    expect(state.alarmAt).toBe(now + KEEPALIVE_INTERVAL_MS);
   });
 
   it('does not push when the public snapshot is unchanged', async () => {
@@ -122,7 +130,7 @@ describe('PresenceHub', () => {
     const pushes = watcher.snapshots().length;
     tick(25_000);
     await send(a, { t: 'hb', cat: 'reading' });
-    await hub.alarm();
+    await fireAlarm();
     expect(watcher.snapshots()).toHaveLength(pushes);
   });
 
@@ -135,13 +143,85 @@ describe('PresenceHub', () => {
     expect(watcher.snapshots().at(-1)?.active).toBe(1);
 
     tick(PRESENCE_TTL_MS + 1);
-    await hub.alarm();
+    await fireAlarm();
     expect(watcher.snapshots().at(-1)?.active).toBe(0);
 
     a.close();
     watcher.close();
-    state.alarmAt = null;
-    await hub.alarm();
+    await fireAlarm();
+    expect(state.alarmAt).toBeNull();
+  });
+
+  it('does not re-arm the alarm while sockets exist but none is live or subscribed', async () => {
+    const a = connect('a');
+    connect('b');
+    expect(state.alarmAt).toBeNull(); // connecting alone arms nothing
+    await send(a, { t: 'hb', cat: 'reading' });
+    expect(state.alarmAt).toBe(now + PRESENCE_TTL_MS + 1); // a newly live session arms the sweep at its expiry
+    tick(SWEEP_INTERVAL_MS);
+    await send(a, { t: 'idle' });
+    tick(PRESENCE_TTL_MS);
+    await fireAlarm();
+    expect(state.sockets.filter((s) => !s.ws.closed)).toHaveLength(2);
+    expect(state.alarmAt).toBeNull();
+
+    // A heartbeat from the now non-live session arms it again.
+    tick(MIN_GAP);
+    await send(a, { t: 'hb', cat: 'reading' });
+    expect(state.alarmAt).toBe(now + PRESENCE_TTL_MS + 1);
+  });
+
+  it('arms the sweep at the oldest live heartbeat expiry, at least one sweep interval ahead', async () => {
+    const a = connect('a');
+    const b = connect('b');
+    await send(a, { t: 'hb', cat: 'reading' });
+    tick(30_000);
+    await send(b, { t: 'hb', cat: 'reading' });
+    tick(10_000);
+    await fireAlarm();
+    expect(state.alarmAt).toBe(T0 + PRESENCE_TTL_MS + 1);
+    tick(PRESENCE_TTL_MS - 40_000 + 1);
+    await fireAlarm();
+    expect(state.alarmAt).toBe(T0 + 30_000 + PRESENCE_TTL_MS + 1); // a expired; b is next
+  });
+
+  it('sends subscribers a keepalive snapshot at most every 45 s, only while they exist', async () => {
+    const watcher = connect('w', { c: false });
+    await send(watcher, { t: 'sub' });
+    expect(watcher.snapshots()).toHaveLength(1);
+    expect(state.alarmAt).toBe(now + KEEPALIVE_INTERVAL_MS);
+
+    tick(KEEPALIVE_INTERVAL_MS);
+    await fireAlarm();
+    expect(watcher.snapshots()).toHaveLength(2); // unchanged snapshot, still pushed
+    expect(state.alarmAt).toBe(now + KEEPALIVE_INTERVAL_MS);
+
+    tick(10_000);
+    await fireAlarm(); // an early alarm (e.g. a coalesced broadcast) does not double the keepalive
+    expect(watcher.snapshots()).toHaveLength(2);
+
+    await send(watcher, { t: 'unsub' });
+    tick(KEEPALIVE_INTERVAL_MS);
+    await fireAlarm();
+    expect(watcher.snapshots()).toHaveLength(2);
+    expect(state.alarmAt).toBeNull();
+  });
+
+  it('upgrades with the presence subprotocol selected', async () => {
+    class PairSocket extends FakeSocket {
+      accept(): void {}
+    }
+    Object.assign(globalThis, { WebSocketPair: class { 0 = new PairSocket(); 1 = new PairSocket(); } });
+    const identity: SessionIdentity = { k: 'k1', c: true, m: false, o: false, ipHash: 'ip' };
+    let res: Response;
+    try {
+      res = await hub.fetch(new Request('https://hub/connect', { headers: { [SESSION_HEADER]: JSON.stringify(identity) } }));
+    } finally {
+      Reflect.deleteProperty(globalThis, 'WebSocketPair');
+    }
+    expect(res.status).toBe(101);
+    expect(res.headers.get('Sec-WebSocket-Protocol')).toBe('zuey-presence.v1');
+    expect(state.sockets).toHaveLength(1);
     expect(state.alarmAt).toBeNull();
   });
 

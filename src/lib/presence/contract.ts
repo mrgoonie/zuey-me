@@ -1,7 +1,8 @@
 /**
  * Presence data contract shared by the zuey.me Pages app, the browser presence client, the
- * Activity Monitor app and the `zuey-me-presence` Worker (workers/presence). Presence is ephemeral:
- * it lives only in the Worker's Durable Object memory/storage, never in D1 or PostHog.
+ * Activity Monitor app and the `zuey-me-presence` Worker (workers/presence). Per-visitor presence is
+ * ephemeral (socket attachments in the Worker's Durable Object); only aggregate state and owner status
+ * reach that Durable Object's own storage. Never D1 or PostHog.
  *
  * Self-contained on purpose (no app imports) so the Worker bundle can import it directly.
  */
@@ -14,6 +15,16 @@ export const PRESENCE_DEFAULT_ORIGIN = 'https://presence.zuey.me';
 /** Client heartbeat while the tab is visible; a session expires when no heartbeat arrives within the TTL. */
 export const PRESENCE_HEARTBEAT_MS = 25_000;
 export const PRESENCE_TTL_MS = 75_000;
+
+/**
+ * WebSocket subprotocol of the presence Worker. Clients offer `[PRESENCE_SUBPROTOCOL, ticket]` so the
+ * ticket travels in the `Sec-WebSocket-Protocol` header (never in the URL, which logs record); the Worker
+ * answers with this value alone.
+ */
+export const PRESENCE_SUBPROTOCOL = 'zuey-presence.v1';
+
+/** Shape of a connect ticket: base64url payload `.` base64url signature (all valid subprotocol token chars). */
+export const PRESENCE_TICKET_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 /** Ticket lifetime: the client fetches a fresh one for each (re)connect. */
 export const PRESENCE_TICKET_TTL_MS = 120_000;

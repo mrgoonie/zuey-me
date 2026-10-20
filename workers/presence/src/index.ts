@@ -1,22 +1,28 @@
 /**
  * zuey-me-presence: public edge of zuey.me realtime presence (https://presence.zuey.me).
  *
- *   GET /v1/health              liveness
- *   GET /v1/snapshot            aggregated PresenceSnapshot (CORS for zuey.me origins, cached 5 s)
- *   GET /v1/connect?ticket=...  WebSocket upgrade, forwarded to the single PresenceHub Durable Object
+ *   GET /v1/health      liveness
+ *   GET /v1/snapshot    aggregated PresenceSnapshot (CORS for zuey.me origins; memo + edge cache, see snapshot-cache.ts)
+ *   GET /v1/connect     WebSocket upgrade, forwarded to the single PresenceHub Durable Object. The ticket travels
+ *                       in `Sec-WebSocket-Protocol: zuey-presence.v1, <ticket>`, never in the URL (logs record URLs).
  *
  * Tickets are verified here (HMAC, expiry) before any upgrade; the hub only ever sees the verified identity
- * plus a truncated HMAC of the client IP. Raw IPs, user agents and ids are never stored or forwarded.
+ * plus a truncated HMAC of the client IP (IPv6: its /64). Raw IPs, user agents, tickets and ids are never
+ * stored, forwarded or logged.
  */
+import { PRESENCE_SUBPROTOCOL, type PresenceSnapshot } from '../../../src/lib/presence/contract';
+import { presenceIpKey } from '../../../src/lib/presence/ip-prefix';
 import { hmacBase64Url, verifyPresenceTicket } from '../../../src/lib/presence/ticket';
-import { PRESENCE_CONTRACT_VERSION, type PresenceSnapshot } from '../../../src/lib/presence/contract';
 import { PresenceHub, SESSION_HEADER } from './presence-hub';
 import type { SessionIdentity } from './presence-state';
 import type { PresenceEnv } from './runtime-types';
+import { cachedSnapshot, isPresenceSnapshot } from './snapshot-cache';
 
 export { PresenceHub };
 
-export const ALLOWED_ORIGINS: readonly string[] = ['https://zuey.me', 'https://www.zuey.me', 'http://localhost:4321', 'http://127.0.0.1:4321'];
+export const ALLOWED_ORIGINS: readonly string[] = ['https://zuey.me', 'https://www.zuey.me'];
+/** Local `bun run dev` origins, allowed only when the Worker runs with PRESENCE_DEV_ORIGINS=1 (local `.dev.vars`). */
+export const DEV_ORIGINS: readonly string[] = ['http://localhost:4321', 'http://127.0.0.1:4321'];
 
 /** Name of the one hub instance; presence is global, so a single object sees every socket. */
 const HUB_NAME = 'global';
@@ -43,45 +49,55 @@ function corsHeaders(origin: string | null): Record<string, string> {
   return headers;
 }
 
-function isPresenceSnapshot(v: unknown): v is PresenceSnapshot {
-  return typeof v === 'object' && v !== null && 'v' in v && v.v === PRESENCE_CONTRACT_VERSION && 'active' in v && typeof v.active === 'number'
-    && 'owner' in v && typeof v.owner === 'object' && v.owner !== null && 'categories' in v && Array.isArray(v.categories);
+export function isAllowedOrigin(origin: string | null, env: PresenceEnv): origin is string {
+  if (origin === null) return false;
+  return ALLOWED_ORIGINS.includes(origin) || (env.PRESENCE_DEV_ORIGINS === '1' && DEV_ORIGINS.includes(origin));
 }
 
-/** Last snapshot this isolate served, used when the hub is briefly unreachable. */
-let lastKnownSnapshot: PresenceSnapshot | null = null;
-
-async function snapshot(env: PresenceEnv, origin: string | null): Promise<Response> {
-  const headers = { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=5' };
-  try {
-    const stub = env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
-    const res = await stub.fetch(new Request(`${HUB_URL}/snapshot`));
-    const body: unknown = res.ok ? await res.json() : null;
-    if (isPresenceSnapshot(body)) lastKnownSnapshot = body;
-  } catch (err) {
-    console.error('presence snapshot failed', err instanceof Error ? err.message : 'unknown error');
-  }
-  if (!lastKnownSnapshot) return errorResponse(503, 'unavailable', 'Presence is temporarily unavailable', corsHeaders(origin));
-  return new Response(JSON.stringify(lastKnownSnapshot), { status: 200, headers });
+async function snapshotFromHub(env: PresenceEnv): Promise<PresenceSnapshot | null> {
+  const stub = env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
+  const res = await stub.fetch(new Request(`${HUB_URL}/snapshot`));
+  const body: unknown = res.ok ? await res.json() : null;
+  return isPresenceSnapshot(body) ? body : null;
 }
 
-async function connect(request: Request, env: PresenceEnv, url: URL): Promise<Response> {
+async function snapshot(env: PresenceEnv, url: URL, origin: string | null): Promise<Response> {
+  const current = await cachedSnapshot(url.origin, () => snapshotFromHub(env));
+  if (!current) return errorResponse(503, 'unavailable', 'Presence is temporarily unavailable', corsHeaders(origin));
+  return new Response(JSON.stringify(current), {
+    status: 200,
+    headers: { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=5' },
+  });
+}
+
+/**
+ * Ticket offered as a WebSocket subprotocol: the header must list PRESENCE_SUBPROTOCOL plus exactly one
+ * other entry (the ticket). Returns '' when absent, so verification fails closed.
+ */
+export function ticketFromProtocols(header: string | null): string {
+  const offered = (header ?? '').split(',').map(p => p.trim()).filter(p => p.length > 0);
+  if (!offered.includes(PRESENCE_SUBPROTOCOL)) return '';
+  const others = offered.filter(p => p !== PRESENCE_SUBPROTOCOL);
+  return others.length === 1 ? (others[0] ?? '') : '';
+}
+
+async function connect(request: Request, env: PresenceEnv): Promise<Response> {
   const secret = env.PRESENCE_TICKET_SECRET;
   if (!secret) return errorResponse(503, 'unavailable', 'Presence is not configured');
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return errorResponse(426, 'upgrade_required', 'Expected a WebSocket upgrade', { Upgrade: 'websocket' });
   }
-  const ticket = await verifyPresenceTicket(secret, url.searchParams.get('ticket') ?? '');
+  const ticket = await verifyPresenceTicket(secret, ticketFromProtocols(request.headers.get('Sec-WebSocket-Protocol')));
   if (!ticket) return errorResponse(401, 'unauthorized', 'Invalid or expired ticket');
 
-  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  const ip = presenceIpKey(request.headers.get('CF-Connecting-IP') ?? '') || 'unknown';
   const identity: SessionIdentity = {
     k: ticket.k, c: ticket.c, m: ticket.m, o: ticket.o,
     ipHash: (await hmacBase64Url(secret, `ip:${ip}`)).slice(0, IP_HASH_LENGTH),
   };
   try {
     const stub = env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
-    // A fresh request: no client headers (cookies, spoofed session headers) reach the hub.
+    // A fresh request: no client headers (cookies, the ticket, spoofed session headers) reach the hub.
     return await stub.fetch(new Request(`${HUB_URL}/connect`, {
       headers: { Upgrade: 'websocket', [SESSION_HEADER]: JSON.stringify(identity) },
     }));
@@ -97,7 +113,7 @@ export async function handleRequest(request: Request, env: PresenceEnv): Promise
   if (route !== '/v1/health' && route !== '/v1/snapshot' && route !== '/v1/connect') return errorResponse(404, 'not_found', 'Not found');
 
   const origin = request.headers.get('Origin');
-  const originAllowed = origin !== null && ALLOWED_ORIGINS.includes(origin);
+  const originAllowed = isAllowedOrigin(origin, env);
 
   if (route === '/v1/health') {
     if (request.method !== 'GET' && request.method !== 'HEAD') return errorResponse(405, 'method_not_allowed', 'Method not allowed');
@@ -110,13 +126,13 @@ export async function handleRequest(request: Request, env: PresenceEnv): Promise
     const corsOrigin = originAllowed ? origin : null;
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(corsOrigin) });
     if (request.method !== 'GET' && request.method !== 'HEAD') return errorResponse(405, 'method_not_allowed', 'Method not allowed', corsHeaders(corsOrigin));
-    return snapshot(env, corsOrigin);
+    return snapshot(env, url, corsOrigin);
   }
 
   // /v1/connect: browsers always send Origin on a WebSocket handshake, so a missing one is refused too.
   if (!originAllowed) return errorResponse(403, 'forbidden', 'Origin not allowed');
   if (request.method !== 'GET') return errorResponse(405, 'method_not_allowed', 'Method not allowed');
-  return connect(request, env, url);
+  return connect(request, env);
 }
 
 export default {

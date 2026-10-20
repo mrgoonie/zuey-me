@@ -47,4 +47,12 @@ export interface PresenceEnv {
   PRESENCE_HUB: DurableObjectNamespaceLike;
   /** Shared with the Pages app, which signs connect tickets with it. Set once with `wrangler secret put`. */
   PRESENCE_TICKET_SECRET?: string;
+  /** `1` also allows the local dev origins (localhost:4321). Set only in `workers/presence/.dev.vars`, never in production. */
+  PRESENCE_DEV_ORIGINS?: string;
+}
+
+/** The subset of the Workers Cache API (`caches.default`) the snapshot route uses. */
+export interface EdgeCacheLike {
+  match(request: Request): Promise<Response | undefined>;
+  put(request: Request, response: Response): Promise<void>;
 }
