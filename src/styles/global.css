@@ -3,13 +3,22 @@
 @tailwind utilities;
 
 /* Metric-matched local fallbacks (Capsize metrics): the web fonts load without blocking render, so the
-   fallback must occupy the same space or the swap shifts the layout (CLS). */
+   fallback must occupy the same space or the swap shifts the layout (CLS). Each face is tuned to one local
+   font; a face whose font is missing is skipped, so Android (no Arial) gets the Roboto-tuned one. */
 @font-face {
   font-family: 'Plus Jakarta Sans Fallback';
-  src: local('Arial'), local('Roboto');
+  src: local('Arial');
   size-adjust: 104.98%;
   ascent-override: 98.88%;
   descent-override: 21.15%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans Fallback Roboto';
+  src: local('Roboto');
+  size-adjust: 104.18%;
+  ascent-override: 99.64%;
+  descent-override: 21.31%;
   line-gap-override: 0%;
 }
 @font-face {
@@ -25,7 +34,7 @@
   body {
     background-color: #F5EFEB;
     color: #1c1917;
-    font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', system-ui, -apple-system, sans-serif;
+    font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', system-ui, -apple-system, sans-serif;
   }
 
   h1, h2, h3, .font-serif {
