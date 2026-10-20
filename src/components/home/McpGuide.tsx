@@ -70,6 +70,21 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
   const [copied, setCopied] = useState<{ index: number; ok: boolean } | null>(null);
   /** Copy result shown inline only when no shared Toaster is mounted, so it is announced once. */
   const [inlineStatus, setInlineStatus] = useState('');
+  const statusTimers = useRef<number[]>([]);
+  useEffect(() => () => statusTimers.current.forEach(t => window.clearTimeout(t)), []);
+
+  /** Shows a copy result: through the shared toast, or inline when no Toaster is mounted. */
+  const announce = (message: string, ok: boolean) => {
+    statusTimers.current.forEach(t => window.clearTimeout(t));
+    statusTimers.current = [];
+    setInlineStatus('');
+    if (showToast(message, ok ? 'success' : 'error')) return;
+    // Empty first, then the text, so a repeated identical result is announced again; then clear it.
+    statusTimers.current = [
+      window.setTimeout(() => setInlineStatus(message), 60),
+      window.setTimeout(() => setInlineStatus(''), 3000),
+    ];
+  };
   const panelId = useId();
 
   useEffect(() => {
@@ -124,8 +139,7 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
                   const code = e.currentTarget.parentElement?.querySelector('code') ?? null;
                   const ok = await copyText(s.code, code);
                   setCopied({ index: i, ok });
-                  const message = ok ? strings.copied : strings.copyFailed;
-                  setInlineStatus(showToast(message, ok ? 'success' : 'error') ? '' : message);
+                  announce(ok ? strings.copied : strings.copyFailed, ok);
                 }}
               >
                 {copied?.index === i && copied.ok ? <Check aria-hidden="true" className="w-4 h-4" /> : <Copy aria-hidden="true" className="w-4 h-4" />}

@@ -1,4 +1,4 @@
-import React, { useId, useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 import { X, Link2, QrCode, Check } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import type { Profile } from '../db/types';
@@ -10,7 +10,8 @@ interface ShareModalProps {
   onClose: () => void;
   profile: Profile;
   lang: 'en' | 'vi';
-  onOpenQr: () => void;
+  /** Opens the QR modal instead; receives where focus should return once that modal closes. */
+  onOpenQr: (returnFocus: HTMLElement | null) => void;
 }
 
 export const ShareModal: React.FC<ShareModalProps> = ({
@@ -23,7 +24,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   /** 'toast' when the shared toast confirmed the copy, 'inline' when this page has no Toaster. */
   const [copied, setCopied] = useState<'toast' | 'inline' | null>(null);
   const titleId = useId();
-  useEscapeToClose(isOpen, onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const returnTarget = useEscapeToClose(isOpen, onClose, { initialFocus: closeButtonRef });
+  const openQr = () => onOpenQr(returnTarget());
 
   if (!isOpen) return null;
 
@@ -93,7 +96,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
       label: 'QR Code',
       icon: <QrCode className="w-6 h-6 text-stone-800" />,
       bg: 'bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900',
-      action: onOpenQr,
+      action: openQr,
     },
   ];
 
@@ -112,6 +115,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             {lang === 'vi' ? 'Chia sẻ Profile' : 'Share Profile'}
           </h2>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors"
             aria-label="Close"
@@ -180,7 +184,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             {copied ? (lang === 'vi' ? '✓ Đã sao chép' : '✓ Copied!') : (lang === 'vi' ? 'Sao chép liên kết URL' : 'Copy Profile URL')}
           </button>
           <button
-            onClick={onOpenQr}
+            onClick={openQr}
             className="w-full py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-full font-medium text-xs transition-colors flex items-center justify-center gap-2"
           >
             <QrCode className="w-4 h-4 text-stone-600" />

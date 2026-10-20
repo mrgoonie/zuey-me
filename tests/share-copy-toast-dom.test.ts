@@ -21,6 +21,7 @@ let shareModal: typeof import('../src/components/ShareModal');
 let shareMenu: typeof import('../src/components/knowledge/ShareMenu');
 let mcpGuide: typeof import('../src/components/home/McpGuide');
 let homeI18n: typeof import('../src/components/home/home-i18n');
+let popup: typeof import('../src/components/use-escape-to-close');
 
 const mounted: Array<{ root: Root; container: HTMLElement }> = [];
 /** Text written to the stubbed clipboard; `clipboardFails` makes the next writes reject. */
@@ -82,6 +83,7 @@ beforeAll(async () => {
   shareMenu = await import('../src/components/knowledge/ShareMenu');
   mcpGuide = await import('../src/components/home/McpGuide');
   homeI18n = await import('../src/components/home/home-i18n');
+  popup = await import('../src/components/use-escape-to-close');
 });
 
 afterEach(() => {
@@ -119,7 +121,7 @@ describe('profile link card', () => {
     expect(written).toEqual([item.url]);
     expect(toastText()).toBe('Link copied');
     expect(card.textContent).not.toContain('Copy link');
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement === trigger).toBe(true);
   });
 
   test('the menu trigger reports its popup, and Escape closes the menu back onto it', async () => {
@@ -133,7 +135,7 @@ describe('profile link card', () => {
     React.act(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(card.textContent).not.toContain('Copy link');
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement === trigger).toBe(true);
   });
 
   test('a failed copy shows an error toast instead of failing silently', async () => {
@@ -209,7 +211,36 @@ describe('MCP setup snippets', () => {
       m.container.remove();
     }
     const alone = mount(React.createElement(mcpGuide.McpGuide, { strings }));
-    await click(alone.querySelector('.home-snippet button') ?? alone);
+    const copy = alone.querySelector('.home-snippet button') ?? alone;
+    await click(copy);
+    await React.act(async () => { await new Promise(r => setTimeout(r, 100)); });
     expect(status(alone)).toBe(strings.copied);
+    // A repeat copy clears the region first, so the same text is announced again.
+    await click(copy);
+    expect(status(alone)).toBe('');
+    await React.act(async () => { await new Promise(r => setTimeout(r, 100)); });
+    expect(status(alone)).toBe(strings.copied);
+  });
+});
+
+describe('useEscapeToClose', () => {
+  test('one Escape closes only the newest open popup', () => {
+    const closed: string[] = [];
+    const Popup = ({ name }: { name: string }) => {
+      popup.useEscapeToClose(true, () => { closed.push(name); });
+      return null;
+    };
+    mount(React.createElement(Popup, { name: 'menu' }));
+    mount(React.createElement(Popup, { name: 'dialog' }));
+    const escape = () => React.act(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    escape();
+    expect(closed).toEqual(['dialog']);
+    const newest = mounted.pop();
+    if (newest) {
+      React.act(() => newest.root.unmount());
+      newest.container.remove();
+    }
+    escape();
+    expect(closed).toEqual(['dialog', 'menu']);
   });
 });

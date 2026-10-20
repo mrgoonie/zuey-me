@@ -287,22 +287,22 @@ describe('Zuey OS dock, menu bar, phone home and appearance', () => {
     expect(items.map(i => i.textContent)).toEqual(['about', 'theme', 'privacy']);
     for (const i of items) expect(i.getAttribute('tabindex')).toBe('-1');
     expect(items.every(i => i.parentElement?.getAttribute('role') === 'none')).toBe(true);
-    expect(document.activeElement).toBe(items[0]);
+    expect(document.activeElement === items[0]).toBe(true);
 
     key(items[0], { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(items[2]);
+    expect(document.activeElement === items[2]).toBe(true);
     key(items[2], { key: 'Home' });
-    expect(document.activeElement).toBe(items[0]);
+    expect(document.activeElement === items[0]).toBe(true);
     key(items[0], { key: 'End' });
-    expect(document.activeElement).toBe(items[2]);
+    expect(document.activeElement === items[2]).toBe(true);
     key(items[2], { key: 'Escape' });
     expect(root.querySelector('[role="menu"]')).toBeNull();
-    expect(document.activeElement).toBe(btn);
+    expect(document.activeElement === btn).toBe(true);
 
     // ArrowUp opens on the last item; activating an item runs it and closes the menu.
     key(btn, { key: 'ArrowUp' });
     const reopened = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
-    expect(document.activeElement).toBe(reopened[2]);
+    expect(document.activeElement === reopened[2]).toBe(true);
     React.act(() => reopened[1].click());
     expect(ran).toEqual(['theme']);
     expect(root.querySelector('[role="menu"]')).toBeNull();
@@ -388,7 +388,8 @@ describe('Zuey OS feedback', () => {
 });
 
 describe('Zuey OS desktop keyboard flow', () => {
-  test('Escape in the About window closes the open share modal first, then the window', async () => {
+  /** Mounts the desktop with the About window open and focused. */
+  async function openAbout() {
     offlineFetch();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
     const root = mount(React.createElement(os.ZueyOS, { locale: 'en', profile, links: [], signedIn: false }));
@@ -397,21 +398,56 @@ describe('Zuey OS desktop keyboard flow', () => {
     await settle();
     const about = () => root.querySelector<HTMLElement>('.osw[data-app="about"]');
     expect(about()?.hidden).toBe(false);
+    const modal = () => about()?.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? null;
+    const escape = async () => {
+      key(document.activeElement ?? document.body, { key: 'Escape' });
+      await settle(2);
+    };
+    return { about, modal, escape };
+  }
 
+  test('Escape in the About window closes the share modal first (focus returns to its opener), then the window', async () => {
+    const { about, modal, escape } = await openAbout();
     const share = about()?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
     if (!share) throw new Error('No share button');
     share.focus();
     React.act(() => share.click());
     await settle(2);
-    const modal = () => about()?.querySelector('[role="dialog"][aria-modal="true"]') ?? null;
     expect(modal()).not.toBeNull();
+    // Focus starts inside the dialog, and Escape is pressed from there.
+    expect(modal()?.contains(document.activeElement)).toBe(true);
 
-    key(share, { key: 'Escape' });
-    await settle(2);
+    await escape();
     expect(modal()).toBeNull();
     expect(about()?.hidden).toBe(false);
+    expect(document.activeElement === share).toBe(true);
 
-    key(share, { key: 'Escape' });
+    await escape();
+    await settle();
+    expect(about()?.hidden).toBe(true);
+  });
+
+  test('Share, then QR, then Escape twice: the QR modal closes onto the share trigger and the window closes', async () => {
+    const { about, modal, escape } = await openAbout();
+    const share = about()?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
+    if (!share) throw new Error('No share button');
+    share.focus();
+    React.act(() => share.click());
+    await settle(2);
+    const showQr = Array.from(modal()?.querySelectorAll('button') ?? []).find(b => b.textContent?.trim() === 'Show QR Code');
+    if (!showQr) throw new Error('No QR button');
+    showQr.focus();
+    React.act(() => showQr.click());
+    await settle(2);
+    expect(modal()?.querySelector('h2')?.textContent).toBe('Scan Profile QR');
+    expect(modal()?.contains(document.activeElement)).toBe(true);
+
+    await escape();
+    expect(modal()).toBeNull();
+    expect(about()?.hidden).toBe(false);
+    expect(document.activeElement === share).toBe(true);
+
+    await escape();
     await settle();
     expect(about()?.hidden).toBe(true);
   });
