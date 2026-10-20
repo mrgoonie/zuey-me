@@ -1,5 +1,5 @@
 /**
- * Zuey OS appearance: theme mode, accent colour and wallpaper. Stored per device in localStorage
+ * Zuey OS appearance: theme mode, accent colour, wallpaper and the Liquid Glass switch. Stored per device in localStorage
  * and applied to <html> before first paint by LOOK_BOOT_SCRIPT (inlined in the page head).
  * Only the shell (menubar, dock, desktop, Exposé) follows the theme; documents stay paper.
  */
@@ -14,6 +14,11 @@ export interface Look {
   wallpaper: WallpaperId;
   /** Dim over photo and video wallpapers, 0–80 (%). */
   dim: number;
+  /**
+   * Liquid Glass chrome (see liquid-glass.ts). Only stored once the visitor flips the switch, so looks
+   * saved before the switch existed keep parsing unchanged; absent means on.
+   */
+  glass?: boolean;
 }
 
 export const THEME_MODES: ThemeMode[] = ['dark', 'light', 'system'];
@@ -45,8 +50,13 @@ export function parseLook(raw: unknown): Look {
   const accent = 'accent' in raw && isAccent(raw.accent) ? raw.accent : DEFAULT_LOOK.accent;
   const wallpaper = 'wallpaper' in raw && isWallpaper(raw.wallpaper) ? raw.wallpaper : DEFAULT_LOOK.wallpaper;
   const dimRaw = 'dim' in raw && typeof raw.dim === 'number' && Number.isFinite(raw.dim) ? raw.dim : DEFAULT_LOOK.dim;
-  return { mode, accent, wallpaper, dim: Math.max(0, Math.min(80, Math.round(dimRaw))) };
+  const look: Look = { mode, accent, wallpaper, dim: Math.max(0, Math.min(80, Math.round(dimRaw))) };
+  if ('glass' in raw && typeof raw.glass === 'boolean') look.glass = raw.glass;
+  return look;
 }
+
+/** Whether the visitor wants Liquid Glass chrome (on unless switched off). */
+export const glassEnabled = (look: Look): boolean => look.glass !== false;
 
 export function readLook(): Look {
   try {
