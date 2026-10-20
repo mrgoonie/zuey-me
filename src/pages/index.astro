@@ -43,9 +43,10 @@ Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
 if (member) Astro.response.headers.set('Cache-Control', 'private, no-store');
 const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
 const imageTransforms = imageTransformsFor(Astro.url.hostname, runtimeEnv.IMAGE_TRANSFORMS);
-// The avatar is shown at most 112 CSS px (52–64 px in the dock, glyphs and phone home), so one 128 px
-// square serves every place; the original PNG is ~280 KB.
-const shownProfile = { ...profile, avatar_url: transformImageUrl(profile.avatar_url, { width: 128, height: 128, fit: 'cover' }, imageTransforms) };
+// The avatar is shown at most 112 CSS px (80 px in the share sheet, 52–64 px in the dock, glyphs and phone
+// home), so one 256 px square stays sharp on 2x screens everywhere; the original PNG is ~280 KB. If the
+// transformation fails, Cloudflare redirects to the original.
+const shownProfile = { ...profile, avatar_url: transformImageUrl(profile.avatar_url, { width: 256, height: 256, fit: 'cover', onerror: 'redirect' }, imageTransforms) };
 ---
 
 <Layout

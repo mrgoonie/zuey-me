@@ -21,6 +21,8 @@ export interface TransformOptions {
   height?: number;
   fit?: 'cover' | 'scale-down';
   quality?: number;
+  /** 'redirect' answers with the original image when the transformation fails (instead of an error). */
+  onerror?: 'redirect';
 }
 
 export const DEFAULT_IMAGE_QUALITY = 80;
@@ -63,6 +65,7 @@ export function transformImageUrl(url: string, opts: TransformOptions, transform
   if (opts.height) parts.push(`height=${clampDimension(opts.height)}`);
   if (opts.fit) parts.push(`fit=${opts.fit}`);
   parts.push(`quality=${Math.round(Math.min(100, Math.max(1, opts.quality ?? DEFAULT_IMAGE_QUALITY)))}`, 'format=auto');
+  if (opts.onerror) parts.push(`onerror=${opts.onerror}`);
   const source = url.startsWith('/') ? url.slice(1) : url;
   return `${transforms.base}/cdn-cgi/image/${parts.join(',')}/${source}`;
 }
