@@ -1,4 +1,5 @@
 import { parseBindingId, unlinkMemberBinding } from '../../../../../lib/channel-access/dewee-identity';
+import { consumeRateLimit } from '../../../../../lib/courses/course-abuse-guards';
 import { jsonOk } from '../../../../../lib/http';
 import { NO_STORE, memberRoute, requireUser } from '../../../../../lib/members/account';
 import { requireCan } from '../../../../../lib/members/policy';
@@ -9,6 +10,7 @@ export const DELETE = memberRoute(async ({ params, request }, { d1, env, princip
   requireCan(principal, 'account:security');
   const user = requireUser(principal);
   const bindingId = parseBindingId(params.bindingId);
+  await consumeRateLimit(d1, 'channelBindings', user.id);
   await unlinkMemberBinding(env, user.id, bindingId);
   try {
     await logActivity(d1, user.id, 'channel.unlinked', { binding_id: bindingId }, request);

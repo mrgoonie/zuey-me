@@ -20,8 +20,16 @@ export const DEWEE_IDENTITY_ENV_NAMES = ['DEWEE_GATEWAY_URL', 'DEWEE_APPLICATION
 const BINDINGS_SESSION_TTL_SECONDS = 60;
 /** Lifecycle calls run after billing or deletion has committed: keep them short. */
 const LIFECYCLE_TIMEOUT_MS = 3000;
+/** Waits before the 2nd and 3rd lifecycle attempt; only a timeout, 429 or 5xx is retried. */
+export const LIFECYCLE_RETRY_DELAYS_MS = [250, 1000] as const;
 const BINDINGS_TIMEOUT_MS = 5000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Injectable for tests: the lifecycle retry backoff. */
+export const deweeIdentityRuntime: { sleep: (ms: number) => Promise<void> } = {
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+};
 
 export interface DeweeIdentityConfig {
   gatewayUrl: string;
@@ -36,10 +44,28 @@ function trimmed(v: string | undefined): string {
   return (v ?? '').trim();
 }
 
-/** Names of the identity variables that are missing or unusable (a short secret counts as missing). */
+/**
+ * A Dewee base URL zuey.me may sign for and send members to: https (http only on loopback, for local
+ * development), with no credentials, query or fragment.
+ */
+function isUsableDeweeUrl(raw: string): boolean {
+  if (!raw || raw.includes('?') || raw.includes('#')) return false;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.username || url.password) return false;
+  return url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname));
+}
+
+/** Names of the identity variables that are missing or unusable (a short secret or a bad URL counts as missing). */
 export function missingDeweeIdentityEnv(env: RuntimeEnv): string[] {
   const missing: string[] = [];
-  if (!trimmed(env.DEWEE_GATEWAY_URL)) missing.push('DEWEE_GATEWAY_URL');
+  if (!isUsableDeweeUrl(trimmed(env.DEWEE_GATEWAY_URL))) missing.push('DEWEE_GATEWAY_URL');
+  const connectBase = trimmed(env.DEWEE_CONNECT_BASE_URL);
+  if (connectBase && !isUsableDeweeUrl(connectBase)) missing.push('DEWEE_CONNECT_BASE_URL');
   if (!UUID_RE.test(trimmed(env.DEWEE_APPLICATION_ID))) missing.push('DEWEE_APPLICATION_ID');
   if (!trimmed(env.DEWEE_IDENTITY_ISSUER)) missing.push('DEWEE_IDENTITY_ISSUER');
   if (trimmed(env.DEWEE_ASSERTION_SECRET).length < MIN_SECRET_LENGTH) missing.push('DEWEE_ASSERTION_SECRET');
@@ -96,26 +122,46 @@ export type LifecycleOutcome =
   | { status: 'unconfigured' }
   | { status: 'failed'; error: string };
 
+/** A timeout or network failure (no answer), a 429 or a 5xx: worth another attempt. */
+function isTransient(err: unknown): boolean {
+  if (!(err instanceof DeweeIdentityError)) return false;
+  return err.status === 0 || err.status === 429 || err.status >= 500;
+}
+
 /**
- * Reports a member lifecycle event to Dewee. Never throws: the billing or account operation that triggered
- * it has already committed, and Dewee's own checks stay the source of truth if a call is lost.
+ * Reports a member lifecycle event to Dewee, best effort. A transient failure is retried up to
+ * `LIFECYCLE_RETRY_DELAYS_MS.length` more times with backoff. Never throws: the billing or account operation
+ * that triggered it has already committed. Every outcome other than `applied` is logged, because a lost event
+ * leaves Dewee with stale scopes or links until an admin removes them there.
  */
 export async function reportMemberLifecycle(
   env: RuntimeEnv, userId: string, event: LifecycleEvent, scopes?: string[],
 ): Promise<LifecycleOutcome> {
   const cfg = deweeIdentityConfig(env);
   if (!cfg) return { status: 'unconfigured' };
-  try {
-    const result = await lifecycle({
-      gatewayUrl: cfg.gatewayUrl, signer: cfg.signer, subject: userId, event, scopes,
-      fetch: sdkFetch, timeoutMs: LIFECYCLE_TIMEOUT_MS,
-    });
-    return { status: 'applied', result };
-  } catch (err) {
-    if (err instanceof DeweeIdentityError && err.code === 'NOT_FOUND') return { status: 'not_linked' };
-    const error = describeError(err);
-    console.warn(`dewee identity lifecycle ${event} failed:`, error);
-    return { status: 'failed', error };
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const result = await lifecycle({
+        gatewayUrl: cfg.gatewayUrl, signer: cfg.signer, subject: userId, event, scopes,
+        fetch: sdkFetch, timeoutMs: LIFECYCLE_TIMEOUT_MS,
+      });
+      return { status: 'applied', result };
+    } catch (err) {
+      if (err instanceof DeweeIdentityError && err.code === 'NOT_FOUND') {
+        // Usually a member who never linked a chat account; also what a wrong application id or a gateway
+        // with identity exchange disabled answers, so it is logged rather than dropped silently.
+        console.info(`dewee identity lifecycle ${event}: no Dewee principal for this member (NOT_FOUND)`);
+        return { status: 'not_linked' };
+      }
+      const delay = LIFECYCLE_RETRY_DELAYS_MS[attempt];
+      if (delay !== undefined && isTransient(err)) {
+        await deweeIdentityRuntime.sleep(delay);
+        continue;
+      }
+      const error = describeError(err);
+      console.warn(`dewee identity lifecycle ${event} failed after ${attempt + 1} attempt(s):`, error);
+      return { status: 'failed', error };
+    }
   }
 }
 
@@ -149,18 +195,38 @@ function toAppError(err: unknown): AppError {
   return new AppError(502, 'dewee_identity_unavailable', 'Dewee could not be reached; try again shortly');
 }
 
+/** Dewee answered as if identity linking were off for this application: a configuration problem, not the member's. */
+function linkingUnavailable(): AppError {
+  return new AppError(503, 'dewee_identity_unavailable', 'Dewee account linking is not available right now');
+}
+
 async function bindingsRequest(cfg: DeweeIdentityConfig, userId: string, method: 'GET' | 'DELETE', path: string): Promise<unknown> {
-  const session = await exchangeSession({
-    gatewayUrl: cfg.gatewayUrl, signer: cfg.signer, subject: userId, agent: cfg.agent,
-    ttlSeconds: BINDINGS_SESSION_TTL_SECONDS, fetch: sdkFetch, timeoutMs: BINDINGS_TIMEOUT_MS,
-  });
+  let session: Awaited<ReturnType<typeof exchangeSession>>;
+  try {
+    session = await exchangeSession({
+      gatewayUrl: cfg.gatewayUrl, signer: cfg.signer, subject: userId, agent: cfg.agent,
+      ttlSeconds: BINDINGS_SESSION_TTL_SECONDS, fetch: sdkFetch, timeoutMs: BINDINGS_TIMEOUT_MS,
+    });
+  } catch (err) {
+    // NOT_FOUND here means an unknown application or agent, or exchange disabled on the gateway.
+    if (err instanceof DeweeIdentityError && err.code === 'NOT_FOUND') {
+      console.warn('dewee identity session exchange answered NOT_FOUND: check DEWEE_APPLICATION_ID, DEWEE_AGENT_KEY and the gateway identity settings');
+      throw linkingUnavailable();
+    }
+    throw err;
+  }
   const res = await membersRuntime.fetch(`${cfg.gatewayUrl.replace(/\/+$/, '')}${path}`, {
     method,
     headers: { Accept: 'application/json', [session.header]: session.sessionToken },
     redirect: 'error',
     signal: AbortSignal.timeout(BINDINGS_TIMEOUT_MS),
   });
-  if (res.status === 404) throw new AppError(404, 'not_found', 'Linked chat account not found');
+  if (res.status === 404) {
+    // Only an unlink can miss: a 404 on the list route means the gateway does not serve it.
+    if (method === 'DELETE') throw new AppError(404, 'not_found', 'Linked chat account not found');
+    console.warn('dewee identity GET /v1/identity/me/bindings answered 404');
+    throw linkingUnavailable();
+  }
   if (!res.ok) {
     console.warn(`dewee identity ${method} ${path.split('/').slice(0, 5).join('/')} answered`, res.status);
     throw new AppError(502, 'dewee_identity_unavailable', 'Dewee could not be reached; try again shortly');

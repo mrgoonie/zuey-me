@@ -5,7 +5,13 @@ import { AppError, errorResponse } from '../../lib/http';
 import { requireMembersDb, safeNextPath } from '../../lib/members/runtime';
 import { resolveMemberSession } from '../../lib/members/session';
 
-const HANDOFF_HEADERS = { 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
+const HANDOFF_HEADERS = {
+  'Cache-Control': 'private, no-store',
+  'Referrer-Policy': 'no-referrer',
+  'X-Robots-Tag': 'noindex, nofollow',
+  // The page auto-posts a signed member assertion: it must never run inside another site's frame.
+  'Content-Security-Policy': "frame-ancestors 'none'",
+};
 
 /**
  * Dewee Connect start URL: Dewee sends the member here with `dewee_txn` and `return_to`. The signed-in member

@@ -6,7 +6,7 @@ import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { subjectRef } from '../src/lib/channel-access/check';
-import { reportMemberLifecycle } from '../src/lib/channel-access/dewee-identity';
+import { LIFECYCLE_RETRY_DELAYS_MS, deweeIdentityRuntime, missingDeweeIdentityEnv, reportMemberLifecycle } from '../src/lib/channel-access/dewee-identity';
 import { isSensitivePath } from '../src/lib/analytics/pii';
 import { applyBillingPayment } from '../src/lib/members/billing';
 import { channelAccessOpenApi } from '../src/lib/channel-access/openapi';
@@ -49,6 +49,8 @@ let fetchImpl: (url: string, init?: RequestInit) => Promise<Response>;
 const originalFetch = membersRuntime.fetch;
 const originalNow = membersRuntime.now;
 const originalExperienceFetch = experienceRuntime.fetch;
+const originalSleep = deweeIdentityRuntime.sleep;
+let sleeps: number[];
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -146,22 +148,27 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
 
 const lifecycleCalls = () => fetchLog.filter(f => f.url === `${GATEWAY}/v1/identity/principals/lifecycle`);
 
-/** Answers like a Dewee gateway with hosted linking on. */
-function fakeDewee(opts: { lifecycleStatus?: number; bindings?: unknown[]; unlinkStatus?: number } = {}): void {
+/** Answers like a Dewee gateway with hosted linking on. `lifecycleStatuses` answers successive lifecycle calls (0 = network failure). */
+function fakeDewee(opts: { lifecycleStatus?: number; lifecycleStatuses?: number[]; bindings?: unknown[]; unlinkStatus?: number; exchangeStatus?: number; listStatus?: number } = {}): void {
+  const queue = [...(opts.lifecycleStatuses ?? [])];
   fetchImpl = async (url, init) => {
     if (url === `${GATEWAY}/v1/identity/principals/lifecycle`) {
-      const status = opts.lifecycleStatus ?? 200;
+      const status = queue.shift() ?? opts.lifecycleStatus ?? 200;
+      if (status === 0) throw new Error('network down');
       if (status !== 200) return json({ error: { code: status === 404 ? 'NOT_FOUND' : 'INTERNAL', message: 'x' } }, status);
       return json({ principal_id: 'p1', event: 'scopes_changed', status: 'active', grant_version: 2, sessions_revoked: 0, bindings_revoked: 0 });
     }
     if (url === `${GATEWAY}/v1/identity/sessions/exchange`) {
+      if (opts.exchangeStatus) return json({ error: { code: opts.exchangeStatus === 404 ? 'NOT_FOUND' : 'INTERNAL', message: 'x' } }, opts.exchangeStatus);
       return json({
         session_token: 'dis_session_token', token_type: 'Bearer', header: 'X-Dewee-Identity-Session', session_id: '0199a572-a064-7118-8f4a-0b28d615d0f0',
         principal_id: '0199a572-a064-7118-8f4a-0b28d615d0f1', application_id: APP_ID, agent_id: 'agent-1',
         expires_at: new Date(now + 60_000).toISOString(), test_mode: false,
       }, 201);
     }
-    if (url === `${GATEWAY}/v1/identity/me/bindings` && (init?.method ?? 'GET') === 'GET') return json({ bindings: opts.bindings ?? [] });
+    if (url === `${GATEWAY}/v1/identity/me/bindings` && (init?.method ?? 'GET') === 'GET') {
+      return opts.listStatus ? json({ error: { code: 'NOT_FOUND', message: 'x' } }, opts.listStatus) : json({ bindings: opts.bindings ?? [] });
+    }
     if (url.startsWith(`${GATEWAY}/v1/identity/me/bindings/`) && init?.method === 'DELETE') {
       const status = opts.unlinkStatus ?? 200;
       return status === 200 ? json({ binding_id: BINDING_ID, status: 'revoked', grant_version: 3 }) : json({ error: { code: 'NOT_FOUND', message: 'x' } }, status);
@@ -175,6 +182,8 @@ beforeEach(() => {
   now = T0;
   membersRuntime.now = () => now;
   fetchLog = [];
+  sleeps = [];
+  deweeIdentityRuntime.sleep = async ms => { sleeps.push(ms); };
   fetchImpl = async () => new Response('{}', { status: 200 });
   membersRuntime.fetch = async (url, init) => {
     fetchLog.push({ url, init });
@@ -186,6 +195,7 @@ afterEach(() => {
   membersRuntime.fetch = originalFetch;
   membersRuntime.now = originalNow;
   experienceRuntime.fetch = originalExperienceFetch;
+  deweeIdentityRuntime.sleep = originalSleep;
 });
 
 describe('agent_chat entitlement', () => {
@@ -419,6 +429,45 @@ describe('Dewee lifecycle on access changes', () => {
     expect((await recomputeSubscription(d1, dave.userId, 'ai', { env: identityEnv() }))?.status).toBe('active');
   });
 
+  it('retries a transient lifecycle failure with backoff, at most three attempts, and never a client error', async () => {
+    const alice = await member('alice@example.com');
+    // 503, then a network failure, then success.
+    fakeDewee({ lifecycleStatuses: [503, 0, 200] });
+    expect((await reportMemberLifecycle(identityEnv(), alice.userId, 'scopes_changed', ['agent_chat'])).status).toBe('applied');
+    expect(lifecycleCalls().length).toBe(3);
+    expect(sleeps).toEqual([...LIFECYCLE_RETRY_DELAYS_MS]);
+
+    // 429 three times: gives up after three attempts.
+    fetchLog = []; sleeps = [];
+    fakeDewee({ lifecycleStatuses: [429, 500, 502] });
+    expect(await reportMemberLifecycle(identityEnv(), alice.userId, 'delete')).toEqual({ status: 'failed', error: 'INTERNAL (502)' });
+    expect(lifecycleCalls().length).toBe(3);
+
+    // A 400 is not transient: one attempt only.
+    fetchLog = []; sleeps = [];
+    fakeDewee({ lifecycleStatuses: [400] });
+    expect((await reportMemberLifecycle(identityEnv(), alice.userId, 'delete')).status).toBe('failed');
+    expect([lifecycleCalls().length, sleeps.length]).toEqual([1, 0]);
+  });
+
+  it('logs a NOT_FOUND lifecycle answer with the event name instead of dropping it silently', async () => {
+    const alice = await member('alice@example.com');
+    fakeDewee({ lifecycleStatus: 404 });
+    const logged: string[] = [];
+    const originalInfo = console.info;
+    console.info = (...args: unknown[]) => { logged.push(args.map(String).join(' ')); };
+    try {
+      expect(await reportMemberLifecycle(identityEnv(), alice.userId, 'delete')).toEqual({ status: 'not_linked' });
+    } finally {
+      console.info = originalInfo;
+    }
+    expect(lifecycleCalls().length).toBe(1);
+    expect(logged.length).toBe(1);
+    expect(logged[0]).toContain('lifecycle delete');
+    expect(logged[0]).toContain('NOT_FOUND');
+    expect(logged[0]).not.toContain(alice.userId);
+  });
+
   it('lets the SePay webhook answer without waiting for Dewee, through waitUntil', async () => {
     const alice = await member('alice@example.com');
     const ts = new Date(now).toISOString();
@@ -478,14 +527,15 @@ describe('my linked chat accounts (Dewee me/bindings)', () => {
   it('lists the member own bindings through a short server-side session, showing only the sender hint', async () => {
     fakeDewee({
       bindings: [
-        { id: BINDING_ID, channel_type: 'telegram', sender_hint: '7001', status: 'linked', linked_at: '2026-10-10T00:00:00Z', sender_id: '777001' },
-        { id: '0199a572-a064-7118-8f4a-0b28d615d0e3', channel_type: 'zalo', sender_hint: '42', status: 'revoked' },
+        { id: BINDING_ID, channel_type: 'telegram', sender_hint: '…7001', status: 'linked', linked_at: '2026-10-10T00:00:00Z', sender_id: '777001' },
+        { id: '0199a572-a064-7118-8f4a-0b28d615d0e3', channel_type: 'zalo', sender_hint: '…42', status: 'revoked' },
       ],
     });
     const alice = await member('alice@example.com');
     const res = await read(await list(browser(alice.cookie)));
     expect(res.status).toBe(200);
-    expect(res.data).toEqual([{ id: BINDING_ID, channel_type: 'telegram', sender_hint: '7001', linked_at: '2026-10-10T00:00:00Z' }]);
+    // The hint is passed through exactly as Dewee masked it.
+    expect(res.data).toEqual([{ id: BINDING_ID, channel_type: 'telegram', sender_hint: '…7001', linked_at: '2026-10-10T00:00:00Z' }]);
     expect(JSON.stringify(res.data)).not.toContain('777001');
 
     const [exchange, get] = fetchLog;
@@ -523,7 +573,67 @@ describe('my linked chat accounts (Dewee me/bindings)', () => {
     expect([unconfigured.status, unconfigured.code]).toEqual([503, 'dewee_identity_unconfigured']);
     expect(fetchLog.length).toBe(0);
     fetchImpl = async () => json({ error: { code: 'INTERNAL', message: 'x' } }, 500);
-    expect((await read(await list(browser(alice.cookie)))).code).toBe('dewee_identity_unavailable');
+    const failed = await read(await list(browser(alice.cookie)));
+    expect([failed.status, failed.code]).toEqual([502, 'dewee_identity_unavailable']);
+  });
+
+  it('is reachable only from the browser session, never with a personal API key', async () => {
+    fakeDewee();
+    const alice = await member('alice@example.com');
+    const { secret: key } = await createUserKey(d1, alice.userId, { name: 'k', scopes: ['account:read'], expires_in_days: 30 });
+    const refused = await read(await list(bearer(key)));
+    expect(refused.status).toBe(403);
+    expect((await list({})).status).toBe(401);
+    // No Dewee principal is created for a refused caller.
+    expect(fetchLog.length).toBe(0);
+  });
+
+  it('throttles list and unlink to 6 per member per minute before calling Dewee', async () => {
+    fakeDewee();
+    const alice = await member('alice@example.com');
+    const bob = await member('bob@example.com');
+    for (let i = 0; i < 5; i += 1) expect((await list(browser(alice.cookie))).status).toBe(200);
+    expect((await unlink(browser(alice.cookie), BINDING_ID)).status).toBe(200);
+    const exchangesBefore = fetchLog.filter(f => f.url.endsWith('/sessions/exchange')).length;
+    const limited = await read(await list(browser(alice.cookie)));
+    expect([limited.status, limited.code]).toEqual([429, 'rate_limited']);
+    expect((await read(await unlink(browser(alice.cookie), BINDING_ID))).code).toBe('rate_limited');
+    expect(fetchLog.filter(f => f.url.endsWith('/sessions/exchange')).length).toBe(exchangesBefore);
+    // Another member has their own budget, and the window resets after a minute.
+    expect((await list(browser(bob.cookie))).status).toBe(200);
+    now += 60_000;
+    expect((await list(browser(alice.cookie))).status).toBe(200);
+  });
+
+  it('reports a Dewee that does not serve linking for this application as 503, not as a missing binding', async () => {
+    const alice = await member('alice@example.com');
+    // Session exchange NOT_FOUND: unknown application or agent, or exchange disabled.
+    fakeDewee({ exchangeStatus: 404 });
+    const exchange = await read(await list(browser(alice.cookie)));
+    expect([exchange.status, exchange.code]).toEqual([503, 'dewee_identity_unavailable']);
+    const exchangeUnlink = await read(await unlink(browser(alice.cookie), BINDING_ID));
+    expect([exchangeUnlink.status, exchangeUnlink.code]).toEqual([503, 'dewee_identity_unavailable']);
+    // The list route answering 404 is the same configuration problem; only an unlink may miss a binding.
+    fakeDewee({ listStatus: 404 });
+    const listed = await read(await list(browser(alice.cookie)));
+    expect([listed.status, listed.code]).toEqual([503, 'dewee_identity_unavailable']);
+    fakeDewee({ unlinkStatus: 404 });
+    const missing = await read(await unlink(browser(alice.cookie), BINDING_ID));
+    expect([missing.status, missing.code]).toEqual([404, 'not_found']);
+  });
+});
+
+describe('Dewee identity configuration', () => {
+  it('accepts https, or http on loopback only, without credentials, query or fragment', () => {
+    const missing = (extra: Partial<RuntimeEnv>) => missingDeweeIdentityEnv(identityEnv(extra));
+    expect(missing({})).toEqual([]);
+    expect(missing({ DEWEE_CONNECT_BASE_URL: undefined })).toEqual([]);
+    expect(missing({ DEWEE_GATEWAY_URL: 'http://localhost:8080', DEWEE_CONNECT_BASE_URL: 'http://127.0.0.1:3000' })).toEqual([]);
+    expect(missing({ DEWEE_CONNECT_BASE_URL: 'http://[::1]:3000' })).toEqual([]);
+    for (const bad of ['http://connect.dewee.test', 'https://user:pw@connect.dewee.test', 'https://connect.dewee.test?x=1', 'https://connect.dewee.test/#f', 'connect.dewee.test', 'ftp://connect.dewee.test', 'https://']) {
+      expect(missing({ DEWEE_CONNECT_BASE_URL: bad })).toEqual(['DEWEE_CONNECT_BASE_URL']);
+      expect(missing({ DEWEE_GATEWAY_URL: bad })).toEqual(['DEWEE_GATEWAY_URL']);
+    }
   });
 });
 
@@ -541,6 +651,7 @@ describe('/dewee/connect handoff', () => {
     expect(location.startsWith('/login?next=')).toBe(true);
     expect(decodeURIComponent(location.slice('/login?next='.length))).toBe(`/dewee/connect${query()}`);
     expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
     expect(isSensitivePath('/dewee/connect')).toBe(true);
     expect(isSensitivePath('/login')).toBe(true);
   });
@@ -552,6 +663,8 @@ describe('/dewee/connect handoff', () => {
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(res.headers.get('cache-control')).toContain('no-store');
     expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    // The auto-posting form can never be framed (clickjacking the handoff).
+    expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
     const html = await res.text();
     expect(html).toContain(`action="${RETURN_TO}"`);
     const assertion = /name="assertion" value="([^"]+)"/.exec(html)?.[1] ?? '';
@@ -576,6 +689,18 @@ describe('/dewee/connect handoff', () => {
     const alice = await member('alice@example.com');
     const res = await read(await open({ cookie: alice.cookie }, query(), baseEnv({ DEWEE_GATEWAY_URL: GATEWAY })));
     expect([res.status, res.code]).toEqual([503, 'dewee_identity_unconfigured']);
+  });
+
+  it('answers 503 naming the variable, not 400, when a Dewee URL is misconfigured', async () => {
+    const alice = await member('alice@example.com');
+    const badEnv = identityEnv({ DEWEE_CONNECT_BASE_URL: 'http://connect.dewee.test' });
+    const res = await open({ cookie: alice.cookie }, query(TXN, 'http://connect.dewee.test/connect/return'), badEnv);
+    expect(res.status).toBe(503);
+    const body: unknown = await res.json();
+    expect(field(body, 'error', 'code')).toBe('dewee_identity_unconfigured');
+    expect(JSON.stringify(body)).toContain('DEWEE_CONNECT_BASE_URL');
+    const badGateway = await read(await open({ cookie: alice.cookie }, query(), identityEnv({ DEWEE_GATEWAY_URL: 'https://dewee.test?x=1' })));
+    expect([badGateway.status, badGateway.code]).toEqual([503, 'dewee_identity_unconfigured']);
   });
 });
 
