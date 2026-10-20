@@ -14,7 +14,8 @@ import type { DurableObjectStateLike, HubWebSocket, PresenceEnv } from '../worke
 
 const SECRET = 'test-presence-secret';
 const T0 = Date.parse('2026-10-20T04:00:00.000Z');
-const URL_OWNER = 'https://presence.zuey.me/internal/owner';
+const OWNER_PATH = '/internal/owner';
+const URL_OWNER = `https://presence.zuey.me${OWNER_PATH}`;
 
 class FakeSocket implements HubWebSocket {
   sent: PresenceServerMessage[] = [];
@@ -61,6 +62,7 @@ let state: FakeState;
 let hub: PresenceHub;
 let env: PresenceEnv;
 let internalToken: string;
+let methodTokens: Record<string, string>;
 
 function tick(ms: number): void {
   now += ms;
@@ -91,7 +93,7 @@ async function fireAlarm(): Promise<void> {
   await hub.alarm();
 }
 
-function ownerRequest(method: 'GET' | 'PUT' | 'POST' | 'OPTIONS', body?: unknown, headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: internalToken }): Request {
+function ownerRequest(method: 'GET' | 'PUT' | 'POST' | 'OPTIONS', body?: unknown, headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: methodTokens[method] ?? internalToken }): Request {
   return new Request(URL_OWNER, {
     method,
     headers: { 'Content-Type': 'application/json', ...headers },
@@ -142,7 +144,8 @@ beforeEach(async () => {
   state = new FakeState();
   env = makeEnv();
   hub = new PresenceHub(state, env);
-  internalToken = await signPresenceInternal(SECRET, now);
+  internalToken = await signPresenceInternal(SECRET, 'GET', OWNER_PATH, now);
+  methodTokens = Object.fromEntries(await Promise.all(['GET', 'PUT', 'POST', 'OPTIONS'].map(async (m) => [m, await signPresenceInternal(SECRET, m, OWNER_PATH, now)])));
 });
 
 afterEach(() => {
@@ -152,7 +155,7 @@ afterEach(() => {
 describe('/internal/owner authentication', () => {
   it('answers 404 without the internal header, with a wrong one, or one signed with another secret; state stays unchanged', async () => {
     const seconds = Math.floor(now / 1000);
-    const forged = await signPresenceInternal('another-secret', now);
+    const forged = await signPresenceInternal('another-secret', 'GET', OWNER_PATH, now);
     const wrongLabel = `${seconds}.${await hmacBase64Url(SECRET, `presence-internal:v0:${seconds}`)}`;
     const legacyStatic = await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL);
     const sig = internalToken.split('.')[1] ?? '';
@@ -177,7 +180,7 @@ describe('/internal/owner authentication', () => {
 
   it('accepts the header only within the allowed clock skew, in either direction', async () => {
     const at = async (offsetMs: number) => {
-      const headers = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, now + offsetMs) };
+      const headers = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, 'GET', OWNER_PATH, now + offsetMs) };
       return (await handleRequest(ownerRequest('GET', undefined, headers), env)).status;
     };
     expect(await at(0)).toBe(200);
@@ -186,9 +189,22 @@ describe('/internal/owner authentication', () => {
     expect(await at(-PRESENCE_INTERNAL_MAX_SKEW_MS - 1_000)).toBe(404);
     expect(await at(PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(404);
     // A once-valid header replayed after the window is refused.
-    const captured = await signPresenceInternal(SECRET, now);
+    const captured = await signPresenceInternal(SECRET, 'GET', OWNER_PATH, now);
     setSystemTime(new Date(now + PRESENCE_INTERNAL_MAX_SKEW_MS + 2_000));
     expect((await handleRequest(ownerRequest('GET', undefined, { [PRESENCE_INTERNAL_HEADER]: captured }), env)).status).toBe(404);
+  });
+
+  it('refuses a header signed for another method or path, so a captured value cannot be replayed elsewhere', async () => {
+    const otherPath = await signPresenceInternal(SECRET, 'PUT', '/internal/diagnostics', now);
+    const getToken = methodTokens.GET ?? '';
+    const putAttempts = [{ [PRESENCE_INTERNAL_HEADER]: getToken }, { [PRESENCE_INTERNAL_HEADER]: otherPath }];
+    for (const headers of putAttempts) {
+      const res = await handleRequest(ownerRequest('PUT', { mode: 'busy', text: 'pwned' }, headers), env);
+      expect(res.status).toBe(404);
+    }
+    const getWithPutToken = await handleRequest(ownerRequest('GET', undefined, { [PRESENCE_INTERNAL_HEADER]: methodTokens.PUT ?? '' }), env);
+    expect(getWithPutToken.status).toBe(404);
+    expect(state.data.has('ownerSetting')).toBe(false);
   });
 
   it('answers 503 when the ticket secret is missing, even with a header', async () => {

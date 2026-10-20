@@ -49,7 +49,7 @@ class FakeWorker implements ServiceBindingLike {
     if (this.fail === 'throw') throw new Error('Worker down');
     if (this.fail === 'status') return new Response('oops', { status: 500 });
     if (this.fail === 'garbage') return Response.json({ mode: 'sleeping' });
-    if (!(await verifyPresenceInternal(SECRET, request.headers.get(PRESENCE_INTERNAL_HEADER)))) {
+    if (!(await verifyPresenceInternal(SECRET, request.headers.get(PRESENCE_INTERNAL_HEADER), request.method, new URL(request.url).pathname))) {
       return new Response('Not found', { status: 404 });
     }
     if (request.method === 'PUT' && isRecord(body) && (body.mode === 'auto' || body.mode === 'away' || body.mode === 'busy' || body.mode === 'offline' || body.mode === 'invisible')) {
@@ -252,18 +252,23 @@ describe('presence Worker client', () => {
     const header = worker.calls[0]?.header ?? '';
     const [ts, sig] = header.split('.');
     expect(Number(ts)).toBeGreaterThanOrEqual(before);
-    expect(sig).toBe(await hmacBase64Url(SECRET, `${PRESENCE_INTERNAL_LABEL}:${ts}`));
+    expect(sig).toBe(await hmacBase64Url(SECRET, `${PRESENCE_INTERNAL_LABEL}:GET:/internal/owner:${ts}`));
     expect(worker.calls[0]?.url).toBe('https://presence.zuey.me/internal/owner');
 
     const now = Date.now();
-    const valid = await signPresenceInternal(SECRET, now);
-    expect(await verifyPresenceInternal(SECRET, valid, now)).toBe(true);
-    expect(await verifyPresenceInternal(SECRET, valid, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(false); // stale
-    expect(await verifyPresenceInternal(SECRET, `0${valid}`, now)).toBe(false); // non-canonical timestamp
-    expect(await verifyPresenceInternal(SECRET, await signPresenceInternal(SECRET, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000), now)).toBe(false); // future
-    expect(await verifyPresenceInternal('other-secret', valid, now)).toBe(false);
+    const M = 'PUT';
+    const P = '/internal/owner';
+    const valid = await signPresenceInternal(SECRET, M, P, now);
+    expect(await verifyPresenceInternal(SECRET, valid, M, P, now)).toBe(true);
+    expect(await verifyPresenceInternal(SECRET, valid, 'put', P, now)).toBe(true); // method is case-insensitive
+    expect(await verifyPresenceInternal(SECRET, valid, 'GET', P, now)).toBe(false); // another method
+    expect(await verifyPresenceInternal(SECRET, valid, M, '/internal/diagnostics', now)).toBe(false); // another path
+    expect(await verifyPresenceInternal(SECRET, valid, M, P, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(false); // stale
+    expect(await verifyPresenceInternal(SECRET, `0${valid}`, M, P, now)).toBe(false); // non-canonical timestamp
+    expect(await verifyPresenceInternal(SECRET, await signPresenceInternal(SECRET, M, P, now + PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000), M, P, now)).toBe(false); // future
+    expect(await verifyPresenceInternal('other-secret', valid, M, P, now)).toBe(false);
     for (const bad of [null, '', 'abc', `${valid}x`, `x${valid}`, valid.replace('.', ':'), await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL)]) {
-      expect(await verifyPresenceInternal(SECRET, bad, now)).toBe(false);
+      expect(await verifyPresenceInternal(SECRET, bad, M, P, now)).toBe(false);
     }
   });
 
