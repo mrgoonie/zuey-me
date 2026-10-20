@@ -63,7 +63,10 @@ export function useEscapeToClose(active: boolean, onClose: () => void, options: 
     const token = Symbol('popup');
     openPopups.push(token);
     const opener = document.activeElement;
-    openerRef.current = opener instanceof HTMLElement && opener !== document.body ? opener : pointerTarget?.isConnected ? pointerTarget : null;
+    const pressed = pointerTarget?.isConnected ? pointerTarget : null;
+    const focused = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    // A mouse press on a button Safari will not focus leaves focus on the window or body around it.
+    openerRef.current = pressed && (!focused || (focused !== pressed && focused.contains(pressed))) ? pressed : focused;
     optionsRef.current.initialFocus?.current?.focus({ preventScroll: true });
 
     const onKey = (e: KeyboardEvent) => {
