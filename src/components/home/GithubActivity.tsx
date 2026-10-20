@@ -7,6 +7,7 @@ import { LOCALE_LABELS } from '../../lib/i18n/locales';
 import type { HomeStrings } from './home-i18n';
 import { fmt } from './home-i18n';
 import { apiFetch, parseActivity } from './api-client';
+import { Skeleton } from '../feedback/Skeleton';
 import { ContributionGraph, useContributionCalendar } from './ContributionGraph';
 
 interface GithubActivityProps {
@@ -176,19 +177,13 @@ export const GithubActivity: React.FC<GithubActivityProps> = ({ strings, locale,
             {calendar.error.status !== 0 && retryButton(calendar.reload)}
           </div>
         ) : (
-          <div role="status" aria-label={strings.loading}>
-            <div className="home-skeleton h-[112px]" />
-          </div>
+          <Skeleton label={strings.loading} rows={[112]} />
         )}
       </div>
 
       <div aria-live="polite" aria-busy={state.kind === 'loading' || state.kind === 'idle'}>
         {(state.kind === 'idle' || state.kind === 'loading') && (
-          <div aria-label={strings.loading} role="status">
-            <div className="home-skeleton mt-4 h-5 w-2/3" />
-            <div className="home-skeleton mt-2 h-5 w-1/2" />
-            <span className="sr-only">{strings.loading}</span>
-          </div>
+          <Skeleton label={strings.loading} rows={[20, 20]} className="mt-4" />
         )}
 
         {(state.kind === 'rateLimited' || state.kind === 'offline' || state.kind === 'failed') && (

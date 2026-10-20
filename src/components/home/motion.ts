@@ -19,6 +19,37 @@ export function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_QUERY).matches;
 }
 
+/**
+ * Motion tokens are defined once, as CSS custom properties on :root (os.css, "motion tokens").
+ * Web Animations read them here so JS-driven window motion uses the same durations and easings
+ * as CSS transitions, including the zeroed durations under `prefers-reduced-motion`.
+ */
+export type MotionDuration = 'instant' | 'fast' | 'base' | 'slow' | 'slower';
+export type MotionEasing = 'standard' | 'out' | 'in' | 'spring' | 'genie';
+
+function readToken(name: string): string {
+  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') return '';
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+/** Parses a CSS time (`180ms`, `.2s`) to milliseconds; null when it is not a time. */
+export function parseCssTime(value: string): number | null {
+  const m = /^(-?\d*\.?\d+)(ms|s)$/.exec(value.trim());
+  if (!m) return null;
+  const n = Number(m[1]) * (m[2] === 's' ? 1000 : 1);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/** Duration token in ms (`--motion-dur-<name>`), or the fallback when the stylesheet is absent. */
+export function motionMs(name: MotionDuration, fallback: number): number {
+  return parseCssTime(readToken(`--motion-dur-${name}`)) ?? fallback;
+}
+
+/** Easing token (`--motion-ease-<name>`), or the fallback when the stylesheet is absent. */
+export function motionEase(name: MotionEasing, fallback: string): string {
+  return readToken(`--motion-ease-${name}`) || fallback;
+}
+
 /** Live `prefers-reduced-motion` flag (false during SSR). */
 export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);

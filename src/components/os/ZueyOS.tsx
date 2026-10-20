@@ -11,7 +11,7 @@ import { GithubActivity } from '../home/GithubActivity';
 import { homeStrings } from '../home/home-i18n';
 import { Mascot } from '../home/Mascot';
 import { McpGuide } from '../home/McpGuide';
-import { useMediaQuery, useReducedMotion } from '../home/motion';
+import { motionEase, motionMs, useMediaQuery, useReducedMotion } from '../home/motion';
 import { addDismissed, nextNoticeChange, parseDismissed, pickNotice } from '../home/notice-queue';
 import { STORAGE_KEYS, readStored, writeStored } from '../home/storage';
 import { WeatherBackdrop } from '../home/WeatherBackdrop';
@@ -19,6 +19,8 @@ import { APPS, DOCK_APPS, SLOT_APPS, appFromHash, type AppId, type Rect, type Sl
 import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
 import { track } from '../../lib/analytics/client';
 import { ActivityMonitorPanel } from '../activity-monitor/ActivityMonitorPanel';
+import { Toaster } from '../feedback/Toaster';
+import { showToast } from '../feedback/toast-bus';
 import { AppGlyph } from './AppGlyph';
 import { AppearancePanel } from './AppearancePanel';
 import { Dock } from './Dock';
@@ -38,7 +40,6 @@ import './os.css';
 
 const PHONE_QUERY = '(max-width: 767px)';
 const NOTICE_REFRESH_MS = 5 * 60 * 1000;
-const EXPO_MS = 420;
 
 type Slots = Partial<Record<SlotAppId, React.ReactNode>>;
 
@@ -74,7 +75,6 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const [area, setArea] = useState<Area | null>(null);
   const [look, setLook] = useState<Look>(DEFAULT_LOOK);
   const [wallImage, setWallImage] = useState<string | null>(null);
-  const [lookMsg, setLookMsg] = useState('');
   const [dropping, setDropping] = useState(false);
   const [expo, setExpo] = useState<ExpoState | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -168,19 +168,25 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       const url = await imageFileToWallpaper(file);
       const kept = writeWallImage(url);
       setWallImage(url);
-      setLookMsg(kept ? '' : s.look.tooLarge);
       changeLook({ wallpaper: 'image' });
+      showToast(kept ? s.look.wallpaperSet : s.look.tooLarge, kept ? 'success' : 'info');
     } catch (err) {
-      setLookMsg(err instanceof Error && err.message === 'not_image' ? s.look.notImage : s.look.unreadable);
+      showToast(err instanceof Error && err.message === 'not_image' ? s.look.notImage : s.look.unreadable, 'error');
     }
   }, [changeLook, s.look]);
 
   const resetLook = useCallback(() => {
     writeWallImage(null);
     setWallImage(null);
-    setLookMsg('');
     changeLook({ ...DEFAULT_LOOK });
-  }, [changeLook]);
+    showToast(s.look.resetDone);
+  }, [changeLook, s.look]);
+
+  /** A change made in the Appearance window: applied, persisted (look effect) and confirmed. The dim slider announces its own value. */
+  const saveLook = useCallback((patch: Partial<Look>) => {
+    changeLook(patch);
+    if (!('dim' in patch)) showToast(s.look.saved);
+  }, [changeLook, s.look]);
 
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
@@ -227,6 +233,30 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     window.history.replaceState(window.history.state, '', url.hash ? url : url.pathname + url.search);
   }, []);
 
+  /** Moves keyboard focus to a window's title bar once it is shown (it may still be hidden this frame). */
+  const focusWindow = useCallback((id: AppId) => {
+    let tries = 0;
+    const go = () => {
+      const win = screenRef.current?.querySelector<HTMLElement>(`.osw[data-app="${id}"]`);
+      if (win && !win.hidden) {
+        if (!win.contains(document.activeElement)) win.querySelector<HTMLElement>('.osw-bar')?.focus({ preventScroll: true });
+      } else if (++tries < 4) requestAnimationFrame(go);
+    };
+    requestAnimationFrame(go);
+  }, []);
+
+  /** After a window hides, hand focus to the next window (or the desktop) if focus was inside it. */
+  const refocusAfterHide = useCallback((id: AppId) => {
+    const win = screenRef.current?.querySelector<HTMLElement>(`.osw[data-app="${id}"]`);
+    const active = document.activeElement;
+    if (!win || !(active === document.body || active === null || win.contains(active))) return;
+    requestAnimationFrame(() => {
+      const next = topId(winsRef.current);
+      if (next && next !== id) focusWindow(next);
+      else screenRef.current?.focus({ preventScroll: true });
+    });
+  }, [focusWindow]);
+
   const openApp = useCallback((id: AppId) => {
     // Opening a window never changes the pathname, so pageviews alone miss it.
     const w = winsRef.current[id];
@@ -234,7 +264,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     setExpo(null);
     dispatch({ type: 'open', id });
     setHash(id);
-  }, [setHash]);
+    focusWindow(id);
+  }, [setHash, focusWindow]);
 
   /** Opens Zueytube on one video: ?v= covers a window that has not hydrated yet, the event one that has. */
   const openVideo = useCallback((youtubeId: string) => {
@@ -246,14 +277,16 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   }, [openApp]);
 
   const closeApp = useCallback((id: AppId) => {
+    refocusAfterHide(id);
     dispatch({ type: 'close', id });
     if (appFromHash(window.location.hash) === id) setHash(null);
-  }, [setHash]);
+  }, [setHash, refocusAfterHide]);
 
   const minimizeApp = useCallback((id: AppId) => {
-    if (window.matchMedia(PHONE_QUERY).matches) closeApp(id);
-    else dispatch({ type: 'minimize', id });
-  }, [closeApp]);
+    if (window.matchMedia(PHONE_QUERY).matches) { closeApp(id); return; }
+    refocusAfterHide(id);
+    dispatch({ type: 'minimize', id });
+  }, [closeApp, refocusAfterHide]);
 
   const toggleMax = useCallback((id: AppId) => {
     if (window.matchMedia(PHONE_QUERY).matches) return;
@@ -324,6 +357,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       if (pick) {
         dispatch({ type: 'open', id: pick });
         setHash(pick);
+        focusWindow(pick);
       }
       const placements: ExpoState['placements'] = {};
       for (const id of prev.order) {
@@ -334,8 +368,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       }
       return { ...prev, placements, leaving: true };
     });
-    window.setTimeout(() => setExpo(prev => (prev?.leaving ? null : prev)), reduced ? 0 : EXPO_MS);
-  }, [reduced, setHash]);
+    window.setTimeout(() => setExpo(prev => (prev?.leaving ? null : prev)), reduced ? 0 : motionMs('slower', 440));
+  }, [reduced, setHash, focusWindow]);
 
   const toggleExpo = useCallback(() => {
     if (expo) exitExpo(null);
@@ -458,7 +492,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const fadeOut = useCallback(async () => {
     const el = rootRef.current;
     if (!el || reduced) return;
-    await el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-in', fill: 'forwards' }).finished.catch(() => undefined);
+    await el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motionMs('base', 200), easing: motionEase('in', 'ease-in'), fill: 'forwards' }).finished.catch(() => undefined);
   }, [reduced]);
   useEffect(() => {
     const onShow = (e: PageTransitionEvent) => {
@@ -517,9 +551,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
           <AppearancePanel
             look={look}
             hasImage={wallImage !== null}
-            message={lookMsg}
             strings={s.look}
-            onChange={changeLook}
+            onChange={saveLook}
             onImage={f => void setImage(f)}
             onReset={resetLook}
           />
@@ -630,6 +663,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       {!mascotHidden && (
         <Mascot strings={hs.mascot} locale={locale} weather={weather} notice={notice} onDismissNotice={dismissNotice} onHide={hideMascot} />
       )}
+
+      <Toaster label={s.notifications} />
 
       <CommandPalette
         open={paletteOpen}

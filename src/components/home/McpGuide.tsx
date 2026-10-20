@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { showToast } from '../feedback/toast-bus';
 import type { HomeStrings } from './home-i18n';
 
 interface McpGuideProps {
@@ -119,7 +120,9 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
                 aria-label={`${strings.copy}: ${s.note}`}
                 onClick={async e => {
                   const code = e.currentTarget.parentElement?.querySelector('code') ?? null;
-                  setCopied({ index: i, ok: await copyText(s.code, code) });
+                  const ok = await copyText(s.code, code);
+                  setCopied({ index: i, ok });
+                  showToast(ok ? strings.copied : strings.copyFailed, ok ? 'success' : 'error');
                 }}
               >
                 {copied?.index === i && copied.ok ? <Check aria-hidden="true" className="w-4 h-4" /> : <Copy aria-hidden="true" className="w-4 h-4" />}
@@ -127,9 +130,6 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
             </div>
           </div>
         ))}
-        <p className="min-h-[20px] text-[13px] font-semibold" role="status" aria-live="polite">
-          {copied ? (copied.ok ? strings.copied : strings.copyFailed) : ''}
-        </p>
       </div>
       <div className="flex flex-wrap gap-2">
         <a href="/account#keys" className="home-cta">{strings.keys}</a>
