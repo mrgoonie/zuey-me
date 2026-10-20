@@ -139,9 +139,10 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   // is actually open would flash the profile sheet over the home screen after hydration (and make it the
   // page's largest paint), so the attribute waits for the first open window there.
   useEffect(() => {
-    if (!ready) return;
+    const root = document.documentElement;
+    if (!ready || root.hasAttribute('data-os-ready')) return;
     if (!window.matchMedia(PHONE_QUERY).matches || Object.values(wins).some(w => w.open)) {
-      document.documentElement.setAttribute('data-os-ready', '');
+      root.setAttribute('data-os-ready', '');
     }
   }, [ready, wins]);
 
