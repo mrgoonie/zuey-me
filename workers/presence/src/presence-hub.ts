@@ -4,17 +4,21 @@
  * Uses the WebSocket Hibernation API: sockets are accepted with `ctx.acceptWebSocket`, and all per-socket
  * state lives in the socket attachment, so the object can be evicted between messages without losing
  * anyone. In-memory fields below are caches only; the owner's manual setting, the public owner status and
- * the last broadcast signature are persisted in DO storage. `/owner` (GET/PUT) is reachable only through the
+ * the last broadcast signature and the 24 h history (presence-history.ts) are persisted in DO storage. `/owner` (GET/PUT) is reachable only through the
  * Worker's authenticated `/internal/owner` route. One DO alarm does three jobs, and is armed only while one of them is pending,
  * so an object holding only idle or silent sockets can sleep:
  *   - TTL sweep: due when the oldest live session would expire (min lastHb + TTL, at least SWEEP_INTERVAL_MS ahead);
  *   - subscriber keepalive: an unchanged snapshot is re-sent to `sub` sockets every KEEPALIVE_INTERVAL_MS,
  *     so a quiet but healthy feed never looks stale;
- *   - coalesced broadcasts (at most one every 2 s).
+ *   - coalesced broadcasts (at most one every 2 s);
+ *   - a last history write when activity ended with unwritten history and no other alarm is due.
+ * Every snapshot evaluation also feeds the 24 h history (presence-history.ts); while sessions are live the sweep
+ * alarm keeps those observations coming, so history never arms an alarm of its own except that final write.
+ * `/history` and `/diagnostics` serve the Worker's public history route and internal diagnostics route.
  */
 import {
   PRESENCE_SUBPROTOCOL, PRESENCE_TTL_MS,
-  type OwnerStatusState, type PresenceServerMessage, type PresenceSnapshot,
+  type OwnerStatusState, type PresenceDiagnostics, type PresenceServerMessage, type PresenceSnapshot,
 } from '../../../src/lib/presence/contract';
 import {
   DEFAULT_OWNER_SETTING, derivePublicOwner, isOwnerSetting, nextOwner, ownerConnected, ownerPresence, parseOwnerStatusUpdate,
@@ -22,10 +26,13 @@ import {
   type OwnerSetting, type StoredOwner,
 } from './owner-status';
 import {
-  CLOSE_OVER_CAPACITY, CLOSE_POLICY, affectsSnapshot, applyClientMessage, computeSnapshot, consumeRate, isLive,
-  isSessionIdentity, isSocketSession, newSession, parseClientMessage, shouldClose, snapshotSignature, strike, withinCaps,
+  CLOSE_OVER_CAPACITY, CLOSE_POLICY, affectsSnapshot, aggregateSessions, applyClientMessage, consumeRate, isLive,
+  isSessionIdentity, isSocketSession, newSession, parseClientMessage, shouldClose, snapshotFromAggregate, snapshotSignature, strike,
+  withinCaps,
   type SessionIdentity, type SocketSession,
 } from './presence-state';
+import { buildDiagnostics, newHubCounters, type HubCounters } from './hub-diagnostics';
+import { PresenceHistoryRecorder } from './presence-history';
 import type { DurableObjectStateLike, HubWebSocket, PairWebSocket, PresenceEnv } from './runtime-types';
 
 declare const WebSocketPair: { new (): { 0: PairWebSocket; 1: PairWebSocket } };
@@ -82,8 +89,15 @@ export class PresenceHub {
   private refreshPending = false;
   /** Epoch ms of the last snapshot push to subscribers (in memory: after eviction the next alarm simply pushes). */
   private lastPushAt = 0;
+  private readonly history: PresenceHistoryRecorder;
+  private readonly counters: HubCounters;
+  private lastAlarmRunAt: number | null = null;
+  private lastAlarmRunMs: number | null = null;
 
-  constructor(private readonly ctx: DurableObjectStateLike, _env: PresenceEnv) {}
+  constructor(private readonly ctx: DurableObjectStateLike, _env: PresenceEnv) {
+    this.history = new PresenceHistoryRecorder(ctx.storage);
+    this.counters = newHubCounters(Date.now());
+  }
 
   async fetch(request: Request): Promise<Response> {
     try {
@@ -92,6 +106,8 @@ export class PresenceHub {
       if (pathname === '/snapshot') return json(await this.current(Date.now()));
       if (pathname === '/owner' && request.method === 'GET') return json(await this.ownerState(Date.now()));
       if (pathname === '/owner' && request.method === 'PUT') return await this.updateOwner(request);
+      if (pathname === '/history' && request.method === 'GET') return json(await this.history.toHistory(Date.now()));
+      if (pathname === '/diagnostics' && request.method === 'GET') return json(await this.diagnostics(Date.now()));
       return json({ success: false, error: { code: 'not_found', message: 'Not found' } }, 404);
     } catch (err) {
       console.error('presence hub fetch failed', err instanceof Error ? err.message : 'unknown error');
@@ -115,18 +131,23 @@ export class PresenceHub {
     } catch {
       identity = null;
     }
-    if (!isSessionIdentity(identity)) return json({ success: false, error: { code: 'bad_request', message: 'Bad request' } }, 400);
+    if (!isSessionIdentity(identity)) {
+      this.counters.connectsRejected += 1;
+      return json({ success: false, error: { code: 'bad_request', message: 'Bad request' } }, 400);
+    }
 
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     if (!this.admits(identity)) {
+      this.counters.connectsRejected += 1;
       server.accept();
       closeQuietly(server, CLOSE_OVER_CAPACITY, 'over_capacity');
       return upgradeResponse(client);
     }
     // A fresh socket is neither live nor subscribed, so it arms no alarm until its first `hb` or `sub`.
     this.ctx.acceptWebSocket(server, [`ip:${identity.ipHash}`, `k:${identity.k}`]);
+    this.counters.connectsAccepted += 1;
     server.serializeAttachment(newSession(identity, Date.now()));
     return upgradeResponse(client);
   }
@@ -135,23 +156,27 @@ export class PresenceHub {
     try {
       const session = readSession(ws);
       if (!session) {
+        this.counters.messagesDropped += 1;
+        this.counters.abuseCloses += 1;
         closeQuietly(ws, CLOSE_POLICY, 'bad_session');
         return;
       }
       const now = Date.now();
       const decision = consumeRate(session.rate, now);
       if (!decision.allowed) {
+        this.counters.messagesDropped += 1;
         ws.serializeAttachment({ ...session, rate: decision.rate });
         send(ws, { t: 'error', code: 'rate_limited' });
-        if (decision.close) closeQuietly(ws, CLOSE_POLICY, 'rate_limited');
+        if (decision.close) this.abuseClose(ws, 'rate_limited');
         return;
       }
       const msg = parseClientMessage(message);
       if (!msg) {
+        this.counters.messagesDropped += 1;
         const rate = strike(decision.rate, now);
         ws.serializeAttachment({ ...session, rate });
         send(ws, { t: 'error', code: 'bad_message' });
-        if (shouldClose(rate)) closeQuietly(ws, CLOSE_POLICY, 'bad_message');
+        if (shouldClose(rate)) this.abuseClose(ws, 'bad_message');
         return;
       }
       const next = applyClientMessage({ ...session, rate: decision.rate }, msg, now);
@@ -178,19 +203,27 @@ export class PresenceHub {
   }
 
   async alarm(): Promise<void> {
+    const now = Date.now();
+    this.lastAlarmRunAt = now;
     try {
-      const now = Date.now();
       this.refreshPending = false;
       const subscribers = this.subscribers();
       const keepalive = subscribers.length > 0 && now - this.lastPushAt >= KEEPALIVE_INTERVAL_MS - ALARM_SLACK_MS;
       await this.refresh(now, undefined, keepalive);
       const next = this.nextAlarm(now, subscribers.length > 0);
       if (next !== null) await this.ctx.storage.setAlarm(next);
+      this.lastAlarmRunMs = Date.now() - now;
     } catch (err) {
+      this.lastAlarmRunMs = Date.now() - now;
       console.error('presence hub alarm failed', err instanceof Error ? err.message : 'unknown error');
       // Keep sweeping; the runtime also retries a failed alarm.
       throw err;
     }
+  }
+
+  private abuseClose(ws: HubWebSocket, reason: string): void {
+    this.counters.abuseCloses += 1;
+    closeQuietly(ws, CLOSE_POLICY, reason);
   }
 
   private async dropSocket(ws: HubWebSocket, code: number): Promise<void> {
@@ -211,7 +244,8 @@ export class PresenceHub {
 
   /**
    * When the alarm must fire next, or null when nothing needs it: the oldest live session's TTL expiry
-   * (at least SWEEP_INTERVAL_MS ahead) and, while subscribers exist, the next keepalive.
+   * (at least SWEEP_INTERVAL_MS ahead) and, while subscribers exist, the next keepalive. Only when neither is
+   * due does unwritten history get an alarm of its own, so the final peaks of an activity burst are stored.
    */
   private nextAlarm(now: number, hasSubscribers: boolean): number | null {
     let next: number | null = null;
@@ -222,6 +256,8 @@ export class PresenceHub {
       const keepaliveAt = Math.max(now + ALARM_SLACK_MS, this.lastPushAt + KEEPALIVE_INTERVAL_MS);
       next = next === null ? keepaliveAt : Math.min(next, keepaliveAt);
     }
+    const historyDue = this.history.flushDueAt();
+    if (next === null && historyDue !== null) next = Math.max(now + ALARM_SLACK_MS, historyDue);
     return next;
   }
 
@@ -229,6 +265,11 @@ export class PresenceHub {
   private async armNoLaterThan(at: number): Promise<void> {
     const current = await this.ctx.storage.getAlarm();
     if (current === null || current > at) await this.ctx.storage.setAlarm(at);
+  }
+
+  /** Arms the alarm at `at` unless one is already pending (that alarm recomputes its successor itself). */
+  private async armIfNone(at: number): Promise<void> {
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at);
   }
 
   private sessions(exclude?: HubWebSocket): SocketSession[] {
@@ -263,7 +304,12 @@ export class PresenceHub {
       await this.ctx.storage.put(OWNER_KEY, owner);
       this.owner = owner;
     }
-    return { snapshot: computeSnapshot(sessions, ownerPresence(owner), now), connected, owner };
+    const agg = aggregateSessions(sessions, now);
+    await this.history.observe(now, agg.cats);
+    // Unwritten history needs some alarm to come back to it; while sessions are live the sweep alarm is pending.
+    const historyDue = this.history.flushDueAt();
+    if (historyDue !== null) await this.armIfNone(Math.max(now + ALARM_SLACK_MS, historyDue));
+    return { snapshot: snapshotFromAggregate(agg, ownerPresence(owner), now), connected, owner };
   }
 
   private async current(now: number, exclude?: HubWebSocket): Promise<PresenceSnapshot> {
@@ -336,6 +382,20 @@ export class PresenceHub {
     const msg: PresenceServerMessage = { t: 'snapshot', data: snapshot };
     for (const ws of this.subscribers(exclude)) send(ws, msg);
     this.lastPushAt = now;
+    this.counters.broadcasts += 1;
+  }
+
+  private async diagnostics(now: number): Promise<PresenceDiagnostics> {
+    const snapshot = await this.current(now);
+    return buildDiagnostics({
+      now,
+      totalSockets: this.ctx.getWebSockets().length,
+      sessions: this.sessions(),
+      activeSessions: snapshot.active,
+      counters: this.counters,
+      alarm: { nextAt: await this.ctx.storage.getAlarm(), lastRunAt: this.lastAlarmRunAt, lastRunMs: this.lastAlarmRunMs },
+      history: await this.history.stats(now),
+    });
   }
 }
 
