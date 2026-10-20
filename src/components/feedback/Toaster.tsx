@@ -23,6 +23,7 @@ export const Toaster: React.FC<{ label: string }> = ({ label }) => {
     const onToast = (e: Event) => {
       const detail = e instanceof CustomEvent ? parseToastDetail(e.detail) : null;
       if (!detail) return;
+      e.preventDefault(); // tells showToast a Toaster displayed it
       seq.current += 1;
       setToast({ ...detail, id: seq.current });
       setOn(true);

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Link2, QrCode, Check } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import type { Profile } from '../db/types';
+import { showToast } from './feedback/toast-bus';
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -18,7 +19,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   lang,
   onOpenQr,
 }) => {
-  const [copied, setCopied] = useState(false);
+  /** 'toast' when the shared toast confirmed the copy, 'inline' when this page has no Toaster. */
+  const [copied, setCopied] = useState<'toast' | 'inline' | null>(null);
 
   if (!isOpen) return null;
 
@@ -29,14 +31,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
   const copyToClipboard = async () => {
     try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(currentUrl);
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      if (typeof navigator === 'undefined' || !navigator.clipboard) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(currentUrl);
     } catch {
-      // Fallback
+      showToast(lang === 'vi' ? 'Không sao chép được liên kết' : 'Could not copy the profile link', 'error');
+      return;
     }
+    const toasted = showToast(lang === 'vi' ? 'Đã sao chép liên kết vào bộ nhớ tạm!' : 'Profile link copied to clipboard!');
+    setCopied(toasted ? 'toast' : 'inline');
+    setTimeout(() => setCopied(null), 2500);
   };
 
   const shareItems = [
@@ -154,8 +157,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </div>
         </div>
 
-        {/* Copy Toast Feedback */}
-        {copied && (
+        {/* Inline copy confirmation, only when no shared Toaster shows it */}
+        {copied === 'inline' && (
           <div className="mt-4 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-center text-xs font-semibold flex items-center justify-center gap-1.5 animate-bounce">
             <Check className="w-4 h-4 text-emerald-600" />
             {lang === 'vi' ? 'Đã sao chép liên kết vào bộ nhớ tạm!' : 'Profile link copied to clipboard!'}
