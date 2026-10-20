@@ -4,7 +4,7 @@ import '../../styles/blocks.css';
 import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
 import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
 import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
-import { documentLanes, imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
+import { documentLanes, imageSizeAttrs, resolveSpan, walkBlocks } from '../../lib/blocks/schema';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
 import { EmbedView } from './EmbedView';
@@ -51,6 +51,14 @@ interface RenderContext {
   highlights?: CodeHighlights;
   liveHighlight: boolean;
   autoLoadEmbeds: boolean;
+  /** Id of the document's first image block: usually the page's LCP element, so it loads eagerly at high priority. */
+  leadImageId?: string;
+}
+
+function leadImageId(blocks: Block[]): string | undefined {
+  let id: string | undefined;
+  walkBlocks(blocks, b => { if (!id && b.type === 'image') id = b.id; });
+  return id;
 }
 
 function renderNodes(nodes: InlineNode[]): ReactNode[] {
@@ -184,7 +192,9 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
       const style: CssVars | undefined = block.width && block.height ? { '--zb-img-ratio': `${block.width} / ${block.height}` } : undefined;
       return (
         <figure className="zb-figure zb-figure-center">
-          <img src={block.url} alt={block.alt} loading="lazy" decoding="async" {...imageSizeAttrs(block)} style={style} />
+          {ctx.leadImageId === block.id
+            ? <img src={block.url} alt={block.alt} fetchPriority="high" decoding="async" {...imageSizeAttrs(block)} style={style} />
+            : <img src={block.url} alt={block.alt} loading="lazy" decoding="async" {...imageSizeAttrs(block)} style={style} />}
           {block.caption && <figcaption>{block.caption}</figcaption>}
         </figure>
       );
@@ -255,11 +265,13 @@ interface BlockRendererProps {
   liveHighlight?: boolean;
   /** Third-party embeds load by themselves when scrolled into view (default). False keeps them click-to-load (every Studio preview). */
   autoLoadEmbeds?: boolean;
+  /** Load the first image eagerly at high priority (the article page, where it is usually the LCP element). Off for HTML fragments. */
+  eagerLeadImage?: boolean;
 }
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
-export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true }: BlockRendererProps) {
-  const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds };
+export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false }: BlockRendererProps) {
+  const ctx: RenderContext = { articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, leadImageId: eagerLeadImage ? leadImageId(doc.blocks) : undefined };
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
   const lanes = documentLanes(doc);
   return (
