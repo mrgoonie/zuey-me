@@ -633,6 +633,30 @@ describe('ZueyOS, community and surveys', () => {
     window.history.replaceState(null, '', '/');
   });
 
+  test('a #app deep link reopens a window that was minimized after an earlier visit to the same hash', async () => {
+    const profile = { id: 'p', name: 'Duy', handle: 'duy', email: 'duy@example.com', avatar_url: '/avatar.png', intro_en: '', intro_vi: '', theme: 'default' };
+    await mount(createElement(ZueyOS, { locale: 'en', profile, links: [], signedIn: false }));
+    const pricingOpens = (from: number) => since(from).filter(e => e.event === 'app_opened' && e.props.app === 'pricing');
+    let start = captured.length;
+    await act(async () => { window.location.hash = '#pricing'; });
+    await settle();
+    expect(pricingOpens(start).length).toBeGreaterThan(0);
+    const minimize = host.querySelector('[data-app="pricing"] button.mn');
+    if (!minimize) throw new Error('pricing window has no minimize button');
+    await click(minimize);
+    // The hash no longer names a window that is off screen, so the same deep link fires hashchange again.
+    expect(window.location.hash).not.toBe('#pricing');
+    start = captured.length;
+    await act(async () => { window.location.hash = '#pricing'; });
+    await settle();
+    expect(pricingOpens(start).map(plain)[0]).toEqual({ app: 'pricing', already_open: false });
+    // Pricing is visible again and stacked above every other window.
+    const shown = Array.from(host.querySelectorAll<HTMLElement>('section[data-app]')).filter(w => !w.hidden);
+    const topWin = shown.reduce((a, b) => (Number(b.style.zIndex) > Number(a.style.zIndex) ? b : a));
+    expect(topWin.dataset.app).toBe('pricing');
+    window.history.replaceState(null, '', '/');
+  });
+
   test('invite requested, joined after returning from Telegram, and a failed invite', async () => {
     await mount(createElement(CommunityAccess, { locale: 'en' }));
     const start = captured.length;

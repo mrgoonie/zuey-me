@@ -295,6 +295,17 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     };
   }, [openApp]);
 
+  // A hash naming a window that is no longer on top (focus moved, minimized, closed) is stale: setting
+  // the same hash again fires no hashchange, so the deep link would do nothing. Keep it on the top window.
+  // A clean URL or a non-app hash is left alone.
+  useEffect(() => {
+    if (!ready) return;
+    const current = appFromHash(window.location.hash);
+    if (!current) return;
+    const top = topId(wins);
+    if (top !== current) setHash(top);
+  }, [wins, ready, setHash]);
+
   /* ---------- Exposé ---------- */
   const enterExpo = useCallback(() => {
     if (window.matchMedia(PHONE_QUERY).matches) return;
