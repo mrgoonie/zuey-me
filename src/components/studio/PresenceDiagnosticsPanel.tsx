@@ -8,6 +8,15 @@ export const DIAGNOSTICS_REFRESH_MS = 30_000;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** A failed diagnostics request; `status` lets the panel tell an expired session (401/403) from an outage. */
+class DiagnosticsError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+const isAuthFailure = (e: unknown): boolean => e instanceof DiagnosticsError && (e.status === 401 || e.status === 403);
+
 /** Reads the `{ success, data | error }` envelope into diagnostics or a readable error. */
 async function readDiagnostics(res: Response): Promise<PresenceDiagnostics> {
   let body: unknown = null;
@@ -21,7 +30,7 @@ async function readDiagnostics(res: Response): Promise<PresenceDiagnostics> {
   const err = isRecord(body) && isRecord(body.error) ? body.error : null;
   const code = err && typeof err.code === 'string' ? err.code : `HTTP ${res.status}`;
   const message = err && typeof err.message === 'string' ? err.message : 'Unexpected response';
-  throw new Error(`${code}: ${message}`);
+  throw new DiagnosticsError(`${code}: ${message}`, res.status);
 }
 
 const fmtTime = (ts: string | null): string => {
@@ -52,6 +61,9 @@ export const PresenceDiagnosticsPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const busy = useRef(false);
+  /** Set after a 401/403: auto refresh stops (each call would only fail again); a manual Refresh still retries. */
+  const [authStopped, setAuthStopped] = useState(false);
+  const authStoppedRef = useRef(false);
 
   const load = useCallback(async () => {
     if (busy.current) return;
@@ -60,8 +72,14 @@ export const PresenceDiagnosticsPanel: React.FC = () => {
     try {
       setData(await readDiagnostics(await fetch(ENDPOINT, { credentials: 'same-origin', headers: { Accept: 'application/json' } })));
       setError(null);
+      authStoppedRef.current = false;
+      setAuthStopped(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load presence diagnostics');
+      if (isAuthFailure(e)) {
+        authStoppedRef.current = true;
+        setAuthStopped(true);
+      }
     } finally {
       busy.current = false;
       setLoading(false);
@@ -71,7 +89,7 @@ export const PresenceDiagnosticsPanel: React.FC = () => {
   useEffect(() => {
     void load();
     const id = setInterval(() => {
-      if (document.visibilityState === 'visible') void load();
+      if (document.visibilityState === 'visible' && !authStoppedRef.current) void load();
     }, DIAGNOSTICS_REFRESH_MS);
     return () => clearInterval(id);
   }, [load]);
@@ -82,7 +100,8 @@ export const PresenceDiagnosticsPanel: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold font-serif text-white">Presence diagnostics</h2>
           <p className="text-xs text-stone-400 mt-1">
-            Live counters of the presence Worker. Counts only, no visitor data. Refreshes every {DIAGNOSTICS_REFRESH_MS / 1000}s while open.
+            Live counters of the presence Worker. Counts only, no visitor data.{' '}
+            {authStopped ? 'Auto refresh is paused until you sign in again and press Refresh.' : `Refreshes every ${DIAGNOSTICS_REFRESH_MS / 1000}s while open.`}
           </p>
         </div>
         <button
@@ -114,8 +133,8 @@ export const PresenceDiagnosticsPanel: React.FC = () => {
               ['Max per IP', fmtNum(data.limits.maxPerIp)],
               ['Max per key', fmtNum(data.limits.maxPerKey)],
             ]} />
-            <Group title="Counters (since start)" rows={[
-              ['Started', fmtTime(data.counters.startedAt)],
+            <Group title="Counters (since last wake)" rows={[
+              ['Woke at', fmtTime(data.counters.startedAt)],
               ['Connects accepted', fmtNum(data.counters.connectsAccepted)],
               ['Connects rejected', fmtNum(data.counters.connectsRejected)],
               ['Messages dropped', fmtNum(data.counters.messagesDropped)],
@@ -131,6 +150,10 @@ export const PresenceDiagnosticsPanel: React.FC = () => {
               ['History storage', fmtBytes(data.history.storageBytes)],
             ]} />
           </div>
+          <p className="text-[11px] text-stone-500">
+            Counters and alarm timings are kept in memory. The hub hibernates after about 10 s without events, which
+            resets them, so they show only activity since the last wake (a request like this one wakes it).
+          </p>
         </>
       )}
     </section>

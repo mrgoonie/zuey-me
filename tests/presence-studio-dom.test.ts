@@ -123,4 +123,38 @@ describe('Studio Presence tab', () => {
     expect(root.querySelector('[role="alert"]')).toBeNull();
     expect(root.querySelector('[data-diagnostics-group="Sockets"]')).not.toBeNull();
   });
+
+  test('a 401/403 stops auto refresh and shows the error; a manual Refresh still retries', async () => {
+    const ticks: Array<() => void> = [];
+    const realSetInterval = globalThis.setInterval;
+    // Capture the panel's poller so the test can fire it on demand.
+    Object.assign(globalThis, { setInterval: (fn: () => void) => ticks.push(fn) });
+    try {
+      let answer = () => json({ success: false, error: { code: 'unauthorized', message: 'Sign in required' } }, 401);
+      const urls = stubFetch(() => answer());
+      const root = mount(false);
+      await settle();
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain('unauthorized');
+      expect(root.querySelector('[data-presence-diagnostics]')?.textContent).toContain('Auto refresh is paused');
+      expect(ticks).toHaveLength(1);
+
+      for (let i = 0; i < 3; i += 1) React.act(() => ticks[0]?.());
+      await settle();
+      expect(urls).toHaveLength(1);
+
+      answer = () => json({ success: true, data: DIAG });
+      const refresh = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'Refresh');
+      React.act(() => refresh?.click());
+      await settle();
+      expect(urls).toHaveLength(2);
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(root.querySelector('[data-diagnostics-group="Counters (since last wake)"]')).not.toBeNull();
+
+      React.act(() => ticks[0]?.()); // polling resumes after a successful manual refresh
+      await settle();
+      expect(urls).toHaveLength(3);
+    } finally {
+      Object.assign(globalThis, { setInterval: realSetInterval });
+    }
+  });
 });

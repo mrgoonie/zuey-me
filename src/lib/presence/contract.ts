@@ -125,7 +125,10 @@ export interface PresenceDiagnostics {
     owner: number;
   };
   limits: { maxTotal: number; maxPerIp: number; maxPerKey: number };
-  /** Since the Durable Object last started (in-memory; resets on eviction). */
+  /**
+   * Since the Durable Object last woke (in memory only). The hub hibernates after about 10 s without events,
+   * which resets these, so they cover a single wake period (`startedAt` is the wake time), not a long-term trend.
+   */
   counters: {
     startedAt: string;
     connectsAccepted: number;
