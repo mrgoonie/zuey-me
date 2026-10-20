@@ -28,6 +28,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const fallbackNote = locale === lang ? null : homeStrings(locale).profileFallback;
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isQrOpen, setIsQrOpen] = useState(false);
+  /** Set when the QR modal opens from the share modal: focus returns to what opened the share modal. */
+  const [qrReturnFocus, setQrReturnFocus] = useState<HTMLElement | null>(null);
 
   const blogs = initialLinks.filter(l => l.section === 'blogs' && l.is_active);
   const companies = initialLinks.filter(l => l.section === 'companies' && l.is_active);
@@ -71,7 +73,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
           <div className="flex items-center gap-1.5 sm:gap-2">
             <button
-              onClick={() => setIsQrOpen(true)}
+              onClick={() => { setQrReturnFocus(null); setIsQrOpen(true); }}
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/90 hover:bg-white border border-stone-300/80 shadow-xs flex items-center justify-center text-stone-700 hover:text-stone-900 transition-all hover:scale-105 active:scale-95"
               aria-label="QR Code"
               title={lang === 'vi' ? 'Hiển thị mã QR' : 'Show QR Code'}
@@ -228,7 +230,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         onClose={() => setIsShareOpen(false)}
         profile={initialProfile}
         lang={lang}
-        onOpenQr={() => {
+        onOpenQr={(returnFocus) => {
+          setQrReturnFocus(returnFocus);
           setIsShareOpen(false);
           setIsQrOpen(true);
         }}
@@ -239,6 +242,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         isOpen={isQrOpen}
         onClose={() => setIsQrOpen(false)}
         lang={lang}
+        returnFocus={qrReturnFocus}
       />
     </div>
   );

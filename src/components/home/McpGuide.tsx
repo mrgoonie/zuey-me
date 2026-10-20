@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { showToast } from '../feedback/toast-bus';
 import type { HomeStrings } from './home-i18n';
 
 interface McpGuideProps {
@@ -67,6 +68,23 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
   const [tab, setTab] = useState<ClientTab>('claudeCode');
   const [origin, setOrigin] = useState('https://zuey.me');
   const [copied, setCopied] = useState<{ index: number; ok: boolean } | null>(null);
+  /** Copy result shown inline only when no shared Toaster is mounted, so it is announced once. */
+  const [inlineStatus, setInlineStatus] = useState('');
+  const statusTimers = useRef<number[]>([]);
+  useEffect(() => () => statusTimers.current.forEach(t => window.clearTimeout(t)), []);
+
+  /** Shows a copy result: through the shared toast, or inline when no Toaster is mounted. */
+  const announce = (message: string, ok: boolean) => {
+    statusTimers.current.forEach(t => window.clearTimeout(t));
+    statusTimers.current = [];
+    setInlineStatus('');
+    if (showToast(message, ok ? 'success' : 'error')) return;
+    // Empty first, then the text, so a repeated identical result is announced again; then clear it.
+    statusTimers.current = [
+      window.setTimeout(() => setInlineStatus(message), 60),
+      window.setTimeout(() => setInlineStatus(''), 3000),
+    ];
+  };
   const panelId = useId();
 
   useEffect(() => {
@@ -119,7 +137,9 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
                 aria-label={`${strings.copy}: ${s.note}`}
                 onClick={async e => {
                   const code = e.currentTarget.parentElement?.querySelector('code') ?? null;
-                  setCopied({ index: i, ok: await copyText(s.code, code) });
+                  const ok = await copyText(s.code, code);
+                  setCopied({ index: i, ok });
+                  announce(ok ? strings.copied : strings.copyFailed, ok);
                 }}
               >
                 {copied?.index === i && copied.ok ? <Check aria-hidden="true" className="w-4 h-4" /> : <Copy aria-hidden="true" className="w-4 h-4" />}
@@ -127,9 +147,7 @@ export const McpGuide: React.FC<McpGuideProps> = ({ strings }) => {
             </div>
           </div>
         ))}
-        <p className="min-h-[20px] text-[13px] font-semibold" role="status" aria-live="polite">
-          {copied ? (copied.ok ? strings.copied : strings.copyFailed) : ''}
-        </p>
+        <p className="text-[13px] font-semibold" role="status" aria-live="polite">{inlineStatus}</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <a href="/account#keys" className="home-cta">{strings.keys}</a>

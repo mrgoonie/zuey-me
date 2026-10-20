@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { X, Download, Copy, Check } from 'lucide-react';
+import { showToast } from './feedback/toast-bus';
+import { useEscapeToClose } from './use-escape-to-close';
 
 interface QrCodeModalProps {
   isOpen: boolean;
@@ -10,6 +12,8 @@ interface QrCodeModalProps {
   title?: string;
   hint?: string;
   fileName?: string;
+  /** Where focus returns on close, when the modal was opened from another popup that is gone now. */
+  returnFocus?: HTMLElement | null;
 }
 
 export const QrCodeModal: React.FC<QrCodeModalProps> = ({
@@ -20,9 +24,14 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   title,
   hint,
   fileName = 'zuey-me-qrcode.png',
+  returnFocus,
 }) => {
   const [qrSrc, setQrSrc] = useState<string>('');
-  const [copied, setCopied] = useState(false);
+  /** 'toast' when the shared toast confirmed the copy, 'inline' when this page has no Toaster. */
+  const [copied, setCopied] = useState<'toast' | 'inline' | null>(null);
+  const titleId = useId();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEscapeToClose(isOpen, onClose, { initialFocus: closeButtonRef, returnFocus });
 
   const targetUrl = url || (typeof window !== 'undefined' ? window.location.origin : 'https://zuey.me');
 
@@ -50,12 +59,15 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 
   const handleCopy = async () => {
     try {
+      if (!navigator.clipboard) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(targetUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ignore
+      showToast(lang === 'vi' ? 'Không sao chép được liên kết' : 'Could not copy link', 'error');
+      return;
     }
+    const toasted = showToast(lang === 'vi' ? 'Đã sao chép liên kết' : 'Link copied');
+    setCopied(toasted ? 'toast' : 'inline');
+    setTimeout(() => setCopied(null), 2000);
   };
 
   const handleDownload = () => {
@@ -68,15 +80,19 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-      <div 
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 sm:p-7 border border-stone-200 text-center animate-scaleUp"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-          <h2 className="text-base font-bold text-stone-900 font-sans tracking-tight">
+          <h2 id={titleId} className="text-base font-bold text-stone-900 font-sans tracking-tight">
             {title ?? (lang === 'vi' ? 'Quét mã QR Profile' : 'Scan Profile QR')}
           </h2>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors"
             aria-label="Close"
@@ -136,6 +152,14 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
             {copied ? (lang === 'vi' ? 'Đã sao chép' : 'Copied!') : (lang === 'vi' ? 'Sao chép link' : 'Copy Link')}
           </button>
         </div>
+
+        {/* Inline copy confirmation, only when no shared Toaster shows it */}
+        {copied === 'inline' && (
+          <p className="mt-4 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-center text-xs font-semibold flex items-center justify-center gap-1.5">
+            <Check className="w-4 h-4 text-emerald-600" aria-hidden="true" />
+            {lang === 'vi' ? 'Đã sao chép liên kết' : 'Link copied'}
+          </p>
+        )}
       </div>
     </div>
   );

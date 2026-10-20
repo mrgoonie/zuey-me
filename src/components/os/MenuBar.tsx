@@ -55,6 +55,12 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
   const clock = useClock(locale);
+  /** Which item gets focus when the menu opens: ArrowUp on the button starts from the last one. */
+  const openAt = useRef<'first' | 'last'>('first');
+  const focusItem = (which: 'first' | 'last') => {
+    const items = rootRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+    (which === 'last' ? items?.[items.length - 1] : items?.[0])?.focus();
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -62,7 +68,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
       if (e.target instanceof Node && !rootRef.current?.contains(e.target)) setOpen(false);
     };
     document.addEventListener('pointerdown', onDown);
-    rootRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    focusItem(openAt.current);
+    openAt.current = 'first';
     return () => document.removeEventListener('pointerdown', onDown);
   }, [open]);
 
@@ -83,6 +90,16 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     items[next]?.focus();
   };
 
+  // Menu button keys (WAI-ARIA menu button): ArrowDown opens on the first item, ArrowUp on the last.
+  const onButtonKey = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const which = e.key === 'ArrowUp' ? 'last' : 'first';
+    if (open) { focusItem(which); return; }
+    openAt.current = which;
+    setOpen(true);
+  };
+
   const mascotLabel = mascotHidden ? (noticeWaiting ? `${strings.showZuey} (${strings.noticeWaiting})` : strings.showZuey) : strings.hideZuey;
 
   return (
@@ -96,6 +113,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           aria-expanded={open}
           aria-controls={menuId}
           onClick={() => setOpen(v => !v)}
+          onKeyDown={onButtonKey}
         >
           <i aria-hidden="true">z</i>
           <span>zuey.me</span>
@@ -105,7 +123,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           <ul id={menuId} role="menu" aria-label={strings.menu} className="os-pop" onKeyDown={onMenuKey}>
             {menu.map(item => (
               <li key={item.key} role="none">
-                <button type="button" role="menuitem" className="os-mi" onClick={() => { setOpen(false); item.run(); }}>
+                <button type="button" role="menuitem" tabIndex={-1} className="os-mi" onClick={() => { setOpen(false); item.run(); }}>
                   <span>{item.label}</span>
                   {item.kbd && <kbd>{item.kbd}</kbd>}
                 </button>

@@ -1,12 +1,18 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ExternalLink, Minus, Plus, X } from 'lucide-react';
 import type { AppDef, Rect } from './apps';
 import type { OsStrings } from './os-i18n';
+import { motionEase, motionMs } from '../home/motion';
+import { shouldCloseOnEscape } from './window-escape';
 import { GAP, modeRect, type Area, type WinMode, type WinState } from './window-store';
 
-const EASE_OUT = 'cubic-bezier(.2,.8,.2,1)';
-const EASE_SPRING = 'cubic-bezier(.2,1.15,.3,1)';
-const EASE_GENIE = 'cubic-bezier(.55,0,.75,.3)';
+/** Window motion reads the shared motion tokens (os.css) at animation time; fallbacks mirror them. */
+const ease = {
+  out: () => motionEase('out', 'cubic-bezier(.2,.8,.2,1)'),
+  in: () => motionEase('in', 'cubic-bezier(.4,0,1,1)'),
+  spring: () => motionEase('spring', 'cubic-bezier(.2,1.15,.3,1)'),
+  genie: () => motionEase('genie', 'cubic-bezier(.55,0,.75,.3)'),
+};
 const DIRS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 type Dir = (typeof DIRS)[number];
 
@@ -82,24 +88,48 @@ export const OsWindow: React.FC<OsWindowProps> = ({
   const prevExpo = useRef(expo !== null);
   const [busy, setBusy] = useState<'drag' | 'resize' | null>(null);
   const lastMode = useRef(state.mode);
-  const glideTimer = useRef(0);
+  const titleId = useId();
 
-  // Apply committed geometry (outside gestures); a mode change (zoom, snap) glides between rects.
+  // Apply committed geometry (outside gestures). A mode change (zoom, snap) glides between rects
+  // FLIP-style: geometry jumps once, then a transform-only animation eases from the old rect.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !rect || mobile || busy) return;
-    if (lastMode.current !== state.mode && !reduced) {
-      el.classList.add('osw--glide');
-      window.clearTimeout(glideTimer.current);
-      glideTimer.current = window.setTimeout(() => el.classList.remove('osw--glide'), 360);
-    }
+    const glide = lastMode.current !== state.mode && !reduced && !el.hidden && !expo;
     lastMode.current = state.mode;
+    const from = glide ? el.getBoundingClientRect() : null;
     el.style.left = `${rect.x}px`;
     el.style.top = `${rect.y}px`;
     el.style.width = `${rect.w}px`;
     el.style.height = `${rect.h}px`;
-  }, [rect, mobile, busy, state.mode, reduced]);
-  useEffect(() => () => window.clearTimeout(glideTimer.current), []);
+    if (!from || !from.width || typeof el.animate !== 'function') return;
+    const to = el.getBoundingClientRect();
+    if (!to.width || !to.height) return;
+    el.style.transformOrigin = '0 0';
+    el.animate(
+      [
+        { transform: `translate(${Math.round(from.left - to.left)}px,${Math.round(from.top - to.top)}px) scale(${(from.width / to.width).toFixed(4)},${(from.height / to.height).toFixed(4)})` },
+        { transform: 'none' },
+      ],
+      { duration: motionMs('slow', 340), easing: ease.out() },
+    );
+  }, [rect, mobile, busy, state.mode, reduced, expo]);
+
+  // Escape closes this window while focus is inside it (see window-escape.ts for what it leaves alone).
+  // A native listener on the section also catches keys from hosted islands, which are separate React roots.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || expo) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!shouldCloseOnEscape(e, el)) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    el.addEventListener('keydown', onKey);
+    return () => el.removeEventListener('keydown', onKey);
+  }, [expo]);
 
   // Open / restore / minimize / close animations. The element stays rendered until its exit finishes.
   useLayoutEffect(() => {
@@ -116,10 +146,10 @@ export const OsWindow: React.FC<OsWindowProps> = ({
       if (reduced || expo) return;
       el.hidden = false;
       if (mobile) {
-        el.animate([{ transform: 'translateY(100%)' }, { transform: 'none' }], { duration: 420, easing: EASE_OUT });
+        el.animate([{ transform: 'translateY(100%)' }, { transform: 'none' }], { duration: motionMs('slower', 440), easing: ease.out() });
       } else if (was.min) {
         el.style.transformOrigin = '50% 50%';
-        el.animate(genieFrames(el, dockTarget(app.id)).reverse().map(k => ({ ...k, offset: k.offset == null ? null : 1 - Number(k.offset) })), { duration: 420, easing: EASE_OUT });
+        el.animate(genieFrames(el, dockTarget(app.id)).reverse().map(k => ({ ...k, offset: k.offset == null ? null : 1 - Number(k.offset) })), { duration: motionMs('slower', 440), easing: ease.out() });
       } else {
         const o = lastPress && performance.now() - lastPress.t < 700 ? lastPress.r : dockTarget(app.id);
         const r = el.getBoundingClientRect();
@@ -128,7 +158,7 @@ export const OsWindow: React.FC<OsWindowProps> = ({
           o
             ? [{ opacity: 0, transform: 'scale(.16)' }, { opacity: 1, offset: 0.4 }, { opacity: 1, transform: 'none' }]
             : [{ opacity: 0, transform: 'translateY(18px) scale(.94)' }, { opacity: 1, transform: 'none' }],
-          { duration: o ? 440 : 320, easing: EASE_SPRING },
+          { duration: o ? motionMs('slower', 440) : motionMs('slow', 340), easing: ease.spring() },
         );
       }
       return;
@@ -138,15 +168,15 @@ export const OsWindow: React.FC<OsWindowProps> = ({
     let opts: KeyframeAnimationOptions;
     if (mobile) {
       frames = [{ transform: el.style.transform || 'none' }, { transform: 'translateY(100%)' }];
-      opts = { duration: 300, easing: EASE_OUT };
+      opts = { duration: motionMs('slow', 340), easing: ease.out() };
     } else if (state.min) {
       el.style.transformOrigin = '50% 50%';
       frames = genieFrames(el, dockTarget(app.id));
-      opts = { duration: 480, easing: EASE_GENIE };
+      opts = { duration: motionMs('slower', 440), easing: ease.genie() };
     } else {
       el.style.transformOrigin = '50% 40%';
       frames = [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.94) translateY(6px)' }];
-      opts = { duration: 170, easing: 'ease-in' };
+      opts = { duration: motionMs('fast', 150), easing: ease.in() };
     }
     el.style.pointerEvents = 'none';
     const anim = el.animate(frames, { ...opts, fill: 'forwards' });
@@ -217,7 +247,7 @@ export const OsWindow: React.FC<OsWindowProps> = ({
     if (d.mob) {
       if (d.dy > 110) onClose();
       else {
-        if (d.dy && !reduced) el.animate([{ transform: `translateY(${d.dy}px)` }, { transform: 'none' }], { duration: 260, easing: EASE_SPRING });
+        if (d.dy && !reduced) el.animate([{ transform: `translateY(${d.dy}px)` }, { transform: 'none' }], { duration: motionMs('base', 200), easing: ease.spring() });
         el.style.transform = '';
       }
       return;
@@ -238,7 +268,7 @@ export const OsWindow: React.FC<OsWindowProps> = ({
     if (v && !e.altKey) {
       e.preventDefault();
       onCommit({ x: el.offsetLeft + v[0] * step, y: el.offsetTop + v[1] * step, w: el.offsetWidth, h: el.offsetHeight }, 'normal');
-    } else if (e.key === 'Escape') onClose();
+    }
   };
 
   /* ---------- 8-way resize ---------- */
@@ -307,7 +337,7 @@ export const OsWindow: React.FC<OsWindowProps> = ({
         data-app={app.id}
         data-mode={state.mode}
         role="dialog"
-        aria-label={title}
+        aria-labelledby={titleId}
         hidden={!shown}
         style={{ zIndex: 10 + state.z, ...expoStyle }}
         onPointerDownCapture={expo ? undefined : onFocus}
@@ -316,6 +346,10 @@ export const OsWindow: React.FC<OsWindowProps> = ({
         <div
           className="osw-bar"
           tabIndex={0}
+          role="group"
+          aria-roledescription={strings.titleBar}
+          aria-label={title}
+          aria-describedby={`${titleId}-hint`}
           onPointerDown={onBarDown}
           onPointerMove={onBarMove}
           onPointerUp={onBarUp}
@@ -329,7 +363,8 @@ export const OsWindow: React.FC<OsWindowProps> = ({
             <button type="button" className="mx" aria-label={state.mode === 'max' ? strings.restore : strings.maximize} title={`${state.mode === 'max' ? strings.restore : strings.maximize} (Alt ↑)`} aria-keyshortcuts="Alt+ArrowUp" onClick={onToggleMax}><Plus aria-hidden /></button>
           </div>
           <button type="button" className="osw-back" onClick={onClose}><ChevronLeft aria-hidden /><span>{strings.back}</span></button>
-          <h2 className="osw-title">{title}</h2>
+          <h2 className="osw-title" id={titleId}>{title}</h2>
+          <span className="sr-only" id={`${titleId}-hint`}>{strings.moveHint}</span>
           {!app.href.startsWith('/#') && (
             <a className="osw-page" href={app.href} title={strings.openPage} aria-label={`${strings.openPage}: ${title}`}><ExternalLink aria-hidden /></a>
           )}

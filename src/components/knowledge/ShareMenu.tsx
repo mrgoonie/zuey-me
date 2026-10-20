@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Locale } from '../../lib/i18n/locales';
 import { knowledgeStrings } from './strings';
+import { showToast } from '../feedback/toast-bus';
 
 interface Props {
   locale: Locale;
@@ -55,13 +56,17 @@ export function ShareMenu({ locale, title, publicUrl, markdownUrl, canCopyPrivat
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onClick); };
   }, [open]);
 
+  /** Copy feedback goes to the shared toast; the inline live region is only the fallback for pages without a Toaster. */
   const run = async (action: () => Promise<void>) => {
+    let ok = true;
     try {
       await action();
-      setStatus(t.copied);
     } catch {
-      setStatus(t.copyFailed);
+      ok = false;
     }
+    const message = ok ? t.copied : t.copyFailed;
+    if (showToast(message, ok ? 'success' : 'error')) return;
+    setStatus(message);
     window.setTimeout(() => setStatus(''), 2500);
   };
 
