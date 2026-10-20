@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { ZueyOS } from '../components/os/ZueyOS';
+import ZueyOSStaticIndex from '../components/os/ZueyOSStaticIndex.astro';
 import { LOOK_BOOT_SCRIPT } from '../components/os/look';
 import { ZueyAiPanel } from '../components/ai/ZueyAiPanel';
 import { KnowledgesPanel } from '../components/knowledge/KnowledgesPanel';
@@ -107,4 +108,5 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
       <ReferralApp client:visible locale={locale} signedIn={member !== null} />
     </div>
   </ZueyOS>
+  <ZueyOSStaticIndex locale={locale} profile={profile} />
 </Layout>

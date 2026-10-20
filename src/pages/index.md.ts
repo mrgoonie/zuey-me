@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getProfile, getLinks } from '../db/store';
+import { zueyOsAgentGuideMarkdown } from '../components/os/agent-surfaces';
 
 export const GET: APIRoute = async ({ locals }) => {
   const d1 = locals.runtime?.env?.DB;
@@ -11,6 +12,7 @@ export const GET: APIRoute = async ({ locals }) => {
   md += `Avatar: ${profile.avatar_url}\n`;
   md += `Email: [${profile.email}](mailto:${profile.email})\n`;
   md += `Website: [https://zuey.me](https://zuey.me)\n\n`;
+  md += `${zueyOsAgentGuideMarkdown()}\n`;
 
   md += `## Blogs\n`;
   links.filter(l => l.section === 'blogs').forEach(l => {
