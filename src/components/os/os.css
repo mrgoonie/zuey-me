@@ -158,8 +158,9 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .osw-lights:hover button, .osw-lights button:focus-visible { color: rgba(0, 0, 0, .6); }
 .osw-lights button:active { transform: scale(.86); }
 .osw:not(.is-focus) .osw-lights:not(:hover) button { background: rgba(128, 118, 110, .35); box-shadow: none; }
-.osw-title { flex: 1; min-width: 0; margin: 0 0 0 0; text-align: center; font: 600 12px var(--os-mono); color: inherit; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.osw:not(.is-focus) .osw-title { opacity: .45; }
+.osw-title { flex: 1; min-width: 0; margin: 0 0 0 0; text-align: center; font: 600 12px var(--os-mono); color: inherit; opacity: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Unfocused titles stay >= 4.5:1 (WCAG AA): .7 gives ~5.7:1 on paper, higher on stage and glass. */
+.osw:not(.is-focus) .osw-title { opacity: .7; }
 .osw-page { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; opacity: .65; }
 .osw-page:hover { opacity: 1; background: rgba(128, 118, 110, .16); }
 .osw-page svg { width: 15px; height: 15px; }
