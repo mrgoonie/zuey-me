@@ -641,19 +641,20 @@ describe('ZueyOS, community and surveys', () => {
     await act(async () => { window.location.hash = '#pricing'; });
     await settle();
     expect(pricingOpens(start).length).toBeGreaterThan(0);
+    const topOf = (wins: HTMLElement[]) => (wins.length ? wins.reduce((a, b) => (Number(b.style.zIndex) > Number(a.style.zIndex) ? b : a)) : null);
+    const visible = () => Array.from(host.querySelectorAll<HTMLElement>('section[data-app]')).filter(w => !w.hidden);
+    const nextTop = topOf(visible().filter(w => w.dataset.app !== 'pricing'))?.dataset.app;
     const minimize = host.querySelector('[data-app="pricing"] button.mn');
     if (!minimize) throw new Error('pricing window has no minimize button');
     await click(minimize);
-    // The hash no longer names a window that is off screen, so the same deep link fires hashchange again.
-    expect(window.location.hash).not.toBe('#pricing');
+    // The hash moves to the window now on top, so the same deep link fires hashchange again.
+    expect(window.location.hash).toBe(nextTop ? `#${nextTop}` : '');
     start = captured.length;
     await act(async () => { window.location.hash = '#pricing'; });
     await settle();
     expect(pricingOpens(start).map(plain)[0]).toEqual({ app: 'pricing', already_open: false });
     // Pricing is visible again and stacked above every other window.
-    const shown = Array.from(host.querySelectorAll<HTMLElement>('section[data-app]')).filter(w => !w.hidden);
-    const topWin = shown.reduce((a, b) => (Number(b.style.zIndex) > Number(a.style.zIndex) ? b : a));
-    expect(topWin.dataset.app).toBe('pricing');
+    expect(topOf(visible())?.dataset.app).toBe('pricing');
     window.history.replaceState(null, '', '/');
   });
 

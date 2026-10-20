@@ -276,8 +276,9 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
 
   // Hash navigation (#ai, #knowledges, legacy #profile / #activity) opens the matching window.
   useEffect(() => {
-    const onHash = () => {
-      const id = appFromHash(window.location.hash);
+    // Read the event's target URL: a render queued before this hashchange may already have rewritten the hash.
+    const onHash = (e: HashChangeEvent) => {
+      const id = appFromHash(new URL(e.newURL).hash);
       if (id) openApp(id);
     };
     // WebMCP tools open windows through an event so analytics can tag them; cancelling acknowledges it.
