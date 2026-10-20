@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { OWNER_MODES, OWNER_STATUS_TEXT_MAX, type OwnerMode, type OwnerPublicStatus, type OwnerStatusState } from '../../lib/presence/contract';
 import { isOwnerStatusState, sanitizeOwnerStatusText } from '../../lib/presence/presence-owner-status-guards';
+import { changedLabel } from '../../lib/presence/changed-label';
 
 const ENDPOINT = '/api/v1/presence/owner';
 
@@ -32,11 +33,6 @@ async function readState(res: Response): Promise<OwnerStatusState> {
   const code = err && typeof err.code === 'string' ? err.code : `HTTP ${res.status}`;
   const message = err && typeof err.message === 'string' ? err.message : 'Unexpected response';
   throw new Error(`${code}: ${message}`);
-}
-
-function fmt(ts: string): string {
-  const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString('vi-VN', { timeZone: 'Asia/Saigon' });
 }
 
 /** Studio panel (owner only): the realtime presence mode and status text shown in the Activity Monitor. */
@@ -126,7 +122,7 @@ export const PresenceOwnerPanel: React.FC = () => {
           </div>
           {state.public.text && <p className="text-stone-200 break-words">{state.public.text}</p>}
           <p className="text-stone-500">
-            Setting: {MODE_COPY[state.mode].label} · {state.connected ? 'connected' : 'not connected'} · changed {fmt(state.updatedAt)}
+            Setting: {MODE_COPY[state.mode].label} · {state.connected ? 'connected' : 'not connected'}{changedLabel(state.updatedAt)}
           </p>
         </div>
       )}
