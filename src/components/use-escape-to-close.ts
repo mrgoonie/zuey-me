@@ -17,6 +17,23 @@ interface PopupFocusOptions {
   returnFocus?: HTMLElement | null;
 }
 
+const FOCUSABLE = 'button, a[href], input, select, textarea, summary, [tabindex]';
+let pointerTarget: HTMLElement | null = null;
+
+/**
+ * Safari and macOS Firefox do not focus a button on click, so the opener is `body` after a mouse
+ * click. Remember what the pointer last pressed to use as the opener; a key press clears it, since
+ * keyboard users always have real focus.
+ */
+const tracked = new WeakSet<Document>();
+function trackPointer(): void {
+  if (tracked.has(document)) return;
+  tracked.add(document);
+  document.addEventListener('pointerdown', e => {
+    pointerTarget = e.target instanceof Element ? e.target.closest<HTMLElement>(FOCUSABLE) : null;
+  }, true);
+  document.addEventListener('keydown', () => { pointerTarget = null; }, true);
+}
 /** Focus fell out of the page (the focused popup content unmounted), so it is safe to move it back. */
 function focusIsLost(): boolean {
   const active = document.activeElement;
@@ -42,10 +59,14 @@ export function useEscapeToClose(active: boolean, onClose: () => void, options: 
 
   useEffect(() => {
     if (!active) return;
+    trackPointer();
     const token = Symbol('popup');
     openPopups.push(token);
     const opener = document.activeElement;
-    openerRef.current = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    const pressed = pointerTarget?.isConnected ? pointerTarget : null;
+    const focused = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    // A mouse press on a button Safari will not focus leaves focus on the window or body around it.
+    openerRef.current = pressed && (!focused || (focused !== pressed && focused.contains(pressed))) ? pressed : focused;
     optionsRef.current.initialFocus?.current?.focus({ preventScroll: true });
 
     const onKey = (e: KeyboardEvent) => {

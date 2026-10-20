@@ -427,6 +427,45 @@ describe('Zuey OS desktop keyboard flow', () => {
     expect(about()?.hidden).toBe(true);
   });
 
+  test('Safari-style mouse click (no focus on the button): Escape closes the modal, then the window', async () => {
+    const { about, modal, escape } = await openAbout();
+    const share = about()?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
+    if (!share) throw new Error('No share button');
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement === document.body).toBe(true);
+    React.act(() => { share.dispatchEvent(new Event('pointerdown', { bubbles: true })); share.click(); });
+    await settle(2);
+    expect(modal()).not.toBeNull();
+
+    await escape();
+    expect(modal()).toBeNull();
+    expect(document.activeElement === share).toBe(true);
+
+    await escape();
+    await settle();
+    expect(about()?.hidden).toBe(true);
+  });
+
+  test('Safari-style click where the window section takes focus: focus still returns to the Share button', async () => {
+    const { about, modal, escape } = await openAbout();
+    const section = about();
+    const share = section?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
+    if (!section || !share) throw new Error('No share button');
+    section.focus();
+    expect(document.activeElement === section).toBe(true);
+    React.act(() => { share.dispatchEvent(new Event('pointerdown', { bubbles: true })); share.click(); });
+    await settle(2);
+    expect(modal()).not.toBeNull();
+
+    await escape();
+    expect(modal()).toBeNull();
+    expect(document.activeElement === share).toBe(true);
+
+    await escape();
+    await settle();
+    expect(about()?.hidden).toBe(true);
+  });
+
   test('Share, then QR, then Escape twice: the QR modal closes onto the share trigger and the window closes', async () => {
     const { about, modal, escape } = await openAbout();
     const share = about()?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
