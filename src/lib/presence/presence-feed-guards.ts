@@ -9,6 +9,8 @@ import {
   type CategoryCount,
   type OwnerPresence,
   type OwnerPublicStatus,
+  type PresenceHistory,
+  type PresenceHistoryBucket,
   type PresenceSnapshot,
 } from './contract';
 
@@ -42,6 +44,30 @@ export function isPresenceSnapshot(v: unknown): v is PresenceSnapshot {
     Array.isArray(v.categories) &&
     v.categories.every(isCategoryCount) &&
     isOwnerPresence(v.owner)
+  );
+}
+
+function isHistoryBucket(v: unknown): v is PresenceHistoryBucket {
+  return (
+    isRecord(v) &&
+    typeof v.t === 'string' &&
+    Number.isFinite(Date.parse(v.t)) &&
+    isCount(v.peak) &&
+    Array.isArray(v.categories) &&
+    v.categories.every(isCategoryCount)
+  );
+}
+
+/** GET /v1/history: 5-minute aggregate buckets (no per-visitor data). */
+export function isPresenceHistory(v: unknown): v is PresenceHistory {
+  return (
+    isRecord(v) &&
+    v.v === PRESENCE_CONTRACT_VERSION &&
+    typeof v.at === 'string' &&
+    Number.isFinite(Date.parse(v.at)) &&
+    v.bucketMinutes === 5 &&
+    Array.isArray(v.buckets) &&
+    v.buckets.every(isHistoryBucket)
   );
 }
 
