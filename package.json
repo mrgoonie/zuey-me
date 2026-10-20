@@ -10,7 +10,10 @@
     "preview": "astro preview",
     "astro": "astro",
     "test": "vitest run",
-    "cli": "node packages/cli/bin/zuey.js"
+    "cli": "node packages/cli/bin/zuey.js",
+    "agent-eval:fetch": "bun tests/agent-eval/run-fetch.ts",
+    "agent-eval:mcp": "bun tests/agent-eval/run-mcp.ts",
+    "agent-eval:browser": "bun tests/agent-eval/run-browser.ts"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.4",

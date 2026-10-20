@@ -22,6 +22,11 @@ export interface R2BucketLike {
   delete(keys: string | string[]): Promise<void>;
 }
 
+/** Minimal shape of a Cloudflare service binding (Fetcher) used by this app. */
+export interface ServiceBindingLike {
+  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+}
+
 export interface RuntimeEnv {
   DB?: D1DatabaseLike;
   /** Private bucket `zuey-referral-kyc`: referrers' national-ID images, deleted when an admin decides. */
@@ -36,8 +41,17 @@ export interface RuntimeEnv {
   PUBLIC_POSTHOG_KEY?: string;
   /** PostHog ingestion host (default https://us.i.posthog.com). */
   PUBLIC_POSTHOG_HOST?: string;
-  /** "1" captures on localhost/dev builds and logs analytics calls to the console. */
+  /** "1" captures on localhost/dev builds and logs analytics calls to the console (also enables the presence beacon off production hosts). */
   PUBLIC_ANALYTICS_DEBUG?: string;
+  // Realtime presence (workers/presence)
+  /** HMAC secret signing presence connect tickets; must equal the presence Worker's secret. Missing = ticket endpoint answers 503. */
+  PRESENCE_TICKET_SECRET?: string;
+  /** Comma-separated member ids treated as the site owner in presence (never derived from the admin role). */
+  PRESENCE_OWNER_MEMBER_IDS?: string;
+  /** Origin of the presence Worker (default https://presence.zuey.me); e.g. http://localhost:8787 in dev. */
+  PUBLIC_PRESENCE_URL?: string;
+  /** Service binding to the `zuey-me-presence` Worker (owner status `/internal/*`); absent = HTTP to PUBLIC_PRESENCE_URL. */
+  PRESENCE?: ServiceBindingLike;
   ADMIN_MASTER_TOKEN?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

@@ -5,7 +5,7 @@
 
 export type AppId =
   | 'about' | 'ai' | 'knowledges' | 'reads' | 'zueytube' | 'github'
-  | 'pricing' | 'business' | 'mcp' | 'account' | 'referral' | 'appearance' | '200lab';
+  | 'pricing' | 'business' | 'mcp' | 'account' | 'referral' | 'appearance' | '200lab' | 'activity-monitor';
 
 export type SlotAppId = 'ai' | 'knowledges' | 'reads' | 'zueytube' | 'pricing' | 'business' | 'account' | 'referral' | '200lab';
 
@@ -37,6 +37,7 @@ export const APPS: Record<AppId, AppDef> = {
   account: { id: 'account', surface: 'stage', href: '/account', size: (w, h) => ({ w: clampTo(760, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   referral: { id: 'referral', surface: 'stage', href: '/referral', size: (w, h) => ({ w: clampTo(760, w - 40), h: clampTo(720, h - 16) }), min: { w: 360, h: 400 } },
   '200lab': { id: '200lab', surface: 'stage', href: '/200lab', size: (w, h) => ({ w: clampTo(820, w - 40), h: clampTo(700, h - 16) }), min: { w: 360, h: 360 } },
+  'activity-monitor': { id: 'activity-monitor', surface: 'glass', href: '/#activity-monitor', size: (w, h) => ({ w: clampTo(520, w - 40), h: clampTo(660, h - 16) }), min: { w: 320, h: 360 } },
   appearance: { id: 'appearance', surface: 'glass', href: '/#appearance', size: (_, h) => ({ w: 560, h: clampTo(640, h - 16) }), min: { w: 340, h: 360 } },
 };
 
@@ -45,7 +46,7 @@ export const APP_IDS = Object.keys(APPS) as AppId[];
  * Dock order (Alt+1…9 follow it, so apps past the ninth have no shortcut). Appearance lives in the
  * menu and the dock's right side.
  */
-export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'zueytube', 'github', 'pricing', 'business', 'mcp', 'account', 'referral', '200lab'];
+export const DOCK_APPS: AppId[] = ['about', 'ai', 'knowledges', 'reads', 'zueytube', 'github', 'pricing', 'business', 'mcp', 'account', 'referral', '200lab', 'activity-monitor'];
 export const SLOT_APPS: SlotAppId[] = ['ai', 'knowledges', 'reads', 'zueytube', 'pricing', 'business', 'account', 'referral', '200lab'];
 
 export const isAppId = (v: unknown): v is AppId => typeof v === 'string' && (APP_IDS as string[]).includes(v);

@@ -8,7 +8,7 @@ const locale = resolveLocale(Astro.request);
 const lang: 'vi' | 'en' = locale === 'vi' ? 'vi' : 'en';
 Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
 
-const EFFECTIVE = '2026-10-11';
+const EFFECTIVE = '2026-10-20';
 const CONTACT = 'hi@zuey.me';
 
 interface Section {
@@ -132,6 +132,7 @@ const content: Record<'vi' | 'en', {
         'Mỗi sự kiện chỉ được gửi các thuộc tính đã khai báo trước. Địa chỉ trang và nguồn giới thiệu được lọc bỏ các tham số nhạy cảm (ví dụ token, code, email, key, secret, state, session) trước khi gửi; trên các trang tài khoản, thanh toán và đặt lịch, toàn bộ tham số bị bỏ, mã đơn hàng và mã lịch hẹn trong đường dẫn được thay bằng ký hiệu chung và tiêu đề trang không được gửi. Biểu mẫu khảo sát, đặt lịch, thanh toán và khung chat không bị ghi lại thao tác bấm. Không ghi lại phiên màn hình (session replay) và trình duyệt không gửi yêu cầu feature flag tới PostHog.',
         'Để cải thiện tính năng, trình duyệt gửi các sự kiện sử dụng dạng số đếm và mã chung: tìm kiếm (chỉ độ dài từ khoá và số kết quả; riêng địa chỉ trang kết quả /articles vẫn chứa từ khoá tìm kiếm), bộ lọc đã chọn, mở và đọc bài viết (thời gian đọc, mức cuộn), khung bài viết dành cho thành viên, mở Zuey Reads và trang nguồn (chỉ tên miền), câu hỏi gửi Zuey AI (chỉ độ dài, kèm thời gian phản hồi, số token và chi phí ước tính do máy chủ đo), mở ứng dụng trong ZueyOS, yêu cầu tham gia cộng đồng, bình chọn khảo sát (chỉ số lựa chọn, không phải lựa chọn nào) và lỗi tính năng (mã lỗi). Trình duyệt cũng gửi số đo tốc độ tải trang (Web Vitals) và báo lỗi JavaScript chưa được xử lý (loại lỗi, thông báo lỗi và vị trí trong mã nguồn, đã lọc như trên).',
         'Analytics trên trình duyệt không chạy khi trình duyệt bật Do Not Track hoặc Global Privacy Control, hoặc khi bạn tắt ở đây. Lựa chọn được lưu trong trình duyệt này; xoá dữ liệu trình duyệt sẽ xoá lựa chọn. Nếu trình duyệt không lưu được lựa chọn (bộ nhớ cục bộ bị chặn hoặc đã đầy), analytics trên trình duyệt cũng tắt.',
+        'Số người đang xem (realtime): khi analytics trên trình duyệt được phép, trình duyệt giữ một kết nối tới máy chủ presence của zuey.me (chạy trên Cloudflare) và chỉ gửi loại hoạt động chung (ví dụ đang đọc bài, xem Zueytube, dùng Zuey AI) cùng tín hiệu đang hoạt động hay tạm vắng; không gửi địa chỉ trang, tiêu đề, từ khoá hay mã tài khoản. Mã ngẫu nhiên zuey_presence_id trong localStorage (chỉ tạo khi được phép) giúp nhiều tab của bạn chỉ được tính một lần; máy chủ chỉ nhận một khoá băm từ mã này hoặc từ mã thành viên, không nhận mã gốc. Dữ liệu theo từng người chỉ gắn với kết nối đang mở tới máy chủ presence, hết hạn sau khoảng 75 giây không có tín hiệu và mất khi kết nối đóng. Bộ lưu trữ riêng của máy chủ này chỉ giữ số tổng hợp gần nhất và trạng thái của chủ trang, không giữ gì theo từng người; không có dữ liệu nào trong số này được ghi vào cơ sở dữ liệu của zuey.me hay gửi sang PostHog. Một vé kết nối ngắn hạn (khoảng 2 phút) được giữ trong sessionStorage của tab để tải lại trang không phải xin vé mới; tắt analytics sẽ xoá vé này. Trang chỉ công bố số tổng hợp; nhóm dưới 3 người được gộp vào nhóm "khác" để không ai bị nhận ra. Tắt analytics ở đây, Do Not Track hoặc Global Privacy Control cũng tắt việc đếm này.',
         'Riêng máy chủ của zuey.me ghi nhận các sự kiện tài khoản và mua hàng (đăng ký, đăng nhập, thanh toán, hoàn tiền, bắt đầu, gia hạn và kết thúc gói) từ hệ thống thanh toán và đăng nhập, không phải từ trình duyệt, rồi gửi sang PostHog chỉ kèm mã thành viên nội bộ, không có email, số điện thoại hay token và không suy ra vị trí. Vì không đến từ trình duyệt, các sự kiện này vẫn được gửi kể cả khi bạn tắt analytics trên trình duyệt hoặc trình duyệt bật Do Not Track hay Global Privacy Control. Lịch hẹn của khách chưa có tài khoản dùng một mã ngẫu nhiên riêng và không tạo hồ sơ người dùng.',
       ],
       neverTitle: 'Không bao giờ gửi sang analytics',
@@ -267,6 +268,7 @@ const content: Record<'vi' | 'en', {
         'Each event carries only properties declared in advance. Page addresses and referrers are stripped of sensitive parameters (such as token, code, email, key, secret, state, session) before sending; on account, payment and booking pages the whole query is dropped, order and booking codes in the path are replaced by a placeholder and the page title is not sent. Clicks inside survey, booking, checkout and chat forms are not recorded. Session replay is not recorded, and the browser sends no feature-flag requests to PostHog.',
         'To improve features, your browser sends usage events made of counts and generic codes: searches (only the query length and the number of results; the address of the /articles results page still contains the search words), filters picked, articles opened and read (reading time, scroll depth), the members-only box of an article, Zuey Reads opened and sources visited (domain only), questions sent to Zuey AI (length only, with the response time, token counts and estimated cost measured by our server), apps opened in ZueyOS, community invite requests, survey votes (how many options, never which) and feature errors (error code). Your browser also sends page speed measurements (Web Vitals) and reports of unhandled JavaScript errors (error type, message and code location, filtered as above).',
         'Analytics in your browser does not run when your browser sends Do Not Track or Global Privacy Control, or when you turn it off here. The choice is stored in this browser; clearing browser data clears it. If this browser cannot save the choice (local storage is blocked or full), browser analytics stays off too.',
+        'Live visitor count: while browser analytics is allowed, your browser keeps one connection to the zuey.me presence server (running on Cloudflare) and sends only a generic activity type (such as reading, watching Zueytube or using Zuey AI) and whether you are active or away; never the page address, title, search words or account id. A random zuey_presence_id in local storage (created only when allowed) lets all your tabs count once; the server receives only a keyed hash of it or of your member id, never the id itself. Per-visitor data exists only on your open connection to the presence server, expires about 75 seconds after the last signal and is gone when the connection closes. That server\'s own storage keeps only the latest aggregate totals and the site owner\'s status, nothing per visitor; none of it is written to the zuey.me database or sent to PostHog. A short-lived connection ticket (about 2 minutes) is kept in this tab\'s session storage so reloading a page does not need a new one; turning analytics off deletes it. Only totals are published, and groups smaller than 3 are folded into "other" so no one is singled out. Turning analytics off here, Do Not Track or Global Privacy Control also turns this count off.',
         'Separately, our server records account and purchase events (sign-up, sign-in, payments, refunds, subscription start, renewal and end) from the payment and sign-in systems, not from your browser, and sends them to PostHog under your internal member id only, with no email, phone number or token and without deriving a location. Because they do not come from the browser, they are sent even when browser analytics is off or your browser sends Do Not Track or Global Privacy Control. Bookings by guests without an account use a one-off random id that creates no profile.',
       ],
       neverTitle: 'Never sent to analytics',
@@ -453,6 +455,7 @@ const fallback = lang !== locale;
 <script>
   import { currentConsent, optIn, optOut } from '../lib/analytics/client';
   import { CONSENT_CONTROL_COPY, isConsentControlLang, renderConsentControl } from '../lib/analytics/consent-control';
+  import { dispatchPresenceConsent } from '../lib/presence/presence-consent-event';
 
   const root = document.getElementById('analytics-consent');
   const status = root?.querySelector<HTMLElement>('[data-consent-status]');
@@ -468,8 +471,12 @@ const fallback = lang !== locale;
     };
     toggle.addEventListener('click', () => {
       const before = currentConsent();
-      if (before === 'opted_out') optIn();
-      else optOut();
+      // Opting out stops live presence even when this browser cannot keep the choice.
+      if (before === 'opted_out') dispatchPresenceConsent(optIn() === 'granted');
+      else {
+        optOut();
+        dispatchPresenceConsent(false);
+      }
       render(currentConsent() !== before ? 'saved' : 'notSaved');
     });
     render();

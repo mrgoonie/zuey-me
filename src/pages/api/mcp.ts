@@ -8,6 +8,7 @@ import { resolvePrincipal } from '../../lib/members/policy';
 import type { Principal } from '../../lib/members/policy';
 import { requireChannelAccessService } from '../../lib/channel-access/check';
 import { canSeeTool, toolAccess } from '../../lib/oauth/tool-access';
+import { presenceOwnerIds } from '../../lib/presence/presence-owner-identity';
 
 /**
  * Legacy JSON-RPC MCP endpoint (protocol 2024-11-05). Accepts Studio sessions, admin/read API keys and
@@ -53,7 +54,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     // principal, so it additionally sees the verifier tool it is allowed to call.
     const principal = await resolvePrincipal(request, { ...env, DB: d1 });
     const isChannelService = await requireChannelAccessService(request, env).then(() => true, () => false);
-    const tools = allMcpTools().filter(t => canSeeTool(principal, toolAccess(t.name)) || (isChannelService && t.name === 'channel_access_check'));
+    const ownerIds = presenceOwnerIds(env);
+    const tools = allMcpTools().filter(t => canSeeTool(principal, toolAccess(t.name), ownerIds) || (isChannelService && t.name === 'channel_access_check'));
     return rpc({ jsonrpc: '2.0', id, result: { tools } });
   }
 
