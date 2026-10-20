@@ -1,7 +1,7 @@
 /**
  * Pure presence logic for the PresenceHub Durable Object: per-socket session state, client message
  * parsing, per-socket rate limiting, connection caps and snapshot aggregation with small-group
- * suppression. No Cloudflare imports, so bun tests cover it directly.
+ * suppression (owner status lives in owner-status.ts). No Cloudflare imports, so bun tests cover it directly.
  */
 import {
   ACTIVITY_CATEGORIES, PRESENCE_CONTRACT_VERSION, PRESENCE_MAX_MESSAGE_BYTES, PRESENCE_MIN_GROUP, PRESENCE_TTL_MS,
@@ -201,39 +201,12 @@ export function affectsSnapshot(before: SocketSession, after: SocketSession, now
   return isLive(after, now) && before.cat !== after.cat;
 }
 
-/** Owner status persisted in DO storage so `since` survives eviction. Phase 1: online/offline only. */
-export interface StoredOwner {
-  status: 'online' | 'offline';
-  since: number;
-}
-
-export function isStoredOwner(v: unknown): v is StoredOwner {
-  if (typeof v !== 'object' || v === null) return false;
-  return 'status' in v && (v.status === 'online' || v.status === 'offline') && 'since' in v && typeof v.since === 'number';
-}
-
-/** Next owner state; `since` moves only when the public status flips (first observation starts it). */
-export function nextOwner(prev: StoredOwner | null, online: boolean, now: number): StoredOwner {
-  const status = online ? 'online' : 'offline';
-  if (prev && prev.status === status) return prev;
-  return { status, since: now };
-}
-
-export function ownerPresence(owner: StoredOwner): OwnerPresence {
-  return { status: owner.status, onSite: owner.status === 'online', since: new Date(owner.since).toISOString() };
-}
-
-/** True when any fresh owner socket exists. */
-export function ownerOnline(sessions: readonly SocketSession[], now: number): boolean {
-  return sessions.some((s) => s.o && isLive(s, now));
-}
-
 /**
  * Aggregates sockets into the public snapshot: unique counted keys (multi-tab collapsed), members and
  * a category breakdown where each key contributes its most recent heartbeat category. Groups below
  * PRESENCE_MIN_GROUP fold into `other`; with fewer than PRESENCE_MIN_GROUP active nothing is broken down.
  */
-export function computeSnapshot(sessions: readonly SocketSession[], owner: StoredOwner, now: number): PresenceSnapshot {
+export function computeSnapshot(sessions: readonly SocketSession[], owner: OwnerPresence, now: number): PresenceSnapshot {
   const perKey = new Map<string, { cat: ActivityCategory; lastHb: number; m: boolean }>();
   for (const s of sessions) {
     if (!isCounted(s, now) || s.cat === null) continue;
@@ -250,7 +223,7 @@ export function computeSnapshot(sessions: readonly SocketSession[], owner: Store
     active,
     members: memberCount >= PRESENCE_MIN_GROUP ? memberCount : null,
     categories: active >= PRESENCE_MIN_GROUP ? foldCategories([...perKey.values()].map((v) => v.cat)) : [],
-    owner: ownerPresence(owner),
+    owner,
   };
 }
 

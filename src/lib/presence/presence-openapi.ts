@@ -1,10 +1,30 @@
 import type { OpenApiFragment } from '../openapi/types';
-import { PRESENCE_DEFAULT_ORIGIN, PRESENCE_TICKET_TTL_MS } from './contract';
+import { OWNER_MODES, OWNER_STATUS_TEXT_MAX, PRESENCE_DEFAULT_ORIGIN, PRESENCE_TICKET_TTL_MS } from './contract';
 import { PRESENCE_TICKET_RATE_LIMIT, PRESENCE_TICKET_RATE_WINDOW_MS } from './presence-rate-limit';
 
 const TAG = 'Presence';
 const json = (schema: Record<string, unknown>) => ({ 'application/json': { schema } });
 const errorRef = json({ $ref: '#/components/schemas/Error' });
+const ownerSecurity = [{ MemberSession: [] }, { BearerAuth: [] }];
+const ownerState = {
+  description: 'Owner presence state (Cache-Control: no-store)',
+  content: json({
+    type: 'object',
+    properties: { success: { type: 'boolean', enum: [true] }, data: { $ref: '#/components/schemas/PresenceOwnerStatus' } },
+  }),
+};
+const ownerDenied = {
+  '401': { description: '`unauthorized` (no credential) or an invalid, expired or revoked key or token', content: errorRef },
+  '403': {
+    description: '`not_owner` (signed in but not listed in PRESENCE_OWNER_MEMBER_IDS; the admin role alone is refused), `csrf_rejected`, or `insufficient_scope`',
+    content: errorRef,
+  },
+  '503': { description: '`presence_unavailable`: the presence Worker is unreachable, answered badly, or presence is not configured', content: errorRef },
+};
+const OWNER_AUTH = [
+  'Owner only: a member session, personal `zk_` key or OAuth token whose member id is listed in PRESENCE_OWNER_MEMBER_IDS.',
+  'Studio sessions, Studio admin/read keys and admins who are not listed get 403 `not_owner`.',
+].join(' ');
 
 export const presenceOpenApi: OpenApiFragment = {
   tag: {
@@ -68,6 +88,67 @@ export const presenceOpenApi: OpenApiFragment = {
         },
       },
     },
+    '/api/v1/presence/owner': {
+      get: {
+        tags: [TAG],
+        summary: 'Owner: read the presence setting and the public status (account:read)',
+        description: `${OWNER_AUTH} Scope-limited credentials need \`account:read\`.`,
+        security: ownerSecurity,
+        responses: { '200': ownerState, ...ownerDenied },
+      },
+      put: {
+        tags: [TAG],
+        summary: 'Owner: set the presence mode and optional status text (account:write)',
+        description: [
+          OWNER_AUTH,
+          'Scope-limited credentials need `account:write`; read-only keys can never change it.',
+          '`auto` shows online while the owner has a live zuey.me connection, else offline; `away` and `busy` are shown as set;',
+          '`offline` and `invisible` both show offline publicly (nothing public tells them apart). Send `Content-Type: application/json`.',
+        ].join(' '),
+        security: ownerSecurity,
+        requestBody: {
+          required: true,
+          content: json({
+            type: 'object',
+            required: ['mode'],
+            properties: {
+              mode: { type: 'string', enum: [...OWNER_MODES] },
+              text: {
+                type: ['string', 'null'], maxLength: OWNER_STATUS_TEXT_MAX,
+                description: 'Optional public status text. Line breaks and tabs become spaces, other control characters and bidi override marks are dropped, then trimmed; the limit counts UTF-16 units; omitted, null or empty clears it. Longer text is rejected (400 `text_too_long`)',
+              },
+            },
+          }),
+        },
+        responses: {
+          '200': ownerState,
+          '400': { description: '`invalid_json`, `invalid_mode`, `invalid_text` or `text_too_long`', content: errorRef },
+          ...ownerDenied,
+        },
+      },
+    },
   },
-  schemas: {},
+  schemas: {
+    PresenceOwnerStatus: {
+      type: 'object',
+      required: ['mode', 'text', 'updatedAt', 'connected', 'public'],
+      properties: {
+        mode: { type: 'string', enum: [...OWNER_MODES], description: 'Manual setting' },
+        text: { type: ['string', 'null'], maxLength: OWNER_STATUS_TEXT_MAX },
+        updatedAt: { type: 'string', format: 'date-time', description: 'When the manual setting last changed' },
+        connected: { type: 'boolean', description: 'True while the owner has a live, counted zuey.me connection' },
+        public: {
+          type: 'object',
+          description: 'Exactly what visitors see in the presence snapshot',
+          required: ['status', 'onSite', 'since'],
+          properties: {
+            status: { type: 'string', enum: ['online', 'away', 'busy', 'offline'] },
+            onSite: { type: 'boolean' },
+            text: { type: 'string', description: 'Present only when set and the owner is not offline/invisible' },
+            since: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+  },
 };

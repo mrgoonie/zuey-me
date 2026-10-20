@@ -35,3 +35,10 @@ bucket_name = "zuey-course-files"
 [[r2_buckets]]
 binding = "MEDIA"
 bucket_name = "zuey-media"
+
+# Service binding to the realtime presence Worker (workers/presence). Pages calls its private
+# `/internal/owner` API only through it (top-level: every Pages environment). Locally the binding
+# reaches a presence Worker started with `wrangler dev`; without one, owner endpoints answer 503.
+[[services]]
+binding = "PRESENCE"
+service = "zuey-me-presence"

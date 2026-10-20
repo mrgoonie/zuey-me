@@ -312,11 +312,11 @@ describe('Studio access for member admins', () => {
     const studioToken = await createSession('owner@zuey.me', d1);
 
     expect(await resolveStudioAccess(page({ cookie: boss.cookie }), env()))
-      .toEqual({ authenticated: true, via: 'member_session', email: 'boss@example.com', deniedEmail: null });
+      .toEqual({ authenticated: true, via: 'member_session', email: 'boss@example.com', deniedEmail: null, presenceOwner: false });
     expect(await resolveStudioAccess(page({ cookie: `zuey_session=${studioToken}` }), env()))
       .toMatchObject({ authenticated: true, via: 'studio_session' });
     expect(await resolveStudioAccess(page({ cookie: lan.cookie }), env()))
-      .toEqual({ authenticated: false, via: null, email: null, deniedEmail: 'lan@example.com' });
+      .toEqual({ authenticated: false, via: null, email: null, deniedEmail: 'lan@example.com', presenceOwner: false });
     expect((await resolveStudioAccess(page(), env())).authenticated).toBe(false);
     // Studio is a browser surface: an admin key header does not open the page.
     expect((await resolveStudioAccess(page({ Authorization: `Bearer ${adminKey}` }), env())).authenticated).toBe(false);
