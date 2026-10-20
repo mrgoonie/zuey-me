@@ -8,7 +8,7 @@ import { parseSweepOptions, sweepCommunity } from '../../../../lib/experience/co
 
 /**
  * Admin or the scheduler worker (`Authorization: Bearer CRON_SECRET`): remove members whose $29 entitlement
- * lapsed and retire stale invite links. Admins on their own linked Telegram account are exempt. `?dry_run=1` reports without changing anything;
+ * lapsed and retire stale invite links. Admins on their own Telegram account (ADMIN_TELEGRAM_IDS) are exempt. `?dry_run=1` reports without changing anything;
  * `limit` and `cursor` page through memberships (without `cursor` the stored resume point is used).
  * Idempotent, so a doubled or missed tick is harmless.
  */

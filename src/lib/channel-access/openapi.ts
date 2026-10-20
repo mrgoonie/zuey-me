@@ -1,8 +1,6 @@
 import type { OpenApiFragment } from '../openapi/types';
-import { adminSecurity, errorResponses } from '../openapi/types';
-import { MAX_UNLINK_REASON_LENGTH } from './admin';
-import { ALLOW_TTL_SECONDS, CHANNEL_ACCESS_SCOPE, DENY_TTL_SECONDS } from './check';
-import { SENDER_ID_RE, SUPPORTED_CHANNEL_TYPES } from './link-token';
+import { errorResponses } from '../openapi/types';
+import { ALLOW_TTL_SECONDS, CHANNEL_ACCESS_CONTRACT_VERSIONS, CHANNEL_ACCESS_SCOPE, DENY_TTL_SECONDS, SENDER_ID_RE } from './check';
 
 const TAG = 'Channel access (dewee gate)';
 
@@ -17,31 +15,24 @@ const err = (description: string) => ({ description, ...errorRef });
 
 const serviceAuth = [{ BearerAuth: [] }];
 const sessionAuth = [{ MemberSession: [] }];
-const adminAuth = [...adminSecurity, { MemberSession: [] }];
-const channelType = { type: 'string', enum: [...SUPPORTED_CHANNEL_TYPES] };
-const identityParams = [
-  { name: 'provider', in: 'path', required: true, schema: channelType },
-  { name: 'external_id', in: 'path', required: true, schema: { type: 'string', pattern: SENDER_ID_RE.source }, description: 'Platform sender id (Telegram numeric user id); percent-encoding such as `%3A` for `:` is decoded once, malformed encoding is a 400 `invalid_field`' },
-];
 
 export const channelAccessOpenApi: OpenApiFragment = {
   tag: {
     name: TAG,
     description: [
-      'zuey.me is the external entitlement verifier of the dewee Channel Access Gate: only members whose plans grant `agent_chat`',
-      '(Zuey AI, Kết hợp, Cộng đồng) may chat with the Zuey AI agent on Telegram. The verifier is also the MCP tool `channel_access_check` on `/api/mcp`.',
+      'zuey.me is the external entitlement verifier of the dewee Channel Access Gate in hosted linking mode (Dewee Connect): only members whose plans grant `agent_chat`',
+      '(Zuey AI, Kết hợp, Cộng đồng) may chat with the Zuey AI agent. The verifier is also the MCP tool `channel_access_check` on `/api/mcp`.',
       `It accepts only the dedicated service key (scope \`${CHANNEL_ACCESS_SCOPE}\`, env CHANNEL_ACCESS_SERVICE_KEY) as Bearer; admin and personal keys are rejected.`,
-      'Members link a chat account at `/connect?token=…` with a token signed by dewee:',
-      '`base64url(JSON payload) + "." + base64url(HMAC-SHA256(CHANNEL_LINK_TOKEN_SECRET, payloadPart))`,',
-      'payload `{v:1, channel_type, channel_instance, sender_id, sender_username?, tenant?, exp, nonce}`; each token links once.',
+      'Dewee links chat accounts itself: it sends the member to `/dewee/connect`, which signs a handoff assertion for the signed-in member,',
+      'and calls the verifier only for linked senders, with `external_subject` = the zuey.me member id. Linked accounts are listed and unlinked through Dewee.',
     ].join(' '),
   },
   paths: {
     '/api/v1/channel-access/check': {
       post: {
         tags: [TAG],
-        summary: `Service: decide whether a chat sender may talk to the agent (scope ${CHANNEL_ACCESS_SCOPE})`,
-        description: `allow (ttl ${ALLOW_TTL_SECONDS}s) for a linked member with agent_chat (card renewals keep a 24-hour grace), deny + pricing link_url (ttl ${DENY_TTL_SECONDS}s) when linked without an active plan, link_required when the sender is not linked (link_url = /connect?token=… when link_token is given in a direct chat; group chats get a reply asking the sender to message the bot directly, with no link). Send Content-Type: application/json.`,
+        summary: `Service: decide whether a linked chat sender may talk to the agent (scope ${CHANNEL_ACCESS_SCOPE})`,
+        description: `allow (ttl ${ALLOW_TTL_SECONDS}s) when the member named by \`external_subject\` has agent_chat (card renewals keep a 24-hour grace; admins always), deny + pricing link_url (ttl ${DENY_TTL_SECONDS}s) when the member has no active plan, deny without a link when \`external_subject\` is missing (including every version 1 request), unknown or a deleted account. The sender id is never mapped to a member. Send Content-Type: application/json.`,
         security: serviceAuth,
         requestBody: { required: true, content: json(ref('ChannelAccessCheckInput')) },
         responses: {
@@ -52,71 +43,30 @@ export const channelAccessOpenApi: OpenApiFragment = {
         },
       },
     },
-    '/api/v1/channel-access/link': {
-      post: {
-        tags: [TAG],
-        summary: 'Link the chat account named by a dewee link token to your account (browser session)',
-        description: 'Scripted linking with the token in the JSON body. The /connect page itself posts to POST /connect/link, which reads the token from its HttpOnly cookie so the page never sees it. A chat account already linked to another member is refused; the same member gets an idempotent success. Replayed, tampered or expired tokens are rejected.',
-        security: sessionAuth,
-        requestBody: { required: true, content: json({ type: 'object', required: ['token'], properties: { token: { type: 'string' } } }) },
-        responses: {
-          '200': ok('Linked', {
-            type: 'object',
-            properties: {
-              provider: channelType, external_id: { type: 'string' }, sender_username: { type: ['string', 'null'] },
-              already_linked: { type: 'boolean' }, entitled: { type: 'boolean', description: 'Your plans currently allow chatting with the agent' },
-            },
-          }),
-          '400': err('`invalid_link_token`, `link_token_expired` or `unsupported_channel`'),
-          '401': errorResponses['401'],
-          '403': err('`session_required` or `csrf_rejected`'),
-          '409': err('`channel_linked_elsewhere` or `link_token_used`'),
-          '503': err('`channel_link_unconfigured` or `database_unavailable`'),
-        },
-      },
-    },
     '/api/v1/me/channels': {
       get: {
-        tags: [TAG], summary: 'Your linked chat accounts (account:read)', security: [{ MemberSession: [] }, { BearerAuth: [] }],
-        responses: { '200': ok('Linked chat accounts', { type: 'array', items: ref('ChannelIdentity') }), '401': errorResponses['401'], '403': errorResponses['403'] },
-      },
-    },
-    '/api/v1/me/channels/{provider}/{external_id}': {
-      delete: {
-        tags: [TAG], summary: 'Unlink one of your chat accounts (browser session); the agent stops answering it', security: sessionAuth,
-        parameters: [
-          { name: 'provider', in: 'path', required: true, schema: channelType },
-          { name: 'external_id', in: 'path', required: true, schema: { type: 'string' }, description: 'Platform sender id; percent-encoding such as `%3A` for `:` is decoded once, malformed encoding is a 400 `invalid_field`' },
-        ],
-        responses: { '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean' } } }), '400': err('`invalid_field` (malformed percent-encoding)'), '401': errorResponses['401'], '403': errorResponses['403'], '404': err('`not_found`') },
-      },
-    },
-    '/api/v1/admin/channel-identities/{provider}/{external_id}': {
-      get: {
-        tags: [TAG], summary: 'Admin: which member holds a linked chat account (MCP channel_identity_get)', security: adminAuth, parameters: identityParams,
+        tags: [TAG], summary: 'Your chat accounts linked in Dewee (account:read)', security: [{ MemberSession: [] }, { BearerAuth: [] }],
+        description: 'Read from Dewee (`GET /v1/identity/me/bindings`) with a one-minute identity session of the signed-in member. Only the last characters of each sender id (`sender_hint`) are shown.',
         responses: {
-          '200': ok('Linked chat account and its member', ref('AdminChannelIdentity')),
-          '400': err('`unsupported_channel` or `invalid_field`'), '401': errorResponses['401'], '403': errorResponses['403'],
-          '404': err('`not_found` (the sender id is not linked)'), '503': err('`database_unavailable`'),
+          '200': ok('Linked chat accounts', { type: 'array', items: ref('ChannelBinding') }),
+          '401': errorResponses['401'], '403': errorResponses['403'],
+          '409': err('`dewee_identity_revoked`'),
+          '502': err('`dewee_identity_unavailable`'),
+          '503': err('`dewee_identity_unconfigured` or `database_unavailable`'),
         },
       },
+    },
+    '/api/v1/me/channels/{binding_id}': {
       delete: {
-        tags: [TAG], summary: 'Admin: unlink a chat account from whichever member holds it (MCP channel_identity_unlink)', security: adminAuth, parameters: identityParams,
-        description: [
-          'Recovery for a chat account linked to the wrong member (mistaken community backfill, a link made on someone else\'s device, a support request',
-          'from the real owner): the sender id is freed so its owner can link it at /connect. The affected member\'s activity log gets `channel.unlinked`',
-          'with only `by: "admin"`; the admin and the optional reason go to the admin-only `admin_access_audit` log (action `channel.unlink`).',
-          'dewee is told to drop its cached gate decision for that sender. Read-only keys are refused.',
-          'The JSON body is optional; scripted calls must still send `Content-Type: application/json` (the origin check rejects body-less unsafe requests).',
-        ].join(' '),
-        requestBody: {
-          required: false,
-          content: json({ type: 'object', properties: { reason: { type: 'string', maxLength: MAX_UNLINK_REASON_LENGTH, description: 'Written to the admin-only audit log; never shown to the member' } } }),
-        },
+        tags: [TAG], summary: 'Unlink one of your chat accounts in Dewee (browser session); the agent stops answering it', security: sessionAuth,
+        parameters: [{ name: 'binding_id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' }, description: 'Binding id from GET /api/v1/me/channels' }],
         responses: {
-          '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean', enum: [true] }, identity: ref('AdminChannelIdentity') } }),
-          '400': err('`unsupported_channel`, `invalid_field` or `invalid_json`'), '401': errorResponses['401'], '403': errorResponses['403'],
-          '404': err('`not_found` (the sender id is not linked)'), '503': err('`database_unavailable`'),
+          '200': ok('Unlinked', { type: 'object', properties: { unlinked: { type: 'boolean' } } }),
+          '400': err('`invalid_field` (not a UUID)'), '401': errorResponses['401'], '403': errorResponses['403'],
+          '404': err('`not_found` (no such binding of yours)'),
+          '409': err('`dewee_identity_revoked`'),
+          '502': err('`dewee_identity_unavailable`'),
+          '503': err('`dewee_identity_unconfigured` or `database_unavailable`'),
         },
       },
     },
@@ -126,50 +76,38 @@ export const channelAccessOpenApi: OpenApiFragment = {
       type: 'object',
       required: ['version', 'channel_type', 'sender_id', 'chat_type'],
       properties: {
-        version: { type: 'integer', enum: [1] },
+        version: { type: 'integer', enum: [...CHANNEL_ACCESS_CONTRACT_VERSIONS], description: '2 in hosted mode; a version 1 request is always denied' },
         tenant: { type: 'string' },
         agent_key: { type: 'string' },
-        channel_type: channelType,
+        channel_type: { type: 'string', pattern: '^[a-z0-9_-]{1,32}$' },
         channel_instance: { type: 'string' },
-        sender_id: { type: 'string' },
+        sender_id: { type: 'string', pattern: SENDER_ID_RE.source, description: 'Canonical sender id; never used to pick a member' },
         sender_username: { type: 'string' },
         chat_type: { type: 'string', enum: ['direct', 'group'] },
         chat_id: { type: 'string' },
-        link_token: { type: 'string' },
+        principal_id: { type: 'string', description: 'Dewee principal of the linked sender (version 2)' },
+        external_subject: { type: 'string', maxLength: 255, description: 'zuey.me member id of the linked sender (version 2)' },
+        authn_level: { type: 'string', enum: ['verified', 'channel'], description: '`channel` when a linked sender is checked from a group (version 2)' },
       },
     },
     ChannelAccessDecision: {
       type: 'object',
       required: ['decision', 'ttl_seconds'],
       properties: {
-        decision: { type: 'string', enum: ['allow', 'deny', 'link_required'] },
+        decision: { type: 'string', enum: ['allow', 'deny'] },
         reply: { type: 'string', description: 'Suggested reply to the sender (Vietnamese + English)' },
-        link_url: { type: 'string', description: 'Pricing page (deny) or /connect link (link_required, direct chats only)' },
+        link_url: { type: 'string', description: 'Pricing page (deny for a member without an active plan)' },
         ttl_seconds: { type: 'integer' },
-        subject_ref: { type: 'string', description: 'Opaque stable member reference (never an email)' },
+        subject_ref: { type: 'string', description: 'Opaque stable member reference (never an email or the member id)' },
       },
     },
-    ChannelIdentity: {
+    ChannelBinding: {
       type: 'object',
       properties: {
-        provider: channelType,
-        external_id: { type: 'string' },
-        linked_at: { type: 'string', format: 'date-time' },
-        source: { type: 'string', enum: ['link_token', 'community_backfill'] },
-      },
-    },
-    AdminChannelIdentity: {
-      type: 'object',
-      properties: {
-        provider: channelType,
-        external_id: { type: 'string' },
-        user_id: { type: 'string' },
-        linked_at: { type: 'string', format: 'date-time' },
-        source: { type: 'string', enum: ['link_token', 'community_backfill'] },
-        member: {
-          type: ['object', 'null'],
-          properties: { id: { type: 'string' }, email: { type: 'string' }, name: { type: ['string', 'null'] } },
-        },
+        id: { type: 'string', format: 'uuid' },
+        channel_type: { type: 'string' },
+        sender_hint: { type: 'string', description: 'Last characters of the sender id' },
+        linked_at: { type: ['string', 'null'], format: 'date-time' },
       },
     },
   },
