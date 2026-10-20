@@ -3,6 +3,7 @@
  *
  *   GET /v1/health      liveness
  *   GET /v1/snapshot    aggregated PresenceSnapshot (CORS for zuey.me origins; memo + edge cache, see snapshot-cache.ts)
+ *   GET|PUT /internal/owner  owner status control for the Pages app only (see internal-owner-route.ts)
  *   GET /v1/connect     WebSocket upgrade, forwarded to the single PresenceHub Durable Object. The ticket travels
  *                       in `Sec-WebSocket-Protocol: zuey-presence.v1, <ticket>`, never in the URL (logs record URLs).
  *
@@ -13,6 +14,7 @@
 import { PRESENCE_SUBPROTOCOL, type PresenceSnapshot } from '../../../src/lib/presence/contract';
 import { presenceIpKey } from '../../../src/lib/presence/ip-prefix';
 import { hmacBase64Url, verifyPresenceTicket } from '../../../src/lib/presence/ticket';
+import { INTERNAL_OWNER_PATH, handleInternalOwner } from './internal-owner-route';
 import { PresenceHub, SESSION_HEADER } from './presence-hub';
 import type { SessionIdentity } from './presence-state';
 import type { PresenceEnv } from './runtime-types';
@@ -30,7 +32,8 @@ const HUB_NAME = 'global';
 const HUB_URL = 'https://presence-hub.internal';
 const IP_HASH_LENGTH = 16;
 
-type ErrorCode = 'not_found' | 'forbidden' | 'unauthorized' | 'unavailable' | 'upgrade_required' | 'method_not_allowed';
+type ErrorCode = 'not_found' | 'forbidden' | 'unauthorized' | 'unavailable' | 'upgrade_required' | 'method_not_allowed'
+  | 'bad_request' | 'payload_too_large';
 
 function errorResponse(status: number, code: ErrorCode, message: string, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ success: false, error: { code, message } }), {
@@ -54,9 +57,10 @@ export function isAllowedOrigin(origin: string | null, env: PresenceEnv): origin
   return ALLOWED_ORIGINS.includes(origin) || (env.PRESENCE_DEV_ORIGINS === '1' && DEV_ORIGINS.includes(origin));
 }
 
+const hubStub = (env: PresenceEnv) => env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
+
 async function snapshotFromHub(env: PresenceEnv): Promise<PresenceSnapshot | null> {
-  const stub = env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
-  const res = await stub.fetch(new Request(`${HUB_URL}/snapshot`));
+  const res = await hubStub(env).fetch(new Request(`${HUB_URL}/snapshot`));
   const body: unknown = res.ok ? await res.json() : null;
   return isPresenceSnapshot(body) ? body : null;
 }
@@ -96,7 +100,7 @@ async function connect(request: Request, env: PresenceEnv): Promise<Response> {
     ipHash: (await hmacBase64Url(secret, `ip:${ip}`)).slice(0, IP_HASH_LENGTH),
   };
   try {
-    const stub = env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
+    const stub = hubStub(env);
     // A fresh request: no client headers (cookies, the ticket, spoofed session headers) reach the hub.
     return await stub.fetch(new Request(`${HUB_URL}/connect`, {
       headers: { Upgrade: 'websocket', [SESSION_HEADER]: JSON.stringify(identity) },
@@ -110,6 +114,7 @@ async function connect(request: Request, env: PresenceEnv): Promise<Response> {
 export async function handleRequest(request: Request, env: PresenceEnv): Promise<Response> {
   const url = new URL(request.url);
   const route = url.pathname;
+  if (route === INTERNAL_OWNER_PATH) return handleInternalOwner(request, env, () => hubStub(env), HUB_URL, errorResponse);
   if (route !== '/v1/health' && route !== '/v1/snapshot' && route !== '/v1/connect') return errorResponse(404, 'not_found', 'Not found');
 
   const origin = request.headers.get('Origin');
