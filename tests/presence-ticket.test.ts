@@ -7,6 +7,7 @@ import { membersRuntime } from '../src/lib/members/runtime';
 import { createMemberSession } from '../src/lib/members/session';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import { PRESENCE_TICKET_TTL_MS, type PresenceTicketPayload } from '../src/lib/presence/contract';
+import { presenceIpKey } from '../src/lib/presence/ip-prefix';
 import { createFixedWindowLimiter, presenceTicketLimiter, PRESENCE_TICKET_RATE_LIMIT } from '../src/lib/presence/presence-rate-limit';
 import { presenceConnectUrl, presenceOwnerIds } from '../src/lib/presence/presence-ticket-issuer';
 import { hmacBase64Url, verifyPresenceTicket } from '../src/lib/presence/ticket';
@@ -150,6 +151,12 @@ describe('POST /api/v1/presence/ticket', () => {
     expect((await call({ body: { count: false }, ip: '198.51.100.9' })).status).toBe(200);
   });
 
+  it('counts IPv6 clients per /64, so rotating addresses inside it shares one budget', async () => {
+    for (let i = 0; i < PRESENCE_TICKET_RATE_LIMIT; i++) presenceTicketLimiter.hit(presenceIpKey('2001:db8:aa:bb::1'), membersRuntime.now());
+    expect((await call({ body: { count: false }, ip: '2001:db8:aa:bb:1234:5678:9abc:def0' })).status).toBe(429);
+    expect((await call({ body: { count: false }, ip: '2001:db8:aa:bc::1' })).status).toBe(200);
+  });
+
   it('uses PUBLIC_PRESENCE_URL as a ws(s) origin', () => {
     expect(presenceConnectUrl({ PUBLIC_PRESENCE_URL: 'http://localhost:8787/' })).toBe('ws://localhost:8787/v1/connect');
     expect(presenceConnectUrl({ PUBLIC_PRESENCE_URL: 'https://presence.example.com' })).toBe('wss://presence.example.com/v1/connect');
@@ -171,5 +178,29 @@ describe('fixed-window limiter', () => {
     expect(limiter.hit('a', 20)).toBe(1);
     expect(limiter.hit('a', 1_000)).toBeNull();
     for (const k of ['b', 'c', 'd', 'e']) expect(limiter.hit(k, 1_100)).toBeNull();
+  });
+});
+
+describe('presenceIpKey', () => {
+  it('keeps IPv4 and reduces IPv6 to its /64', () => {
+    expect(presenceIpKey('203.0.113.7')).toBe('203.0.113.7');
+    expect(presenceIpKey(' 203.0.113.7 ')).toBe('203.0.113.7');
+    expect(presenceIpKey('2001:db8:1:2::1')).toBe('2001:db8:1:2::/64');
+    expect(presenceIpKey('2001:0DB8:0001:0002:ffff:aaaa:bbbb:cccc')).toBe('2001:db8:1:2::/64');
+    expect(presenceIpKey('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(presenceIpKey('::1')).toBe('0:0:0:0::/64');
+    expect(presenceIpKey('[2001:db8:1:2::1]')).toBe('2001:db8:1:2::/64');
+    expect(presenceIpKey('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+    expect(presenceIpKey('2001:db8:1:2:3:4:192.0.2.1')).toBe('2001:db8:1:2::/64');
+  });
+
+  it('treats IPv4-mapped IPv6 as IPv4 and leaves unparseable input alone', () => {
+    expect(presenceIpKey('::ffff:203.0.113.7')).toBe('203.0.113.7');
+    expect(presenceIpKey('::ffff:cb00:7107')).toBe('203.0.113.7');
+    expect(presenceIpKey('')).toBe('');
+    expect(presenceIpKey('unknown')).toBe('unknown');
+    expect(presenceIpKey('1:2:3:4:5:6:7:8:9')).toBe('1:2:3:4:5:6:7:8:9');
+    expect(presenceIpKey('1::2::3')).toBe('1::2::3');
+    expect(presenceIpKey('2001:db8:zz::1')).toBe('2001:db8:zz::1');
   });
 });

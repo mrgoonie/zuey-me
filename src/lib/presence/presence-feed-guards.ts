@@ -4,6 +4,7 @@
  */
 import {
   PRESENCE_CONTRACT_VERSION,
+  PRESENCE_TICKET_PATTERN,
   isActivityCategory,
   type CategoryCount,
   type OwnerPresence,
@@ -46,15 +47,32 @@ export function isPresenceSnapshot(v: unknown): v is PresenceSnapshot {
 
 export interface TicketGrant {
   ticket: string;
+  /** WebSocket connect URL (`ws(s)://<host>[/base]/v1/connect`), from the server's runtime config. */
   url: string;
+  /** HTTP(S) origin (plus base path) of the same presence Worker, for GET /v1/snapshot. */
+  origin: string;
 }
 
-/** Extracts `{ticket, url}` from the success envelope of POST /api/v1/presence/ticket. */
+const CONNECT_SUFFIX = '/v1/connect';
+
+/**
+ * Extracts the grant from the success envelope of POST /api/v1/presence/ticket. The Worker origin comes
+ * from the server's runtime `PUBLIC_PRESENCE_URL`, so the feed's snapshot and socket always target the
+ * same Worker as the ticket.
+ */
 export function parseTicketGrant(v: unknown): TicketGrant | null {
   if (!isRecord(v) || v.success !== true || !isRecord(v.data)) return null;
   const { ticket, url } = v.data;
-  if (typeof ticket !== 'string' || ticket === '' || typeof url !== 'string') return null;
-  return url.startsWith('wss://') || url.startsWith('ws://') ? { ticket, url } : null;
+  if (typeof ticket !== 'string' || !PRESENCE_TICKET_PATTERN.test(ticket) || typeof url !== 'string') return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if ((parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') || !parsed.pathname.endsWith(CONNECT_SUFFIX)) return null;
+  const scheme = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+  return { ticket, url, origin: `${scheme}//${parsed.host}${parsed.pathname.slice(0, -CONNECT_SUFFIX.length)}` };
 }
 
 export type ServerFrame =

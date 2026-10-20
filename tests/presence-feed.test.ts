@@ -14,7 +14,7 @@ const snap = (active: number, extra: Partial<PresenceSnapshot> = {}): PresenceSn
 });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const grant = { success: true, data: { ticket: 't k/1', url: 'wss://presence.test/v1/connect', expiresAt: '2026-10-20T04:02:00.000Z' } };
+const grant = { success: true, data: { ticket: 'tkt-1.sig_2', url: 'wss://presence.test/v1/connect', expiresAt: '2026-10-20T04:02:00.000Z' } };
 
 /** Lets queued promise continuations (fetch → json → connect) settle. */
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0)); };
@@ -22,14 +22,13 @@ const settle = async () => { for (let i = 0; i < 8; i++) await new Promise((r) =
 interface Harness {
   feed: ReturnType<typeof createPresenceFeed>;
   states: FeedState[];
-  sockets: Array<{ url: string; sent: string[]; closed: boolean; handlers: SocketHandlers }>;
+  sockets: Array<{ url: string; protocols: string[]; sent: string[]; closed: boolean; handlers: SocketHandlers }>;
   calls: string[];
 }
 
 function harness(routes: { snapshot: () => Response | Promise<Response>; ticket: () => Response | Promise<Response> }, now = () => Date.now()): Harness {
   const h: Harness = { feed: null as never, states: [], sockets: [], calls: [] };
   h.feed = createPresenceFeed({
-    origin: 'https://presence.test',
     baseDelayMs: 5,
     maxDelayMs: 10,
     random: () => 0,
@@ -38,8 +37,8 @@ function harness(routes: { snapshot: () => Response | Promise<Response>; ticket:
       h.calls.push(input);
       return input.endsWith('/v1/snapshot') ? routes.snapshot() : routes.ticket();
     },
-    openSocket: (url, handlers): FeedSocket => {
-      const rec = { url, sent: [] as string[], closed: false, handlers };
+    openSocket: (url, protocols, handlers): FeedSocket => {
+      const rec = { url, protocols, sent: [] as string[], closed: false, handlers };
       h.sockets.push(rec);
       return { send: (d) => { rec.sent.push(d); }, close: () => { rec.closed = true; } };
     },
@@ -61,23 +60,30 @@ describe('presence feed guards', () => {
     expect(parseServerFrame(JSON.stringify({ t: 'snapshot', data: { active: 'x' } }))).toBeNull();
     expect(parseServerFrame('not json')).toBeNull();
     expect(parseServerFrame(new ArrayBuffer(2))).toBeNull();
-    expect(parseTicketGrant(grant)).toEqual({ ticket: 't k/1', url: 'wss://presence.test/v1/connect' });
-    expect(parseTicketGrant({ success: true, data: { ticket: 'a', url: 'https://x' } })).toBeNull();
+    expect(parseTicketGrant(grant)).toEqual({ ticket: 'tkt-1.sig_2', url: 'wss://presence.test/v1/connect', origin: 'https://presence.test' });
+    expect(parseTicketGrant({ success: true, data: { ticket: 'a.b', url: 'ws://localhost:8787/base/v1/connect' } }))
+      .toEqual({ ticket: 'a.b', url: 'ws://localhost:8787/base/v1/connect', origin: 'http://localhost:8787/base' });
+    expect(parseTicketGrant({ success: true, data: { ticket: 'a.b', url: 'https://x/v1/connect' } })).toBeNull();
+    expect(parseTicketGrant({ success: true, data: { ticket: 'a.b', url: 'wss://x/elsewhere' } })).toBeNull();
+    // Not a valid subprotocol token: refused before it could reach the WebSocket constructor.
+    expect(parseTicketGrant({ success: true, data: { ticket: 't k/1', url: 'wss://x/v1/connect' } })).toBeNull();
     expect(parseTicketGrant({ success: false })).toBeNull();
   });
 });
 
 describe('presence feed state machine', () => {
-  test('snapshot over HTTP first, then the socket subscribes and goes live', async () => {
+  test('ticket first (it names the Worker origin), then the HTTP snapshot, then the socket subscribes and goes live', async () => {
     const h = harness({ snapshot: () => json(snap(4)), ticket: () => json(grant) });
     const unsub = h.feed.subscribeFeed((s) => h.states.push(s));
     expect(h.feed.getFeedState().connection).toBe('connecting');
     await settle();
 
-    expect(h.calls).toEqual(['https://presence.test/v1/snapshot', '/api/v1/presence/ticket']);
+    expect(h.calls).toEqual(['/api/v1/presence/ticket', 'https://presence.test/v1/snapshot']);
     expect(h.feed.getFeedState()).toMatchObject({ connection: 'connecting', snapshot: { active: 4 } });
     expect(h.sockets).toHaveLength(1);
-    expect(h.sockets[0].url).toBe('wss://presence.test/v1/connect?ticket=t%20k%2F1');
+    // The ticket rides as the second subprotocol; the URL never carries it.
+    expect(h.sockets[0].url).toBe('wss://presence.test/v1/connect');
+    expect(h.sockets[0].protocols).toEqual(['zuey-presence.v1', 'tkt-1.sig_2']);
 
     h.sockets[0].handlers.onOpen();
     expect(h.sockets[0].sent).toEqual(['{"t":"sub"}']);
@@ -96,11 +102,27 @@ describe('presence feed state machine', () => {
     unsub();
   });
 
-  test('503 from the ticket endpoint is unavailable but keeps the HTTP snapshot', async () => {
+  test('503 from the ticket endpoint is unavailable, with no snapshot invented', async () => {
     const h = harness({ snapshot: () => json(snap(2)), ticket: () => json({ success: false }, 503) });
     const unsub = h.feed.subscribeFeed(() => undefined);
     await settle();
-    expect(h.feed.getFeedState()).toMatchObject({ connection: 'unavailable', snapshot: { active: 2 } });
+    expect(h.feed.getFeedState()).toMatchObject({ connection: 'unavailable', snapshot: null });
+    expect(h.calls.some((c) => c.endsWith('/v1/snapshot'))).toBe(false);
+    unsub();
+  });
+
+  test('keepalive snapshots keep a quiet, healthy feed from turning stale', async () => {
+    let clock = 1_000_000;
+    const h = harness({ snapshot: () => json(snap(3)), ticket: () => json(grant) }, () => clock);
+    const unsub = h.feed.subscribeFeed(() => undefined);
+    await settle();
+    const frame = JSON.stringify({ t: 'snapshot', data: snap(3) });
+    h.sockets[0].handlers.onMessage(frame);
+    for (let i = 0; i < 4; i++) {
+      clock += 45_000; // the hub's keepalive interval
+      h.sockets[0].handlers.onMessage(frame);
+      expect(isFeedStale(h.feed.getFeedState(), clock + 1_000)).toBe(false);
+    }
     unsub();
   });
 

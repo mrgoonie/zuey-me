@@ -2,15 +2,18 @@
  * Framework-free live feed behind the Activity Monitor. One shared connection serves every
  * subscriber and closes when the last one leaves:
  *
- *   GET {origin}/v1/snapshot  ->  POST /api/v1/presence/ticket (watch-only)  ->  wss ?ticket=  ->  {t:'sub'}
+ *   POST /api/v1/presence/ticket (watch-only)  ->  GET {origin}/v1/snapshot  ->  wss (ticket as subprotocol)  ->  {t:'sub'}
  *
- * The first snapshot comes from plain HTTP so numbers show before the socket is up. Failures never
+ * The Worker origin comes from the ticket answer (the server's runtime PUBLIC_PRESENCE_URL), so the
+ * snapshot and the socket always hit the Worker the ticket was signed for. The first snapshot comes
+ * from plain HTTP so numbers show before the socket is up; the hub then pushes on every change and a
+ * keepalive at least every 45 s, so a quiet healthy socket never turns stale. Failures never
  * invent data: the state keeps the last valid snapshot (or null) and says why it is not live.
  * Reconnects use exponential backoff with jitter and a fresh ticket; a page hidden for a while
  * drops the socket and resumes when it becomes visible again.
  */
-import { PRESENCE_DEFAULT_ORIGIN, type PresenceSnapshot } from './contract';
-import { isPresenceSnapshot, parseServerFrame, parseTicketGrant } from './presence-feed-guards';
+import { PRESENCE_SUBPROTOCOL, type PresenceSnapshot } from './contract';
+import { isPresenceSnapshot, parseServerFrame, parseTicketGrant, type TicketGrant } from './presence-feed-guards';
 
 export type FeedConnection = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'unavailable';
 
@@ -42,8 +45,8 @@ export interface FeedSocket {
 
 export interface FeedDeps {
   fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
-  openSocket: (url: string, handlers: SocketHandlers) => FeedSocket;
-  origin: string;
+  /** Opens `new WebSocket(url, protocols)`; `protocols` is `[PRESENCE_SUBPROTOCOL, ticket]`. */
+  openSocket: (url: string, protocols: string[], handlers: SocketHandlers) => FeedSocket;
   now: () => number;
   random: () => number;
   baseDelayMs: number;
@@ -57,8 +60,8 @@ const INITIAL_STATE: FeedState = { snapshot: null, connection: 'connecting', upd
 
 type Loaded = { kind: 'ok'; data: PresenceSnapshot } | { kind: 'unavailable' } | { kind: 'failed'; error: string };
 
-function browserSocket(url: string, handlers: SocketHandlers): FeedSocket {
-  const ws = new WebSocket(url);
+function browserSocket(url: string, protocols: string[], handlers: SocketHandlers): FeedSocket {
+  const ws = new WebSocket(url, protocols);
   ws.addEventListener('open', handlers.onOpen);
   ws.addEventListener('message', (e) => handlers.onMessage(e.data));
   ws.addEventListener('close', handlers.onClose);
@@ -69,7 +72,6 @@ function defaultDeps(): FeedDeps {
   return {
     fetchImpl: (input, init) => fetch(input, init),
     openSocket: browserSocket,
-    origin: import.meta.env?.PUBLIC_PRESENCE_URL || PRESENCE_DEFAULT_ORIGIN,
     now: () => Date.now(),
     random: () => Math.random(),
     baseDelayMs: 1_000,
@@ -98,6 +100,8 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let watchdog: ReturnType<typeof setInterval> | null = null;
   let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Worker origin learned from the latest ticket grant; null until one arrives. */
+  let origin: string | null = null;
 
   const set = (next: FeedState) => {
     state = next;
@@ -141,9 +145,9 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
     retryTimer = setTimeout(() => void run(g), delayOverrideMs ?? backoff);
   };
 
-  async function loadSnapshot(): Promise<Loaded> {
+  async function loadSnapshot(from: string): Promise<Loaded> {
     try {
-      const res = await deps.fetchImpl(`${deps.origin}/v1/snapshot`, { headers: { accept: 'application/json' } });
+      const res = await deps.fetchImpl(`${from}/v1/snapshot`, { headers: { accept: 'application/json' } });
       if (res.status === 503) return { kind: 'unavailable' };
       if (!res.ok) return { kind: 'failed', error: `snapshot_${res.status}` };
       const body: unknown = await res.json();
@@ -155,15 +159,19 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
 
   async function run(g: number): Promise<void> {
     if (g !== gen) return;
-    const snap = await loadSnapshot();
+    const grant = await requestTicket(g);
+    if (!grant || g !== gen) return;
+    origin = grant.origin;
+    const snap = await loadSnapshot(grant.origin);
     if (g !== gen) return;
     if (snap.kind === 'unavailable') return fail(g, true, 'snapshot_503');
     if (snap.kind === 'failed') return fail(g, false, snap.error);
     applySnapshot(snap.data, false);
-    await connect(g);
+    openSocket(g, grant);
   }
 
-  async function connect(g: number): Promise<void> {
+  /** A watch-only ticket grant, or null after recording the failure. */
+  async function requestTicket(g: number): Promise<TicketGrant | null> {
     let res: Response;
     try {
       res = await deps.fetchImpl('/api/v1/presence/ticket', {
@@ -172,25 +180,34 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
         body: JSON.stringify({ count: false }),
       });
     } catch {
-      return fail(g, false, 'ticket_network');
+      fail(g, false, 'ticket_network');
+      return null;
     }
-    if (g !== gen) return;
-    if (res.status === 503) return fail(g, true, 'ticket_503');
-    if (!res.ok) return fail(g, false, res.status === 429 ? 'ticket_rate_limited' : `ticket_${res.status}`);
-    let grant: ReturnType<typeof parseTicketGrant>;
+    if (g !== gen) return null;
+    if (res.status === 503) {
+      fail(g, true, 'ticket_503');
+      return null;
+    }
+    if (!res.ok) {
+      fail(g, false, res.status === 429 ? 'ticket_rate_limited' : `ticket_${res.status}`);
+      return null;
+    }
+    let grant: TicketGrant | null;
     try {
       grant = parseTicketGrant(await res.json());
     } catch {
       grant = null;
     }
-    if (g !== gen) return;
-    if (!grant) return fail(g, false, 'ticket_invalid');
+    if (g !== gen) return null;
+    if (!grant) fail(g, false, 'ticket_invalid');
+    return grant;
+  }
 
+  function openSocket(g: number, grant: TicketGrant): void {
     const sid = ++sockSeq;
-    const sep = grant.url.includes('?') ? '&' : '?';
     const live = () => g === gen && sid === sockSeq;
     try {
-      socket = deps.openSocket(`${grant.url}${sep}ticket=${encodeURIComponent(grant.ticket)}`, {
+      socket = deps.openSocket(grant.url, [PRESENCE_SUBPROTOCOL, grant.ticket], {
         onOpen: () => {
           if (live()) socket?.send(JSON.stringify({ t: 'sub' }));
         },
@@ -219,9 +236,9 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
 
   /** While live, a feed with no frames for `staleMs` re-reads the snapshot over HTTP so freshness stays honest. */
   const watchStale = () => {
-    if (state.connection !== 'live' || state.updatedAt === null || deps.now() - state.updatedAt <= deps.staleMs) return;
+    if (state.connection !== 'live' || state.updatedAt === null || deps.now() - state.updatedAt <= deps.staleMs || origin === null) return;
     const g = gen;
-    void loadSnapshot().then((r) => {
+    void loadSnapshot(origin).then((r) => {
       if (g === gen && r.kind === 'ok' && state.connection === 'live') applySnapshot(r.data, true);
     });
   };

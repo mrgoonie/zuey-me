@@ -23,8 +23,17 @@ function safeLocalStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
   }
 }
 
-function openBrowserSocket(url: string, handlers: PresenceSocketHandlers): PresenceSocket {
-  const ws = new WebSocket(url);
+function safeSessionStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** The ticket rides in `protocols` (Sec-WebSocket-Protocol), never in the URL. */
+function openBrowserSocket(url: string, protocols: string[], handlers: PresenceSocketHandlers): PresenceSocket {
+  const ws = new WebSocket(url, protocols);
   ws.addEventListener('open', () => handlers.onOpen());
   ws.addEventListener('close', () => handlers.onClose());
   return {
@@ -55,6 +64,7 @@ export function startPresenceBeacon(): void {
     beacon = createPresenceBeacon({
       consentGranted: () => canTrack(),
       storage: safeLocalStorage,
+      sessionStorage: safeSessionStorage,
       fetch: (url, init) => fetch(url, init),
       openSocket: openBrowserSocket,
       win: window,

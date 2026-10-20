@@ -9,6 +9,7 @@ import { AppError } from '../http';
 import { clientIp, membersRuntime, randomSecret } from '../members/runtime';
 import { isSameOriginRequest, resolveMemberSession } from '../members/session';
 import { PRESENCE_DEFAULT_ORIGIN, PRESENCE_TICKET_TTL_MS, type PresenceTicketPayload } from './contract';
+import { presenceIpKey } from './ip-prefix';
 import { presenceTicketLimiter } from './presence-rate-limit';
 import { hmacBase64Url, signPresenceTicket } from './ticket';
 
@@ -61,9 +62,9 @@ export function presenceConnectUrl(env: RuntimeEnv): string {
   return `${scheme}//${url.host}${url.pathname.replace(/\/+$/, '')}/v1/connect`;
 }
 
-/** Throws 429 when this client IP asked for too many tickets in the current window (per isolate). */
+/** Throws 429 when this client IP (IPv6: its /64) asked for too many tickets in the current window (per isolate). */
 export function enforcePresenceTicketRateLimit(request: Request, now: number): void {
-  const retryAfter = presenceTicketLimiter.hit(clientIp(request) || 'unknown', now);
+  const retryAfter = presenceTicketLimiter.hit(presenceIpKey(clientIp(request)) || 'unknown', now);
   if (retryAfter !== null) {
     throw new AppError(429, 'rate_limited', 'Too many presence tickets; try again later', { retry_after: retryAfter });
   }

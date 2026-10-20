@@ -6,13 +6,23 @@
  *   not idle (no pointer/key/scroll/touch input for IDLE_AFTER_MS); idle or hidden sends `idle` once.
  * - At most one message per MIN_MESSAGE_GAP_MS per socket (the Worker drops faster ones); a message
  *   that has to wait is replaced by a newer one.
- * - Reconnects with capped exponential backoff and full jitter, fetching a fresh ticket each time;
- *   repeated 401/503 ticket answers (or a 400) stop it for the page lifetime.
+ * - The ticket travels as the second WebSocket subprotocol (never in the URL). It is cached in
+ *   sessionStorage and reused across page loads and reconnects until TICKET_REUSE_MARGIN_MS before it
+ *   expires, while the counting context (consent, browser id) still matches.
+ * - Reconnects with capped exponential backoff and full jitter; repeated 401/503 ticket answers (or a
+ *   400/403), or MAX_FAILED_SOCKETS sockets in a row that never opened (Worker down, upgrade refused),
+ *   stop it for the page lifetime.
+ * - A tab hidden for HIDDEN_GRACE_MS drops its socket and reconnects when shown again.
  * - Consent withdrawn (this tab or another) closes the socket at once.
  *
  * Every browser surface is injected, so tests drive it with fakes. Nothing here throws into the page.
  */
-import { PRESENCE_HEARTBEAT_MS, type ActivityCategory, type PresenceClientMessage } from './contract';
+import {
+  PRESENCE_HEARTBEAT_MS, PRESENCE_SUBPROTOCOL, PRESENCE_TICKET_TTL_MS, type ActivityCategory, type PresenceClientMessage,
+} from './contract';
+import { createTicketCache, parseTicket, type SessionStorageLike, type TicketData } from './presence-beacon-ticket-cache';
+
+export { PRESENCE_TICKET_STORAGE_KEY, TICKET_REUSE_MARGIN_MS } from './presence-beacon-ticket-cache';
 import { categoryFor } from './presence-category';
 import { PRESENCE_CONSENT_EVENT, presenceConsentFrom } from './presence-consent-event';
 
@@ -28,6 +38,10 @@ export const RECONNECT_CAP_MS = 60_000;
 export const HEALTHY_SOCKET_MS = 30_000;
 /** Consecutive 401/503 ticket answers after which the beacon gives up for this page. */
 export const MAX_UNAVAILABLE_TICKETS = 3;
+/** Consecutive sockets that closed without ever opening after which the beacon gives up for this page. */
+export const MAX_FAILED_SOCKETS = 5;
+/** How long a hidden tab keeps its socket before closing it. */
+export const HIDDEN_GRACE_MS = 60_000;
 
 const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'scroll', 'wheel', 'touchstart'] as const;
 
@@ -52,8 +66,11 @@ export interface PresenceSocketHandlers {
 export interface PresenceBeaconDeps {
   consentGranted: () => boolean;
   storage: () => StorageLike | null;
+  /** Per-tab storage for the ticket cache; null when unavailable (a fresh ticket per page load then). */
+  sessionStorage: () => SessionStorageLike | null;
   fetch: (url: string, init: RequestInit) => Promise<Response>;
-  openSocket: (url: string, handlers: PresenceSocketHandlers) => PresenceSocket;
+  /** Opens `new WebSocket(url, protocols)`; `protocols` is `[PRESENCE_SUBPROTOCOL, ticket]`. */
+  openSocket: (url: string, protocols: string[], handlers: PresenceSocketHandlers) => PresenceSocket;
   /** Window-like target: pagehide/pageshow, storage, consent, app-focus and input events. */
   win: PresenceEventTarget;
   /** Document-like target for `visibilitychange`. */
@@ -74,20 +91,6 @@ export interface PresenceBeacon {
   start(): void;
   /** Closes everything and ignores later events (page teardown). */
   stop(): void;
-}
-
-interface TicketData {
-  ticket: string;
-  url: string;
-}
-
-function parseTicket(body: unknown): TicketData | null {
-  if (typeof body !== 'object' || body === null || !('data' in body)) return null;
-  const data: unknown = body.data;
-  if (typeof data !== 'object' || data === null) return null;
-  if (!('ticket' in data) || typeof data.ticket !== 'string' || !('url' in data) || typeof data.url !== 'string') return null;
-  if (!/^wss?:\/\//.test(data.url)) return null;
-  return { ticket: data.ticket, url: data.url };
 }
 
 function focusedAppFrom(ev: Event): string | null | undefined {
@@ -111,6 +114,8 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
   let waitingForVisible = false;
   let attempts = 0;
   let unavailable = 0;
+  let failedSockets = 0;
+  let hiddenTimer: unknown = null;
   let ticker: unknown = null;
   let lastActivity = deps.now();
   let lastSentAt = 0;
@@ -240,57 +245,92 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
     state = 'dead';
   };
 
+  const tickets = createTicketCache(deps.sessionStorage, deps.now);
+
+  /** Cached ticket, or a fresh one from the ticket endpoint; null after handling a failure (retry or give up). */
+  async function obtainTicket(gen: number): Promise<TicketData | null> {
+    const id = browserId();
+    const cached = tickets.get(id);
+    if (cached) return cached;
+    const requestedAt = deps.now();
+    const res = await deps.fetch(PRESENCE_TICKET_ENDPOINT, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ count: true, browserId: id }),
+    });
+    if (gen !== generation || state !== 'running') return null;
+    if (res.status === 401 || res.status === 503) {
+      unavailable += 1;
+      if (unavailable >= MAX_UNAVAILABLE_TICKETS) giveUp(`ticket ${res.status}`);
+      else scheduleReconnect();
+      return null;
+    }
+    if (res.status === 400 || res.status === 403) {
+      giveUp(`ticket ${res.status}`);
+      return null;
+    }
+    const ticket = res.ok ? parseTicket(await res.json()) : null;
+    if (gen !== generation || state !== 'running') return null;
+    if (!ticket) {
+      scheduleReconnect();
+      return null;
+    }
+    unavailable = 0;
+    // Consent is re-checked right before connecting, so a ticket is only ever cached for a consenting visitor.
+    if (deps.consentGranted()) tickets.put({ ...ticket, exp: requestedAt + PRESENCE_TICKET_TTL_MS, consent: true, kind: 'count', browserId: id });
+    return ticket;
+  }
+
+  /** A socket that closed (or could not be created) without ever opening: drop its ticket, maybe give up. */
+  const socketFailed = (): void => {
+    failedSockets += 1;
+    tickets.forget();
+    if (failedSockets >= MAX_FAILED_SOCKETS) giveUp(`${failedSockets} sockets failed to open`);
+    else scheduleReconnect();
+  };
+
   async function connect(): Promise<void> {
     if (state !== 'running' || socket || connecting) return;
     connecting = true;
     const gen = generation;
     try {
-      const res = await deps.fetch(PRESENCE_TICKET_ENDPOINT, {
-        method: 'POST',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ count: true, browserId: browserId() }),
-      });
-      if (gen !== generation || state !== 'running') return;
-      if (res.status === 401 || res.status === 503) {
-        unavailable += 1;
-        if (unavailable >= MAX_UNAVAILABLE_TICKETS) giveUp(`ticket ${res.status}`);
-        else scheduleReconnect();
+      const ticket = await obtainTicket(gen);
+      if (!ticket || gen !== generation || state !== 'running') return;
+      let s: PresenceSocket;
+      try {
+        s = deps.openSocket(ticket.url, [PRESENCE_SUBPROTOCOL, ticket.ticket], {
+          onOpen: () => {
+            if (socket !== s) return;
+            socketOpen = true;
+            failedSockets = 0;
+            openedAt = deps.now();
+            lastSentAt = 0;
+            lastCat = null;
+            reportedIdle = false;
+            if (active()) heartbeat();
+          },
+          onClose: () => {
+            if (socket !== s) return;
+            const opened = socketOpen;
+            const lived = opened ? deps.now() - openedAt : 0;
+            socket = null;
+            socketOpen = false;
+            pending = null;
+            if (!opened) {
+              socketFailed();
+              return;
+            }
+            if (lived >= HEALTHY_SOCKET_MS) attempts = 0;
+            scheduleReconnect();
+          },
+        });
+      } catch (err) {
+        log(`socket failed ${err instanceof Error ? err.message : ''}`);
+        socketFailed();
         return;
       }
-      if (res.status === 400 || res.status === 403) {
-        giveUp(`ticket ${res.status}`);
-        return;
-      }
-      const ticket = res.ok ? parseTicket(await res.json()) : null;
-      if (gen !== generation || state !== 'running') return;
-      if (!ticket) {
-        scheduleReconnect();
-        return;
-      }
-      unavailable = 0;
-      const url = `${ticket.url}${ticket.url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket.ticket)}`;
-      const s = deps.openSocket(url, {
-        onOpen: () => {
-          if (socket !== s) return;
-          socketOpen = true;
-          openedAt = deps.now();
-          lastSentAt = 0;
-          lastCat = null;
-          reportedIdle = false;
-          if (active()) heartbeat();
-        },
-        onClose: () => {
-          if (socket !== s) return;
-          const lived = socketOpen ? deps.now() - openedAt : 0;
-          socket = null;
-          socketOpen = false;
-          pending = null;
-          if (lived >= HEALTHY_SOCKET_MS) attempts = 0;
-          scheduleReconnect();
-        },
-      });
       socket = s;
     } catch (err) {
       if (gen === generation && state === 'running') {
@@ -302,16 +342,36 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
     }
   }
 
+  const clearHidden = (): void => {
+    if (hiddenTimer !== null) deps.clearTimer(hiddenTimer);
+    hiddenTimer = null;
+  };
+
+  /** Hidden for HIDDEN_GRACE_MS: drop the socket and any pending reconnect; showing the tab reconnects. */
+  const hiddenTooLong = (): void => {
+    hiddenTimer = null;
+    if (state !== 'running' || deps.visible()) return;
+    log('hidden: socket closed');
+    generation += 1;
+    connecting = false;
+    if (reconnectTimer !== null) deps.clearTimer(reconnectTimer);
+    reconnectTimer = null;
+    closeSocket();
+    waitingForVisible = true;
+  };
+
   function teardown(): void {
     generation += 1;
     connecting = false;
     clearReconnect();
+    clearHidden();
     closeSocket();
     if (ticker !== null) deps.clearTicker(ticker);
     ticker = null;
   }
 
   function consentWithdrawn(): void {
+    tickets.forget();
     if (state !== 'running') return;
     log('consent withdrawn');
     teardown();
@@ -337,6 +397,7 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
     try {
       if (state !== 'running') return;
       if (deps.visible()) {
+        clearHidden();
         lastActivity = deps.now();
         if (waitingForVisible || (!socket && !connecting && reconnectTimer === null)) {
           waitingForVisible = false;
@@ -345,6 +406,7 @@ export function createPresenceBeacon(deps: PresenceBeaconDeps): PresenceBeacon {
       } else {
         if (pending?.t === 'hb') pending = null;
         goIdle();
+        if (hiddenTimer === null) hiddenTimer = deps.setTimer(hiddenTooLong, HIDDEN_GRACE_MS);
       }
     } catch (err) {
       log(`visibility failed ${err instanceof Error ? err.message : ''}`);

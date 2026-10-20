@@ -10,7 +10,7 @@
  * real backstop. Memory is bounded by `maxKeys`.
  */
 
-export const PRESENCE_TICKET_RATE_LIMIT = 30;
+export const PRESENCE_TICKET_RATE_LIMIT = 120;
 export const PRESENCE_TICKET_RATE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_TRACKED_KEYS = 5_000;
 

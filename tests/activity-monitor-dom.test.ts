@@ -13,6 +13,20 @@ let React: ReactModule;
 let client: ClientModule;
 let panel: PanelModule;
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
+const grant = { success: true, data: { ticket: 'tkt.sig', url: 'wss://presence.test/v1/connect', expiresAt: '2026-10-20T04:02:00.000Z' } };
+
+/** Inert WebSocket: records what the feed opens, never touches the network. */
+class FakeWebSocket extends EventTarget {
+  static opened: Array<{ url: string; protocols: string[] }> = [];
+  readyState = 0;
+  constructor(url: string, protocols: string[] = []) {
+    super();
+    FakeWebSocket.opened.push({ url, protocols });
+  }
+  send(): void {}
+  close(): void {}
+}
 const mounted: Array<{ unmount: () => void; container: HTMLElement }> = [];
 
 const snapshot: PresenceSnapshot = {
@@ -28,6 +42,11 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 function stubFetch(handler: (url: string) => Response) {
   globalThis.fetch = (async (input: RequestInfo | URL) => handler(String(input))) as typeof fetch;
+}
+
+function stubWebSocket() {
+  FakeWebSocket.opened = [];
+  Object.assign(globalThis, { WebSocket: FakeWebSocket });
 }
 
 async function settle() {
@@ -57,6 +76,7 @@ afterEach(() => {
     m.container.remove();
   }
   globalThis.fetch = originalFetch;
+  Object.assign(globalThis, { WebSocket: originalWebSocket });
 });
 
 afterAll(async () => {
@@ -80,9 +100,12 @@ describe('Activity Monitor panel', () => {
   });
 
   test('members below the privacy floor read "< 3", not a fake number', async () => {
-    stubFetch((url) => (url.endsWith('/v1/snapshot') ? json(snapshot) : json({ success: false }, 503)));
+    stubWebSocket();
+    stubFetch((url) => (url.endsWith('/v1/snapshot') ? json(snapshot) : json(grant)));
     const root = mount();
     await settle();
+    // The snapshot origin comes from the ticket answer; the ticket rides as a subprotocol, never in the URL.
+    expect(FakeWebSocket.opened).toEqual([{ url: 'wss://presence.test/v1/connect', protocols: ['zuey-presence.v1', 'tkt.sig'] }]);
     expect(root.querySelector('[data-kpi="active"] .am-kpi-val')?.textContent).toBe('12');
     expect(root.querySelector('[data-kpi="members"] .am-kpi-val')?.textContent).toBe('< 3');
     expect(root.querySelector('[data-kpi="members"]')?.textContent).toContain('ít hơn 3');

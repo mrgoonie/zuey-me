@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { ACTIVITY_CATEGORIES, PRESENCE_HEARTBEAT_MS, type ActivityCategory } from '../src/lib/presence/contract';
+import { ACTIVITY_CATEGORIES, PRESENCE_HEARTBEAT_MS, PRESENCE_TICKET_TTL_MS, type ActivityCategory } from '../src/lib/presence/contract';
 import {
-  IDLE_AFTER_MS, MAX_UNAVAILABLE_TICKETS, MIN_MESSAGE_GAP_MS, PRESENCE_APP_FOCUS_EVENT, PRESENCE_ID_STORAGE_KEY, TICK_MS,
+  HIDDEN_GRACE_MS, IDLE_AFTER_MS, MAX_FAILED_SOCKETS, MAX_UNAVAILABLE_TICKETS, MIN_MESSAGE_GAP_MS, PRESENCE_APP_FOCUS_EVENT,
+  PRESENCE_ID_STORAGE_KEY, PRESENCE_TICKET_STORAGE_KEY, TICKET_REUSE_MARGIN_MS, TICK_MS,
   createPresenceBeacon, type PresenceEventTarget, type PresenceSocketHandlers,
 } from '../src/lib/presence/presence-beacon';
 import { presenceAllowedOn } from '../src/lib/presence/presence-beacon-boot';
@@ -76,7 +77,7 @@ class FakeSocket {
   sent: unknown[] = [];
   open = false;
   closed = false;
-  constructor(public url: string, public handlers: PresenceSocketHandlers) {}
+  constructor(public url: string, public protocols: string[], public handlers: PresenceSocketHandlers) {}
   send(data: string): boolean {
     if (!this.open) return false;
     this.sent.push(JSON.parse(data));
@@ -98,11 +99,13 @@ class FakeSocket {
 
 interface Timer { id: number; at: number; fn: () => void; every: number | null }
 
-function harness(opts: { consent?: boolean; ticketStatus?: number } = {}) {
-  let now = 1_000_000;
+function harness(opts: { consent?: boolean; ticketStatus?: number; session?: Map<string, string>; store?: Map<string, string>; now?: number } = {}) {
+  let now = opts.now ?? 1_000_000;
   let nextId = 1;
   let timers: Timer[] = [];
-  const store = new Map<string, string>();
+  const store = opts.store ?? new Map<string, string>();
+  const session = opts.session ?? new Map<string, string>();
+  let ticketSeq = 0;
   const state = { consent: opts.consent ?? true, visible: true, ticketStatus: opts.ticketStatus ?? 200, pathname: '/articles/x', hash: '' };
   const sockets: FakeSocket[] = [];
   const fetches: Array<{ url: string; init: RequestInit }> = [];
@@ -112,15 +115,22 @@ function harness(opts: { consent?: boolean; ticketStatus?: number } = {}) {
   const beacon = createPresenceBeacon({
     consentGranted: () => state.consent,
     storage: () => ({ getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) }),
+    sessionStorage: () => ({
+      getItem: (k: string) => session.get(k) ?? null,
+      setItem: (k: string, v: string) => void session.set(k, v),
+      removeItem: (k: string) => void session.delete(k),
+    }),
     fetch: async (url, init) => {
       fetches.push({ url, init });
       if (state.ticketStatus !== 200) {
         return new Response(JSON.stringify({ success: false, error: { code: 'x', message: 'x' } }), { status: state.ticketStatus });
       }
-      return new Response(JSON.stringify({ success: true, data: { ticket: 'tkt.sig', url: 'wss://presence.zuey.me/v1/connect', expiresAt: '' } }));
+      ticketSeq += 1;
+      const ticket = ticketSeq === 1 ? 'tkt.sig' : `tkt${ticketSeq}.sig`;
+      return new Response(JSON.stringify({ success: true, data: { ticket, url: 'wss://presence.zuey.me/v1/connect', expiresAt: '' } }));
     },
-    openSocket: (url, handlers) => {
-      const s = new FakeSocket(url, handlers);
+    openSocket: (url, protocols, handlers) => {
+      const s = new FakeSocket(url, protocols, handlers);
       sockets.push(s);
       return s;
     },
@@ -172,7 +182,8 @@ function harness(opts: { consent?: boolean; ticketStatus?: number } = {}) {
   };
 
   return {
-    beacon, state, store, sockets, fetches, win, doc, flush, advance, last,
+    beacon, state, store, session, sockets, fetches, win, doc, flush, advance, last,
+    now: () => now,
     activity: () => win.emit(new Event('pointermove')),
     setVisible: (v: boolean) => {
       state.visible = v;
@@ -182,6 +193,9 @@ function harness(opts: { consent?: boolean; ticketStatus?: number } = {}) {
     allSent: () => sockets.flatMap(s => s.sent),
   };
 }
+
+/** Longer than any reconnect delay (cap 60 s), so each loop step reaches the next attempt. */
+const RECONNECT_WAIT = 61_000;
 
 async function connected(h: ReturnType<typeof harness>): Promise<FakeSocket> {
   h.beacon.start();
@@ -209,7 +223,8 @@ describe('presence beacon', () => {
     expect(url).toBe('/api/v1/presence/ticket');
     expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
     expect(JSON.parse(String(init.body))).toEqual({ count: true, browserId: 'RandomPresenceId_1234567' });
-    expect(s.url).toBe('wss://presence.zuey.me/v1/connect?ticket=tkt.sig');
+    expect(s.url).toBe('wss://presence.zuey.me/v1/connect');
+    expect(s.protocols).toEqual(['zuey-presence.v1', 'tkt.sig']);
     expect(s.sent).toEqual([{ t: 'hb', cat: 'reading' }]);
   });
 
@@ -235,7 +250,7 @@ describe('presence beacon', () => {
     h.setVisible(false);
     expect(s.sent[s.sent.length - 1]).toEqual({ t: 'idle' });
     const before = s.sent.length;
-    await h.advance(PRESENCE_HEARTBEAT_MS * 3);
+    await h.advance(PRESENCE_HEARTBEAT_MS * 2); // within the hidden grace: the socket stays
     expect(s.sent.length).toBe(before);
     h.setVisible(true);
     expect(s.sent[s.sent.length - 1]).toEqual({ t: 'hb', cat: 'reading' });
@@ -280,14 +295,122 @@ describe('presence beacon', () => {
     expect(s.closed).toBe(true);
   });
 
-  it('reconnects with backoff and a fresh ticket after the socket drops', async () => {
+  it('reconnects with backoff after the socket drops, reusing the still-valid ticket', async () => {
     const h = harness();
     const s = await connected(h);
     s.serverClose();
-    expect(h.fetches).toHaveLength(1);
-    await h.advance(60_000);
-    expect(h.fetches).toHaveLength(2);
+    await h.advance(30_000);
     expect(h.sockets).toHaveLength(2);
+    expect(h.fetches).toHaveLength(1);
+    expect(h.last().protocols).toEqual(['zuey-presence.v1', 'tkt.sig']);
+  });
+
+  it('reuses a cached ticket on the next page load in the same tab until 15 s before it expires', async () => {
+    const session = new Map<string, string>();
+    const store = new Map<string, string>();
+    const first = harness({ session, store });
+    await connected(first);
+    first.win.emit(new Event('pagehide'));
+    expect(session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(true);
+
+    const second = harness({ session, store, now: first.now() + 60_000 });
+    await connected(second);
+    expect(second.fetches).toHaveLength(0);
+    expect(second.last().protocols).toEqual(['zuey-presence.v1', 'tkt.sig']);
+    second.beacon.stop();
+
+    const late = harness({ session, store, now: first.now() + PRESENCE_TICKET_TTL_MS - TICKET_REUSE_MARGIN_MS });
+    await connected(late);
+    expect(late.fetches).toHaveLength(1);
+  });
+
+  it('does not reuse a ticket issued for another browser id, or one that is malformed', async () => {
+    const session = new Map<string, string>();
+    const first = harness({ session });
+    await connected(first);
+    first.beacon.stop();
+    const otherBrowser = harness({ session, store: new Map([[PRESENCE_ID_STORAGE_KEY, 'AnotherPresenceId_987654']]) });
+    await connected(otherBrowser);
+    expect(otherBrowser.fetches).toHaveLength(1);
+    otherBrowser.beacon.stop();
+
+    session.set(PRESENCE_TICKET_STORAGE_KEY, '{"ticket":"bad ticket","url":"wss://x/v1/connect"}');
+    const garbled = harness({ session });
+    await connected(garbled);
+    expect(garbled.fetches).toHaveLength(1);
+  });
+
+  it('withdrawing consent forgets the cached ticket', async () => {
+    const h = harness();
+    await connected(h);
+    expect(h.session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(true);
+    h.state.consent = false;
+    h.win.emit(new CustomEvent(PRESENCE_CONSENT_EVENT, { detail: { granted: false } }));
+    expect(h.session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(false);
+  });
+
+  it('gives up for the page after consecutive sockets that never open, and never throws', async () => {
+    const h = harness();
+    h.beacon.start();
+    await h.flush();
+    for (let i = 0; i < MAX_FAILED_SOCKETS + 3; i++) {
+      const s = h.sockets[h.sockets.length - 1];
+      if (s && !s.closed) s.serverClose(); // upgrade refused or Worker down: close without open
+      await h.advance(RECONNECT_WAIT);
+    }
+    expect(h.sockets).toHaveLength(MAX_FAILED_SOCKETS);
+    expect(h.timerCount()).toBe(0);
+    // Each refused socket dropped its cached ticket, so every retry asked for a new one.
+    expect(h.fetches).toHaveLength(MAX_FAILED_SOCKETS);
+    expect(h.session.has(PRESENCE_TICKET_STORAGE_KEY)).toBe(false);
+  });
+
+  it('a socket that opens resets the failed-socket count', async () => {
+    const h = harness();
+    h.beacon.start();
+    await h.flush();
+    for (let i = 0; i < MAX_FAILED_SOCKETS - 1; i++) {
+      h.last().serverClose();
+      await h.advance(RECONNECT_WAIT);
+    }
+    h.last().serverOpen();
+    h.last().serverClose();
+    await h.advance(RECONNECT_WAIT);
+    for (let i = 0; i < MAX_FAILED_SOCKETS - 1; i++) {
+      h.last().serverClose();
+      await h.advance(RECONNECT_WAIT);
+    }
+    expect(h.sockets).toHaveLength(2 * MAX_FAILED_SOCKETS);
+    expect(h.timerCount()).toBeGreaterThan(0);
+  });
+
+  it('closes the socket after 60 s hidden and reconnects when shown again', async () => {
+    const h = harness();
+    const s = await connected(h);
+    h.setVisible(false);
+    await h.advance(HIDDEN_GRACE_MS - 1);
+    expect(s.closed).toBe(false);
+    await h.advance(1);
+    expect(s.closed).toBe(true);
+    await h.advance(10 * 60_000);
+    expect(h.sockets).toHaveLength(1);
+
+    h.setVisible(true);
+    await h.flush();
+    expect(h.sockets).toHaveLength(2);
+    h.last().serverOpen();
+    expect(h.last().sent).toEqual([{ t: 'hb', cat: 'reading' }]);
+  });
+
+  it('a short hide keeps the socket', async () => {
+    const h = harness();
+    const s = await connected(h);
+    h.setVisible(false);
+    await h.advance(HIDDEN_GRACE_MS / 2);
+    h.setVisible(true);
+    await h.advance(HIDDEN_GRACE_MS);
+    expect(s.closed).toBe(false);
+    expect(h.sockets).toHaveLength(1);
   });
 
   it('gives up for the page after repeated 503 tickets', async () => {

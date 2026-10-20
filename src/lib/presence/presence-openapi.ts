@@ -24,8 +24,8 @@ export const presenceOpenApi: OpenApiFragment = {
           'member session cookie (same origin); API keys and bearer tokens are ignored. Member and owner status are decided by the server',
           '(owner = member id listed in PRESENCE_OWNER_MEMBER_IDS, never the admin role) and the dedupe key is an HMAC, never a raw id.',
           '`count: true` asks to be counted: a guest must send its random `browserId`; `count: false` is a watch-only connection that never counts.',
-          `Tickets expire after ${PRESENCE_TICKET_TTL_MS / 1000} s; fetch a fresh one for every (re)connect.`,
-          `Rate limited to about ${PRESENCE_TICKET_RATE_LIMIT} tickets per ${PRESENCE_TICKET_RATE_WINDOW_MS / 60_000} minutes per client IP (per edge isolate).`,
+          `Tickets expire after ${PRESENCE_TICKET_TTL_MS / 1000} s and may be reused for reconnects until shortly before then.`,
+          `Rate limited to about ${PRESENCE_TICKET_RATE_LIMIT} tickets per ${PRESENCE_TICKET_RATE_WINDOW_MS / 60_000} minutes per client IP, IPv6 counted per /64 (per edge isolate).`,
         ].join(' '),
         security: [],
         requestBody: {
@@ -53,7 +53,7 @@ export const presenceOpenApi: OpenApiFragment = {
                   type: 'object',
                   required: ['ticket', 'url', 'expiresAt'],
                   properties: {
-                    ticket: { type: 'string', description: 'Opaque signed ticket; pass as `?ticket=` when connecting' },
+                    ticket: { type: 'string', description: 'Opaque signed ticket (base64url token chars and `.`); offer it as the second WebSocket subprotocol, after `zuey-presence.v1`, e.g. `new WebSocket(url, [\'zuey-presence.v1\', ticket])`. Never put it in the URL' },
                     url: { type: 'string', format: 'uri', example: 'wss://presence.zuey.me/v1/connect' },
                     expiresAt: { type: 'string', format: 'date-time' },
                   },
