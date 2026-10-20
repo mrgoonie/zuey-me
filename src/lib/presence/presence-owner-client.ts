@@ -99,7 +99,7 @@ async function callOwnerEndpoint(env: RuntimeEnv, method: 'GET' | 'PUT', update?
   const secret = env.PRESENCE_TICKET_SECRET;
   if (!secret) throw new AppError(503, 'presence_unavailable', 'Realtime presence is not configured');
   const transport = presenceOwnerTransport(env);
-  const headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret), Accept: 'application/json' };
+  const headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret, method, new URL(transport.url).pathname), Accept: 'application/json' };
   if (update) headers['Content-Type'] = 'application/json';
 
   let res: Response;
