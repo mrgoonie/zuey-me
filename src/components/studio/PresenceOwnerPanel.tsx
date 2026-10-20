@@ -34,9 +34,11 @@ async function readState(res: Response): Promise<OwnerStatusState> {
   throw new Error(`${code}: ${message}`);
 }
 
-function fmt(ts: string): string {
+/** Formats the last-saved time; `null` when the setting was never saved (the Worker reports epoch 0 for its default). */
+export function fmtChangedAt(ts: string): string | null {
   const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString('vi-VN', { timeZone: 'Asia/Saigon' });
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.getTime() <= 0 ? null : d.toLocaleString('vi-VN', { timeZone: 'Asia/Saigon' });
 }
 
 /** Studio panel (owner only): the realtime presence mode and status text shown in the Activity Monitor. */
@@ -91,6 +93,7 @@ export const PresenceOwnerPanel: React.FC = () => {
     }
   };
 
+  const changedAt = state ? fmtChangedAt(state.updatedAt) : null;
   const cleanText = sanitizeOwnerStatusText(text);
   const tooLong = cleanText.length > OWNER_STATUS_TEXT_MAX;
   const dirty = state !== null && (mode !== state.mode || cleanText !== (state.text ?? ''));
@@ -126,7 +129,8 @@ export const PresenceOwnerPanel: React.FC = () => {
           </div>
           {state.public.text && <p className="text-stone-200 break-words">{state.public.text}</p>}
           <p className="text-stone-500">
-            Setting: {MODE_COPY[state.mode].label} · {state.connected ? 'connected' : 'not connected'} · changed {fmt(state.updatedAt)}
+            Setting: {MODE_COPY[state.mode].label} · {state.connected ? 'connected' : 'not connected'}
+            {changedAt && ` · changed ${changedAt}`}
           </p>
         </div>
       )}
