@@ -24,7 +24,7 @@ export type FeedConnection = 'connecting' | 'live' | 'reconnecting' | 'polling' 
 export interface FeedState {
   snapshot: PresenceSnapshot | null;
   connection: FeedConnection;
-  /** Epoch ms of the last valid snapshot (HTTP or socket); null until one arrives. */
+  /** Epoch ms the shown snapshot is current as of: its `at` for HTTP reads (clamped to now), receipt time for socket pushes; null until one arrives. */
   updatedAt: number | null;
   /** Short machine reason for the current non-live state (never shown raw). */
   error?: string;
@@ -143,10 +143,21 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
     }
   };
 
-  const applySnapshot = (snapshot: PresenceSnapshot, live: boolean) => {
+  /**
+   * When an HTTP snapshot was computed: its `at`, clamped to now (a fast client clock cannot make it look
+   * newer than now). The Worker may serve a cached or fallback snapshot up to minutes old, so receipt time
+   * would make stale numbers look fresh. Socket pushes are computed when sent and use receipt time.
+   */
+  const computedAt = (snapshot: PresenceSnapshot): number => {
+    const now = deps.now();
+    const at = Date.parse(snapshot.at);
+    return Number.isFinite(at) ? Math.min(at, now) : now;
+  };
+
+  const applySnapshot = (snapshot: PresenceSnapshot, live: boolean, updatedAt: number = deps.now()) => {
     const keep = state.connection === 'live' || state.connection === 'connecting' || state.connection === 'reconnecting' || state.connection === 'polling';
     const connection: FeedConnection = live ? 'live' : keep ? state.connection : everLive ? 'reconnecting' : 'connecting';
-    set({ snapshot, connection, updatedAt: deps.now() });
+    set({ snapshot, connection, updatedAt });
   };
 
   /** Records a failure and schedules the next attempt with exponential backoff + jitter. */
@@ -200,12 +211,12 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
     if (!grant) {
       // No ticket, but the Worker answers: keep the numbers fresh over HTTP and retry the ticket later.
       attempt = 0;
-      set({ snapshot: snap.data, connection: 'polling', updatedAt: deps.now(), error: ticketError });
+      set({ snapshot: snap.data, connection: 'polling', updatedAt: computedAt(snap.data), error: ticketError });
       clearRetry();
       retryTimer = setTimeout(() => void run(g), deps.pollMs);
       return;
     }
-    applySnapshot(snap.data, false);
+    applySnapshot(snap.data, false, computedAt(snap.data));
     openSocket(g, grant);
   }
 
@@ -267,7 +278,7 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
     if (state.connection !== 'live' || state.updatedAt === null || deps.now() - state.updatedAt <= deps.staleMs || origin === null) return;
     const g = gen;
     void loadSnapshot(origin).then((r) => {
-      if (g === gen && r.kind === 'ok' && state.connection === 'live') applySnapshot(r.data, true);
+      if (g === gen && r.kind === 'ok' && state.connection === 'live') applySnapshot(r.data, true, computedAt(r.data));
     });
   };
 

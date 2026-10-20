@@ -126,6 +126,21 @@ describe('presence feed state machine', () => {
     });
   }
 
+  test('an HTTP snapshot is dated by its own `at` (clamped to now), so an old fallback shows as old', async () => {
+    const clock = Date.parse('2026-10-20T04:05:00.000Z');
+    const h = harness({ snapshot: () => json(snap(2, { at: '2026-10-20T04:00:00.000Z' })), ticket: () => json({ success: false }, 503) }, () => clock);
+    const unsub = h.feed.subscribeFeed(() => undefined);
+    await settle();
+    expect(h.feed.getFeedState()).toMatchObject({ connection: 'polling', updatedAt: clock - 5 * 60_000 });
+    unsub();
+
+    const future = harness({ snapshot: () => json(snap(2, { at: '2026-10-20T05:00:00.000Z' })), ticket: () => json(grant) }, () => clock);
+    const unsubFuture = future.feed.subscribeFeed(() => undefined);
+    await settle();
+    expect(future.feed.getFeedState().updatedAt).toBe(clock);
+    unsubFuture();
+  });
+
   test('ticket and snapshot both failing reads as lost connection, never invented numbers', async () => {
     const h = harness({ snapshot: () => { throw new TypeError('network'); }, ticket: () => json({ success: false }, 503) });
     const unsub = h.feed.subscribeFeed(() => undefined);
