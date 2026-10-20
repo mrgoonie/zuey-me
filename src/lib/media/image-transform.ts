@@ -2,7 +2,7 @@
  * Responsive image URLs through Cloudflare Image Transformations (`/cdn-cgi/image/<options>/<source>`).
  *
  * The zuey.me zone has `image_resizing=on`, which resizes images from the same zone only: media.zuey.me
- * (public R2 bucket `zuey-media`) and zuey.me itself. Every other host is left untouched. Each distinct
+ * (public R2 bucket `zuey-media`), cdn.zuey.me (profile avatar) and zuey.me itself. Every other host is left untouched. Each distinct
  * source and option set counts as one unique transformation (free tier: 5,000 per month), so callers use
  * a small fixed set of widths.
  *
@@ -28,7 +28,7 @@ export const DEFAULT_IMAGE_QUALITY = 80;
 export const ARTICLE_IMAGE_WIDTHS = [480, 768, 1080, 1440] as const;
 
 const PRODUCTION_HOSTS = new Set(['zuey.me', 'www.zuey.me']);
-const ZONE_IMAGE_HOSTS = new Set(['zuey.me', 'www.zuey.me', 'media.zuey.me']);
+const ZONE_IMAGE_HOSTS = new Set(['zuey.me', 'www.zuey.me', 'media.zuey.me', 'cdn.zuey.me']);
 const MAX_WIDTH = 2400;
 
 /**
@@ -42,7 +42,7 @@ export function imageTransformsFor(host: string, flag?: string): ImageTransforms
   return PRODUCTION_HOSTS.has(host.toLowerCase()) ? { base: '' } : null;
 }
 
-/** True for images the zone may transform: media.zuey.me, zuey.me and site-relative paths (not SVG). */
+/** True for images the zone may transform: media.zuey.me, cdn.zuey.me, zuey.me and site-relative paths (not SVG). */
 export function isTransformableImage(url: string): boolean {
   const relative = url.startsWith('/') && !url.startsWith('//');
   let parsed: URL;

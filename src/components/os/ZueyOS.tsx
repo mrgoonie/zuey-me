@@ -130,9 +130,19 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     setWallImage(readWallImage());
     setMascotHidden(readStored(STORAGE_KEYS.mascotHidden) === true);
     if (/Mac|iPhone|iPad/.test(navigator.userAgent)) setShortcut('⌘K');
-    document.documentElement.setAttribute('data-os-ready', '');
     setReady(true);
   }, []);
+
+  // Until data-os-ready is set, phones hide every window (the server renders the desktop boot windows).
+  // On a phone the restore above closes those windows with a slide-out; revealing them before a window
+  // is actually open would flash the profile sheet over the home screen after hydration (and make it the
+  // page's largest paint), so the attribute waits for the first open window there.
+  useEffect(() => {
+    if (!ready) return;
+    if (!window.matchMedia(PHONE_QUERY).matches || Object.values(wins).some(w => w.open)) {
+      document.documentElement.setAttribute('data-os-ready', '');
+    }
+  }, [ready, wins]);
 
   useEffect(() => {
     if (!ready) return;

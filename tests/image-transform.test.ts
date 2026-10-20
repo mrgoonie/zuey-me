@@ -21,8 +21,8 @@ describe('image transforms: when they apply', () => {
     expect(imageTransformsFor('localhost', 'yes')).toBeNull();
   });
 
-  test('only zone images: media.zuey.me, zuey.me and site paths; never other hosts or SVG', () => {
-    for (const url of [MEDIA, 'https://zuey.me/og.png', '/favicon.png']) expect(isTransformableImage(url)).toBe(true);
+  test('only zone images: media.zuey.me, cdn.zuey.me, zuey.me and site paths; never other hosts or SVG', () => {
+    for (const url of [MEDIA, 'https://cdn.zuey.me/avatar.png', 'https://zuey.me/og.png', '/favicon.png']) expect(isTransformableImage(url)).toBe(true);
     for (const url of [
       'https://images.unsplash.com/photo.jpg', 'http://media.zuey.me/a.webp', '//evil.example/a.png',
       'https://media.zuey.me.evil.example/a.png', 'https://media.zuey.me/logo.svg', '/cdn-cgi/image/width=80/a.png', 'not a url',
