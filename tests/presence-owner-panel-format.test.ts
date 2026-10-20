@@ -8,8 +8,12 @@ describe('fmtChangedAt', () => {
 
   it('formats a real save time', () => {
     const out = fmtChangedAt('2026-10-20T01:00:00.000Z');
-    expect(out).toContain('2026');
-    expect(out).not.toContain('1970');
+    expect(out).toContain('08:00:00');
+    expect(out).toContain('20/10/2026');
+  });
+
+  it('returns null for times before the epoch', () => {
+    expect(fmtChangedAt('1969-12-31T23:59:59.000Z')).toBeNull();
   });
 
   it('falls back to the raw value when unparseable', () => {
