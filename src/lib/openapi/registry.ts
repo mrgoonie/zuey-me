@@ -16,10 +16,11 @@ import { channelAccessOpenApi } from '../channel-access/openapi';
 import { analyticsOpenApi } from '../analytics/openapi';
 import { mediaOpenApi } from '../media/media-openapi';
 import { idempotencyOpenApi } from '../idempotency/openapi';
+import { presenceOpenApi } from '../presence/presence-openapi';
 
 /** Feature fragments merged into /api/openapi.json (and therefore Scalar /docs). */
 export const OPENAPI_FRAGMENTS: OpenApiFragment[] = [
   readsOpenApi, coursesOpenApi, coursesAdminOpenApi, bookingOpenApi, articlesOpenApi, taxonomyOpenApi, membersOpenApi, billingOpenApi,
   chatOpenApi, oauthOpenApi, experienceOpenApi, videosOpenApi, referralsOpenApi, promosOpenApi,
-  channelAccessOpenApi, analyticsOpenApi, mediaOpenApi, idempotencyOpenApi,
+  channelAccessOpenApi, analyticsOpenApi, mediaOpenApi, idempotencyOpenApi, presenceOpenApi,
 ];

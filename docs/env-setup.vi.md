@@ -343,3 +343,13 @@ Project đích: PostHog **Zuey.me**. Danh mục sự kiện, quy tắc PII và c
 - **Sự kiện server (outbox):** thanh toán, gói thành viên và đăng ký/đăng nhập được ghi vào bảng `analytics_outbox` (migration `0022_analytics_outbox.sql`, phải chạy trên D1 remote trước khi deploy). Worker `zuey-me-scheduler` gọi `POST /api/v1/analytics/outbox/drain` mỗi 5 phút bằng `CRON_SECRET` để gửi sang PostHog, tự thử lại với backoff và chuyển sang `dead` sau 10 lần lỗi (khoảng 22 giờ; cách đưa lại hàng đợi xem [analytics-events.md](analytics-events.md#server-event-outbox)). Không cần biến môi trường mới; CI tự deploy lại worker sau khi merge.
 
 **Kiểm tra sau khi deploy:** mở zuey.me (không bật Do Not Track), PostHog → *Activity → Live events* phải thấy `$pageview` với `$current_url` không chứa `token`/`code`/`email`. Đăng nhập rồi tải lại trang: sự kiện mang `distinct_id` là member ID (không phải email). Đăng xuất: sự kiện kế tiếp có `distinct_id` ẩn danh mới. Bấm "Tắt thống kê" ở `/privacy#analytics`: không còn sự kiện mới từ trình duyệt đó.
+
+## 15. Realtime presence (số người đang xem)
+
+Trình duyệt (khi analytics được phép) xin vé ở `POST /api/v1/presence/ticket` rồi mở WebSocket tới Worker `zuey-me-presence` (`workers/presence`). Quy tắc dữ liệu: [analytics-events.md](analytics-events.md#realtime-presence).
+
+- `PRESENCE_TICKET_SECRET` (secret): khoá HMAC ký vé kết nối. **Phải trùng** với secret cùng tên của Worker presence. Thiếu thì endpoint vé trả `503 presence_unavailable` và không ai được đếm.
+- `PRESENCE_OWNER_MEMBER_IDS`: danh sách member ID (cách nhau bởi dấu phẩy) được coi là chủ trang trong presence. Không suy ra từ quyền admin: admin không có trong danh sách vẫn là khách thường.
+- `PUBLIC_PRESENCE_URL` (tuỳ chọn): origin của Worker presence, mặc định `https://presence.zuey.me`. Khi chạy Worker local: `http://localhost:8787` (kèm `PUBLIC_ANALYTICS_DEBUG=1`, vì ngoài `zuey.me`/`www.zuey.me` beacon không chạy).
+
+**Kiểm tra sau khi deploy:** trên zuey.me (không bật Do Not Track), DevTools → Network phải thấy `POST /api/v1/presence/ticket` trả `200` và một kết nối WebSocket tới `presence.zuey.me` chỉ gửi `{"t":"hb","cat":…}` / `{"t":"idle"}`. Bấm "Tắt thống kê" ở `/privacy#analytics`: kết nối đóng ngay.
