@@ -1,6 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import { queueNeedsAttention, queuePurchase } from '../analytics/commerce-events';
-import type { WaitUntil } from '../channel-access/invalidate';
+import type { WaitUntil } from '../wait-until';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';

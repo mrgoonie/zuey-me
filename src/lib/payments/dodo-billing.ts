@@ -2,7 +2,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import {
   queueCardStateChange, queueCardSubscriptionEnd, queueNeedsAttention, queuePaymentFailed, queuePurchase, queueRefund,
 } from '../analytics/commerce-events';
-import type { WaitUntil } from '../channel-access/invalidate';
+import type { WaitUntil } from '../wait-until';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { PlanId } from '../members/plans';

@@ -59,7 +59,7 @@ export const experienceMcpModule: McpToolModule = {
     },
     {
       name: 'community_sweep',
-      description: `Admin: remove Telegram community members whose $29 plan lapsed and retire stale invite links. Admins (verified email in ADMIN_EMAILS) on their own linked Telegram account are never removed. Use dry_run first: it lists who would be removed or revoked and why, without calling Telegram. Each call examines up to limit memberships (default ${SWEEP_DEFAULT_LIMIT}) and at most ${SWEEP_TELEGRAM_BUDGET} Telegram calls, then returns next_cursor; without cursor it resumes where the previous run of the same mode stopped.`,
+      description: `Admin: remove Telegram community members whose $29 plan lapsed and retire stale invite links. Admins (verified email in ADMIN_EMAILS) on their own Telegram account (listed in ADMIN_TELEGRAM_IDS) are never removed. Use dry_run first: it lists who would be removed or revoked and why, without calling Telegram. Each call examines up to limit memberships (default ${SWEEP_DEFAULT_LIMIT}) and at most ${SWEEP_TELEGRAM_BUDGET} Telegram calls, then returns next_cursor; without cursor it resumes where the previous run of the same mode stopped.`,
       inputSchema: {
         type: 'object',
         properties: {
