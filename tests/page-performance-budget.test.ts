@@ -51,8 +51,22 @@ describe('page weight budget', () => {
     for (const d of sans) expect(d).toMatch(/Plus Jakarta Sans Fallback['"], ['"]Plus Jakarta Sans Fallback Roboto['"]/);
     for (const d of serif) expect(d).toContain('Fraunces Fallback');
     const css = await read('../src/styles/global.css');
+    // Each fallback has a regular face and a real bold face: a synthesized bold is narrower than the web font's
+    // bold, so bold titles and badges would rewrap (and shift the page) when the web font arrives.
     for (const face of ['Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', 'Fraunces Fallback']) {
-      expect(css).toMatch(new RegExp(`font-family: '${face}';\\s*src: local\\('[A-Za-z]+'\\);\\s*size-adjust`));
+      const faces = css.match(new RegExp(`@font-face \\{ font-family: '${face}'; [^}]+\\}`, 'g')) ?? [];
+      expect(faces.some(f => /src: local\('[A-Za-z]+'\); font-weight: 100 /.test(f))).toBe(true);
+      expect(faces.some(f => /src: local\('[A-Za-z]+ Bold'\)[^;]*; font-weight: 550 /.test(f))).toBe(true);
+      for (const f of faces) expect(f).toMatch(/size-adjust: [\d.]+%; ascent-override: [\d.]+%; descent-override: [\d.]+%; line-gap-override: 0%/);
+      // Overrides are scaled by size-adjust, so every face must give the same ascent and descent once scaled.
+      const scaled = faces.map(f => {
+        const [size, ascent, descent] = ['size-adjust', 'ascent-override', 'descent-override'].map(k => Number(f.match(new RegExp(`${k}: ([\\d.]+)%`))?.[1]));
+        return { ascent: (size * ascent) / 1e4, descent: (size * descent) / 1e4 };
+      });
+      for (const m of scaled) {
+        expect(m.ascent).toBeCloseTo(scaled[0].ascent, 2);
+        expect(m.descent).toBeCloseTo(scaled[0].descent, 2);
+      }
     }
   });
 
