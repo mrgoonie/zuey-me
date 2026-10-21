@@ -286,7 +286,10 @@ async function insertSepayOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: str
   return order;
 }
 
-/** Months granted by a 100% promo used on the card rail: its card cycles, rounded down to a prepaid term. */
+/**
+ * Months granted by a 100% promo used on the card rail: its card cycles. Admin validation keeps those a prepaid
+ * term; rounding down only guards codes saved before that rule.
+ */
 export function freeCardMonths(cardCycles: number): BillingMonths {
   return [...BILLING_MONTHS].reverse().find(m => m <= cardCycles) ?? 1;
 }
