@@ -57,10 +57,10 @@ The browser lane ran on 2026-10-21 in the built-in browser, driven by claude-opu
 
 ## Follow-up issues filed (`ai-handle`)
 
-- #219: flaky Shiki timeouts in tests.
+- #219: flaky Shiki timeouts in tests (since shipped).
 - #229: in Safari and macOS Firefox, a second Escape after a mouse click does not close the window (PR #230 is open).
 - #233: unfocused window titles fall below WCAG AA contrast (PR #234 is open).
-- #238: `listArticles` runs twice per `/articles` render.
+- #238: `listArticles` runs twice per `/articles` render. #232 made the reads run concurrently but did not deduplicate them; PR #239 is the open fix.
 
 ## Risks and open points
 
