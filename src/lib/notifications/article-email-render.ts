@@ -167,7 +167,8 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
     case 'callout':
       return `<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="${P};margin:0">${inlineHtml(block.text)}</p></div>`;
     case 'code':
-      return `<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.code)}</pre>`;
+      return (block.filename ? `<p style="margin:0 0 4px;font-family:Menlo,Consolas,monospace;font-size:13px;color:#57534e">${escapeHtml(block.filename)}</p>` : '')
+        + `<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.code)}</pre>`;
     case 'divider': return '<hr style="border:none;border-top:1px solid #e7e0d8;margin:24px 0">';
     case 'image': return image(block, input.siteUrl);
     case 'gallery':
@@ -214,7 +215,7 @@ function blockText(block: Block, input: ArticleEmailInput): string {
     case 'list': return block.items.map((i, n) => `${block.style === 'number' ? `${n + 1}.` : '-'} ${inlineToPlain(i)}`).join('\n');
     case 'checklist': return block.items.map(i => `[${i.checked ? 'x' : ' '}] ${inlineToPlain(i.text)}`).join('\n');
     case 'quote': return `“${inlineToPlain(block.text)}”${block.cite ? ` — ${inlineToPlain(block.cite)}` : ''}`;
-    case 'code': return block.code;
+    case 'code': return block.filename ? `${block.filename}\n${block.code}` : block.code;
     case 'divider': return '---';
     case 'table': return [block.headers, ...block.rows].map(r => r.map(inlineToPlain).join(' | ')).join('\n');
     case 'bookmark': return `${block.title || ''} ${block.url}`.trim();

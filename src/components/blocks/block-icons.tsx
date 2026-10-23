@@ -14,6 +14,9 @@ import type { LucideIcon } from 'lucide-react';
 import { ICON_PIXELS, isIconName } from '../../lib/blocks/icons';
 import type { IconName, IconSize } from '../../lib/blocks/icons';
 
+/** Re-exported so lazy callers resolve names from the same chunk as the map instead of a second import. */
+export { resolveIconName } from '../../lib/blocks/icons';
+
 /**
  * Allowlisted name → individually imported Lucide component. Typed as a total record, so adding a
  * name to the registry without a component (or the reverse) fails the type check.

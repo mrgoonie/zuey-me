@@ -153,7 +153,121 @@ function hasEmail(value: string): boolean {
 }
 
 function redactEmails(value: string): string {
-  const ranges = emailRanges(value);
+  return replaceRanges(value, emailRanges(value));
+}
+
+/**
+ * A run of digit groups joined by one separator each (space, `.`, `-`, or a parenthesised area code), with an
+ * optional leading `+`. Every group needs a digit and a separator, so the regex never backtracks over a run and
+ * the scan is linear; which part of a run is a phone number is decided by `phoneRanges`.
+ */
+const PHONE_RUN_RE = /\+?\(?\d+(?:(?:[ .-]|\) ?)\(?\d+)*\)?/g;
+const WORD_CHAR_RE = /^[\p{L}\p{N}_]$/u;
+const JOINER_RE = /^[-._]$/;
+/** Most digits in a phone number (E.164). A window of groups never grows past this, which bounds the scan. */
+const MAX_PHONE_DIGITS = 15;
+/** Vietnamese mobile (`03`, `05`, `07`, `08`, `09` + 8 digits) and landline (`02` + 9 digits) numbers. */
+const VN_PHONE_RE = /^(?:0[35789]\d{8}|02\d{9})$/;
+/** North American `NXX NXX XXXX`, accepted only when written in three groups. */
+const NANP_PHONE_RE = /^[2-9]\d{2}[2-9]\d{6}$/;
+
+interface DigitGroup { start: number; end: number; digits: string; spaceBefore: boolean }
+
+/**
+ * True when a digit run touches an identifier: a letter, digit or `_` right next to it, or a joiner (`-`, `.`,
+ * `_`) followed by one. Order codes (`ZMC-0901234567`), hashes, UUIDs, file names (`0901234567.png`) and
+ * versions (`v1.0901234567`) are therefore never read as phone numbers.
+ */
+function touchesWord(value: string, index: number, step: 1 | -1): boolean {
+  const near = value.charAt(index);
+  if (WORD_CHAR_RE.test(near)) return true;
+  return JOINER_RE.test(near) && WORD_CHAR_RE.test(value.charAt(index + step));
+}
+
+/**
+ * Whether the digits of `count` consecutive groups form a phone number. Groups after the first always have at
+ * least two digits (the caller stops there); the first may have one only after a `+` (`+1 415 555 2671`).
+ */
+function isPhoneNumber(digits: string, plus: boolean, count: number, firstLength: number, secondLength: number): boolean {
+  if (plus && digits.length >= 9 && digits.charAt(0) !== '0') return true;
+  if (firstLength < 2) return false;
+  if (VN_PHONE_RE.test(digits)) return true;
+  return count === 3 && firstLength === 3 && secondLength === 3 && NANP_PHONE_RE.test(digits);
+}
+
+/**
+ * `[start, end)` of every phone number: Vietnamese `0xxxxxxxxx` and `02xxxxxxxxx`, `+` followed by 9 to 15 digits
+ * (E.164, `+84 90 123 4567`), and North American `(415) 555-2671`, with spaces, dots, dashes or a parenthesised
+ * area code between groups. A run of numbers is split only at spaces, so two numbers in a row are both found, while
+ * ISO dates, times, timestamps, prices, versions, IP addresses and order ids never form one of these shapes.
+ * Each window of groups is capped at `MAX_PHONE_DIGITS` digits, so the scan stays linear.
+ */
+function phoneRanges(value: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  if (!/\d/.test(value)) return ranges;
+  PHONE_RUN_RE.lastIndex = 0;
+  let match = PHONE_RUN_RE.exec(value);
+  while (match !== null) {
+    const run = match[0];
+    const runStart = match.index;
+    const runEnd = runStart + run.length;
+    const groups: DigitGroup[] = [];
+    const groupRe = /\d+/g;
+    let digitMatch = groupRe.exec(run);
+    let previousEnd = 0;
+    while (digitMatch !== null) {
+      const start = runStart + digitMatch.index;
+      groups.push({ start, end: start + digitMatch[0].length, digits: digitMatch[0], spaceBefore: run.slice(previousEnd, digitMatch.index).includes(' ') });
+      previousEnd = digitMatch.index + digitMatch[0].length;
+      digitMatch = groupRe.exec(run);
+    }
+    const plus = run.startsWith('+');
+    const gluedBefore = !plus && !run.startsWith('(') && touchesWord(value, runStart - 1, -1);
+    const gluedAfter = touchesWord(value, runEnd, 1);
+    let i = 0;
+    while (i < groups.length) {
+      const first = groups[i];
+      const plusHere = plus && i === 0;
+      const opensRun = i === 0 ? !gluedBefore : first?.spaceBefore === true;
+      const firstLength = first?.digits.length ?? 0;
+      let best = -1;
+      if (first && opensRun && (firstLength >= 2 || plusHere)) {
+        let digits = '';
+        let secondLength = 0;
+        for (let j = i; j < groups.length; j++) {
+          const group = groups[j];
+          if (!group || (j > i && group.digits.length < 2)) break;
+          digits += group.digits;
+          if (digits.length > MAX_PHONE_DIGITS) break;
+          if (j === i + 1) secondLength = group.digits.length;
+          const closesRun = j === groups.length - 1 ? !gluedAfter : groups[j + 1]?.spaceBefore === true;
+          if (closesRun && isPhoneNumber(digits, plusHere, j - i + 1, firstLength, secondLength)) best = j;
+        }
+      }
+      if (best < 0) {
+        i++;
+        continue;
+      }
+      const last = groups[best];
+      if (first && last) {
+        const start = i === 0 ? runStart : first.start - (value.charAt(first.start - 1) === '(' ? 1 : 0);
+        const end = best === groups.length - 1 ? runEnd : last.end + (value.charAt(last.end) === ')' ? 1 : 0);
+        ranges.push([start, end]);
+      }
+      i = best + 1;
+    }
+    match = PHONE_RUN_RE.exec(value);
+  }
+  PHONE_RUN_RE.lastIndex = 0;
+  return ranges;
+}
+
+function hasPhone(value: string): boolean {
+  return phoneRanges(value).length > 0;
+}
+
+/** Replaces each `[start, end)` range (sorted, non-overlapping) with `[redacted]`. */
+function replaceRanges(value: string, ranges: Array<[number, number]>): string {
   if (ranges.length === 0) return value;
   let out = '';
   let last = 0;
@@ -162,6 +276,10 @@ function redactEmails(value: string): string {
     last = end;
   }
   return out + value.slice(last);
+}
+
+function redactPhones(value: string): string {
+  return replaceRanges(value, phoneRanges(value));
 }
 
 function test(re: RegExp, value: string): boolean {
@@ -248,8 +366,9 @@ function encodeSegment(value: string, keepRawUnicode: boolean): string {
 }
 
 /**
- * Redacts emails that only appear once percent-decoded (`john%40x.com`, `john%2540x.com`, `zuey%20john%40x.com`).
- * A segment carrying one is decoded, its emails replaced, and re-encoded so the rest of the URL keeps its shape.
+ * Redacts emails and phone numbers that only appear once percent-decoded (`john%40x.com`, `john%2540x.com`,
+ * `zuey%20john%40x.com`, `%2B84%20901%20234%20567`). A segment carrying one is decoded, its emails and phone numbers
+ * replaced, and re-encoded so the rest of the URL keeps its shape.
  * A segment still encoded after the decoding limit is redacted whole.
  */
 function redactEncodedEmails(value: string): string {
@@ -258,8 +377,8 @@ function redactEncodedEmails(value: string): string {
     if (!segment.includes('%')) return segment;
     const decoded = decodeEscapes(segment);
     if (decoded === null) return REDACTED;
-    if (!hasEmail(decoded)) return segment;
-    return encodeSegment(redactEmails(decoded),NON_ASCII_RE.test(segment));
+    if (!hasEmail(decoded) && !hasPhone(decoded)) return segment;
+    return encodeSegment(redactPhones(redactEmails(decoded)), NON_ASCII_RE.test(segment));
   });
 }
 
@@ -275,21 +394,33 @@ export function looksLikeJwt(value: string): boolean {
   return redactJwts(value) !== value;
 }
 
-/** True when a string carries an email address, a JWT or a recognisable secret token, or is too long to inspect. */
-export function containsPii(value: string): boolean {
-  if (value.length > MAX_SCRUB_LENGTH) return true;
-  return looksLikeEmail(value) || looksLikeJwt(value) || test(SECRET_RE, value);
+/** True when a string carries a phone number, literally or percent-encoded (`%2B84%20901…`). */
+export function looksLikePhone(value: string): boolean {
+  if (hasPhone(value)) return true;
+  if (!value.includes('%')) return false;
+  const decoded = decodeEscapes(value);
+  return decoded !== null && hasPhone(decoded);
 }
 
-function scrubParams(params: URLSearchParams, ownSite: boolean): boolean {
-  let changed = false;
-  for (const name of [...new Set(params.keys())]) {
-    if (isSensitiveParam(name) || (ownSite && isSearchParam(name))) {
-      params.delete(name);
-      changed = true;
-    }
+/** True when a string carries an email address, a phone number, a JWT or a recognisable secret token, or is too long to inspect. */
+export function containsPii(value: string): boolean {
+  if (value.length > MAX_SCRUB_LENGTH) return true;
+  return looksLikeEmail(value) || looksLikePhone(value) || looksLikeJwt(value) || test(SECRET_RE, value);
+}
+
+/**
+ * The parameters left once sensitive ones (and, on zuey.me, search words) are removed, or null when none is.
+ * One pass over the entries builds the result: deleting names one at a time re-serialises the whole query on
+ * every call, which is quadratic and took ~80 ms in V8 on a 16 KB URL with thousands of sensitive names.
+ */
+function keptParams(params: URLSearchParams, ownSite: boolean): URLSearchParams | null {
+  const kept: Array<[string, string]> = [];
+  let removed = false;
+  for (const [name, value] of params) {
+    if (isSensitiveParam(name) || (ownSite && isSearchParam(name))) removed = true;
+    else kept.push([name, value]);
   }
-  return changed;
+  return removed ? new URLSearchParams(kept) : null;
 }
 
 /**
@@ -313,10 +444,11 @@ export function scrubUrl(raw: string): string {
     parsed.search = '';
     parsed.hash = '';
   }
-  scrubParams(parsed.searchParams, ownSite);
+  const query = keptParams(parsed.searchParams, ownSite);
+  if (query) parsed.search = query.toString();
   if (parsed.hash.includes('=')) {
-    const hashParams = new URLSearchParams(parsed.hash.slice(1));
-    if (scrubParams(hashParams, ownSite)) {
+    const hashParams = keptParams(new URLSearchParams(parsed.hash.slice(1)), ownSite);
+    if (hashParams) {
       const rest = hashParams.toString();
       parsed.hash = rest ? `#${rest}` : '';
     }
@@ -334,11 +466,11 @@ function redactText(value: string, redactSearch: boolean): string {
     .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (
       isSensitiveParam(name) || (redactSearch && isSearchParam(name)) ? `${lead}${name}=${REDACTED}` : match
     ));
-  return redactEncodedEmails(redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED)));
+  return redactEncodedEmails(redactPhones(redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED))));
 }
 
 /**
- * Replaces emails (literal or percent-encoded), JWTs, secret tokens, sensitive `name=value` pairs (search
+ * Replaces emails and phone numbers (literal or percent-encoded), JWTs, secret tokens, sensitive `name=value` pairs (search
  * words included), order codes and booking ids in paths inside arbitrary text.
  */
 export function redactString(value: string): string {

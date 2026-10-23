@@ -19,6 +19,7 @@ export interface LinkItem {
   subtitle_en?: string;
   subtitle_vi?: string;
   url: string;
+  /** Brand/product mark, curated Lucide name, or empty; see LINK_ICON_DESCRIPTION in src/lib/link-icons.ts. */
   icon?: string;
   order_index: number;
   is_active: boolean;
