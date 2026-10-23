@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo } from 'react';
+import { Component, lazy, Suspense, useMemo } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
 import type { ArticleDocument, Block, LayoutBlock } from '../../lib/blocks/schema';
@@ -42,14 +42,32 @@ export function IconPlaceholder({ size }: { size: IconGlyphProps['size'] }) {
 }
 
 /**
+ * Keeps a lazy island's failure local: when its chunk cannot load (network error, or a page cached across a deploy
+ * whose chunk hashes changed), the block shows its fallback instead of the error unmounting the whole article.
+ */
+export class LazyBoundary extends Component<{ fallback: ReactNode; children?: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+/**
  * The Suspense boundary must exist on both sides: the server emits its markers around the SVG, so
  * hydration keeps the server markup in place until the lazy chunk resolves instead of failing.
  */
 function IconSlot(props: IconGlyphProps) {
   return (
-    <Suspense fallback={<IconPlaceholder size={props.size} />}>
-      {import.meta.env.SSR ? <StaticIconGlyph {...props} /> : <LazyIconGlyph {...props} />}
-    </Suspense>
+    <LazyBoundary fallback={<IconPlaceholder size={props.size} />}>
+      <Suspense fallback={<IconPlaceholder size={props.size} />}>
+        {import.meta.env.SSR ? <StaticIconGlyph {...props} /> : <LazyIconGlyph {...props} />}
+      </Suspense>
+    </LazyBoundary>
   );
 }
 
@@ -75,11 +93,15 @@ function PlainTable({ headers, rows }: { headers: string[]; rows: string[][] }) 
   );
 }
 
+/** While the chunk loads, or if it fails, the client shows every row as a plain table (raw values, no controls). */
 function DataTableSlot(props: DataTableProps) {
+  const fallback = <PlainTable headers={props.block.headers} rows={props.block.rows} />;
   return (
-    <Suspense fallback={<PlainTable headers={props.block.headers} rows={props.block.rows} />}>
-      {import.meta.env.SSR ? <StaticDataTable {...props} /> : <LazyDataTable {...props} />}
-    </Suspense>
+    <LazyBoundary fallback={fallback}>
+      <Suspense fallback={fallback}>
+        {import.meta.env.SSR ? <StaticDataTable {...props} /> : <LazyDataTable {...props} />}
+      </Suspense>
+    </LazyBoundary>
   );
 }
 
@@ -101,6 +123,7 @@ interface RenderContext {
   /** Equation numbering of display formulas by block id. */
   mathNumbers: Map<string, MathNumber>;
   liveMath: boolean;
+  locale?: string;
 }
 
 /** Only an image this close to the top is likely to be the LCP element. */
@@ -221,7 +244,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'embed': return <EmbedView key={block.url} block={block} autoLoad={ctx.autoLoadEmbeds} />;
     case 'table':
       return isDataTable(block)
-        ? <DataTableSlot block={block} renderInline={text => <Inline text={text} />} />
+        ? <DataTableSlot block={block} locale={ctx.locale} renderInline={text => <Inline text={text} />} />
         : <PlainTable headers={block.headers} rows={block.rows} />;
     case 'chart': return <ChartBlock block={block} />;
     case 'diagram': return <DiagramBlock block={block} />;
@@ -291,6 +314,8 @@ interface BlockRendererProps {
   math?: MathRenders;
   /** Typeset math on the client by lazy-loading KaTeX (Studio previews). */
   liveMath?: boolean;
+  /** Edition locale; data tables format numbers, dates and their labels for it (Vietnamese when absent). */
+  locale?: string;
   /** Equation numbers when doc is one part of a longer document (lesson runs); computed from doc otherwise. */
   mathNumbering?: Map<string, MathNumber>;
 }
@@ -303,7 +328,7 @@ function bodyImageSizes(lanes: boolean): string {
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
 export function BlockRenderer({
   doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, autoRunInteractives = false,
-  eagerLeadImage = false, imageTransforms, math, liveMath = false, mathNumbering,
+  eagerLeadImage = false, imageTransforms, math, liveMath = false, mathNumbering, locale,
 }: BlockRendererProps) {
   const ownNumbers = useMemo(() => (mathNumbering ? null : mathNumbers(doc.blocks, math)), [doc, math, mathNumbering]);
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
@@ -312,7 +337,7 @@ export function BlockRenderer({
     articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, autoRunInteractives, imageTransforms,
     leadImageId: eagerLeadImage ? leadImageBlockId(doc.blocks) : undefined,
     imageSizes: bodyImageSizes(lanes.length > 0),
-    math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, MathNumber>(), liveMath,
+    math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, MathNumber>(), liveMath, locale,
   };
   return (
     <div className="zb-doc" data-lanes={lanes.length > 0 ? lanes.join(' ') : undefined}>

@@ -3,7 +3,7 @@ import type { BlockDefinition, BlockValidator, RawBlock } from '../block-definit
 import { CHART_KINDS, LIMITS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES } from '../schema';
 import type { ChartBlock, ChartSeries, DiagramBlock, SurveyBlock, SurveyOption, TableBlock, TableColumn } from '../schema';
 import { fence, gfmTable, mdCaption } from '../markdown-format';
-import { CELL_FORMATS, CURRENCY_RE, NUMERIC_COLUMN_TYPES, canonicalCell, columnOf, isDataTable } from '../table-data';
+import { CELL_FORMATS, CURRENCY_RE, NUMERIC_COLUMN_TYPES, canonicalCell, columnOf, formatCell, isDataTable, isProseColumn } from '../table-data';
 import { blockId, inline, short } from './schema-fragments';
 import { ID_RE, flag, isInt, isObj, isOneOf, plain, plainLength } from './shared';
 
@@ -106,6 +106,8 @@ export const table: BlockDefinition<TableBlock> = {
     });
     const columns = tableColumns(v, raw, headers.length, path);
     const title = v.str(raw, 'title', path, LIMITS.tableTitle, { optional: true })?.trim();
+    const titleOk = !title || !/[\r\n]/.test(title);
+    if (!titleOk) v.err(`${path}.title`, 'must be one line');
     const caption = v.str(raw, 'caption', path, S, { optional: true })?.trim();
     const sortable = flag(v, raw, 'sortable', path);
     const search = flag(v, raw, 'search', path);
@@ -114,7 +116,7 @@ export const table: BlockDefinition<TableBlock> = {
     const mobile = raw.mobile ?? undefined;
     const mobileOk = mobile === undefined || isOneOf(TABLE_MOBILE_MODES, mobile);
     if (!mobileOk) v.err(`${path}.mobile`, `must be one of ${TABLE_MOBILE_MODES.join(', ')}`);
-    if (rows.length !== raw.rows.length || columns === null || sortable === null || search === null || stickyHeader === null || csv === null || !mobileOk) {
+    if (rows.length !== raw.rows.length || columns === null || sortable === null || search === null || stickyHeader === null || csv === null || !mobileOk || !titleOk) {
       return undefined;
     }
     const block: TableBlock = {
@@ -133,7 +135,15 @@ export const table: BlockDefinition<TableBlock> = {
   markdown: b => (isDataTable(b)
     ? `${b.title ? `**${b.title}**\n\n` : ''}${gfmTable(labelledHeaders(b), b.rows)}${mdCaption(b.caption)}`
     : gfmTable(b.headers, b.rows)),
-  searchText: b => [...(b.title ? [b.title] : []), ...b.headers, ...b.rows.flat(), ...(b.caption ? [b.caption] : [])].map(plain),
+  // Typed cells are indexed as stored and as readers see them, so both `490000` and `490.000` find the row.
+  searchText: b => [
+    ...(b.title ? [b.title] : []), ...b.headers,
+    ...b.rows.flatMap(row => row.map((raw, c) => {
+      const col = columnOf(b, c);
+      return raw && !isProseColumn(col) && col.type !== 'link' ? `${raw} ${formatCell(col, raw)}` : raw;
+    })),
+    ...(b.caption ? [b.caption] : []),
+  ].map(plain),
   aiText: b => [
     ...(b.title ? [b.title] : []),
     ...[labelledHeaders(b), ...b.rows].map(r => r.map(plain).join(' | ')),
@@ -148,7 +158,7 @@ export const table: BlockDefinition<TableBlock> = {
         type: 'array', maxItems: LIMITS.tableColumns,
         description: `One per header; cells of a typed column hold its canonical value, or are empty. Cell formats: ${TABLE_COLUMN_TYPES.map(t => `${t}: ${CELL_FORMATS[t]}`).join('; ')}. Values are shown formatted (1.234.567 ₫, 12,5%, 15/01/2026) and sort by value`,
         items: {
-          type: 'object', required: ['type'],
+          type: 'object',
           properties: {
             type: { type: 'string', enum: [...TABLE_COLUMN_TYPES], default: 'text' },
             decimals: { type: 'integer', minimum: 0, maximum: LIMITS.tableDecimalsMax, description: 'number, currency and percent only: fixed decimals' },

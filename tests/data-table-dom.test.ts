@@ -33,11 +33,15 @@ async function flush() {
   await React.act(async () => { for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0)); });
 }
 
-async function mount(blocks: Block[]): Promise<HTMLElement> {
+async function mount(blocks: Block[], locale?: string): Promise<HTMLElement> {
+  return mountNode(React.createElement(renderer.BlockRenderer, { doc: { version: 1, blocks }, interactive: false, locale }));
+}
+
+async function mountNode(node: ReturnType<ReactModule['createElement']>): Promise<HTMLElement> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = client.createRoot(container);
-  React.act(() => root.render(React.createElement(renderer.BlockRenderer, { doc: { version: 1, blocks }, interactive: false })));
+  React.act(() => root.render(node));
   mounted.push({ root, container });
   await flush();
   return container;
@@ -167,5 +171,35 @@ describe('data table controls', () => {
       'Hà Nội,,true,\'@x',
       '',
     ]);
+  });
+
+  test('cards mode adds the column labels once hydrated', async () => {
+    const root = await mount([{ ...TABLE, mobile: 'cards' }]);
+    expect(root.querySelector('.zb-dt-cards')).not.toBeNull();
+    expect([...root.querySelectorAll('tbody tr:first-child td')].map(td => td.getAttribute('data-label'))).toEqual(TABLE.headers);
+    expect(root.querySelector('td .zb-dt-yes')?.parentElement?.textContent).toBe('✓ Có');
+  });
+
+  test('English editions get English labels and numbers', async () => {
+    const root = await mount([TABLE], 'en');
+    expect(root.querySelector('[role="status"]')?.textContent).toBe('Showing 3 of 3 rows');
+    expect(root.textContent).toContain('490,000 ₫');
+    expect(root.querySelector('input[type="search"]')?.getAttribute('maxlength')).toBe('200');
+  });
+
+  test('a lazy chunk that fails to load shows its fallback and keeps the rest of the document', async () => {
+    const failing = React.lazy(() => Promise.reject(new Error('chunk failed')));
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const root = await mountNode(React.createElement('div', null,
+        React.createElement('p', null, 'Intro'),
+        React.createElement(renderer.LazyBoundary, { fallback: React.createElement('p', null, 'Fallback') },
+          React.createElement(React.Suspense, { fallback: React.createElement('p', null, 'Loading') }, React.createElement(failing))),
+        React.createElement('p', null, 'After')));
+      expect(root.textContent).toBe('IntroFallbackAfter');
+    } finally {
+      console.error = original;
+    }
   });
 });

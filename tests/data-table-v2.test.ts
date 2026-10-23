@@ -9,7 +9,8 @@ import { documentTranslatables } from '../src/lib/blocks/read-modes';
 import { describeBlockSchema } from '../src/lib/blocks/schema-view';
 import type { ArticleDocument, Block, TableBlock } from '../src/lib/blocks/schema';
 import {
-  canonicalCell, csvField, csvFilename, filterChoices, foldText, formatCell, formatNumber, isDataTable, linkCell, tableCsv, visibleRows,
+  canonicalCell, csvField, csvFilename, filterChoices, foldText, formatCell, formatNumber, headerSources, isDataTable, linkCell, normalizeNumber, tableCsv,
+  tableWork, visibleRows,
 } from '../src/lib/blocks/table-data';
 import { readStoredDocument, validateDocument } from '../src/lib/blocks/validate';
 import { renderArticleEmail } from '../src/lib/notifications/article-email-render';
@@ -61,8 +62,8 @@ function errorsOf(extra: Record<string, unknown>): string[] {
   return res.ok ? [] : res.errors.map(e => `${e.path}: ${e.message}`);
 }
 
-function render(blocks: Block[]): string {
-  return renderToStaticMarkup(createElement(BlockRenderer, { doc: { version: 1, blocks }, interactive: false }));
+function render(blocks: Block[], locale?: string): string {
+  return renderToStaticMarkup(createElement(BlockRenderer, { doc: { version: 1, blocks }, interactive: false, locale }));
 }
 
 const LEGACY: TableBlock = { id: 't1', type: 'table', headers: ['A', 'B'], rows: [['**x**', '=1+1'], ['y', 'z']] };
@@ -204,7 +205,9 @@ describe('data table rendering', () => {
     expect(html).toContain('aria-labelledby="zb-dt-');
     expect(html).toContain('role="region"');
     expect(html).toContain('zb-dt-sticky');
-    expect(html).toContain('data-label="Giá"');
+    // Card labels are added on the client, so the server HTML does not repeat every header in every cell.
+    expect(html).not.toContain('data-label');
+    expect(html).not.toContain('zb-dt-cards');
     expect(html).toContain('rel="noopener noreferrer nofollow"');
     expect(html).toContain('<time dateTime="2026-01-15">');
   });
@@ -282,5 +285,78 @@ describe('data table schema', () => {
     const example = examples && typeof examples === 'object' && 'data_table' in examples ? examples.data_table : null;
     expect(example).not.toBeNull();
     expect(validateDocument({ version: 1, blocks: [example] }).ok).toBe(true);
+  });
+});
+
+describe('data table review fixes', () => {
+  it('normalises leading zeros and negative zero in numeric cells', () => {
+    expect(normalizeNumber('00012')).toBe('12');
+    expect(normalizeNumber('-0')).toBe('0');
+    expect(normalizeNumber('-00.00')).toBe('0.00');
+    expect(normalizeNumber('-0.50')).toBe('-0.50');
+    expect(formatNumber('00012')).toBe('12');
+    expect(formatNumber('-0')).toBe('0');
+    expect(table({ rows: [['a', '00490000', '-0', '', '', '', '']] }).rows[0]?.slice(1, 3)).toEqual(['490000', '0']);
+  });
+
+  it('formats English editions with English separators, dates and words', () => {
+    expect(formatNumber('1234567.5', undefined, 'en')).toBe('1,234,567.5');
+    expect(formatCell({ type: 'date' }, '2026-01-05', 'en')).toBe('Jan 5, 2026');
+    expect(formatCell({ type: 'date' }, '2025-06', 'en')).toBe('Jun 2025');
+    expect(formatCell({ type: 'boolean' }, 'true', 'en')).toBe('Yes');
+    const html = render([table()], 'en');
+    for (const text of ['490,000 ₫', '12.5%', 'Jan 15, 2026', 'Yes', 'No']) expect(html).toContain(text);
+    const vi = table();
+    expect(render([vi], 'vi')).toBe(render([vi]));
+  });
+
+  it('formats emails for the edition locale', () => {
+    const email = (locale: string) => JSON.stringify(renderArticleEmail({
+      locale, title: 'Demo', excerpt: '', access: 'free', coverUrl: null, document: { version: 1, blocks: [table()] },
+      articleUrl: 'https://zuey.me/articles/demo', pricingUrl: 'https://zuey.me/pricing', siteUrl: 'https://zuey.me', mode: 'full',
+    }));
+    expect(email('en')).toContain('490,000 ₫');
+    expect(email('vi')).toContain('490.000 ₫');
+  });
+
+  it('indexes formatted values for search so readers can search what they see', () => {
+    const text = documentText({ version: 1, blocks: [table()] });
+    expect(text).toContain('490000');
+    expect(text).toContain('490.000 ₫');
+    expect(text).toContain('15/01/2026');
+  });
+
+  it('rejects multi-line titles and links with credentials, and shows uppercase schemes cleanly', () => {
+    expect(errorsOf({ title: 'A\n# B' }).some(e => e.includes('.title'))).toBe(true);
+    expect(linkCell('https://zuey.me@evil.com')).toBeNull();
+    expect(linkCell('[x](https://a:b@evil.com)')).toBeNull();
+    expect(linkCell('HTTPS://zuey.me/a')?.label).toBe('zuey.me/a');
+  });
+
+  it('guards full-width and zero-width formula starts and exports plain headers', () => {
+    for (const f of ['＝1+1', '－1', '＋1', '＠x', '\u200B=1+1', '\uFEFF-1']) expect(csvField(f).startsWith("'")).toBe(true);
+    const b = table({ headers: ['**Gói**', 'Giá', 'Giảm', 'Ra mắt', 'Hỗ trợ', 'Chi tiết', 'Nhãn'] });
+    expect(tableCsv(b, []).slice(1).split('\r\n')[0]).toBe('Gói,Giá,Giảm,Ra mắt,Hỗ trợ,Chi tiết,Nhãn');
+  });
+
+  it('maps rewritten headers back to their columns', () => {
+    expect(headerSources(['A', 'B', 'C'], ['B', 'C'])).toEqual([1, 2]);
+    expect(headerSources(['A', 'B'], ['A', 'X', 'B'])).toEqual([0, -1, 1]);
+    expect(headerSources(['A', 'B'], ['A2', 'B2'])).toEqual([0, 1]);
+  });
+
+  it('parses each cell once per table, however many searches and sorts follow', () => {
+    // The largest allowed worst case: 99 text cells of 1,000 characters of unclosed and nested inline markers.
+    const units = ['**a', '[a](https://x.y)', '*a**b', '`a', '~~a'];
+    const rows = Array.from({ length: 99 }, (_, r) => [(units[r % units.length] ?? '').repeat(1000).slice(0, 1000)]);
+    const b = table({ headers: ['T'], columns: [{ type: 'text', filter: true }], rows, title: undefined, caption: undefined, mobile: undefined });
+    const before = tableWork.cells;
+    const started = performance.now();
+    for (const query of ['a', 'a b', 'x', 'https', 'zzz', 'a a a a']) visibleRows(b, { query, filters: {}, sort: null });
+    for (const dir of ['asc', 'desc', 'asc'] as const) visibleRows(b, { query: '', filters: { 0: { kind: 'contains', value: 'a' } }, sort: { column: 0, dir } });
+    const elapsed = performance.now() - started;
+    expect(tableWork.cells - before).toBe(99);
+    // Generous ceiling for slow CI; the real cost is a few milliseconds.
+    expect(elapsed).toBeLessThan(1000);
   });
 });

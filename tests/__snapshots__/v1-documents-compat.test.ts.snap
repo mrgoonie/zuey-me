@@ -2262,9 +2262,6 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
               "type": "string",
             },
           },
-          "required": [
-            "type",
-          ],
           "type": "object",
         },
         "maxItems": 20,

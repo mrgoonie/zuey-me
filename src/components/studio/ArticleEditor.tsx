@@ -8,7 +8,7 @@ import {
   BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
   SECTION_SURFACES, SECTION_WIDTHS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES, emptyDocument,
 } from '../../lib/blocks/schema';
-import { NUMERIC_COLUMN_TYPES } from '../../lib/blocks/table-data';
+import { NUMERIC_COLUMN_TYPES, headerSources } from '../../lib/blocks/table-data';
 import type {
   ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, CodeBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, MathMode, ParagraphBlock,
   ResponsiveSpan, SectionBlock, SurveyBlock, TableBlock, TableColumn, TableColumnType, ToggleBlock,
@@ -490,10 +490,12 @@ function TableFields({ block, onChange }: { block: TableBlock; onChange: (b: Blo
     </label>
   );
   const setHeaders = (headers: string[]) => {
-    // Column settings follow their header; new columns are plain text.
-    const resized = headers.map((_, i) => columns[i] ?? { type: 'text' as const });
+    // Column settings and cells follow their header; new columns are empty plain text.
+    const sources = headerSources(block.headers, headers);
+    const resized = sources.map(s => columns[s] ?? { type: 'text' as const });
+    const rows = block.rows.map(row => sources.map(s => row[s] ?? ''));
     const { columns: _old, ...rest } = block;
-    onChange(resized.every(c => c.type === 'text' && !c.filter) ? { ...rest, headers } : { ...rest, headers, columns: resized });
+    onChange(resized.every(c => c.type === 'text' && !c.filter) ? { ...rest, headers, rows } : { ...rest, headers, rows, columns: resized });
   };
   return (
     <div className="space-y-2">
