@@ -1,0 +1,138 @@
+import { describe, expect, test } from 'bun:test';
+import { MAX_SCRUB_LENGTH, REDACTED, containsPii, looksLikePhone, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
+import { scrubCaptureResult } from '../src/lib/analytics/destinations/posthog';
+
+describe('phone numbers are redacted', () => {
+  test('Vietnamese mobile and landline numbers, with or without separators', () => {
+    for (const phone of [
+      '0901234567', '0381234567', '0561234567', '0771234567', '0861234567',
+      '0901 234 567', '090 123 4567', '0901.234.567', '0901-234-567', '0901 234-567',
+      '02838221234', '028 3822 1234', '(028) 3822 1234', '(028)38221234', '0243.822.1234',
+    ]) {
+      expect(redactString(`Gọi ${phone} nhé`)).toBe(`Gọi ${REDACTED} nhé`);
+      expect(containsPii(phone)).toBe(true);
+    }
+  });
+
+  test('+84 and other E.164 numbers', () => {
+    for (const phone of [
+      '+84901234567', '+84 90 123 4567', '+84 901 234 567', '+84-901-234-567', '+84.901.234.567',
+      '+14155552671', '+1 415 555 2671', '+1 (415) 555-2671', '+442071838750', '+44 20 7183 8750', '+6591234567',
+    ]) {
+      expect(redactString(`tel ${phone}.`)).toBe(`tel ${REDACTED}.`);
+      expect(containsPii(phone)).toBe(true);
+    }
+  });
+
+  test('North American numbers written in three groups', () => {
+    for (const phone of ['(415) 555-2671', '415-555-2671', '415.555.2671', '415 555 2671']) {
+      expect(redactString(`call ${phone} now`)).toBe(`call ${REDACTED} now`);
+    }
+  });
+
+  test('every number in a list is found, and the text around them is kept', () => {
+    expect(redactString('0901234567 0912345678')).toBe(`${REDACTED} ${REDACTED}`);
+    expect(redactString('0901 234 567 028 3822 1234')).toBe(`${REDACTED} ${REDACTED}`);
+    expect(redactString('Liên hệ: 0901234567, (028) 3822 1234 hoặc +84 90 123 4567!'))
+      .toBe(`Liên hệ: ${REDACTED}, ${REDACTED} hoặc ${REDACTED}!`);
+    expect(redactString('Error: invalid phone "0901234567" at step 2')).toBe(`Error: invalid phone "${REDACTED}" at step 2`);
+    expect(redactString('2026-10-23 0901234567')).toBe(`2026-10-23 ${REDACTED}`);
+  });
+
+  test('phone numbers in URLs, query strings and autocapture attributes', () => {
+    expect(scrubUrl('https://zuey.me/booking-help?phone=0901234567&lang=vi')).toBe(`https://zuey.me/booking-help?phone=${REDACTED}&lang=vi`);
+    expect(scrubUrl('https://example.com/u/0901234567')).toBe(`https://example.com/u/${REDACTED}`);
+    expect(redactString('tel:+84901234567')).toBe(`tel:${REDACTED}`);
+    expect(scrubValue({ $elements: [{ tag_name: 'a', attr__href: 'tel:0901-234-567', $el_text: 'Hotline 0901 234 567' }] }))
+      .toEqual({ $elements: [{ tag_name: 'a', attr__href: `tel:${REDACTED}`, $el_text: `Hotline ${REDACTED}` }] });
+    expect(redactString('a:href="tel:0901234567"nth-child="1"')).toBe(`a:href="tel:${REDACTED}"nth-child="1"`);
+  });
+
+  test('percent-encoded and plus-as-space forms', () => {
+    expect(scrubUrl('https://example.com/c?to=%2B84901234567')).toBe(`https://example.com/c?to=${REDACTED}`);
+    expect(scrubUrl('https://example.com/c?to=%2B84%20901%20234%20567&x=1')).toBe(`https://example.com/c?to=${REDACTED}&x=1`);
+    expect(scrubUrl('https://example.com/c?to=call%200901234567')).toBe(`https://example.com/c?to=call%20${REDACTED}`);
+    expect(scrubUrl('https://example.com/c?to=%252B84901234567')).toBe(`https://example.com/c?to=${REDACTED}`);
+    expect(scrubUrl('https://example.com/c?msg=call+0901234567')).toBe(`https://example.com/c?msg=call${REDACTED}`);
+    expect(looksLikePhone('%2B84%20901%20234%20567')).toBe(true);
+    expect(containsPii('call%200901234567')).toBe(true);
+  });
+
+  test('exception messages lose phone numbers before they are shortened', () => {
+    const out = scrubCaptureResult({
+      event: '$exception',
+      properties: { $current_url: 'https://zuey.me/', $exception_list: [{ type: 'Error', value: 'Bad input 0901 234 567' }] },
+    });
+    expect(out?.properties?.$exception_list).toEqual([{ type: 'Error', value: `Bad input ${REDACTED}` }]);
+  });
+});
+
+describe('numbers that are not phone numbers are kept', () => {
+  const kept = [
+    // Order codes, booking codes, ids and hashes
+    'ZMC12345678', 'ZMC-0901234567', 'order_0901234567', 'cor_0901234567abc', 'guest_0901234567',
+    '0192f3a1-7c2e-7abc-9def-0123456789ab', '01234567-0123-4567-8901-234567890123', 'usr_01HZX0901234567',
+    'a3f90901234567be', 'sha256:0901234567deadbeef', 'commit 9f0901234 merged', 'deadbeef0901234567',
+    // Timestamps, dates and times
+    '1729660000', '1729660000000', '1729660000.123', '20261023093000', '2026-10-23', '2026-10-23T09:30:00+07:00',
+    '2026-10-23 09:30:00', '2026-10-23 12:30:45.123', '23/10/2026', '23.10.2026', '23-10-2026 14:05', 'Thu Oct 23 2026 09:30:00 GMT+0700',
+    '+07:00', '+0700', 'UTC+7',
+    // Revisions, versions, builds and IP addresses
+    'rev 1234', 'revision 12345678', 'r0901234567', '#1234', 'PR #252', 'v2.10.3', '1.0.0-beta.12', '4.2.1',
+    'build 20261023.1', 'v0901.234.567', '192.168.100.200', '10.0.0.1', '2001:db8::1', 'node 22.11.0',
+    // Prices and counts
+    '1.290.000 ₫', '1.290.000đ', '99.000đ', '12.900.000 VND', '1 290 000 VND', '129 000 000', '$1,234.56', '0 đ',
+    '+1500000', '+12345678', '-0901234567x', '100%', '3.14159265358979',
+    // File names and paths
+    '/img/0901234567.png', 'photo_0901234567.jpg', 'IMG-0901234567-WA0001.jpg', '/courses/ai-101/lessons/0123456789',
+    // Short or odd digit runs
+    '0123456789', '0 1 2 3 4 5 6 7 8 9', '0 3 5 7 9 1 2 3 4 5', '123-456-7890', '1234567890', '415-555-26710',
+    '012345678901234567', '0901234567890', '84901234567',
+  ];
+
+  test('redactString keeps each value unchanged', () => {
+    for (const value of kept) expect(redactString(value)).toBe(value);
+  });
+
+  test('containsPii does not flag them', () => {
+    for (const value of kept) expect(containsPii(value)).toBe(false);
+  });
+
+  test('URLs with timestamps, versions and ids keep their numbers', () => {
+    for (const url of [
+      'https://zuey.me/articles?page=2&t=1729660000000',
+      'https://zuey.me/_astro/client.0901234567.js?v=20261023',
+      'https://cdn.example.com/lib@4.2.1/dist/app.min.js',
+      'https://zuey.me/courses/orders/:code',
+    ]) {
+      expect(scrubUrl(url)).toBe(url);
+    }
+  });
+});
+
+describe('phone scan stays linear', () => {
+  const shapes: Array<[string, string]> = [
+    ['digits and spaces', '1 '],
+    ['two-digit groups', '12 '],
+    ['dotted groups', '12.'],
+    ['VN prefix groups', '090 '],
+    ['parenthesised', '(0) '],
+    ['plus runs', '+1 '],
+    ['glued joiners', 'a-0901234567-'],
+    ['long digit run', '9'],
+    ['mixed separators', '0901-234.567 '],
+    ['encoded', '%2B84%20'],
+  ];
+
+  test('16 KB adversarial strings are scrubbed in a few milliseconds', () => {
+    for (const [, unit] of shapes) {
+      const value = unit.repeat(Math.ceil(MAX_SCRUB_LENGTH / unit.length)).slice(0, MAX_SCRUB_LENGTH);
+      redactString(value);
+      const started = performance.now();
+      redactString(value);
+      containsPii(value);
+      const elapsed = performance.now() - started;
+      expect(elapsed).toBeLessThan(25);
+    }
+  });
+});
