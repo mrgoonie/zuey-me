@@ -154,7 +154,7 @@ Plans: `knowledges`, `ai`, `combo`, `community`. Rails: `sepay` (prepaid 1, 3, 6
 - Formula: total `subscription_cancel_scheduled` and `subscription_cancelled`, breakdown `plan` (provider is always `dodo`).
 
 **SUB-4 Expirations.** Active access that ended.
-- Formula: total `subscription_expired`, breakdown `plan`. No emitter sets `provider` on this event (neither `queueSubscriptionChange` nor the drain sweep), so it cannot be split by rail; a follow-up issue tracks that.
+- Formula: total `subscription_expired`, breakdown `plan`. No emitter sets `provider` on this event (neither `queueSubscriptionChange` nor the drain sweep), so it cannot be split by rail; [#275](https://github.com/mrgoonie/zuey-me/issues/275) tracks that.
 - Caveats: prepaid expiries are found by the outbox drain looking back 3 days; a drain outage longer than that loses them in PostHog (D1 still has `subscriptions.current_period_end`).
 
 **SUB-5 Active subscribers (point in time).** Members with active access to a plan now.
@@ -289,7 +289,7 @@ Conventions for every tile: last 30 days unless noted, interval day, and the Pro
 | Activation (PRD-2) | Funnel | `sign_up` → action "Value action", 7 days | Conversion over time, weekly |
 | Retention (PRD-3) | Retention | Start `sign_up`, return "Value action", weekly, 8 periods | — |
 | Active members (PRD-4) | Trends | "Member value action" unique users (per-step `$is_identified` filter, see PRD-4) | DAU, WAU, MAU series |
-| Stickiness (PRD-4) | Stickiness | "Value action", 30 days | — |
+| Stickiness (PRD-4) | Stickiness | "Member value action", 30 days | — |
 | ZueyOS apps (PRD-5) | Trends | `app_opened` unique users [`source` is not set] | `app`, bar |
 | Search success (PRD-6) | Trends, formula `1 - B / A` | A `knowledge_search` total, B `knowledge_search` [`results` = 0] total | `surface` |
 | Filters used (PRD-6) | Trends | `knowledge_filter_applied` total | `filter` |

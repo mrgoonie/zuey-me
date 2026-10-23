@@ -108,31 +108,51 @@ WITH o AS (
 )
 SELECT provider, currency, COUNT(*) AS purchases,
        SUM(CASE WHEN currency IN ('VND', 'JPY', 'KRW') THEN amount_minor ELSE amount_minor / 100.0 END) AS amount
-FROM o GROUP BY provider, currency;
+FROM o WHERE amount_minor > 0 GROUP BY provider, currency;
 ```
 
-Key: `'purchase:' || provider || ':course_order:' || id`. A refunded or charged-back order was still a purchase when paid, so it stays in the count. The amount and currency follow `paidAmount()` in [`course-order-payments.ts`](../src/lib/courses/course-order-payments.ts): what was actually paid (`amount_paid` + `currency_paid`) when recorded, otherwise the price due on the order's rail (`amount_vnd` for SePay, `amount_usd_cents` for Dodo). So a card payment that landed on a SePay order and was granted by an admin is a `sepay` row in `USD`, and a non-USD Dodo charge is its own currency row; never add the rows of different currencies together.
+Key: `'purchase:' || provider || ':course_order:' || id`. A refunded or charged-back order was still a purchase when paid, so it stays in the count. A fully discounted order (100 % promo) is stored as `paid` with `amount_paid = 0`; `queuePurchase` sends nothing for a zero amount, so `amount_minor > 0` keeps it out. The amount and currency follow `paidAmount()` in [`course-order-payments.ts`](../src/lib/courses/course-order-payments.ts): what was actually paid (`amount_paid` + `currency_paid`) when recorded, otherwise the price due on the order's rail (`amount_vnd` for SePay, `amount_usd_cents` for Dodo). So a card payment that landed on a SePay order and was granted by an admin is a `sepay` row in `USD`, and a non-USD Dodo charge is its own currency row; never add the rows of different currencies together.
 
 ### Bookings (`order_type` = `booking`)
 
 ```sql
+-- Bookings that were confirmed with money (purchase count per rail and currency)
 WITH b AS (
-  SELECT payment_method, UPPER(currency) AS currency, COALESCE(amount_paid, amount_expected) AS amount_minor
-  FROM bookings
-  WHERE (status = 'confirmed'
-         OR (status = 'cancelled' AND amount_paid IS NOT NULL
-             AND (attention_reason IS NULL OR attention_reason = 'admin')))
-    AND updated_at >= :from AND updated_at < :to
+  SELECT bk.id, bk.payment_method, UPPER(bk.currency) AS currency,
+         COALESCE((SELECT SUM(pe.amount) FROM payment_events pe
+                   WHERE pe.booking_id = bk.id AND UPPER(pe.currency) = UPPER(bk.currency)),
+                  bk.amount_paid, bk.amount_expected) AS amount_minor
+  FROM bookings bk
+  WHERE (bk.status = 'confirmed'
+         OR (bk.status IN ('cancelled', 'needs_attention')
+             AND (bk.attention_reason IS NULL OR bk.attention_reason = 'admin')
+             AND (bk.amount_paid IS NOT NULL
+                  OR EXISTS (SELECT 1 FROM payment_events pe WHERE pe.booking_id = bk.id))))
+    AND bk.updated_at >= :from AND bk.updated_at < :to
 )
 SELECT payment_method, currency, COUNT(*) AS purchases,
        SUM(CASE WHEN currency IN ('VND', 'JPY', 'KRW') THEN amount_minor ELSE amount_minor / 100.0 END) AS amount
 FROM b GROUP BY payment_method, currency;
+
+-- Per booking: D1 payments vs the amount the outbox sent (exact amount check)
+SELECT bk.id, bk.status, UPPER(bk.currency) AS currency,
+       (SELECT SUM(pe.amount) FROM payment_events pe
+        WHERE pe.booking_id = bk.id AND UPPER(pe.currency) = UPPER(bk.currency)) AS d1_paid_minor,
+       json_extract(o.properties, '$.amount') AS outbox_amount, o.status AS outbox_status
+FROM bookings bk
+LEFT JOIN analytics_outbox o ON o.event = 'purchase' AND o.dedupe_key IN (
+  'purchase:' || bk.payment_method || ':booking:' || bk.id,
+  (SELECT 'purchase:' || pe.provider || ':' || pe.event_id FROM payment_events pe
+   WHERE pe.booking_id = bk.id ORDER BY pe.id LIMIT 1))
+WHERE bk.status IN ('confirmed', 'cancelled', 'needs_attention')
+  AND bk.updated_at >= :from AND bk.updated_at < :to;
 ```
 
-- An admin `cancel` never refunds, so a booking confirmed with money and then cancelled keeps its `purchase`; the query counts it (cancelled with `amount_paid` set and no payment-problem reason).
-- An admin resolve with no recorded transaction emits the price due when `amount_paid` is NULL, hence the `amount_expected` fallback. An admin resolve with several transactions sums them per currency, so compare amounts with the PostHog total, not row by row.
-- `amount_paid` is in minor units (PayPal USD cents, SePay VND as is); `amount` is converted to major units like the event.
-- Keys use the provider transaction: `purchase:<provider>:<payment_events.event_id>` for the payment that confirmed it (join `payment_events.booking_id`, first row), or `purchase:<provider>:booking:<id>` for an admin resolve with no recorded transaction. `updated_at` only approximates the payment time (a later admin action moves it); use the confirming row's `payment_events.received_at` for an exact window.
+- **Which bookings count.** A confirmed booking is a purchase. So is one confirmed with money that an admin later cancelled (`cancel` never refunds) or marked for attention (`mark_attention` keeps the purchase and sets `attention_reason` to `admin` when it was empty). A booking flagged by a payment problem (`amount_mismatch` and the like) has no purchase until an admin resolves it.
+- **Amount.** `bookings.amount_paid` holds only the last payment (each flagged payment overwrites it), while the purchase of an admin-resolved underpayment plus top-up sums every recorded payment in the booking's currency. So the query sums `payment_events.amount` per booking and currency, and falls back to `amount_paid`, then `amount_expected` (the price due, which an admin resolve with no recorded transaction sends).
+- **Where the sum can differ.** Every webhook payment is recorded in `payment_events` before the booking is checked, so a payment arriving after confirmation (a duplicate transfer) is in the D1 sum but not in the purchase, and a resolve whose payments are all in another currency sends the first payment's currency. D1 then reads higher for that booking. Compare counts in aggregate and amounts with the second query, which sets each booking's D1 payments beside the outbox `amount` (major units; the outbox row is kept 30 days after `sent_at`).
+- `payment_events.amount` and `amount_paid` are in minor units (PayPal USD cents, SePay VND as is); `amount` is converted to major units like the event.
+- Keys use the provider transaction: `purchase:<provider>:<payment_events.event_id>` for the first recorded payment of the booking, or `purchase:<provider>:booking:<id>` for an admin resolve with no recorded transaction. `updated_at` only approximates the payment time (a later admin action moves it); use the first payment's `payment_events.received_at` for an exact window.
 
 ### Refunds and chargebacks (`refund`)
 
@@ -197,7 +217,7 @@ GROUP BY event, plan, status;
 
 `subscriptions.status` is not flipped by the clock, so "active" always means `current_period_end` in the future. `subscriptions.current_period_end` already includes the 24-hour card renewal grace (`recomputeSubscription` adds it), so the first query counts card plans in grace as active; only `card_subscriptions.current_period_end` is the provider's period end without grace.
 
-`subscriptions` keeps one row per member and plan with the latest period end. A member whose access ended in the window and who then re-activated has moved out of the second query, but `subscription_expired` was still sent. So PostHog `subscription_expired` ≥ the second query, and the difference is re-activations; for an exact check, compare PostHog with the outbox `subscription_expired` rows (third query). `subscription_expired` never carries `provider` (neither `queueSubscriptionChange` nor the drain sweep sets it); a follow-up issue tracks that.
+`subscriptions` keeps one row per member and plan with the latest period end. A member whose access ended in the window and who then re-activated has moved out of the second query, but `subscription_expired` was still sent. So PostHog `subscription_expired` ≥ the second query, and the difference is re-activations; for an exact check, compare PostHog with the outbox `subscription_expired` rows (third query). `subscription_expired` never carries `provider` (neither `queueSubscriptionChange` nor the drain sweep sets it); [#275](https://github.com/mrgoonie/zuey-me/issues/275) tracks that.
 
 `subscription_activated` and `subscription_renewed` are derived from the change in `current_period_end`, so check them through the outbox query (and then PostHog), not against a D1 count.
 
@@ -238,6 +258,8 @@ WHERE pe.provider = 'dodo' AND pe.raw_type = 'payment.charge' AND cs.user_id IS 
 SELECT co.id, co.provider, co.paid_at
 FROM course_orders co
 WHERE co.paid_at >= :from AND co.status IN ('paid', 'refunded', 'charged_back')
+  AND CASE WHEN co.provider = 'sepay' THEN COALESCE(co.amount_paid, co.amount_vnd)
+           ELSE COALESCE(co.amount_paid, co.amount_usd_cents) END > 0
   AND NOT EXISTS (SELECT 1 FROM analytics_outbox o
                   WHERE o.dedupe_key = 'purchase:' || co.provider || ':course_order:' || co.id);
 
