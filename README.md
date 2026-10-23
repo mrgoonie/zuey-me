@@ -9,7 +9,7 @@ Personal profile, Page Builder Studio, REST API, MCP Server, and AI Agent Skill 
 
 ## Architecture & Responsibilities
 
-The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed by **Cloudflare D1** (`zuey_me_db`) and **PostHog** analytics (client events, plus server payment, subscription and sign-in events delivered from the D1 `analytics_outbox` by the scheduler worker; see [docs/analytics-events.md](docs/analytics-events.md#server-event-outbox)).
+The system runs on **Cloudflare Pages** (SSR via `@astrojs/cloudflare`) backed by **Cloudflare D1** (`zuey_me_db`) and **PostHog** analytics (client events, plus server payment, subscription and sign-in events delivered from the D1 `analytics_outbox` by the scheduler worker; see [docs/analytics-events.md](docs/analytics-events.md#server-event-outbox); KPIs in [docs/analytics-kpis.md](docs/analytics-kpis.md), D1 reconciliation in [docs/analytics-reconciliation.md](docs/analytics-reconciliation.md)).
 
 - **Public Profile & Modals**: `src/components/ProfileView.tsx` renders the link-in-bio interface, fast social share sheet, and QR code modal.
 - **Data & Storage**: `src/db/` defines the schema (`src/db/types.ts`), initial seed data (`src/db/data.ts`), and edge D1 store (`src/db/store.ts`).
@@ -79,7 +79,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 
 | Feature | Variables / bindings |
 |---|---|
-| Analytics (PostHog) | `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (optional), `PUBLIC_ANALYTICS_DEBUG` (optional; capture on localhost/dev). Event dictionary and privacy rules: [docs/analytics-events.md](docs/analytics-events.md) |
+| Analytics (PostHog) | `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (optional), `PUBLIC_ANALYTICS_DEBUG` (optional; capture on localhost/dev). Event dictionary and privacy rules: [docs/analytics-events.md](docs/analytics-events.md); KPIs and dashboards: [docs/analytics-kpis.md](docs/analytics-kpis.md); reconciliation runbook: [docs/analytics-reconciliation.md](docs/analytics-reconciliation.md) |
 | Analytics (GA4) | `PUBLIC_GA4_MEASUREMENT_ID` (public, build time; CI repository variable), `GA4_API_SECRET` (optional, server-only Pages secret for Measurement Protocol `purchase`/`refund`) |
 | Realtime presence | `PRESENCE_TICKET_SECRET` (signs presence connect tickets; must equal the presence Worker's secret), `PRESENCE_OWNER_MEMBER_IDS` (comma-separated owner member ids; never the admin role), `PUBLIC_PRESENCE_URL` (optional, read at runtime; presence Worker origin, default `https://presence.zuey.me`). Service binding `PRESENCE` → Worker `zuey-me-presence` (top-level in `wrangler.toml`; owner status calls; owner endpoints answer 503 until the presence Worker deploy step finishes). Local Worker only: `PRESENCE_DEV_ORIGINS=1` in `workers/presence/.dev.vars` allows `localhost:4321`. Rules: [docs/analytics-events.md#realtime-presence](docs/analytics-events.md#realtime-presence) |
 | Surveys | `SURVEY_HASH_SALT` |
