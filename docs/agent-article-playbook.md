@@ -21,7 +21,7 @@ Read the least that answers your question.
 
 - `block_schema` without arguments still returns everything (types, limits, rules, icon allowlist, examples). `types` alone returns schemas, limits and examples for those types; add `include: ["rules","icons"]` when you need them. Valid `include` parts: `schemas`, `rules`, `limits`, `icons`, `examples`. Output is deterministic; `schema_hash` changes exactly when the contract does.
 - Every read mode goes through the same paywall as a full read. A reader without the entitlement gets `summary`, `outline` and `translatables` of the free part only, and `section` answers `404 block_not_found` for a withheld block. Admins add `draft: true` to read the draft.
-- `translatables` never lists code, Mermaid source, widget HTML/CSS/JS, URLs, ids or anchors, and an interactive block contributes only its title and caption. Text inside widget code is not extracted; leave it as is.
+- `translatables` never lists code, Mermaid source, math TeX, widget HTML/CSS/JS, URLs, ids or anchors, and an interactive block contributes only its title and caption. Text inside widget code is not extracted; leave it as is.
 - `content_hash` is a hash of the document you were served. The hash from a `response_mode: "summary"` write equals the hash a following draft `summary` read reports, so you can confirm a save without reading it back.
 - For documents too large to pass inline, keep using `document_url` (an https URL on `media.zuey.me`) on `article_create` and `article_update`.
 
@@ -58,6 +58,11 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 - Idempotency keys are not available yet. After a timeout, always read before retrying a write.
 - `401/403` on a write: the key is read-only or not an admin. Do not retry.
 
+## Math blocks
+
+- `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.
+- KaTeX runs with `trust: false`: `\href`, `\url`, `\includegraphics` and `\html*` render as plain red command names, never as links, images or attributes. Malformed TeX is saved as written (validation does not parse TeX) and readers see its source under an error note, so check the rendered page after a write.
+
 ## Paywall and notifications
 
 - An article with `access: "knowledges"` shows readers without the entitlement the free part only. Anonymous verification therefore sees the free part, and `article_verify_public` fails a paid edition whose anonymous page lacks the members-only notice (`paywall.expected` without `paywall.present`), since that means the paid part may be public. Use `draft: true` as admin to read everything.
@@ -79,9 +84,9 @@ Loads each locale at 390 px and 1280 px, fails on page or console errors and hor
 
 | Step | Legacy answer | With the options above |
 | --- | --- | --- |
-| Learn the block format | `block_schema {}` 29,028 | `block_schema {types: [paragraph, heading, card], compact: true}` 4,523 |
+| Learn the block format | `block_schema {}` 30,352 | `block_schema {types: [paragraph, heading, card], compact: true}` 4,523 |
 | Read what to translate | `article_get` 16,024 | `article_get {mode: "translatables", limit: 500}` 12,300 |
 | Save the translated edition | `article_update` echo 16,401 | `response_mode: "summary"` 1,001 |
-| Total | 61,453 | 17,824 (−71%) |
+| Total | 62,777 | 17,824 (−72%) |
 
 The fixture's read step saves less than the others because it is mostly prose; documents with large widget code or diagrams save more, since `translatables` leaves those out.

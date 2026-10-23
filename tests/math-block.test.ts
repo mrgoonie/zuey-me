@@ -71,13 +71,26 @@ describe('math typesetting (KaTeX)', () => {
   });
 
   it('never trusts links, html commands or images', () => {
-    for (const tex of ['\\href{javascript:alert(1)}{x}', '\\url{https://evil.example}', '\\htmlClass{x}{y}', '\\htmlStyle{color:red}{y}', '\\includegraphics{https://evil.example/a.png}']) {
+    const attacks = [
+      '\\href{javascript:alert(1)}{x}', '\\href{data:text/html,<script>alert(1)</script>}{x}', '\\url{javascript:alert(1)}', '\\url{https://evil.example}',
+      '\\htmlClass{x}{y}', '\\htmlStyle{color:red}{y}', '\\htmlId{pwn}{y}', '\\htmlData{onclick=alert(1)}{y}',
+      '\\includegraphics{https://evil.example/a.png}', '\\text{<img src=x onerror=alert(1)>}', '<script>alert(1)</script>',
+    ];
+    for (const tex of attacks) {
       const res = renderTex(tex);
       const html = res.ok ? res.html : '';
       expect(html).not.toContain('href=');
       expect(html).not.toContain('<img');
+      expect(html).not.toContain('<script');
+      // The source may appear as escaped text (the MathML annotation), never inside an attribute.
+      expect(html).not.toMatch(/="[^"]*(javascript|data):/);
       expect(html).not.toContain('class="x"');
+      expect(html).not.toContain('id="pwn"');
+      expect(html).not.toContain('data-onclick');
       expect(html).not.toContain('style="color:red');
+      // Whatever KaTeX made of it, the full page render escapes the source too.
+      const page = render(valid([math('m', tex)]), renderMathBlocks([math('m', tex)]));
+      expect(page).not.toMatch(/<script|<img|href=|="[^"]*javascript:/);
     }
   });
 
@@ -139,15 +152,16 @@ describe('math rendering', () => {
     expect(html).toContain('<details class="zb-math-tex"><summary>Mã TeX</summary><pre><code>a^2 + b^2 = c^2</code></pre></details>');
     expect(html).toContain('<figcaption>Pythagoras</figcaption>');
     expect(html).toContain('zb-math zb-math-inline');
-    // The malformed formula keeps its source, readable as math by assistive technology.
-    expect(html).toContain('<figure class="zb-frame zb-math zb-math-display zb-math-raw"><div class="zb-frame-body"><div class="zb-math-row"><code class="zb-math-source" role="math" aria-label="\\frac{">\\frac{</code><span class="zb-math-number">(3)</span>');
+    // The malformed formula gets an error note and keeps its source (and number), readable as math by assistive technology.
+    expect(html).toContain('<figure class="zb-frame zb-math zb-math-display zb-math-raw"><div class="zb-frame-body"><p class="zb-frame-error" role="status">Không hiển thị được công thức này; đây là mã TeX gốc.</p><div class="zb-math-row"><code class="zb-math-source" role="math" aria-label="\\frac{">\\frac{</code><span class="zb-math-number">(3)</span>');
     // The copy-TeX toolbar appears only after hydration.
     expect(html).not.toContain('Chép TeX');
   });
 
-  it('without server markup every formula shows its TeX source', () => {
+  it('without server markup (feeds, email) every formula shows its TeX source and no error note', () => {
     const html = render(doc);
     expect(html).not.toContain('katex');
+    expect(html).not.toContain('zb-frame-error');
     expect(html).toContain('<code class="zb-math-source" role="math" aria-label="a^2 + b^2 = c^2">a^2 + b^2 = c^2</code>');
   });
 
@@ -159,6 +173,21 @@ describe('math rendering', () => {
     const inner = Array.isArray(wrapped) ? wrapped[1] : null;
     const m1 = typeof inner === 'object' && inner !== null && 'm1' in inner ? inner.m1 : null;
     expect(Array.isArray(m1) ? m1[1] : null).toBe(renders.m1);
+  });
+});
+
+describe('stored math documents from before typesetting', () => {
+  it('a v1 stored math block reads unchanged and renders typeset with its source fallback', () => {
+    const stored = { version: 1, blocks: [{ id: 'old', type: 'math', tex: 'E = mc^2', caption: 'Einstein' }, { id: 'p', type: 'paragraph', text: 'After' }] };
+    const read = readStoredDocument(stored);
+    if (!read) throw new Error('expected a readable document');
+    expect(read.degraded).toBe(0);
+    expect(read.doc.blocks[0]).toEqual(math('old', 'E = mc^2', { caption: 'Einstein' }));
+    const html = render(read.doc, renderMathBlocks(read.doc.blocks));
+    expect(html).toContain('zb-math zb-math-display');
+    expect(html).toContain('class="katex-display"');
+    expect(html).not.toContain('zb-math-number');
+    expect(documentToMarkdown(read.doc)).toBe('$$\nE = mc^2\n$$\n\n*Einstein*\n\nAfter');
   });
 });
 
@@ -210,5 +239,30 @@ describe('math in Markdown, search, AI, schema and paywall', () => {
     expect(toggle.type === 'toggle' ? toggle.blocks.map(b => b.id) : []).toEqual(['m1']);
     expect([...mathNumbers(kept)]).toEqual([['m1', 1]]);
     expect(render(res.doc, renderMathBlocks(kept))).not.toContain('bbbb');
+  });
+
+  it('math inside a section or card is cut unit by unit, and the withheld formula is never typeset', () => {
+    const doc = valid([
+      { id: 's', type: 'section', width: 'wide', surface: 'card', blocks: [math('m1', 'a'.repeat(300), { numbered: true }), math('m2', 'b'.repeat(300), { numbered: true })] },
+      { id: 'c', type: 'card', title: 'Proof', blocks: [math('m3', 'c'.repeat(300))] },
+    ]);
+    const res = applyPaywall(doc, 'knowledges', reader);
+    expect(res.truncated).toBe(true);
+    expect(res.doc.blocks.map(b => b.id)).toEqual(['s']);
+    const section = res.doc.blocks[0];
+    expect(section.type === 'section' ? section.blocks.map(b => b.id) : []).toEqual(['m1']);
+    const renders = renderMathBlocks(res.doc.blocks);
+    expect(Object.keys(renders)).toEqual(['m1']);
+    const html = render(res.doc, renders);
+    expect(html).toContain('<span class="zb-math-number">(1)</span>');
+    expect(html).not.toContain('bbbb');
+    expect(html).not.toContain('cccc');
+  });
+
+  it('a reader with the entitlement gets every formula', () => {
+    const doc = valid([math('m1', 'a'.repeat(300)), { id: 'c', type: 'card', title: 'Proof', blocks: [math('m2', 'b'.repeat(300))] }]);
+    const res = applyPaywall(doc, 'knowledges', { isAdmin: true, entitlements: [] });
+    expect(res.truncated).toBe(false);
+    expect(Object.keys(renderMathBlocks(res.doc.blocks)).sort()).toEqual(['m1', 'm2']);
   });
 });

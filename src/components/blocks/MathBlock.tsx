@@ -25,6 +25,8 @@ interface MathViewProps {
   number?: number;
   /** Typeset on the client by lazy-loading KaTeX (Studio previews) when no server markup was given. */
   live: boolean;
+  /** The server typeset the document but not this formula (malformed TeX, size budget): show the error note. */
+  failed?: boolean;
 }
 
 /**
@@ -33,7 +35,7 @@ interface MathViewProps {
  * away (`<details>`, works without JavaScript) and is copyable from the toolbar once hydrated. Without server
  * markup the source is shown instead; Studio previews typeset live and surface KaTeX's error message.
  */
-export function MathView({ block, html, number, live }: MathViewProps) {
+export function MathView({ block, html, number, live, failed = false }: MathViewProps) {
   const mode = block.mode ?? 'display';
   const source = `${mode}\u0000${block.tex}`;
   const [rendered, setRendered] = useState<{ source: string; result: MathResult } | null>(null);
@@ -58,8 +60,12 @@ export function MathView({ block, html, number, live }: MathViewProps) {
   if (!markup && wantsLive) {
     if (!current) state = 'loading';
     else if (!current.ok) { state = 'error'; errorMessage = `${ERROR_MESSAGE} ${current.error}`; }
+  } else if (!markup && failed) {
+    state = 'error';
+    errorMessage = ERROR_MESSAGE;
   }
 
+  const numberTag = number !== undefined ? <span className="zb-math-number">({number})</span> : null;
   const body: ReactNode = markup
     // Trusted markup: produced by KaTeX from validated TeX with `trust: false` (see math-render.ts).
     ? <div className="zb-math-formula" dangerouslySetInnerHTML={{ __html: markup }} />
@@ -73,11 +79,11 @@ export function MathView({ block, html, number, live }: MathViewProps) {
       labels={LABELS}
       state={state}
       errorMessage={errorMessage}
-      fallback={<TexSource tex={block.tex} />}
+      fallback={<div className="zb-math-row"><TexSource tex={block.tex} />{numberTag}</div>}
     >
       <div className="zb-math-row">
         {body}
-        {number !== undefined && <span className="zb-math-number">({number})</span>}
+        {numberTag}
       </div>
       {markup && (
         <details className="zb-math-tex">

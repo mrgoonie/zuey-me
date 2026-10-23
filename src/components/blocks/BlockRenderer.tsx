@@ -255,7 +255,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </div>
       );
     case 'math':
-      return <MathView block={block} html={mathMarkup(ctx.math, block.id)} number={ctx.mathNumbers.get(block.id)} live={ctx.liveMath} />;
+      return <MathView block={block} html={mathMarkup(ctx.math, block.id)} failed={ctx.math !== undefined} number={ctx.mathNumbers.get(block.id)} live={ctx.liveMath} />;
     case 'gallery':
     case 'audio':
     case 'video':
