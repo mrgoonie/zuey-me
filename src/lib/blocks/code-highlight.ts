@@ -26,7 +26,7 @@ import markdown from 'shiki/langs/markdown.mjs';
 import diff from 'shiki/langs/diff.mjs';
 import type { Block } from './schema';
 import { walkBlocks } from './schema';
-import { TOKEN_KINDS, isValidRuns, normalizeCode, resolveHighlightLanguage, tokenKindIndex } from './code-syntax';
+import { TOKEN_KINDS, highlightSource, isValidRuns, normalizeCode, resolveHighlightLanguage, tokenKindIndex } from './code-syntax';
 import type { CodeHighlights, HighlightLanguage, TokenKind, TokenRuns } from './code-syntax';
 
 /** Larger blocks stay plain: bounds tokenizer CPU per request on the edge worker. */
@@ -183,7 +183,8 @@ export function highlightBlocks(blocks: Block[]): CodeHighlights {
   let budget = MAX_DOCUMENT_HIGHLIGHT_CHARS;
   walkBlocks(blocks, block => {
     if (block.type !== 'code' || block.code.length > budget) return;
-    const runs = highlightCode(block.code, block.language);
+    const source = highlightSource(block);
+    const runs = source && highlightCode(source.text, source.language);
     if (!runs) return;
     budget -= block.code.length;
     entries.push([block.id, runs]);

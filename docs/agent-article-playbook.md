@@ -70,6 +70,23 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 - Idempotency keys are not available yet. After a timeout, always read before retrying a write.
 - `401/403` on a write: the key is read-only or not an admin. Do not retry.
 
+## Code blocks
+
+A `code` block needs only `code` (and usually `language`). Every other field is optional, and a block without them renders exactly as before; `block_schema {types: ["code"]}` returns the schema and a diff example.
+
+| Field | Effect |
+| --- | --- |
+| `filename` | Caption above the code (one line, no backticks or double quotes, at most 200 characters) |
+| `lineNumbers: true` | Line number gutter; numbers are CSS, so they are never selected or copied |
+| `highlightLines: "2,4-6"` | Emphasised lines, 1-based; ranges must go upwards and stay within the code's lines, else `422` |
+| `diff: true` | Each line starts with `+` (added), `-` (removed) or a space (context). The marker moves to the gutter and `language` still drives highlighting |
+| `wrap: true` | Long lines wrap by default instead of scrolling sideways |
+| `collapseAfter: 20` | Code longer than 20 lines (3–500) starts collapsed to that height, scrollable, with a button to show it all |
+
+- Readers get a copy button and a wrap toggle on every code block once the page has loaded. Copy puts the code on the clipboard without line numbers or diff markers; for a diff it is the code after the change (added and context lines, removed lines left out).
+- Markdown, search and Zuey AI see the file name and the code as written (diff markers included). The `.md` fence carries the options as metadata: ```` ```diff lang="ts" title="src/config.ts" {2} showLineNumbers ````.
+- Options are presentation only: `filename` is never listed in `translatables`, and a translation must keep every code field as in the source.
+
 ## Math blocks
 
 - `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.
