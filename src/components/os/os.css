@@ -328,6 +328,9 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
   .osw--glass { background: var(--os-glass-2); }
   .osw[data-app='ai'] { background: #f5efeb; }
   .osw-rz, .osw-lights { display: none; }
+  /* Sheets stack on phones with backdrop-filter off, so the last few percent of alpha would let the sheet below bleed through. */
+  .osw--paper { --osw-bg: rgb(245, 239, 235); }
+  .osw--stage { --osw-bg: rgb(24, 21, 19); }
   .osw-bar { height: 54px; padding: 6px 6px 0; cursor: default; }
   .osw-grab { display: block; position: absolute; top: 6px; left: 50%; width: 38px; height: 5px; margin-left: -19px; border-radius: 3px; background: rgba(128, 118, 110, .4); }
   .osw-page + .osw-grab { display: block; }
