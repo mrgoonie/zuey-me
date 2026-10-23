@@ -1,6 +1,6 @@
 /** Media blocks: image, embed, math, gallery, audio, video, file and bookmark. */
 import type { BlockDefinition, BlockValidator, RawBlock } from '../block-definition';
-import { EMBED_PROVIDERS, LIMITS, isPdfUrl } from '../schema';
+import { EMBED_PROVIDERS, LIMITS, MATH_MODES, isPdfUrl } from '../schema';
 import type {
   AudioBlock, BookmarkBlock, EmbedBlock, EmbedProvider, FileBlock, GalleryBlock, GalleryImage, ImageBlock, MathBlock, VideoBlock,
 } from '../schema';
@@ -76,18 +76,50 @@ export const embed: BlockDefinition<EmbedBlock> = {
   },
 };
 
+export const MATH_EXAMPLE = {
+  type: 'math', tex: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}', numbered: true, caption: 'Tích phân Gauss',
+} as const;
+
 export const math: BlockDefinition<MathBlock> = {
   type: 'math',
   validate(v, raw, { id, path }) {
     const withCaption = captionOf(v, raw, path);
     const tex = v.str(raw, 'tex', path, LIMITS.math, { nonEmpty: true });
-    return tex === undefined ? undefined : { id, type: 'math', tex, ...withCaption };
+    const mode = raw.mode ?? 'display';
+    if (!isOneOf(MATH_MODES, mode)) { v.err(`${path}.mode`, `must be one of ${MATH_MODES.join(', ')}`); return undefined; }
+    if (raw.numbered !== undefined && raw.numbered !== null && typeof raw.numbered !== 'boolean') {
+      v.err(`${path}.numbered`, 'must be a boolean');
+      return undefined;
+    }
+    let numbered = raw.numbered === true;
+    if (numbered && mode === 'inline') {
+      if (!v.lenient) { v.err(`${path}.numbered`, 'applies only to display math; omit it or use mode "display"'); return undefined; }
+      v.degraded();
+      numbered = false;
+    }
+    if (tex === undefined) return undefined;
+    // Defaults are not stored, so documents saved before modes and numbering existed keep their exact shape.
+    return { id, type: 'math', tex, ...(mode === 'inline' ? { mode } : {}), ...(numbered ? { numbered } : {}), ...withCaption };
   },
-  markdown: b => `$$\n${b.tex}\n$$${mdCaption(b.caption)}`,
+  markdown: b => (b.mode === 'inline'
+    ? `$${b.tex.replace(/\s*\r?\n\s*/g, ' ').trim()}$`
+    : `$$\n${b.tex}\n$$`) + mdCaption(b.caption),
   searchText: b => [b.tex, plain(b.caption)],
   aiText: b => [b.tex, plain(b.caption)].join(' '),
   weight: b => b.tex.length + plainLength(b.caption),
-  schema: { properties: { tex: { type: 'string', maxLength: LIMITS.math, description: 'TeX source; shown as accessible source text' }, caption: short }, required: ['tex'] },
+  schema: {
+    properties: {
+      tex: {
+        type: 'string', maxLength: LIMITS.math,
+        description: 'TeX source (KaTeX subset), without surrounding $ or $$. Typeset on the server to HTML plus MathML; the source stays readable and copyable. Malformed TeX is shown as source with an error note. \\href, \\url, \\includegraphics and \\html* commands are not trusted and render as plain text.',
+      },
+      mode: { type: 'string', enum: [...MATH_MODES], default: 'display', description: '`display`: centred on its own line (scrolls horizontally when wide). `inline`: text-sized, left-aligned in the reading flow.' },
+      numbered: { type: 'boolean', default: false, description: 'Display math only: show an equation number, counted in document order across numbered formulas.' },
+      caption: short,
+    },
+    required: ['tex'],
+    extra: { examples: [MATH_EXAMPLE] },
+  },
 };
 
 export const gallery: BlockDefinition<GalleryBlock> = {

@@ -10,6 +10,8 @@ import type { CourseDetail, LessonView } from '../../../lib/courses/course-views
 import { courseDetail, lessonView } from '../../../lib/courses/course-views';
 import { lessonSegments } from '../../../lib/courses/lesson-blocks';
 import { hasHighlightableCode } from '../../../lib/blocks/code-syntax';
+import { hasMath } from '../../../lib/blocks/math';
+import { KATEX_CSS_URL } from '../../../lib/blocks/math-assets';
 import { LOCKED_TITLE_ID } from '../../../lib/blocks/page-ids';
 import type { LessonDenial } from '../../../lib/courses/course-access';
 import { AppError } from '../../../lib/http';
@@ -56,6 +58,11 @@ const articleBlocks = segments.flatMap(seg => (seg.kind === 'article' ? seg.bloc
 const codeHighlights = hasHighlightableCode(articleBlocks)
   ? await import('../../../lib/blocks/code-highlight').then(m => m.highlightBlocks(articleBlocks)).catch(() => undefined)
   : undefined;
+// Math is typeset on the server too; the KaTeX stylesheet is linked only when the lesson has math.
+const lessonHasMath = hasMath(articleBlocks);
+const mathRenders = lessonHasMath
+  ? await import('../../../lib/blocks/math-render').then(m => m.renderMathBlocks(articleBlocks)).catch(() => undefined)
+  : undefined;
 const showWatermark = Boolean(view?.document && paid && watermark);
 const lessonPath = `/courses/${slug}/${lessonSlug}`;
 const coursePath = `/courses/${course?.slug ?? slug}`;
@@ -76,6 +83,7 @@ const denial = view?.denial ? DENIAL_COPY[view.denial] : null;
   lang="vi"
 >
   {(paid || failure) && <meta slot="head" name="robots" content="noindex, nofollow" />}
+  {lessonHasMath && <link slot="head" rel="stylesheet" href={KATEX_CSS_URL} />}
   <main class="relative min-h-screen w-full flex flex-col items-center py-3 sm:py-8 px-2.5 sm:px-4 z-10">
     {failure && (
       <section class="w-full max-w-[720px] bg-[#F5EFEB] rounded-[28px] border border-stone-200/90 p-8 text-center text-stone-900">
@@ -153,7 +161,7 @@ const denial = view?.denial ? DENIAL_COPY[view.denial] : null;
               </div>
             </section>
           ) : (
-            <LessonContent client:load segments={segments} highlights={codeHighlights} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} />
+            <LessonContent client:load segments={segments} highlights={codeHighlights} math={mathRenders} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} />
           )}
 
           {!denial && (

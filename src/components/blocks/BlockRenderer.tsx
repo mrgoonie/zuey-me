@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useEffect, useState } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
 import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
@@ -12,6 +12,9 @@ import type { InlineNode } from '../../lib/blocks/inline';
 import { EmbedView } from './EmbedView';
 import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
+import { MathView } from './MathBlock';
+import { mathMarkup, mathNumbers } from '../../lib/blocks/math';
+import type { MathRenders } from '../../lib/blocks/math';
 import { CardView, SectionView } from './ContainerBlocks';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
@@ -59,6 +62,11 @@ interface RenderContext {
   imageTransforms?: ImageTransforms | null;
   /** `sizes` for full-width body images (the prose column, or the wider lanes). */
   imageSizes: string;
+  /** Server-typeset KaTeX markup by math block id. */
+  math?: MathRenders;
+  /** Equation numbers of numbered display formulas by block id. */
+  mathNumbers: Map<string, number>;
+  liveMath: boolean;
 }
 
 /** Only an image this close to the top is likely to be the LCP element. */
@@ -247,6 +255,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </div>
       );
     case 'math':
+      return <MathView block={block} html={mathMarkup(ctx.math, block.id)} number={ctx.mathNumbers.get(block.id)} live={ctx.liveMath} />;
     case 'gallery':
     case 'audio':
     case 'video':
@@ -292,6 +301,12 @@ interface BlockRendererProps {
   eagerLeadImage?: boolean;
   /** Serve resized images (see `imageTransformsFor`); only the article page passes it, so fragments keep original URLs. */
   imageTransforms?: ImageTransforms | null;
+  /** Server-typeset KaTeX markup by block id (see `renderMathBlocks`); math without an entry shows its TeX source. */
+  math?: MathRenders;
+  /** Typeset math on the client by lazy-loading KaTeX (Studio previews). */
+  liveMath?: boolean;
+  /** Equation numbers when doc is one part of a longer document (lesson runs); computed from doc otherwise. */
+  mathNumbering?: Map<string, number>;
 }
 
 /** Article column width in CSS px: max-w-[860px] or the 1240px lanes, minus the card's horizontal padding. */
@@ -300,13 +315,18 @@ function bodyImageSizes(lanes: boolean): string {
 }
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
-export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms }: BlockRendererProps) {
+export function BlockRenderer({
+  doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms,
+  math, liveMath = false, mathNumbering,
+}: BlockRendererProps) {
+  const ownNumbers = useMemo(() => (mathNumbering ? null : mathNumbers(doc.blocks)), [doc, mathNumbering]);
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
   const lanes = documentLanes(doc);
   const ctx: RenderContext = {
     articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, imageTransforms,
     leadImageId: eagerLeadImage ? leadImageBlockId(doc.blocks) : undefined,
     imageSizes: bodyImageSizes(lanes.length > 0),
+    math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, number>(), liveMath,
   };
   return (
     <div className="zb-doc" data-lanes={lanes.length > 0 ? lanes.join(' ') : undefined}>

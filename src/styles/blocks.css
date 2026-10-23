@@ -310,7 +310,7 @@
 .zb-surface-contrast .zb-h, .zb-surface-contrast .zb-icon { color: inherit; }
 .zb-surface-contrast :is(.zb-quote footer, .zb-checklist .zb-done, figcaption) { color: #d6d3d1; }
 /* Blocks drawn as light panels keep dark text on a dark band. */
-.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math, .zb-file, .zb-bookmark, .zb-toggle,
+.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math-display, .zb-file, .zb-bookmark, .zb-toggle,
   .zb-embed-placeholder, .zb-embed-notice, .zb-embed-fallback, .zb-layout-bento > .zb-cell) { color: #1c1917; }
 .zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-file, .zb-bookmark, .zb-toggle, .zb-layout-bento > .zb-cell) :is(.zb-h, .zb-icon) { color: #0c0a09; }
 .zb-surface-contrast :is(.zb-toggle, .zb-scroll) { background: #fafaf9; }

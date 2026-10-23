@@ -4,6 +4,7 @@ import { StudioApp } from '../../components/studio/StudioApp';
 import { getProfile, getLinks, listApiKeys } from '../../db/store';
 import type { ApiKey } from '../../db/types';
 import { resolveStudioAccess } from '../../lib/members/studio-access';
+import { KATEX_CSS_URL } from '../../lib/blocks/math-assets';
 
 const env = Astro.locals.runtime?.env ?? {};
 const d1 = env.DB;
@@ -31,6 +32,8 @@ const keys: ApiKey[] = isAuthenticated ? await listApiKeys(d1) : [];
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..900&family=Plus+Jakarta+Sans:wght@300..800&family=JetBrains+Mono:wght@400..700&display=swap"
       rel="stylesheet"
     />
+    <!-- Live math previews; KaTeX fonts download only when a preview shows a formula. -->
+    <link rel="stylesheet" href={KATEX_CSS_URL} />
   </head>
   <body class="bg-stone-950 text-stone-100 min-h-screen antialiased selection:bg-amber-400 selection:text-stone-950">
     <StudioApp

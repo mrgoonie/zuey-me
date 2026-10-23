@@ -1,7 +1,7 @@
 import { AppError } from '../http';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import type { BlockType } from './schema';
-import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
+import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, MATH_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
 import { iconCatalog } from './icons';
 
 /** Parts of the block_schema answer a caller may ask for. */
@@ -14,6 +14,7 @@ const EXAMPLES: Array<{ key: string; type: BlockType; value: unknown }> = [
   { key: 'callout_with_icon', type: 'callout', value: CALLOUT_ICON_EXAMPLE },
   { key: 'section', type: 'section', value: SECTION_EXAMPLE },
   { key: 'card', type: 'card', value: CARD_EXAMPLE },
+  { key: 'math', type: 'math', value: MATH_EXAMPLE },
 ];
 
 const schemaName = (type: string) => `Block${type.charAt(0).toUpperCase()}${type.slice(1)}`;
