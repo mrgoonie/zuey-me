@@ -70,6 +70,23 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 - Idempotency keys are not available yet. After a timeout, always read before retrying a write.
 - `401/403` on a write: the key is read-only or not an admin. Do not retry.
 
+## Code blocks
+
+A `code` block needs only `code` (and usually `language`). Every other field is optional, and a block without them renders exactly as before; `block_schema {types: ["code"]}` returns the schema and a diff example.
+
+| Field | Effect |
+| --- | --- |
+| `filename` | Caption above the code (one line, no backticks or double quotes, at most 200 characters) |
+| `lineNumbers: true` | Line number gutter; numbers are CSS, so they are never selected or copied |
+| `highlightLines: "2,4-6"` | Emphasised lines, 1-based; ranges must go upwards and stay within the code's lines, else `422` |
+| `diff: true` | Each line starts with `+` (added), `-` (removed) or a space (context). The marker moves to the gutter and `language` still drives highlighting |
+| `wrap: true` | Long lines wrap by default instead of scrolling sideways |
+| `collapseAfter: 20` | Code longer than 20 lines (3–500) starts collapsed to that height, scrollable, with a button to show it all |
+
+- Readers get a copy button and a wrap toggle on every code block once the page has loaded. Copy puts the code on the clipboard without line numbers or diff markers; for a diff it is the code after the change (added and context lines, removed lines left out).
+- Markdown, search and Zuey AI see the file name and the code as written (diff markers included). The `.md` fence carries the options as metadata: ```` ```diff lang="ts" title="src/config.ts" {2} showLineNumbers ````.
+- Options are presentation only: `filename` is never listed in `translatables`, and a translation must keep every code field as in the source.
+
 ## Math blocks
 
 - `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.
@@ -84,6 +101,11 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 - A publish whose email step fails after the edition is published still returns `200` with `email_notification.reason: "notification_update_failed"`. Its `status` is the stored email state (for example still `scheduled` when a `notify: false` cancel failed, so members will be emailed), or `failed` when nothing could be read back. The edition is live; republish at the new `expected_revision` with an explicit `notify` to apply the email decision again, then check `pending_side_effects`.
 - Share images are re-rendered in the background after writes; a just-published page can take a moment to show its final `og:image`.
 
+## Widgets and embeds on reader pages
+
+- **Interactive widgets** (`interactive` blocks) are first-party code from the article. Published article and lesson pages start each one automatically when it comes within 200 px of the viewport, one start every 150 ms at most, once per page view (scrolling away keeps it running; a frame the watchdog halted waits for **Run**). At most 6 auto-started widgets run at once per page; a widget that reaches the viewport while 6 run stays click-to-run and says so (the reader can still press **Run**, and nothing is stopped for it). A running widget has a **Stop** button that returns it to its placeholder; a stopped widget does not start again by itself during that page view. A widget inside a closed toggle starts when the toggle is opened. Widgets stay click-to-run with `prefers-reduced-motion: reduce`, when the reader saved "do not auto-load embeds on this device" (`zuey:embeds=click`), for well-known crawler user agents (headless browsers are not treated as crawlers), and without `IntersectionObserver`. Auto-start changes nothing about isolation: `sandbox="allow-scripts"` without `allow-same-origin`, the CSP with `connect-src 'none'`, network only through `zuey.fetch` and the allowlisted proxy (50 requests per run, 4 at a time), the 10 s ready watchdog and heartbeat. Studio previews, `?preview=1` article drafts and unpublished lessons opened by an admin never start a widget without a click, and the paywall removes withheld widgets from the page before anything can run them.
+- **Social embeds** (`embed` blocks) are third-party frames from allowlisted provider hosts. They load within 200 px of the viewport unless the reader chose "do not auto-load embeds on this device" (`zuey:embeds=click` in local storage), which is always honoured. Studio previews keep them click-to-load.
+
 ## Browser smoke for widgets
 
 ```bash
@@ -91,7 +113,7 @@ bunx --bun -p playwright-core node scripts/article-widget-smoke.mjs \
   --base https://zuey.me --slug "$SLUG" --locales vi,en,zh,ko,ja --expect-widgets 1
 ```
 
-Loads each locale at 390 px and 1280 px, fails on page or console errors and horizontal scrolling, requires the expected interactive frames, and compares a full-page screenshot with the stored baseline in `.smoke/<slug>/` (exact bytes; `--update` accepts the current pages as the new baseline and a differing page writes `*.changed.png` next to it). Set `CHROMIUM_PATH` when Chromium is not at `/opt/pw-browsers/chromium`.
+Loads each locale at 390 px and 1280 px, opens every toggle and scrolls through the page so every widget reaches the viewport. It fails on page or console errors, horizontal scrolling, fewer widgets than `--expect-widgets`, a widget that did not start or was halted by the watchdog, and a widget that ran under reduced motion. Only widget frames (`.zif iframe`) count as widgets; social embeds are reported separately, and widgets past the cap of 6 must show the click-to-run note. The screenshot comes from a second page with `prefers-reduced-motion: reduce` and the click-to-load choice saved, so no live widget or embed output reaches it, and is compared with the stored baseline in `.smoke/<slug>/` (exact bytes; `--update` accepts the current pages as the new baseline and a differing page writes `*.changed.png` next to it). Set `CHROMIUM_PATH` when Chromium is not at `/opt/pw-browsers/chromium`.
 
 ## Measured payload sizes
 

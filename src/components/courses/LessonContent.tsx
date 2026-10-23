@@ -21,9 +21,11 @@ interface Props {
   highlights?: CodeHighlights;
   /** Server-typeset math for the article runs. */
   math?: MathRenders;
+  /** Start interactive widgets near the viewport: published lessons only, never an admin's draft view. */
+  autoRunInteractives?: boolean;
 }
 
-function Widget({ block, courseSlug, lessonSlug, signedIn }: { block: PublicLessonBlock } & Omit<Props, 'segments'>) {
+function Widget({ block, courseSlug, lessonSlug, signedIn }: { block: PublicLessonBlock } & Omit<Props, 'segments' | 'autoRunInteractives'>) {
   switch (block.type) {
     case 'quiz': return <QuizWidget block={block} courseSlug={courseSlug} lessonSlug={lessonSlug} signedIn={signedIn} />;
     case 'course_media': return <CourseMediaWidget block={block} courseSlug={courseSlug} lessonSlug={lessonSlug} />;
@@ -33,7 +35,7 @@ function Widget({ block, courseSlug, lessonSlug, signedIn }: { block: PublicLess
 }
 
 /** Lesson body: article runs through the shared block renderer, course widgets through their own components. */
-export function LessonContent({ segments, courseSlug, lessonSlug, signedIn, highlights, math }: Props) {
+export function LessonContent({ segments, courseSlug, lessonSlug, signedIn, highlights, math, autoRunInteractives = false }: Props) {
   // Equation numbers run across the whole lesson, not restart in each article run.
   const numbering = useMemo(() => mathNumbers(segments.flatMap(seg => (seg.kind === 'article' ? seg.blocks : [])), math), [segments, math]);
   if (segments.length === 0) return <p className="text-stone-600">Bài học này chưa có nội dung.</p>;
@@ -41,7 +43,7 @@ export function LessonContent({ segments, courseSlug, lessonSlug, signedIn, high
     <div className="min-w-0">
       {segments.map((seg, i) => seg.kind === 'article'
         // Surveys are an article feature (their answers are keyed by article), so they render read-only here.
-        ? <BlockRenderer key={`a-${i}`} doc={{ version: 1, blocks: seg.blocks }} highlights={highlights} math={math} mathNumbering={numbering} interactive={false} />
+        ? <BlockRenderer key={`a-${i}`} doc={{ version: 1, blocks: seg.blocks }} highlights={highlights} math={math} mathNumbering={numbering} interactive={false} autoRunInteractives={autoRunInteractives} />
         : <Widget key={seg.block.id} block={seg.block} courseSlug={courseSlug} lessonSlug={lessonSlug} signedIn={signedIn} />)}
     </div>
   );

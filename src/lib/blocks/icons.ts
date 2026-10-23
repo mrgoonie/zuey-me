@@ -41,7 +41,9 @@ export type IconGroup = keyof typeof ICON_GROUPS;
 export const ICON_GROUP_NAMES: readonly IconGroup[] = ['arrows', 'status', 'objects', 'tech', 'learning', 'business', 'social'];
 export type IconName = (typeof ICON_GROUPS)[IconGroup][number];
 
-export const ICON_NAMES: readonly IconName[] = Object.values(ICON_GROUPS).flat();
+// The /* @__PURE__ */ marks keep this module side-effect free, so a bundle that only reaches it through an unused
+// (server-only) import drops it instead of keeping a bare import of the whole name list.
+export const ICON_NAMES: readonly IconName[] = /* @__PURE__ */ Object.values(ICON_GROUPS).flat();
 
 /** Friendly synonyms accepted on input; validation stores the canonical name. */
 export const ICON_ALIASES: Readonly<Record<string, IconName>> = {
@@ -82,8 +84,8 @@ export type IconTone = (typeof ICON_TONES)[number];
 export const ICON_ALIGNS = ['start', 'center', 'end'] as const;
 export type IconAlign = (typeof ICON_ALIGNS)[number];
 
-const CANONICAL: ReadonlySet<string> = new Set(ICON_NAMES);
-const ALIAS_MAP: ReadonlyMap<string, IconName> = new Map(Object.entries(ICON_ALIASES));
+const CANONICAL: ReadonlySet<string> = /* @__PURE__ */ new Set(ICON_NAMES);
+const ALIAS_MAP: ReadonlyMap<string, IconName> = /* @__PURE__ */ new Map(/* @__PURE__ */ Object.entries(ICON_ALIASES));
 
 export function isIconName(value: unknown): value is IconName {
   return typeof value === 'string' && CANONICAL.has(value);
