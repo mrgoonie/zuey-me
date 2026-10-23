@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { OPENAPI_FRAGMENTS } from '../../lib/openapi/registry';
 import { OAUTH_SCOPES } from '../../lib/oauth/config';
+import { LINK_ICON_DESCRIPTION } from '../../lib/link-icons';
 
 export const GET: APIRoute = async () => {
   const spec = {
@@ -99,7 +100,7 @@ export const GET: APIRoute = async () => {
             subtitle_en: { type: 'string' },
             subtitle_vi: { type: 'string' },
             url: { type: 'string' },
-            icon: { type: 'string' },
+            icon: { type: 'string', description: LINK_ICON_DESCRIPTION },
             order_index: { type: 'integer' },
             is_active: { type: 'boolean' },
             click_count: { type: 'integer' }
@@ -198,7 +199,7 @@ export const GET: APIRoute = async () => {
                     subtitle_en: { type: 'string' },
                     subtitle_vi: { type: 'string' },
                     url: { type: 'string' },
-                    icon: { type: 'string' }
+                    icon: { type: 'string', description: LINK_ICON_DESCRIPTION }
                   }
                 }
               }

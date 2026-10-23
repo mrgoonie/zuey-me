@@ -165,7 +165,7 @@ const denial = view?.denial ? DENIAL_COPY[view.denial] : null;
               </div>
             </section>
           ) : (
-            <LessonContent client:load segments={segments} highlights={codeHighlights} math={mathRenders} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} />
+            <LessonContent client:load segments={segments} highlights={codeHighlights} math={mathRenders} courseSlug={course.slug} lessonSlug={view.lesson.slug} signedIn={signedIn} autoRunInteractives={view.lesson.status === 'published'} />
           )}
 
           {!denial && (

@@ -7,7 +7,7 @@ import type { RuntimeEnv } from '../../env';
 import { queuePaymentFailed } from '../analytics/commerce-events';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime } from '../members/runtime';
-import { minorUnitsOrNull } from '../payments/dodo';
+import { DODO_DISPUTE_FUNDS_KEPT, DODO_DISPUTE_FUNDS_LOST, minorUnitsOrNull } from '../payments/dodo';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import type { CoursePaymentOutcome } from './course-order-payments';
@@ -92,11 +92,8 @@ function text(r: Record<string, unknown>, k: string): string | null {
   return typeof v === 'string' && v ? v : null;
 }
 
-/** Dispute outcomes that take access away, and those that give it back. */
-const DISPUTE_REVOKE = new Set(['dispute.opened', 'dispute.accepted', 'dispute.lost', 'dispute.expired']);
-/** Outcomes where the money actually went back (an opened dispute may still be won). */
-const DISPUTE_MONEY_LOST = new Set(['dispute.accepted', 'dispute.lost', 'dispute.expired']);
-const DISPUTE_RESTORE = new Set(['dispute.won', 'dispute.cancelled']);
+/** An opened dispute and every funds-lost outcome take access away; the outcomes that keep the money give it back. */
+const DISPUTE_REVOKE = new Set(['dispute.opened', ...DODO_DISPUTE_FUNDS_LOST]);
 
 async function orderByPaymentId(d1: D1DatabaseLike, paymentId: string): Promise<CourseOrder | null> {
   // Any provider: a card payment landing on a SePay order is flagged but still refundable through Dodo.
@@ -150,10 +147,10 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
     if (DISPUTE_REVOKE.has(type)) {
       const reversed = await reverseCourseOrder(d1, order, 'charged_back', type);
       // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once.
-      if (DISPUTE_MONEY_LOST.has(type)) await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
+      if (DODO_DISPUTE_FUNDS_LOST.has(type)) await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
       return { outcome: reversed ? 'reversed' : 'ignored', order_code: order.code };
     }
-    if (DISPUTE_RESTORE.has(type)) {
+    if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
       return { outcome: (await restoreCourseOrder(d1, env, order, type)) ? 'restored' : 'ignored', order_code: order.code };
     }
     return { outcome: 'ignored', order_code: order.code };
