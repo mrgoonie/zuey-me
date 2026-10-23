@@ -19,7 +19,7 @@ import { listCategories, resolveCategoryRef, toPublicCategory } from '../taxonom
 import type { PublicCategory } from '../taxonomy/categories';
 import { labelKey, listLabels, publicLabelsFor } from '../taxonomy/labels';
 import type { PublicLabel } from '../taxonomy/labels';
-import { applyPublishNotification, cancelArticleNotification, getArticleNotification, parseNotifyFlag } from '../notifications/article-notification-schedule';
+import { applyPublishNotification, cancelArticleNotification, getArticleNotification, notificationAfterFailure, parseNotifyFlag } from '../notifications/article-notification-schedule';
 import type { PublishEmailNotification } from '../notifications/article-notification-schedule';
 import { getMediaAsset } from '../media/media-asset-store';
 
@@ -993,7 +993,7 @@ export async function publishArticle(
     emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, previouslyPublished, actor: ctx.actor ?? 'admin', nowMs });
   } catch (err) {
     console.error('Email notification failed after commit:', err instanceof Error ? err.message : 'unknown');
-    emailNotification = { status: 'failed', send_after: null, sent_count: 0, reason: 'notification_update_failed', updated_at: new Date(nowMs).toISOString() };
+    emailNotification = await notificationAfterFailure(db, art.id, nowMs);
   }
   const rec = await getArticleById(db, art.id, 'Article disappeared after publish', { locale });
   return { ...rec, email_notification: emailNotification };

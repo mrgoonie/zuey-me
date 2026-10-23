@@ -9,6 +9,8 @@ import { AppError } from '../src/lib/http';
 import { createSession } from '../src/db/store';
 import { getArticleNotification } from '../src/lib/notifications/article-notification-schedule';
 import { POST as publishApi } from '../src/pages/api/v1/articles/[slug]/publish';
+import { articlesMcpModule } from '../src/lib/blocks/mcp';
+import type { McpContext } from '../src/lib/mcp/types';
 
 // A save bumps the revision and writes the draft together: no reader or concurrent save may ever
 // observe one without the other.
@@ -450,6 +452,53 @@ describe('publishArticle: a failed email step after commit is reported, not thro
     d1.raw.run('DROP TRIGGER fail_notify');
     const retried = await publishArticle(d1, 'post', first.revision, true, { notify: true });
     expect(retried.email_notification?.status).toBe('scheduled');
+    expect((await getArticleNotification(d1, first.id))?.status).toBe('scheduled');
+  });
+});
+
+describe('publishArticle: a failed email update reports the email state that is actually stored (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original') });
+  });
+
+  const failUpdates = (): void => {
+    d1.raw.run("CREATE TRIGGER fail_notify_update BEFORE UPDATE ON article_notifications BEGIN SELECT RAISE(ABORT, 'email provider down'); END");
+  };
+
+  it('a failed notify:false cancel reports the email as still scheduled, as stored', async () => {
+    const first = await publishArticle(d1, 'post', 1, true);
+    expect(first.email_notification?.status).toBe('scheduled');
+    const stored = await getArticleNotification(d1, first.id);
+    expect(stored?.status).toBe('scheduled');
+    failUpdates();
+
+    const republished = await publishArticle(d1, 'post', first.revision, true, { notify: false });
+    expect(republished.published_revision).toBe(first.revision + 1);
+    expect(republished.email_notification).toMatchObject({ status: 'scheduled', send_after: stored?.send_after, reason: 'notification_update_failed' });
+    expect((await getArticleNotification(d1, first.id))?.status).toBe('scheduled');
+  });
+
+  it('a failed notify:true re-schedule reports the email as still skipped, as stored', async () => {
+    const first = await publishArticle(d1, 'post', 1, true, { notify: false });
+    expect(first.email_notification?.status).toBe('skipped');
+    failUpdates();
+
+    const republished = await publishArticle(d1, 'post', first.revision, true, { notify: true });
+    expect(republished.email_notification).toMatchObject({ status: 'skipped', reason: 'notification_update_failed' });
+    expect((await getArticleNotification(d1, first.id))?.status).toBe('skipped');
+  });
+
+  it('MCP article_publish reports a still-scheduled email when the cancel fails', async () => {
+    const ctx: McpContext = { request: new Request('https://zuey.test/api/mcp'), env: {}, d1, async requireAdmin() {}, async isAdmin() { return true; } };
+    const first = await publishArticle(d1, 'post', 1, true);
+    failUpdates();
+
+    const res = await articlesMcpModule.call('article_publish', { slug: 'post', expected_revision: first.revision, confirm: true, notify: false, response_mode: 'summary' }, ctx);
+    expect(res).toMatchObject({ email_notification: { status: 'scheduled', reason: 'notification_update_failed' } });
+    expect(JSON.stringify(res)).not.toContain('email provider down');
     expect((await getArticleNotification(d1, first.id))?.status).toBe('scheduled');
   });
 });
