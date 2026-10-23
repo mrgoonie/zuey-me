@@ -316,11 +316,18 @@ describe('readers who do not want motion or auto-loading', () => {
   });
 
   it('a saved click-to-load choice for embeds keeps widgets click-to-run too', () => {
-    window.localStorage.setItem('zuey:embeds', 'click');
+    // Saved through the reader's own control (the module keeps an in-memory copy beside local storage).
+    const embeds = published([{ id: 'e1', type: 'embed', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', provider: 'youtube' }]);
+    click(button(embeds, 'Không tự tải nội dung nhúng'));
+    expect(window.localStorage.getItem('zuey:embeds')).toBe('click');
+    const before = FakeIntersectionObserver.instances.length;
     const view = published([widget('w1')]);
-    expect(FakeIntersectionObserver.instances.filter(o => o.targets.some(t => t.matches('figure.zif')))).toHaveLength(0);
+    expect(FakeIntersectionObserver.instances.slice(before).filter(o => o.targets.some(t => t.matches('figure.zif')))).toHaveLength(0);
     advance(5000);
     expect(frames(view)).toHaveLength(0);
+    // Back to automatic loading so later tests in this process start from the default.
+    click(button(embeds, 'Tự tải nội dung nhúng trên thiết bị này'));
+    expect(window.localStorage.getItem('zuey:embeds')).toBeNull();
   });
 
   it('crawler user agents do not auto-start widgets; headless browsers still do', () => {
