@@ -41,6 +41,9 @@ jobs:
 
       - name: Build Application
         run: bun run build
+        env:
+          # Public GA4 web stream id, inlined at build time (repository variable, not a secret).
+          PUBLIC_GA4_MEASUREMENT_ID: ${{ vars.PUBLIC_GA4_MEASUREMENT_ID }}
 
       # Bundles the scheduler Worker without uploading, so a broken Worker fails the PR.
       - name: Build scheduler Worker

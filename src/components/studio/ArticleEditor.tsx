@@ -9,7 +9,7 @@ import {
   SECTION_SURFACES, SECTION_WIDTHS, emptyDocument,
 } from '../../lib/blocks/schema';
 import type {
-  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, MathMode, ParagraphBlock,
+  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, CodeBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, MathMode, ParagraphBlock,
   ResponsiveSpan, SectionBlock, SurveyBlock, ToggleBlock,
 } from '../../lib/blocks/schema';
 import { canContain, childContext } from '../../lib/blocks/nesting';
@@ -420,6 +420,44 @@ export function EmbedFields({ block, onChange }: { block: Extract<Block, { type:
   );
 }
 
+/** Code block: source plus the optional caption, gutter, emphasis, diff, wrap and collapse settings. */
+function CodeFields({ block, onChange }: { block: CodeBlock; onChange: (b: Block) => void }) {
+  // Unchecked options are removed rather than stored as false, like the validator normalises them.
+  const setFlag = (key: 'lineNumbers' | 'diff' | 'wrap', on: boolean) => {
+    const next: CodeBlock = { ...block };
+    if (on) next[key] = true;
+    else delete next[key];
+    onChange(next);
+  };
+  const flag = (key: 'lineNumbers' | 'diff' | 'wrap', label: string) => (
+    <label className="text-[11px] text-stone-300 flex items-center gap-1.5">
+      <input type="checkbox" checked={block[key] === true} onChange={e => setFlag(key, e.target.checked)} />
+      {label}
+    </label>
+  );
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-[8rem_1fr] gap-2">
+        <Text label="Ngôn ngữ" value={block.language} onChange={language => onChange({ ...block, language })} />
+        <Text label="Tên file (tuỳ chọn)" value={block.filename ?? ''} placeholder="src/app.ts"
+          onChange={filename => { const { filename: _old, ...rest } = block; onChange(filename ? { ...rest, filename } : rest); }} />
+      </div>
+      <Area label={block.diff ? 'Code (mỗi dòng bắt đầu bằng +, - hoặc dấu cách)' : 'Code'} value={block.code} onChange={code => onChange({ ...block, code })} rows={6} mono />
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {flag('lineNumbers', 'Số dòng')}
+        {flag('diff', 'Diff (+/-)')}
+        {flag('wrap', 'Xuống dòng sẵn')}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Text label="Nhấn mạnh dòng (vd. 2,4-6)" value={block.highlightLines ?? ''}
+          onChange={v => { const { highlightLines: _old, ...rest } = block; onChange(v.trim() ? { ...rest, highlightLines: v } : rest); }} />
+        <Text label={`Thu gọn khi dài hơn (${LIMITS.codeCollapseMin}–${LIMITS.codeCollapseMax} dòng)`} type="number" value={block.collapseAfter === undefined ? '' : String(block.collapseAfter)}
+          onChange={v => { const { collapseAfter: _old, ...rest } = block; const n = Number(v); onChange(v.trim() && Number.isFinite(n) ? { ...rest, collapseAfter: n } : rest); }} />
+      </div>
+    </div>
+  );
+}
+
 function ToggleFields({ block, onChange, ctx }: { block: ToggleBlock; onChange: (b: Block) => void; ctx: ListCtx }) {
   return (
     <div className="space-y-2">
@@ -539,12 +577,7 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
         </div>
       );
     case 'code':
-      return (
-        <div className="space-y-2">
-          <Text label="Ngôn ngữ" value={block.language} onChange={language => onChange({ ...block, language })} />
-          <Area label="Code" value={block.code} onChange={code => onChange({ ...block, code })} rows={6} mono />
-        </div>
-      );
+      return <CodeFields block={block} onChange={onChange} />;
     case 'divider':
       return <p className="text-[11px] text-stone-500">Đường kẻ ngang.</p>;
     case 'image':

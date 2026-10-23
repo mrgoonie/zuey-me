@@ -80,6 +80,7 @@ Names only — never commit values. Set them with `wrangler pages secret put <NA
 | Feature | Variables / bindings |
 |---|---|
 | Analytics (PostHog) | `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (optional), `PUBLIC_ANALYTICS_DEBUG` (optional; capture on localhost/dev). Event dictionary and privacy rules: [docs/analytics-events.md](docs/analytics-events.md) |
+| Analytics (GA4) | `PUBLIC_GA4_MEASUREMENT_ID` (public, build time; CI repository variable), `GA4_API_SECRET` (optional, server-only Pages secret for Measurement Protocol `purchase`/`refund`) |
 | Realtime presence | `PRESENCE_TICKET_SECRET` (signs presence connect tickets; must equal the presence Worker's secret), `PRESENCE_OWNER_MEMBER_IDS` (comma-separated owner member ids; never the admin role), `PUBLIC_PRESENCE_URL` (optional, read at runtime; presence Worker origin, default `https://presence.zuey.me`). Service binding `PRESENCE` → Worker `zuey-me-presence` (top-level in `wrangler.toml`; owner status calls; owner endpoints answer 503 until the presence Worker deploy step finishes). Local Worker only: `PRESENCE_DEV_ORIGINS=1` in `workers/presence/.dev.vars` allows `localhost:4321`. Rules: [docs/analytics-events.md#realtime-presence](docs/analytics-events.md#realtime-presence) |
 | Surveys | `SURVEY_HASH_SALT` |
 | Reads | `ANYMD_API_KEY`, `READS_SUMMARY_MODEL` (optional), Workers AI binding `AI` |
