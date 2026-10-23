@@ -512,6 +512,9 @@ describe('GA4 attribution of server purchases', () => {
       expect(posthog).toHaveLength(2);
       for (const b of posthog) expect(b.body).not.toContain('1234567890');
       expect(ga4.map(b => b.client_id)).toEqual(['1234567890.1700000000', '1234567890.1700000000']);
+      // Once sent, the outbox rows no longer keep a copy of the ids.
+      const sent = await d1.prepare('SELECT properties FROM analytics_outbox').all<{ properties: string }>();
+      for (const r of sent.results ?? []) expect(r.properties).not.toContain('ga_');
 
       // Past the retention window the ids are neither used nor kept.
       now += GA4_CLIENT_RETENTION_MS + 1000;
@@ -519,6 +522,32 @@ describe('GA4 attribution of server purchases', () => {
       await rememberGa4Client(d1, GA4_ID, 'usr_other', request({ Cookie: COOKIES }));
       const left = await d1.prepare('SELECT user_id FROM analytics_ga4_clients').all<{ user_id: string }>();
       expect((left.results ?? []).map(r => r.user_id)).toEqual(['usr_other']);
+    } finally {
+      membersRuntime.now = realNow;
+    }
+  });
+
+  it('purges expired ids on every outbox drain, without waiting for a checkout', async () => {
+    const realNow = membersRuntime.now;
+    const now = Date.parse('2026-10-20T03:00:00.000Z');
+    membersRuntime.now = () => now;
+    try {
+      const d1 = createTestD1();
+      d1.raw.run('INSERT INTO analytics_ga4_clients (user_id, client_id, session_id, updated_at) VALUES (?, ?, NULL, ?)',
+        ['usr_old', '1.1', new Date(now - GA4_CLIENT_RETENTION_MS - 1000).toISOString()]);
+      d1.raw.run('INSERT INTO analytics_ga4_clients (user_id, client_id, session_id, updated_at) VALUES (?, ?, NULL, ?)',
+        ['usr_new', '2.2', new Date(now - 1000).toISOString()]);
+      const ok: ServerDestination = { name: 'posthog', send: async () => ({ destination: 'posthog', ok: true, status: 200 }) };
+      expect(await drainAnalyticsOutbox(d1, { destinations: [ok] })).toMatchObject({ status: 'ok', claimed: 0 });
+      const left = await d1.prepare('SELECT user_id FROM analytics_ga4_clients').all<{ user_id: string }>();
+      expect((left.results ?? []).map(r => r.user_id)).toEqual(['usr_new']);
+
+      // A skipped run (analytics off) purges too, and a missing table never breaks the drain.
+      d1.raw.run("UPDATE analytics_ga4_clients SET updated_at = '2000-01-01T00:00:00.000Z'");
+      expect(await drainAnalyticsOutbox(d1, { destinations: [] })).toMatchObject({ status: 'skipped' });
+      expect(await d1.prepare('SELECT COUNT(*) AS n FROM analytics_ga4_clients').first<{ n: number }>()).toEqual({ n: 0 });
+      d1.raw.run('DROP TABLE analytics_ga4_clients');
+      expect(await drainAnalyticsOutbox(d1, { destinations: [ok] })).toMatchObject({ status: 'ok' });
     } finally {
       membersRuntime.now = realNow;
     }

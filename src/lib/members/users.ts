@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { forgetGa4Client } from '../analytics/ga4-attribution';
 import { deferChannelAccessPush, invalidateSenders } from '../channel-access/invalidate';
 import { AppError } from '../http';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
@@ -253,12 +254,13 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
     d1.prepare('UPDATE user_api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, user.id),
     d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email),
     d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id),
-    d1.prepare('DELETE FROM analytics_ga4_clients WHERE user_id = ?').bind(user.id),
     d1.prepare("UPDATE email_log SET to_email = '' WHERE user_id = ?").bind(user.id),
     ...referralAccountScrubStatements(d1, user.id),
   ]);
   // Already deleted: the cleanup above only re-ran idempotent statements on rows that were already clean.
   if (!scrub?.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');
+  // Outside the transaction and best-effort: analytics ids must never block deleting the account.
+  await forgetGa4Client(d1, user.id);
   // Outside the transaction and best-effort: the agent gate must stop answering the deleted member's chat
   // accounts now, not when dewee's cache expires.
   await deferChannelAccessPush(invalidateSenders(env, (channelRows ?? []).map(r => str(r, 'external_id')).filter(Boolean)));

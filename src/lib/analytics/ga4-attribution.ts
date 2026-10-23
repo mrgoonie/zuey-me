@@ -61,7 +61,7 @@ export function ga4IdsFromRequest(request: Request, measurementIdRaw: string | u
   return { clientId, sessionId: parseGaSessionCookie(cookieValue(cookies, `_ga_${measurementId.slice(2)}`)) };
 }
 
-/** Stores the member's GA ids at checkout start (latest wins) and drops expired rows. */
+/** Stores the member's GA ids at checkout start (latest wins), then drops expired rows. */
 export async function rememberGa4Client(
   d1: D1DatabaseLike, measurementIdRaw: string | undefined, userId: string, request: Request,
 ): Promise<void> {
@@ -73,9 +73,51 @@ export async function rememberGa4Client(
       `INSERT INTO analytics_ga4_clients (user_id, client_id, session_id, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT (user_id) DO UPDATE SET client_id = excluded.client_id, session_id = excluded.session_id, updated_at = excluded.updated_at`
     ).bind(userId, ids.clientId, ids.sessionId, iso(nowMs)).run();
-    await d1.prepare('DELETE FROM analytics_ga4_clients WHERE updated_at < ?').bind(iso(nowMs - GA4_CLIENT_RETENTION_MS)).run();
   } catch (err) {
-    console.debug('analytics: could not store GA4 client ids', err instanceof Error ? err.message : 'unknown');
+    console.warn('analytics: could not store GA4 client ids', errorMessage(err));
+    return;
+  }
+  await purgeExpiredGa4Clients(d1);
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'unknown';
+}
+
+/** Deletes stored ids older than the retention window. Run at checkout and by every outbox drain. */
+export async function purgeExpiredGa4Clients(d1: D1DatabaseLike): Promise<void> {
+  try {
+    await d1.prepare('DELETE FROM analytics_ga4_clients WHERE updated_at < ?')
+      .bind(iso(membersRuntime.now() - GA4_CLIENT_RETENTION_MS)).run();
+  } catch (err) {
+    console.warn('analytics: could not purge expired GA4 client ids', errorMessage(err));
+  }
+}
+
+/** JSON paths of the GA ids an outbox row may carry (see `ga4OutboxProperties`). */
+export const GA4_OUTBOX_ID_PATHS = "'$.ga_client_id', '$.ga_session_id'";
+
+/**
+ * Account deletion: forgets the member's stored GA ids and removes them from the member's queued outbox
+ * rows (a requeued row then falls back to the hashed client id). Runs after the deletion transaction and
+ * never throws, so a missing table or a D1 error can never block deleting the account.
+ */
+export async function forgetGa4Client(d1: D1DatabaseLike, userId: string): Promise<void> {
+  try {
+    await d1.prepare('DELETE FROM analytics_ga4_clients WHERE user_id = ?').bind(userId).run();
+  } catch (err) {
+    console.warn('analytics: could not delete GA4 client ids of a deleted account', errorMessage(err));
+  }
+  try {
+    await d1.prepare(
+      `UPDATE analytics_outbox SET properties = json_remove(properties, ${GA4_OUTBOX_ID_PATHS}), updated_at = ?
+       WHERE distinct_id = ? AND event IN ('purchase', 'refund')
+         AND CASE WHEN json_valid(properties)
+           THEN json_extract(properties, '$.ga_client_id') IS NOT NULL OR json_extract(properties, '$.ga_session_id') IS NOT NULL
+           ELSE 0 END`
+    ).bind(iso(membersRuntime.now()), userId).run();
+  } catch (err) {
+    console.warn('analytics: could not remove GA4 client ids from queued events of a deleted account', errorMessage(err));
   }
 }
 
@@ -96,7 +138,8 @@ export async function ga4OutboxProperties(
     const session = withSession && age <= GA4_SESSION_WINDOW_MS && row.session_id && SESSION_ID_RE.test(row.session_id)
       ? { ga_session_id: row.session_id } : {};
     return { ga_client_id: row.client_id, ...session };
-  } catch {
+  } catch (err) {
+    console.warn('analytics: could not read GA4 client ids', errorMessage(err));
     return {};
   }
 }
