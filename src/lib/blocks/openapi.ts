@@ -84,10 +84,14 @@ const articleSummary = {
     snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
     editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
     email_notification: {
-      description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish)',
+      description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish). '
+        + 'A publish response reports reason `notification_update_failed` when the email step failed after the publish committed; '
+        + 'the edition is published, and republishing with an explicit `notify` applies the email decision again. '
+        + 'With that reason the returned status is what is stored (e.g. still `scheduled` after a failed `notify: false`), or `failed` (send_after null) when nothing could be read back, '
+        + 'so check it before assuming no email will be sent.',
       oneOf: [{ type: 'null' }, { type: 'object', properties: {
-        status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled'] },
-        send_after: { type: 'string', format: 'date-time' }, sent_count: { type: 'integer' },
+        status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled', 'failed'] },
+        send_after: { type: ['string', 'null'], format: 'date-time' }, sent_count: { type: 'integer' },
         reason: { type: ['string', 'null'] }, updated_at: { type: 'string' },
       } }],
     },
