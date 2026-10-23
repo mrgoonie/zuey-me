@@ -3,6 +3,7 @@ import {
 } from '../../db/store';
 import type { LinkItem } from '../../db/types';
 import { AppError } from '../http';
+import { LINK_ICON_DESCRIPTION } from '../link-icons';
 import { MCP_FEATURE_MODULES } from './registry';
 import type { McpContext, McpTool } from './types';
 
@@ -54,7 +55,7 @@ export const CORE_TOOLS: McpTool[] = [
         subtitle_en: { type: 'string', description: 'English short description' },
         subtitle_vi: { type: 'string', description: 'Vietnamese short description' },
         url: { type: 'string', description: 'Destination web URL' },
-        icon: { type: 'string', description: 'Icon name: a brand or product mark (agentkit, dewee, tose, substack, cloud, vault, render, multix, anymd, motion, etc.) or any curated Lucide icon name or alias from block_schema icons (e.g. rocket, database). Unknown names render a neutral link mark.' },
+        icon: { type: 'string', description: LINK_ICON_DESCRIPTION },
       },
     },
   },
@@ -71,7 +72,7 @@ export const CORE_TOOLS: McpTool[] = [
         subtitle_en: { type: 'string' },
         subtitle_vi: { type: 'string' },
         url: { type: 'string' },
-        icon: { type: 'string' },
+        icon: { type: 'string', description: LINK_ICON_DESCRIPTION },
         is_active: { type: 'boolean' },
       },
     },
