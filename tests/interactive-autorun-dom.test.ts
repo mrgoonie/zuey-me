@@ -33,7 +33,8 @@ class FakeIntersectionObserver {
   constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean; target: Element }>) => void, readonly options?: { rootMargin?: string }) {
     FakeIntersectionObserver.instances.push(this);
   }
-  observe(el: Element) { this.targets.push(el); }
+  observeCalls = 0;
+  observe(el: Element) { this.observeCalls += 1; if (!this.targets.includes(el)) this.targets.push(el); }
   unobserve() {}
   disconnect() { this.disconnected = true; }
   takeRecords() { return []; }
@@ -71,9 +72,21 @@ afterEach(() => {
   // Let the start queue's cool-down elapse so the next test starts from an idle queue.
   React.act(() => { jest.advanceTimersByTime(queue.FRAME_START_GAP_MS * 2); });
   jest.useRealTimers();
+  queue.resetFrameStartQueue();
   FakeIntersectionObserver.instances = [];
   Object.assign(globalThis, { IntersectionObserver: FakeIntersectionObserver, fetch: originalFetch });
+  window.localStorage.removeItem('zuey:embeds');
+  Reflect.deleteProperty(window, 'matchMedia');
+  Reflect.deleteProperty(window.navigator, 'userAgent');
 });
+
+/** Emulates `prefers-reduced-motion: reduce` for this test. */
+function reduceMotion() {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: (query: string) => ({ matches: query.includes('prefers-reduced-motion: reduce'), media: query, addEventListener() {}, removeEventListener() {} }),
+  });
+}
 
 afterAll(async () => {
   console.error = originalConsoleError;
@@ -180,24 +193,25 @@ describe('published readers start widgets near the viewport', () => {
   });
 
   it('does not start off-screen widgets, spaces out simultaneous starts and never recreates a running frame', () => {
-    const blocks = Array.from({ length: 10 }, (_, i) => widget(`w${i}`));
+    const count = queue.MAX_AUTO_RUNNING;
+    const blocks = Array.from({ length: count }, (_, i) => widget(`w${i}`));
     const view = published(blocks);
     advance(5000);
     expect(frames(view)).toHaveLength(0);
-    expect(FakeIntersectionObserver.instances.filter(o => !o.disconnected)).toHaveLength(10);
+    expect(FakeIntersectionObserver.instances.filter(o => !o.disconnected)).toHaveLength(count);
 
     // A jump that brings every widget into range at once.
     const observers = blocks.map(b => observerFor(view, b.title));
     for (const io of observers) enter(io);
-    expect(queue.pendingFrameStarts()).toBe(10);
+    expect(queue.pendingFrameStarts()).toBe(count);
     advance(0);
     expect(frames(view)).toHaveLength(1);
     advance(queue.FRAME_START_GAP_MS - 1);
     expect(frames(view)).toHaveLength(1);
     advance(1);
     expect(frames(view)).toHaveLength(2);
-    advance(queue.FRAME_START_GAP_MS * 8);
-    expect(frames(view)).toHaveLength(10);
+    advance(queue.FRAME_START_GAP_MS * (count - 2));
+    expect(frames(view)).toHaveLength(count);
     expect(queue.pendingFrameStarts()).toBe(0);
 
     // Scrolling away and back keeps the same frames: no reset, no new observer.
@@ -254,17 +268,132 @@ describe('published readers start widgets near the viewport', () => {
     advance(1000);
     expect(frames(view)).toHaveLength(0);
 
-    // A closed toggle body is not rendered, so its widget only intersects once the reader opens it.
     const toggle = view.querySelector('details.zb-toggle');
-    expect(toggle?.hasAttribute('open')).toBe(false);
+    if (!(toggle instanceof window.HTMLDetailsElement)) throw new Error('toggle not rendered as <details>');
+    expect(toggle.open).toBe(false);
     enter(observerFor(view, 'Demo in-section'));
     advance(0);
     expect(frames(view).map(f => f.getAttribute('title'))).toEqual(['Demo in-section']);
+  });
 
-    React.act(() => { toggle?.setAttribute('open', ''); });
-    enter(observerFor(view, 'Demo in-toggle'));
-    advance(queue.FRAME_START_GAP_MS);
-    expect(frames(view).map(f => f.getAttribute('title')).sort()).toEqual(['Demo in-section', 'Demo in-toggle']);
+  it('a widget in a closed toggle never starts, even when an observer reports it in range, until the toggle opens', () => {
+    const view = published([{ id: 't1', type: 'toggle', summary: 'Mở', blocks: [widget('in-toggle')] }]);
+    const toggle = view.querySelector('details.zb-toggle');
+    if (!(toggle instanceof window.HTMLDetailsElement)) throw new Error('toggle not rendered as <details>');
+    const io = observerFor(view, 'Demo in-toggle');
+
+    // The body sits within the preload margin while the toggle is closed (a short page, or an observer
+    // that reports hidden content as intersecting): the closed toggle still keeps the widget idle.
+    expect(toggle.open).toBe(false);
+    enter(io);
+    advance(1000);
+    expect(queue.pendingFrameStarts()).toBe(0);
+    expect(frames(view)).toHaveLength(0);
+    expect(io.disconnected).toBe(false);
+
+    // Opening the toggle re-observes the frame, and the next report starts it.
+    const observedBefore = io.observeCalls;
+    React.act(() => {
+      toggle.open = true;
+      toggle.dispatchEvent(new window.Event('toggle'));
+    });
+    expect(io.observeCalls).toBeGreaterThan(observedBefore);
+    enter(io);
+    advance(0);
+    expect(frames(view).map(f => f.getAttribute('title'))).toEqual(['Demo in-toggle']);
+  });
+});
+
+describe('readers who do not want motion or auto-loading', () => {
+  it('prefers-reduced-motion keeps widgets click-to-run', () => {
+    reduceMotion();
+    const view = published([widget('w1')]);
+    expect(FakeIntersectionObserver.instances).toHaveLength(0);
+    advance(5000);
+    expect(frames(view)).toHaveLength(0);
+    click(button(view, 'Chạy demo'));
+    expect(frames(view)).toHaveLength(1);
+  });
+
+  it('a saved click-to-load choice for embeds keeps widgets click-to-run too', () => {
+    window.localStorage.setItem('zuey:embeds', 'click');
+    const view = published([widget('w1')]);
+    expect(FakeIntersectionObserver.instances.filter(o => o.targets.some(t => t.matches('figure.zif')))).toHaveLength(0);
+    advance(5000);
+    expect(frames(view)).toHaveLength(0);
+  });
+
+  it('crawler user agents do not auto-start widgets; headless browsers still do', () => {
+    Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' });
+    expect(frameModule.autoStartAllowed()).toBe(false);
+    const view = published([widget('w1')]);
+    expect(FakeIntersectionObserver.instances).toHaveLength(0);
+    expect(frames(view)).toHaveLength(0);
+    Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36' });
+    expect(frameModule.autoStartAllowed()).toBe(true);
+  });
+});
+
+describe('stopping and the per-page cap', () => {
+  it('Stop is a labelled button that tears the frame down and never re-arms the automatic start', () => {
+    const view = published([widget('w1')]);
+    const io = observerFor(view, 'Demo w1');
+    enter(io);
+    advance(0);
+    expect(frames(view)).toHaveLength(1);
+    expect(queue.autoRunningFrames()).toBe(1);
+
+    const stop = button(view, 'Dừng');
+    expect(stop?.tagName).toBe('BUTTON');
+    expect(stop?.getAttribute('type')).toBe('button');
+    expect(stop?.getAttribute('aria-label')).toBe('Dừng: Demo w1');
+    click(stop);
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('.zif-placeholder')).not.toBeNull();
+    expect(queue.autoRunningFrames()).toBe(0);
+    // Keyboard focus lands on Run demo instead of being lost with the removed button.
+    expect(document.activeElement).toBe(button(view, 'Chạy demo'));
+
+    // Scrolling away and back does not restart it.
+    expect(FakeIntersectionObserver.instances.filter(o => !o.disconnected)).toHaveLength(0);
+    enter(io, false);
+    enter(io);
+    advance(5000);
+    expect(frames(view)).toHaveLength(0);
+    click(button(view, 'Chạy demo'));
+    expect(frames(view)).toHaveLength(1);
+  });
+
+  it('at most 6 auto-started widgets run at once; later ones stay click-to-run with a note', () => {
+    const max = queue.MAX_AUTO_RUNNING;
+    expect(max).toBe(6);
+    const blocks = Array.from({ length: max + 2 }, (_, i) => widget(`w${i}`));
+    const view = published(blocks);
+    for (const b of blocks) enter(observerFor(view, b.title));
+    advance(queue.FRAME_START_GAP_MS * (max + 2));
+    expect(frames(view)).toHaveLength(max);
+    expect(queue.autoRunningFrames()).toBe(max);
+    const capped = [...view.querySelectorAll<HTMLElement>('figure.zif[data-state="capped"]')];
+    expect(capped.map(f => f.querySelector('.zif-title')?.textContent)).toEqual([`Demo w${max}`, `Demo w${max + 1}`]);
+    expect(capped[0].querySelector('.zif-note-limit')?.textContent).toContain('Chạy demo');
+
+    // A stopped widget frees its slot; capped widgets do not start by themselves afterwards.
+    click(button(view.querySelector<HTMLElement>('figure.zif') ?? view, 'Dừng'));
+    expect(queue.autoRunningFrames()).toBe(max - 1);
+    advance(5000);
+    expect(frames(view)).toHaveLength(max - 1);
+
+    // The reader can still run a capped widget; reader-started frames do not take a slot.
+    click(button(capped[0], 'Chạy demo'));
+    expect(frames(view)).toHaveLength(max);
+    expect(queue.autoRunningFrames()).toBe(max - 1);
+    expect(capped[0].getAttribute('data-state')).toBe('running');
+
+    // Unmounting releases every slot.
+    const m = mounted.pop();
+    React.act(() => m?.unmount());
+    m?.container.remove();
+    expect(queue.autoRunningFrames()).toBe(0);
   });
 });
 

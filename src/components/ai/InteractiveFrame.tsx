@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Play, RefreshCw, X } from 'lucide-react';
+import { Maximize2, Play, RefreshCw, Square, X } from 'lucide-react';
 import './zuey-ai.css';
 import type { InteractiveBlock } from '../../lib/blocks/schema';
 import { LIMITS } from '../../lib/blocks/schema';
 import type { Locale } from '../../lib/i18n/locales';
 import { DEFAULT_LOCALE } from '../../lib/i18n/locales';
 import { SANDBOX_CHANNEL, SANDBOX_SANDBOX_ATTR, buildSandboxSrcdoc } from '../../lib/ai/sandbox-doc';
+import { readEmbedPref } from '../blocks/EmbedView';
 import { AI_COPY } from './copy';
-import { scheduleFrameStart } from './frame-start-queue';
+import { claimAutoRunSlot, releaseAutoRunSlot, scheduleFrameStart } from './frame-start-queue';
 
 export const READY_TIMEOUT_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 8_000;
@@ -27,13 +28,41 @@ function clampHeight(h: number): number {
   return Math.max(LIMITS.interactiveHeightMin, Math.min(LIMITS.interactiveHeightMax, Math.round(h)));
 }
 
+/**
+ * Well-known crawlers and link-preview fetchers that run scripts gain nothing from live widgets. Named on
+ * purpose (a bare `bot` would also match phone brands); headless browsers and `navigator.webdriver` are not
+ * matched, so browser smoke runs still exercise the automatic start.
+ */
+const BOT_USER_AGENT = /googlebot|bingbot|yandexbot|duckduckbot|baiduspider|applebot|petalbot|ahrefsbot|semrushbot|slurp|facebookexternalhit|twitterbot|linkedinbot|slackbot|discordbot|telegrambot|embedly|crawler|spider/i;
+
+/**
+ * Whether this reader lets widgets start by themselves: not with `prefers-reduced-motion: reduce`, not when the
+ * reader chose click-to-load for embeds on this device (`zuey:embeds=click`), and not for crawler user agents.
+ */
+export function autoStartAllowed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  } catch {
+    // matchMedia unavailable: fall through to the other checks.
+  }
+  if (readEmbedPref() === 'click') return false;
+  return !BOT_USER_AGENT.test(window.navigator.userAgent);
+}
+
+/** True while an ancestor toggle is closed: its content is not shown, whatever an observer reports. */
+function insideClosedToggle(el: HTMLElement): boolean {
+  return el.parentElement?.closest('details:not([open])') != null;
+}
+
 interface FrameProps {
   block: InteractiveBlock;
   /** Start immediately (chat artifacts) instead of click-to-run (Studio previews). */
   autoRun?: boolean;
   /**
    * Start once, when the frame comes near the viewport (published article and lesson readers). Starts are
-   * spaced out across frames; without IntersectionObserver the frame stays click-to-run.
+   * spaced out across frames and capped per page; reduced motion, the reader's click-to-load choice, crawlers
+   * and a missing IntersectionObserver keep the frame click-to-run. Stop keeps it stopped for this page view.
    */
   runWhenVisible?: boolean;
   locale?: Locale;
@@ -53,6 +82,13 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
   const [height, setHeight] = useState(clampHeight(block.height ?? 320));
   const [frameError, setFrameError] = useState<string | null>(null);
   const [full, setFull] = useState(false);
+  // Armed until the frame starts once (by itself or by the reader) or the reader stops it.
+  const [autoArmed, setAutoArmed] = useState(runWhenVisible);
+  // The frame reached the viewport while the page already ran the maximum of auto-started frames.
+  const [capped, setCapped] = useState(false);
+  const slotRef = useRef(false);
+  const refocusRunRef = useRef(false);
+  const runButtonRef = useRef<HTMLButtonElement | null>(null);
   const rootRef = useRef<HTMLElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -149,36 +185,95 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
     setRunId(n => n + 1);
   }, []);
 
-  // Automatic start happens once, from the idle state only: a frame halted by the watchdog, or one the reader
-  // already started, never restarts by itself, and scrolling away and back keeps the running frame as it is.
-  // A frame inside a closed toggle is not rendered, so it is not intersecting until the toggle opens.
-  // While the full-screen copy runs, the inline one waits, so the widget never runs twice at once.
+  /** Reader-started run: never counted against the auto-start cap, and it disarms the automatic start. */
+  const start = useCallback(() => {
+    setAutoArmed(false);
+    setCapped(false);
+    run();
+  }, [run]);
+
+  /** Tears the frame down to its placeholder; nothing restarts it by itself during this page view. */
+  const stop = useCallback(() => {
+    setAutoArmed(false);
+    setFrameError(null);
+    refocusRunRef.current = true;
+    setState('idle');
+  }, []);
+
+  // The Stop button disappears with the frame; keyboard focus moves to Run demo instead of being lost.
   useEffect(() => {
-    if (!runWhenVisible || state !== 'idle' || tooLarge || full) return;
+    if (state === 'idle' && refocusRunRef.current) {
+      refocusRunRef.current = false;
+      runButtonRef.current?.focus();
+    }
+  }, [state]);
+
+  // An auto-started frame frees its slot when it stops running (Stop, watchdog halt) or unmounts.
+  useEffect(() => {
+    if (state !== 'running' && slotRef.current) {
+      slotRef.current = false;
+      releaseAutoRunSlot();
+    }
+  }, [state]);
+  useEffect(() => () => {
+    if (slotRef.current) {
+      slotRef.current = false;
+      releaseAutoRunSlot();
+    }
+  }, []);
+
+  // Automatic start happens once, from the idle state only: a frame halted by the watchdog, stopped, or already
+  // started by the reader never restarts by itself, and scrolling away and back keeps a running frame as it is.
+  // A frame inside a closed toggle waits until the toggle opens. While the full-screen copy runs, the inline one
+  // waits, so the widget never runs twice at once.
+  useEffect(() => {
+    if (!autoArmed || state !== 'idle' || tooLarge || full) return;
     const el = rootRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
+    if (!el || typeof IntersectionObserver === 'undefined' || !autoStartAllowed()) return;
     let cancelStart: (() => void) | null = null;
     const io = new IntersectionObserver(entries => {
-      if (cancelStart || !entries.some(e => e.isIntersecting)) return;
+      if (cancelStart || !entries.some(e => e.isIntersecting) || insideClosedToggle(el)) return;
       io.disconnect();
-      cancelStart = scheduleFrameStart(run);
+      document.removeEventListener('toggle', onToggle, true);
+      cancelStart = scheduleFrameStart(() => {
+        setAutoArmed(false);
+        if (!claimAutoRunSlot()) {
+          setCapped(true);
+          return;
+        }
+        slotRef.current = true;
+        run();
+      });
     }, { rootMargin: INTERACTIVE_PRELOAD_MARGIN });
+    // Opening a toggle re-checks a frame that was already within the margin while hidden.
+    const onToggle = (event: Event) => {
+      if (!(event.target instanceof Node) || !event.target.contains(el) || insideClosedToggle(el)) return;
+      io.unobserve(el);
+      io.observe(el);
+    };
+    document.addEventListener('toggle', onToggle, true);
     io.observe(el);
     return () => {
       io.disconnect();
+      document.removeEventListener('toggle', onToggle, true);
       cancelStart?.();
     };
-  }, [runWhenVisible, state, tooLarge, full, run]);
+  }, [autoArmed, state, tooLarge, full, run]);
 
   return (
-    <figure ref={rootRef} className="zif" aria-label={`${t.artifact}: ${block.title}`}>
+    <figure ref={rootRef} className="zif" data-state={state !== 'idle' ? state : capped ? 'capped' : undefined} aria-label={`${t.artifact}: ${block.title}`}>
       <div className="zif-head">
         <span className="zif-title">{block.title}</span>
         <span className="zif-actions">
           {state === 'running' ? (
-            <button type="button" onClick={run}><RefreshCw size={14} aria-hidden="true" />{t.reload}</button>
+            <>
+              <button type="button" onClick={run}><RefreshCw size={14} aria-hidden="true" />{t.reload}</button>
+              {!inDialog && (
+                <button type="button" onClick={stop} aria-label={`${t.stopDemo}: ${block.title}`}><Square size={14} aria-hidden="true" />{t.stopDemo}</button>
+              )}
+            </>
           ) : (
-            <button type="button" onClick={run}><Play size={14} aria-hidden="true" />{t.runDemo}</button>
+            <button type="button" ref={runButtonRef} onClick={start}><Play size={14} aria-hidden="true" />{t.runDemo}</button>
           )}
           {!inDialog && (
             <button type="button" ref={openerRef} onClick={() => setFull(true)}><Maximize2 size={14} aria-hidden="true" />{t.openFull}</button>
@@ -203,6 +298,7 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
         <div className="zif-placeholder" style={runWhenVisible && state === 'idle' ? { minHeight: height } : undefined}>
           {block.caption && <span>{block.caption}</span>}
           {state === 'unresponsive' && <span role="status">{t.unresponsive}</span>}
+          {state === 'idle' && capped && <span className="zif-note-limit">{t.autoRunLimit}</span>}
         </div>
       )}
       {frameError && state === 'running' && <p className="zif-note zif-note-error" role="status">{t.frameError}: {frameError}</p>}
