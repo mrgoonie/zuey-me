@@ -12,6 +12,7 @@ import {
   createPostHogServerDestination, isProductionBuild, isTruthyFlag, resolvePostHogConfig,
   type AnalyticsEnv, type FetchLike,
 } from './destinations/posthog';
+import { createGa4ServerDestination, resolveGa4ServerConfig } from './destinations/ga4';
 import { PRODUCTION_HOSTNAMES } from './constants';
 import type { DestinationResult, ServerAnalyticsEvent, ServerDestination } from './destinations/types';
 import { isValidDistinctId } from './identity';
@@ -69,9 +70,15 @@ export function serverDestinations(
 ): ServerDestination[] {
   if (!isServerCaptureHost(env, options.requestHost)) return [];
   const production = options.production ?? isProductionBuild();
+  const debug = isTruthyFlag(env.PUBLIC_ANALYTICS_DEBUG);
+  if (!production && !debug) return [];
+  const destinations: ServerDestination[] = [];
   const config = resolvePostHogConfig(env, { production });
-  if (!config || (!production && !config.debug)) return [];
-  return [createPostHogServerDestination(config, options.fetchImpl)];
+  if (config) destinations.push(createPostHogServerDestination(config, options.fetchImpl));
+  // GA4 Measurement Protocol (purchase and refund only) needs the server-only GA4_API_SECRET; without it, skipped.
+  const ga4 = resolveGa4ServerConfig(env);
+  if (ga4) destinations.push(createGa4ServerDestination(ga4, options.fetchImpl));
+  return destinations;
 }
 
 async function deliver(destination: ServerDestination, event: ServerAnalyticsEvent, timeoutMs: number): Promise<DestinationResult> {
@@ -128,8 +135,12 @@ export async function sendServerEvent(
       occurredAt,
       properties: { ...checked.properties, event_version: checked.version, schema_version: ANALYTICS_SCHEMA_VERSION },
     };
+    // A destination that does not take this event (GA4 takes only purchase and refund) is not sent it.
+    const targets = destinations.filter(d => d.accepts?.(input.event) ?? true);
+    // No configured destination takes it: nothing to deliver, so the event is done.
+    if (targets.length === 0) return { delivered: true, uuid, results: [] };
     const timeoutMs = options.timeoutMs ?? DEFAULT_SERVER_TIMEOUT_MS;
-    const results = await Promise.all(destinations.map(d => deliver(d, event, timeoutMs)));
+    const results = await Promise.all(targets.map(d => deliver(d, event, timeoutMs)));
     return { delivered: results.some(r => r.ok), uuid, results };
   } catch (err) {
     return {

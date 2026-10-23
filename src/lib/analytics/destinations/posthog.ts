@@ -15,6 +15,10 @@ export interface AnalyticsEnv {
   PUBLIC_POSTHOG_KEY?: string;
   PUBLIC_POSTHOG_HOST?: string;
   PUBLIC_ANALYTICS_DEBUG?: string;
+  /** GA4 web stream measurement id (`G-…`, public). Absent: GA4 is off in the browser and on the server. */
+  PUBLIC_GA4_MEASUREMENT_ID?: string;
+  /** GA4 Measurement Protocol API secret, server-only (runtime binding). Absent: the server GA4 path is skipped. */
+  GA4_API_SECRET?: string;
 }
 
 export interface PostHogConfig {
@@ -61,13 +65,18 @@ function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
-/** Merges runtime bindings (Cloudflare) over build-time `import.meta.env`. */
+/**
+ * Merges runtime bindings (Cloudflare) over build-time `import.meta.env`. The GA4 API secret is read from the
+ * runtime only, so it is never inlined into a build.
+ */
 export function analyticsEnvFrom(runtime: AnalyticsEnv | undefined): AnalyticsEnv {
   const build: Record<string, unknown> = import.meta.env ?? {};
   return {
     PUBLIC_POSTHOG_KEY: stringOrUndefined(runtime?.PUBLIC_POSTHOG_KEY) ?? stringOrUndefined(build.PUBLIC_POSTHOG_KEY),
     PUBLIC_POSTHOG_HOST: stringOrUndefined(runtime?.PUBLIC_POSTHOG_HOST) ?? stringOrUndefined(build.PUBLIC_POSTHOG_HOST),
     PUBLIC_ANALYTICS_DEBUG: stringOrUndefined(runtime?.PUBLIC_ANALYTICS_DEBUG) ?? stringOrUndefined(build.PUBLIC_ANALYTICS_DEBUG),
+    PUBLIC_GA4_MEASUREMENT_ID: stringOrUndefined(runtime?.PUBLIC_GA4_MEASUREMENT_ID) ?? stringOrUndefined(build.PUBLIC_GA4_MEASUREMENT_ID),
+    GA4_API_SECRET: stringOrUndefined(runtime?.GA4_API_SECRET),
   };
 }
 

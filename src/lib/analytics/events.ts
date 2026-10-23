@@ -251,6 +251,8 @@ export const ANALYTICS_EVENTS = {
       plan: { kind: 'string', optional: true }, months: { kind: 'number', optional: true },
       // A card charge that was collected but held for admin review (wrong amount, discount not applied).
       flagged: { kind: 'boolean', optional: true },
+      // Opaque hash of the provider transaction (`tx_` + hex), the GA4 ecommerce `transaction_id`.
+      transaction_id: { kind: 'string', optional: true },
     },
   },
   refund: {
@@ -259,6 +261,8 @@ export const ANALYTICS_EVENTS = {
       provider: str, order_type: str, reason: str,
       amount: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true },
       partial: { kind: 'boolean', optional: true }, plan: { kind: 'string', optional: true },
+      // The refunded purchase's `transaction_id`, when the refunded transaction is known.
+      transaction_id: { kind: 'string', optional: true },
     },
   },
   payment_failed: {

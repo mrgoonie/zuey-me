@@ -36,11 +36,22 @@ function money(amountMinor: number | null | undefined, currency: string | null |
   return { amount: toMajorUnits(amountMinor, c), currency: c };
 }
 
+async function sha256Hex(value: string, bytes: number): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest).slice(0, bytes)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** Opaque, stable distinct id for a guest without a member account (bookings), derived from the record id. */
 export async function guestDistinctId(recordId: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`guest:${recordId}`));
-  const hex = Array.from(new Uint8Array(digest).slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `${GUEST_ID_PREFIX}${hex}`;
+  return `${GUEST_ID_PREFIX}${await sha256Hex(`guest:${recordId}`, 12)}`;
+}
+
+/**
+ * Opaque ecommerce `transaction_id` of a provider transaction (`tx_` + 24 hex of SHA-256): the raw id or order
+ * code never leaves the app, while a refund of the same transaction derives the same value.
+ */
+export async function ecommerceTransactionId(provider: CommerceProvider, transactionId: string): Promise<string> {
+  return `tx_${await sha256Hex(`${provider}:${transactionId}`, 12)}`;
 }
 
 export interface PurchaseInput {
@@ -74,6 +85,7 @@ export async function queuePurchase(d1: D1DatabaseLike, p: PurchaseInput): Promi
       ...(p.plan ? { plan: p.plan } : {}),
       ...(typeof p.months === 'number' ? { months: p.months } : {}),
       ...(p.flagged ? { flagged: true } : {}),
+      transaction_id: await ecommerceTransactionId(p.provider, p.transactionId),
     },
     occurredAt: p.occurredAt,
   });
@@ -113,7 +125,14 @@ export async function queuePaymentFailed(d1: D1DatabaseLike, p: PaymentIssueInpu
   });
 }
 
-export async function queueRefund(d1: D1DatabaseLike, p: PaymentIssueInput & { reason: string; partial?: boolean }): Promise<EnqueueOutcome> {
+export async function queueRefund(
+  d1: D1DatabaseLike,
+  p: PaymentIssueInput & {
+    reason: string; partial?: boolean;
+    /** The refunded purchase's `transactionId` (as given to `queuePurchase`), when known. */
+    purchaseTransactionId?: string | null;
+  },
+): Promise<EnqueueOutcome> {
   return enqueueServerEvent(d1, {
     event: 'refund',
     distinctId: p.distinctId,
@@ -121,6 +140,7 @@ export async function queueRefund(d1: D1DatabaseLike, p: PaymentIssueInput & { r
     properties: {
       provider: p.provider, order_type: p.orderType, reason: p.reason, ...money(p.amountMinor, p.currency),
       ...(typeof p.partial === 'boolean' ? { partial: p.partial } : {}), ...(p.plan ? { plan: p.plan } : {}),
+      ...(p.purchaseTransactionId ? { transaction_id: await ecommerceTransactionId(p.provider, p.purchaseTransactionId) } : {}),
     },
     occurredAt: p.occurredAt,
   });

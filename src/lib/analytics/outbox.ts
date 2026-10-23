@@ -7,7 +7,8 @@
  * - One row per business fact: every row has a `dedupe_key` built from the provider transaction or event id
  *   (unique index), so a repeated webhook, a reconciliation or a recompute inserts nothing.
  * - Delivery is at-least-once with an idempotent id: the row id is the event `uuid` sent on every attempt,
- *   so PostHog de-duplicates a retried send (eventually, at merge time).
+ *   so PostHog de-duplicates a retried send (eventually, at merge time). A row counts as sent once one
+ *   destination accepted it.
  * - Analytics never affects payment: enqueueing validates and inserts inside a catch-all and returns an
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
  *   with it) so a missing table or a failed insert can never roll a payment back.
@@ -337,7 +338,9 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   const clock = options.clock ?? Date.now;
   const started = clock();
   const budget = options.budgetMs ?? DEFAULT_DRAIN_BUDGET_MS;
-  const limit = clampLimit(options.limit);
+  // Each row may cost one request per destination (GA4 on purchases and refunds): keep the run's worst case
+  // at MAX_DRAIN_LIMIT requests, under the Workers free plan's subrequest limit.
+  const limit = Math.min(clampLimit(options.limit), Math.max(1, Math.floor(MAX_DRAIN_LIMIT / Math.max(1, options.destinations.length))));
   const out: DrainResult = {
     status: 'ok', claimed: 0, sent: 0, retried: 0, dead: 0, expired_queued: 0, purged: 0, pending: 0, queries: 0,
     budget_exhausted: false,

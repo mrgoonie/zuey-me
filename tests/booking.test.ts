@@ -353,7 +353,7 @@ describe('PayPal payments', () => {
     expect(outbox).toHaveLength(1);
     expect(outbox[0].dedupe_key).toBe('purchase:paypal:CAP-full');
     expect(outbox[0].distinct_id).toMatch(/^guest_[0-9a-f]{24}$/);
-    expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false });
+    expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false, transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/) });
     expect(JSON.stringify(outbox)).not.toContain('lan@example.com');
 
     // Guest view exposes Meet link but never the token hash.
@@ -520,7 +520,7 @@ describe('reschedule and admin', () => {
       expect(outbox).toHaveLength(1);
       expect(outbox[0].dedupe_key).toBe('purchase:sepay:7001');
       expect(outbox[0].distinct_id).toMatch(/^guest_[0-9a-f]{24}$/);
-      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false, transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/) });
       expect(JSON.stringify(outbox)).not.toContain('lan@example.com');
     });
 
@@ -553,7 +553,7 @@ describe('reschedule and admin', () => {
       const outbox = purchases();
       expect(outbox).toHaveLength(1);
       expect(outbox[0].dedupe_key).toBe(`purchase:sepay:booking:${b.id}`);
-      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false, transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/) });
 
       // A re-resolve after the transfer was recorded does not switch to the transfer's key and count it again.
       purgeOutbox();
@@ -576,7 +576,7 @@ describe('reschedule and admin', () => {
       const outbox = purchases();
       expect(outbox).toHaveLength(1);
       expect(outbox[0].dedupe_key).toBe('purchase:paypal:CAP-late');
-      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false });
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'paypal', order_type: 'booking', amount: 1999, currency: 'USD', renewal: false, transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/) });
 
       purgeOutbox();
       expect((await admin(env, b.id, 'cancel')).status).toBe(200);
@@ -609,7 +609,7 @@ describe('reschedule and admin', () => {
       const outbox = purchases();
       expect(outbox).toHaveLength(1);
       expect(outbox[0].dedupe_key).toBe('purchase:sepay:7301');
-      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false });
+      expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false, transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/) });
     });
 
     it('resolving a free booking queues no purchase', async () => {

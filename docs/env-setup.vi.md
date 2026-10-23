@@ -343,6 +343,10 @@ Project đích: PostHog **Zuey.me**. Danh mục sự kiện, quy tắc PII và c
 
 - **Sự kiện server (outbox):** thanh toán, gói thành viên và đăng ký/đăng nhập được ghi vào bảng `analytics_outbox` (migration `0022_analytics_outbox.sql`, phải chạy trên D1 remote trước khi deploy). Worker `zuey-me-scheduler` gọi `POST /api/v1/analytics/outbox/drain` mỗi 5 phút bằng `CRON_SECRET` để gửi sang PostHog, tự thử lại với backoff và chuyển sang `dead` sau 10 lần lỗi (khoảng 22 giờ; cách đưa lại hàng đợi xem [analytics-events.md](analytics-events.md#server-event-outbox)). Không cần biến môi trường mới; CI tự deploy lại worker sau khi merge.
 
+- **GA4** (đích thứ hai, cùng consent và cùng allowlist hostname với PostHog; chi tiết: [analytics-events.md](analytics-events.md#ga4-destination)):
+  - `PUBLIC_GA4_MEASUREMENT_ID`: Measurement ID của web stream (`G-…`, công khai, không phải secret). Được inline lúc build: CI đọc từ GitHub Actions **repository variable** cùng tên (`gh variable set PUBLIC_GA4_MEASUREMENT_ID --repo mrgoonie/zuey-me --body <G-…>`), local đặt trong `.env`. Thiếu hoặc sai định dạng thì GA4 tắt hoàn toàn (không tải `gtag.js`).
+  - `GA4_API_SECRET` (secret, chỉ server): API secret của Measurement Protocol, dùng để gửi `purchase`/`refund` từ outbox. Tạo ở GA4 Admin → Data streams → chọn web stream → *Measurement Protocol API secrets* → Create, rồi đặt bằng `wrangler pages secret put GA4_API_SECRET --project-name zuey-me` (export `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` từ `.env` trước). Thiếu thì đường gửi server sang GA4 bị bỏ qua lặng lẽ: không lỗi, không dead letter, PostHog vẫn nhận như cũ.
+
 **Kiểm tra sau khi deploy:** mở zuey.me (không bật Do Not Track), PostHog → *Activity → Live events* phải thấy `$pageview` với `$current_url` không chứa `token`/`code`/`email`. Đăng nhập rồi tải lại trang: sự kiện mang `distinct_id` là member ID (không phải email). Đăng xuất: sự kiện kế tiếp có `distinct_id` ẩn danh mới. Bấm "Tắt thống kê" ở `/privacy#analytics`: không còn sự kiện mới từ trình duyệt đó.
 
 ## 15. Realtime presence (số người đang xem)
