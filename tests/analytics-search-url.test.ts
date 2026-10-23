@@ -17,6 +17,7 @@ describe('site search words never reach PostHog URLs', () => {
     expect(scrubUrl('/articles/page/2?q=h%E1%BB%8Dc&lang=en')).toBe('/articles/page/2?lang=en');
     expect(scrubUrl('https://zuey.me/articles?Q=jane&q=nguyen')).toBe('https://zuey.me/articles');
     expect(scrubUrl('https://zuey.me/#q=jane&tab=x')).toBe('https://zuey.me/#tab=x');
+    expect(scrubUrl('https://zuey.me./articles?q=jane')).toBe('https://zuey.me./articles');
   });
 
   test("other sites' URLs keep their own query", () => {

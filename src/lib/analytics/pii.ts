@@ -303,7 +303,7 @@ export function scrubUrl(raw: string): string {
   } catch {
     return redactString(input);
   }
-  const ownSite = relative || PRODUCTION_HOSTNAMES.includes(parsed.hostname);
+  const ownSite = relative || PRODUCTION_HOSTNAMES.includes(parsed.hostname.replace(/\.$/, ''));
   if (isSensitivePath(parsed.pathname)) {
     parsed.search = '';
     parsed.hash = '';
