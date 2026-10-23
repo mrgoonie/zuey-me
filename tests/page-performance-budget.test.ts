@@ -6,7 +6,7 @@ import { BlockRenderer } from '../src/components/blocks/BlockRenderer';
 import { validateDocument } from '../src/lib/blocks/validate';
 import { PROSE_ARTICLE } from './fixtures/v1-article-documents';
 import { parseReadsList } from '../src/components/reads/reads-api-client';
-import { parseLab200Snapshot } from '../src/components/lab200/lab200-api-client';
+import { parseLab200Catalog } from '../src/components/lab200/lab200-api-client';
 import { lab200OpenApi } from '../src/lib/lab200/openapi';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { AMBIENT_VIDEO_SCRIPT, FONT_LOADER_SCRIPT, FONTS_URL } from '../src/lib/page/deferred-asset-scripts';
@@ -20,7 +20,7 @@ const read = (path: string) => readFile(new URL(path, import.meta.url), 'utf8');
 describe('page weight budget', () => {
   test('index.astro does not load the reads, videos or 200lab data sets', async () => {
     const src = await read('../src/pages/index.astro');
-    for (const banned of ['listReads', 'listVideos', 'getLab200Snapshot', 'ReadsBrowser', 'ZueytubeBrowser', 'Lab200Courses']) {
+    for (const banned of ['listReads', 'listVideos', 'getLab200Catalog', 'ReadsBrowser', 'ZueytubeBrowser', 'Lab200Catalog']) {
       expect(src).not.toContain(banned);
     }
     for (const win of ['ReadsWindow', 'ZueytubeWindow', 'Lab200Window']) {
@@ -94,18 +94,23 @@ describe('window data parsers', () => {
     expect(parseReadsList({ items: 'nope' })).toBeNull();
   });
 
-  test('parseLab200Snapshot accepts only https images', () => {
-    const snap = parseLab200Snapshot({
+  test('parseLab200Catalog accepts only 200lab asset images', () => {
+    const item = (slug: string, cover: unknown) => ({
+      slug, url: `https://200lab.io/courses/${slug}`, jsonUrl: `https://200lab.io/courses/${slug}.json`, title: slug.toUpperCase(),
+      cover, pricing: { state: 'available', prices: [] },
+    });
+    const snap = parseLab200Catalog({
       courses: [
-        { slug: 'x', title: 'X', summary: 's', lessons: 5, status: 'open', free: true, image: 'https://assets.200lab.io/x' },
-        { slug: 'y', title: 'Y', image: 'http://insecure.example/y' },
+        item('x', { url: 'https://assets.200lab.io/x', variants: [] }),
+        item('y', { url: 'http://insecure.example/y', variants: [] }),
         { title: 'no slug' },
       ],
       synced_at: null,
+      learning_paths: [],
     });
-    expect(snap?.courses.map(c => [c.slug, c.image])).toEqual([['x', 'https://assets.200lab.io/x'], ['y', null]]);
-    expect(snap?.syncedAt).toBeNull();
-    expect(parseLab200Snapshot(null)).toBeNull();
+    expect(snap?.courses.items.map(c => [c.slug, c.cover?.url ?? null])).toEqual([['x', 'https://assets.200lab.io/x'], ['y', null]]);
+    expect(snap?.courses.syncedAt).toBeNull();
+    expect(parseLab200Catalog(null)).toBeNull();
   });
 });
 
