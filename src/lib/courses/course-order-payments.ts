@@ -164,6 +164,7 @@ export async function queueCourseMoneyBack(
     distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:${kind}`,
     reason: kind === 'refunded' ? 'refund' : 'chargeback', amountMinor, currency: reversed?.currency ?? paid.currency,
     partial: amountMinor !== null && paid.amountMinor !== null ? amountMinor < paid.amountMinor : undefined,
+    purchaseTransactionId: `course_order:${order.id}`,
   });
 }
 

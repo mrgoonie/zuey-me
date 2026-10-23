@@ -500,7 +500,10 @@ describe('booking commissions and PayPal refunds', () => {
     // Analytics: one refund for the redelivered webhook, with the provider's amount in USD.
     const { results } = await d1.prepare("SELECT properties FROM analytics_outbox WHERE event = 'refund'").all<{ properties: string }>();
     expect((results ?? []).map(r => JSON.parse(r.properties))).toEqual([
-      { provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 1899.05, currency: 'USD', partial: false },
+      {
+        provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 1899.05, currency: 'USD', partial: false,
+        transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/),
+      },
     ]);
   });
 

@@ -681,6 +681,7 @@ export async function applyDodoReversal(
       await queueRefund(d1, {
         distinctId: userId, provider: 'dodo', orderType: 'membership', reference: `${event.kind}:${event.objectId ?? event.paymentId}`,
         reason: event.kind === 'refund' ? 'refund' : 'chargeback', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
+        purchaseTransactionId: event.paymentId,
       });
     }
     await insertActivity(d1, userId, 'billing.card_reversal', {

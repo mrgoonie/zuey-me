@@ -756,6 +756,8 @@ export async function applyPaypalReversal(
       reason: event.kind === 'refund' ? 'refund' : 'chargeback',
       amountMinor, currency: event.currency ?? row.currency,
       partial: amountMinor !== null && row.amount_paid !== null ? amountMinor < row.amount_paid : undefined,
+      // The purchase of a PayPal booking is keyed by its capture id.
+      purchaseTransactionId: event.captureId,
     });
   }
   return { outcome: result.outcome, booking_id: row.id };
