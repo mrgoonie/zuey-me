@@ -25,10 +25,10 @@ const EMAIL_DOMAIN_RE = /@[\p{L}\p{M}\p{N}.-]{1,253}\.[\p{L}\p{M}]{2,63}/gu;
 const EMAIL_LOCAL_CHAR_RE = /^[\p{L}\p{M}\p{N}._%+-]$/u;
 const MAX_EMAIL_LOCAL_LENGTH = 64;
 /**
- * A retina asset suffix (`image@2x.png`, `logo@3x.webp`) matched as a whole domain: a scale and an image
+ * A retina asset suffix (`image@2x.png`, `logo@3x.webp`) matched as a whole domain: a 1- or 2-digit scale and an image
  * extension with no further labels. It is a file name, not an email; `a@2x.example.com` still is one.
  */
-const RETINA_ASSET_RE = /^@\dx\.(?:png|jpe?g|gif|webp|avif|svg)$/i;
+const RETINA_ASSET_RE = /^@\d{1,2}x\.(?:png|jpe?g|gif|webp|avif|svg)$/i;
 /** A run of base64url characters and dots: the only text a JWT (`eyJ….….…`) can span. */
 const TOKEN_RUN_RE = /[A-Za-z0-9_.-]+/g;
 

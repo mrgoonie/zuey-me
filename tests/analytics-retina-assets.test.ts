@@ -3,7 +3,7 @@ import { REDACTED, containsPii, redactString, scrubUrl, scrubValue } from '../sr
 
 describe('retina asset names are not emails', () => {
   test('a scale suffix with an image extension is kept', () => {
-    for (const name of ['image@2x.png', 'logo@3x.webp', 'hero@2x.JPG', 'photo@1x.jpeg', 'badge@2x.avif', 'anim@2x.gif']) {
+    for (const name of ['image@2x.png', 'logo@3x.webp', 'hero@2x.JPG', 'photo@1x.jpeg', 'badge@2x.avif', 'anim@2x.gif', 'tile@10x.png']) {
       expect(redactString(name)).toBe(name);
       expect(containsPii(name)).toBe(false);
     }
@@ -19,6 +19,8 @@ describe('retina asset names are not emails', () => {
     expect(redactString('write to jane@3m.com')).toBe(`write to ${REDACTED}`);
     expect(redactString('image@2x.png.example.com')).toBe(REDACTED);
     expect(redactString('jane@2x.pngs')).toBe(REDACTED);
+    expect(redactString('jane@100x.png')).toBe(REDACTED);
+    expect(redactString('jane@10x.example.com')).toBe(REDACTED);
     expect(containsPii('a@2x.example.com')).toBe(true);
     expect(containsPii('a%402x.example.com')).toBe(true);
     expect(scrubUrl('/u?to=jane%402x.example.com')).toBe(`/u?to=${REDACTED}`);
