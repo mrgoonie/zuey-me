@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { postHogInitOptions, scrubCaptureResult } from '../src/lib/analytics/destinations/posthog';
 import { MAX_SCRUB_LENGTH, REDACTED, containsPii, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
 
@@ -209,6 +209,34 @@ describe('long inputs', () => {
   test('values up to the cap are kept whole', () => {
     const value = 'a'.repeat(MAX_SCRUB_LENGTH);
     expect(redactString(value)).toBe(value);
+  });
+
+  test('a 16 KB URL with thousands of sensitive parameter names is scrubbed in one pass', () => {
+    const pairs = Array.from({ length: 2000 }, (_, i) => (i % 10 === 0 ? `k${i}=y` : `token${i.toString(36)}`)).join('&');
+    const query = pairs.slice(0, pairs.lastIndexOf('&', 15_000));
+    const hash = 'access_token=x&tab=1';
+    const url = `https://zuey.me/articles?${query}#${hash}`;
+    expect(url.length).toBeLessThanOrEqual(MAX_SCRUB_LENGTH);
+    expect((query.match(/token/g) ?? []).length).toBeGreaterThan(1500);
+    // Removing names one at a time re-serialises the whole query per name (quadratic). The work bound: the
+    // number of URLSearchParams mutations stays constant however many sensitive names the URL carries.
+    const spies = (['delete', 'set', 'append', 'sort'] as const).map(method => spyOn(URLSearchParams.prototype, method));
+    let out = '';
+    let ms = 0;
+    let mutations = 0;
+    try {
+      const start = performance.now();
+      out = scrubUrl(url);
+      ms = performance.now() - start;
+      mutations = spies.reduce((sum, spy) => sum + spy.mock.calls.length, 0);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(mutations).toBeLessThanOrEqual(2);
+    expect(ms).toBeLessThan(1000);
+    expect(out).not.toContain('token');
+    const kept = (query.match(/k\d+=y/g) ?? []).join('&');
+    expect(out).toBe(`https://zuey.me/articles?${kept}#tab=1`);
   });
 
   test('containsPii treats a value too long to inspect as PII', () => {
