@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
-import { createArticle, listArticles, parseArticleInput, toSummary } from '../../../../lib/blocks/articles';
+import { createArticle, listArticles, parseArticleInput, submittedArticleFields, toSummary, toWriteReceipt } from '../../../../lib/blocks/articles';
 import { documentReceipt, parseResponseMode } from '../../../../lib/blocks/read-modes';
 import { discoverArticles } from '../../../../lib/blocks/discovery';
 import { parseDiscoveryQuery } from '../../../../lib/blocks/params';
@@ -55,8 +55,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
     if (!body) return jsonError(400, 'invalid_json', 'Body must be a JSON object');
     const responseMode = parseResponseMode(body.response_mode);
     return await idempotentJson({ request, d1: env.DB, actor, operation: 'article_create', body, status: 201 }, async () => {
-      const rec = await createArticle(env.DB, parseArticleInput(withoutIdempotencyKey(body), 'create'), { actor, env });
-      return responseMode === 'summary' ? { ...toSummary(rec), ...(await documentReceipt(rec.draft)) } : { ...toSummary(rec), document: rec.draft };
+      const input = parseArticleInput(withoutIdempotencyKey(body), 'create');
+      const rec = await createArticle(env.DB, input, { actor, env });
+      const summary = { ...toSummary(rec), receipt: toWriteReceipt(rec, 'create', submittedArticleFields(input)) };
+      return responseMode === 'summary' ? { ...summary, ...(await documentReceipt(rec.draft)) } : { ...summary, document: rec.draft };
     });
   } catch (err) {
     return errorResponse(err);
