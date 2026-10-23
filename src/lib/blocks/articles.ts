@@ -20,7 +20,7 @@ import type { PublicCategory } from '../taxonomy/categories';
 import { labelKey, listLabels, publicLabelsFor } from '../taxonomy/labels';
 import type { PublicLabel } from '../taxonomy/labels';
 import { applyPublishNotification, cancelArticleNotification, getArticleNotification, parseNotifyFlag } from '../notifications/article-notification-schedule';
-import type { ArticleNotification } from '../notifications/article-notification-schedule';
+import type { PublishEmailNotification } from '../notifications/article-notification-schedule';
 import { getMediaAsset } from '../media/media-asset-store';
 
 export const SOCIAL_PREVIEW_MODES = ['generated_card', 'cover', 'custom_asset'] as const;
@@ -77,8 +77,8 @@ export interface ArticleSummary {
   social_preview: { mode: SocialPreviewMode; asset_id: string | null };
   /** Admin listings only: every edition including drafts. */
   editions?: EditionSummary[];
-  /** Admin draft views and publish responses only: the new-article email to members. */
-  email_notification?: ArticleNotification | null;
+  /** Admin draft views and publish responses only: the new-article email to members (`failed` only in publish responses). */
+  email_notification?: PublishEmailNotification | null;
 }
 
 export interface ArticleRecord extends ArticleSummary {
@@ -987,7 +987,14 @@ export async function publishArticle(
   scheduleOgRefresh(db, art.id, slug, ctx);
   const nowMs = Date.now();
   const backdated = publishedAt !== null && Date.parse(publishedAt) < nowMs - BACKDATE_THRESHOLD_MS;
-  const emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, previouslyPublished, actor: ctx.actor ?? 'admin', nowMs });
+  // The publish has committed: an email-step failure is reported, never thrown (a retry would only get 409).
+  let emailNotification: PublishEmailNotification | null;
+  try {
+    emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, previouslyPublished, actor: ctx.actor ?? 'admin', nowMs });
+  } catch (err) {
+    console.error('Email notification failed after commit:', err instanceof Error ? err.message : 'unknown');
+    emailNotification = { status: 'failed', send_after: null, sent_count: 0, reason: 'notification_update_failed', updated_at: new Date(nowMs).toISOString() };
+  }
   const rec = await getArticleById(db, art.id, 'Article disappeared after publish', { locale });
   return { ...rec, email_notification: emailNotification };
 }

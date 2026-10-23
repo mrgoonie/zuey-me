@@ -1224,7 +1224,8 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     if (res.ok) {
       await load(editing.originalSlug, editing.draft.locale);
       const scheduled = isObj(res.data) ? parseEmailNotification(res.data.email_notification) : null;
-      const emailNote = scheduled?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(scheduled.sendAfter)}.` : '';
+      const emailNote = scheduled?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(scheduled.sendAfter)}.`
+        : scheduled?.status === 'failed' ? ' Không cập nhật được email cho thành viên; xuất bản lại để thử lại.' : '';
       setStatus({ text: `Đã xuất bản bản ${editing.draft.locale}.${emailNote}`, error: false });
       onListChanged();
     } else if (res.code === 'revision_conflict') {
