@@ -651,6 +651,10 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
  * renewal reports `renewal`. Access is not changed for either: the admin reviews the logged reversal.
  * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
  * `payment_events` row keyed by the refund or dispute id gates them across webhook retries.
+ * An opened dispute logs and reverses the commission but queues no `refund` (it may still be won); the funds-lost
+ * outcomes (`dispute.accepted`, `dispute.lost`, `dispute.expired`) share one gate and one analytics key per dispute,
+ * so it is reported once whichever arrives. `dispute.won` / `dispute.cancelled` are not parsed: nothing is restored,
+ * and a commission reversed on `dispute.opened` stays reversed for the admin to review.
  *
  * A payment with no recorded charge (a reversal that beats its `payment.succeeded`, or a renewal charged before
  * charge rows existed) is looked up at Dodo (`GET /payments/{id}`, with `env`) and matched to a card by its subscription id or,
@@ -669,7 +673,8 @@ export async function applyDodoReversal(
   const renewal = strOrNull(row, 'first_payment_id') !== event.paymentId;
   const outcome = renewal ? 'renewal' : (await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind)).outcome;
   const userId = strOrNull(row, 'user_id');
-  const reversalKey = `${event.type}:${event.objectId ?? event.paymentId}`;
+  // Every funds-lost outcome shares `dispute.lost`'s key, so a dispute accepted, lost or expired is logged once.
+  const reversalKey = `${event.kind === 'dispute_lost' ? 'dispute.lost' : event.type}:${event.objectId ?? event.paymentId}`;
   if (!userId || !(await recordEvent(d1, reversalKey, cardId, event.amount, event.currency, event.type))) {
     return { outcome, card_subscription_id: cardId };
   }
@@ -685,7 +690,7 @@ export async function applyDodoReversal(
       });
     }
     await insertActivity(d1, userId, 'billing.card_reversal', {
-      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
+      card_subscription_id: cardId, kind: event.kind, event: event.type, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
     });
   } catch (err) {
     await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('dodo', reversalKey).run().catch(() => undefined);
