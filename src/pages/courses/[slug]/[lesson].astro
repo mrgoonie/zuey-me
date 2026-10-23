@@ -61,7 +61,11 @@ const codeHighlights = hasHighlightableCode(articleBlocks)
 // Math is typeset on the server too; the KaTeX stylesheet is linked only when the lesson has math.
 const lessonHasMath = hasMath(articleBlocks);
 const mathRenders = lessonHasMath
-  ? await import('../../../lib/blocks/math-render').then(m => m.renderMathBlocks(articleBlocks)).catch(() => undefined)
+  ? await import('../../../lib/blocks/math-render').then(m => m.renderMathBlocks(articleBlocks)).catch((err: unknown) => {
+    // Readers still get every formula as TeX source; the log names the failure, never the lesson.
+    console.error('Math typesetter failed to load:', err instanceof Error ? err.message : 'unknown');
+    return undefined;
+  })
   : undefined;
 const showWatermark = Boolean(view?.document && paid && watermark);
 const lessonPath = `/courses/${slug}/${lessonSlug}`;

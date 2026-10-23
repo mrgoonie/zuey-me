@@ -82,7 +82,11 @@ const codeHighlights = hasHighlightableCode(articleBlocks)
 // Math is typeset here too (KaTeX stays out of the island bundle); the KaTeX stylesheet is linked only for these pages.
 const articleHasMath = hasMath(articleBlocks);
 const mathRenders = articleHasMath
-  ? await import('../../lib/blocks/math-render').then(m => m.renderMathBlocks(articleBlocks)).catch(() => undefined)
+  ? await import('../../lib/blocks/math-render').then(m => m.renderMathBlocks(articleBlocks)).catch((err: unknown) => {
+    // Readers still get every formula as TeX source; the log names the failure, never the document.
+    console.error('Math typesetter failed to load:', err instanceof Error ? err.message : 'unknown');
+    return undefined;
+  })
   : undefined;
 // Wide or full sections widen the page; everything else stays in the prose column (see .zb-article-lanes).
 const articleWidth = view && documentLanes(view.document).length > 0 ? 'max-w-[1240px] zb-article-lanes' : 'max-w-[860px]';

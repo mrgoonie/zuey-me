@@ -61,6 +61,8 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 ## Math blocks
 
 - `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.
+- One equation sequence runs through the document: `numbered` formulas get `(n)`, and `equation`/`align`/`gather` continue the same count with KaTeX's own numbers. A formula with its own numbering or a `\tag` never gets a second number, even when `numbered` is set.
+- Typesetting is bounded so a page cannot burn server CPU: macro definitions (`\def`, `\newcommand`, `\let`, …), nesting deeper than 40 groups, TeX over 3,000 characters, and formulas past the per-page budget (about 16,000 TeX characters plus a fixed share per formula, 1.5 MB of markup) show as source. Split long derivations into several blocks.
 - KaTeX runs with `trust: false`: `\href`, `\url`, `\includegraphics` and `\html*` render as plain red command names, never as links, images or attributes. Malformed TeX is saved as written (validation does not parse TeX) and readers see its source under an error note, so check the rendered page after a write.
 
 ## Paywall and notifications
@@ -84,9 +86,9 @@ Loads each locale at 390 px and 1280 px, fails on page or console errors and hor
 
 | Step | Legacy answer | With the options above |
 | --- | --- | --- |
-| Learn the block format | `block_schema {}` 30,352 | `block_schema {types: [paragraph, heading, card], compact: true}` 4,523 |
+| Learn the block format | `block_schema {}` 30,705 | `block_schema {types: [paragraph, heading, card], compact: true}` 4,523 |
 | Read what to translate | `article_get` 16,024 | `article_get {mode: "translatables", limit: 500}` 12,300 |
 | Save the translated edition | `article_update` echo 16,401 | `response_mode: "summary"` 1,001 |
-| Total | 62,777 | 17,824 (−72%) |
+| Total | 63,130 | 17,824 (−72%) |
 
 The fixture's read step saves less than the others because it is mostly prose; documents with large widget code or diagrams save more, since `translatables` leaves those out.

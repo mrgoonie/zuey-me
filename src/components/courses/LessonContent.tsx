@@ -35,7 +35,7 @@ function Widget({ block, courseSlug, lessonSlug, signedIn }: { block: PublicLess
 /** Lesson body: article runs through the shared block renderer, course widgets through their own components. */
 export function LessonContent({ segments, courseSlug, lessonSlug, signedIn, highlights, math }: Props) {
   // Equation numbers run across the whole lesson, not restart in each article run.
-  const numbering = useMemo(() => mathNumbers(segments.flatMap(seg => (seg.kind === 'article' ? seg.blocks : []))), [segments]);
+  const numbering = useMemo(() => mathNumbers(segments.flatMap(seg => (seg.kind === 'article' ? seg.blocks : [])), math), [segments, math]);
   if (segments.length === 0) return <p className="text-stone-600">Bài học này chưa có nội dung.</p>;
   return (
     <div className="min-w-0">

@@ -6,7 +6,7 @@ import { BlockRenderer } from '../src/components/blocks/BlockRenderer';
 import { documentToMarkdown } from '../src/lib/blocks/markdown';
 import { hasMath, mathMarkup, mathNumbers } from '../src/lib/blocks/math';
 import type { MathRenders } from '../src/lib/blocks/math';
-import { MAX_DOCUMENT_MATH_CHARS, renderMathBlocks, renderTex } from '../src/lib/blocks/math-render';
+import { MATH_MAX_TEX_CHARS, MAX_DOCUMENT_MATH_COST, mathCost, renderMathBlocks, renderTex, texDepth } from '../src/lib/blocks/math-render';
 import { BLOCK_SCHEMA_NOTES, MATH_EXAMPLE, blockSchemas } from '../src/lib/blocks/openapi';
 import { applyPaywall, blockWeight } from '../src/lib/blocks/paywall';
 import type { ArticleDocument, Block, MathBlock } from '../src/lib/blocks/schema';
@@ -105,20 +105,53 @@ describe('math typesetting (KaTeX)', () => {
     expect(renderTex('{'.repeat(20_000) + '}'.repeat(20_000)).ok).toBe(false);
   });
 
-  it('does not leak \\gdef definitions between formulas', () => {
-    expect(renderTex('\\gdef\\zueyfoo{1}\\zueyfoo').ok).toBe(true);
+  it('refuses macro definitions, so nothing can leak between formulas and no short TeX expands into heavy work', () => {
+    for (const tex of ['\\gdef\\zueyfoo{1}\\zueyfoo', '\\def\\a{x}\\a', '\\newcommand{\\a}{x}\\a', '\\let\\a=x', '\\global\\def\\a{x}']) {
+      const res = renderTex(tex);
+      expect(res.ok ? '' : res.error).toContain('Macro definitions');
+    }
     expect(renderTex('\\zueyfoo').ok).toBe(false);
+    // Built-in commands that merely start like a definition still typeset.
+    expect(renderTex('\\left( \\delta + \\leftarrow \\right) \\leq \\deg x').ok).toBe(true);
+  });
+
+  it('measures nesting depth and refuses formulas nested or sized beyond the caps', () => {
+    expect(texDepth('\\frac{a}{\\sqrt{b}}')).toBe(2);
+    expect(texDepth('\\left( \\begin{matrix} \\{x\\} \\end{matrix} \\right)')).toBe(3);
+    expect(renderTex('\\sqrt{'.repeat(41) + 'x' + '}'.repeat(41)).ok).toBe(false);
+    expect(renderTex('\\sqrt{'.repeat(40) + 'x' + '}'.repeat(40)).ok).toBe(true);
+    const long = renderTex('x+'.repeat(MATH_MAX_TEX_CHARS));
+    expect(long.ok ? '' : long.error).toContain(`longer than ${MATH_MAX_TEX_CHARS}`);
+  });
+
+  it('bounds the CPU a worst-case document costs', () => {
+    renderTex('x'); // KaTeX is loaded and warm, as on a busy worker.
+    const nest = '\\frac{1}{'.repeat(39) + '1' + '}'.repeat(39);
+    const worst: Record<string, string> = {
+      plus: 'x+'.repeat(1_400), subscripts: 'x_{1}'.repeat(560), nested: `${nest}+`.repeat(7),
+      matrix: '\\begin{pmatrix}' + Array.from({ length: 56 }, () => Array(25).fill('a').join('&')).join('\\\\') + '\\end{pmatrix}',
+      tiny: 'x', typical: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}',
+    };
+    for (const [name, tex] of Object.entries(worst)) {
+      const blocks = Array.from({ length: 500 }, (_, i) => math(`${name}${i}`, tex));
+      const started = performance.now();
+      const renders = renderMathBlocks(blocks);
+      const ms = performance.now() - started;
+      expect({ name, slow: ms >= 100 }).toEqual({ name, slow: false });
+      // Only the formulas within the budget are typeset; the rest fall back to source without any KaTeX work.
+      expect(Object.keys(renders).length).toBeLessThanOrEqual(Math.floor(MAX_DOCUMENT_MATH_COST / mathCost(tex)));
+    }
   });
 
   it('typesets nested math, skips failures and stays within the document budget', () => {
-    const big = 'x'.repeat(9_000);
+    const big = 'x'.repeat(2_000);
     const blocks: Block[] = [
       math('__proto__', 'a^2'),
       { id: 's', type: 'section', width: 'prose', surface: 'none', blocks: [math('in-section', 'b')] },
       { id: 't', type: 'toggle', summary: 'More', blocks: [math('in-toggle', 'c')] },
       { id: 'l', type: 'layout', variant: 'columns', cols: { base: 1, md: 2, lg: 2 }, children: [{ blocks: [math('in-layout', 'd')] }] },
       math('broken', '\\frac{'),
-      ...Array.from({ length: Math.ceil(MAX_DOCUMENT_MATH_CHARS / big.length) + 1 }, (_, i) => math(`big${i}`, big)),
+      ...Array.from({ length: Math.ceil(MAX_DOCUMENT_MATH_COST / big.length) + 1 }, (_, i) => math(`big${i}`, big)),
     ];
     const renders = renderMathBlocks(blocks);
     expect(Object.hasOwn(renders, '__proto__')).toBe(true);
@@ -127,7 +160,8 @@ describe('math typesetting (KaTeX)', () => {
     expect(mathMarkup(renders, 'broken')).toBeNull();
     expect(mathMarkup(renders, 'constructor')).toBeNull();
     const typesetBig = Object.keys(renders).filter(k => k.startsWith('big')).length;
-    expect(typesetBig).toBe(Math.floor((MAX_DOCUMENT_MATH_CHARS - 6) / big.length));
+    const spentBefore = ['a^2', 'b', 'c', 'd', '\\frac{'].reduce((sum, tex) => sum + mathCost(tex), 0);
+    expect(typesetBig).toBe(Math.floor((MAX_DOCUMENT_MATH_COST - spentBefore) / mathCost(big)));
     expect(hasMath(blocks)).toBe(true);
     expect(hasMath([{ id: 'p', type: 'paragraph', text: 'no math' }])).toBe(false);
   });
@@ -141,7 +175,37 @@ describe('math rendering', () => {
   ]);
 
   it('numbers numbered display formulas in document order', () => {
-    expect([...mathNumbers(doc.blocks)]).toEqual([['m1', 1], ['m3', 2], ['m4', 3]]);
+    expect([...mathNumbers(doc.blocks)]).toEqual([['m1', { label: 1 }], ['m3', { label: 2 }], ['m4', { label: 3 }]]);
+  });
+
+  describe('with TeX that numbers itself', () => {
+    const mixed = valid([
+      math('m1', 'a', { numbered: true }),
+      math('e1', '\\begin{equation} b \\end{equation}'),
+      math('a1', '\\begin{align} c &= d \\\\ e &= f \\end{align}', { numbered: true }),
+      math('t1', 'g \\tag{A}', { numbered: true }),
+      math('s1', '\\begin{equation*} h \\end{equation*}', { numbered: true }),
+      math('m2', 'i', { numbered: true }),
+    ]);
+    const renders = renderMathBlocks(mixed.blocks);
+
+    it('runs one sequence through our labels and KaTeX numbers, never numbering a formula twice', () => {
+      expect([...mathNumbers(mixed.blocks, renders)]).toEqual([
+        ['m1', { label: 1 }], ['e1', { counterStart: 1 }], ['a1', { counterStart: 2 }], ['t1', { counterStart: 4 }],
+        ['s1', { label: 5 }], ['m2', { label: 6 }],
+      ]);
+      // Without server markup the TeX decides; no KaTeX numbers are shown then, so none are counted.
+      expect([...mathNumbers(mixed.blocks)].map(([id, n]) => [id, 'label' in n ? n.label : `+${n.counterStart}`]))
+        .toEqual([['m1', 1], ['e1', '+1'], ['a1', '+1'], ['t1', '+1'], ['s1', 2], ['m2', 3]]);
+    });
+
+    it('restarts KaTeX counters per formula and adds no label of ours', () => {
+      const html = render(mixed, renders);
+      expect(html.match(/class="zb-math-number"/g)).toHaveLength(3);
+      expect(html).toContain('<span class="zb-math-number">(6)</span>');
+      expect(html).toContain('<div class="zb-math-row" style="counter-reset:katexEqnNo 2 mmlEqnNo 2">');
+      expect(html.match(/class="eqn-num"/g)).toHaveLength(3);
+    });
   });
 
   it('server markup: typeset formula, equation number, no-JS TeX source and caption', () => {
@@ -197,6 +261,11 @@ describe('math in Markdown, search, AI, schema and paywall', () => {
     expect(documentToMarkdown(doc)).toBe('$$\na^2\n$$\n\n*Square*\n\n$x + y$');
   });
 
+  it('exports TeX holding its own delimiter as a math code block', () => {
+    const doc = valid([math('a', '\\$5 + x', { mode: 'inline' }), math('b', '\\text{$$} x'), math('c', '\\text{\\$} y')]);
+    expect(documentToMarkdown(doc)).toBe('```math\n\\$5 + x\n```\n\n```math\n\\text{$$} x\n```\n\n$$\n\\text{\\$} y\n$$');
+  });
+
   it('feeds the TeX and caption to search and AI text', () => {
     const doc = valid([math('a', '\\sqrt{2}', { caption: 'Căn hai' })]);
     expect(documentText(doc)).toContain('\\sqrt{2}');
@@ -237,7 +306,7 @@ describe('math in Markdown, search, AI, schema and paywall', () => {
     expect(kept.map(b => b.id)).toEqual(['t']);
     const toggle = kept[0];
     expect(toggle.type === 'toggle' ? toggle.blocks.map(b => b.id) : []).toEqual(['m1']);
-    expect([...mathNumbers(kept)]).toEqual([['m1', 1]]);
+    expect([...mathNumbers(kept)]).toEqual([['m1', { label: 1 }]]);
     expect(render(res.doc, renderMathBlocks(kept))).not.toContain('bbbb');
   });
 

@@ -1985,7 +1985,7 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
       },
       "numbered": {
         "default": false,
-        "description": "Display math only: show an equation number, counted in document order across numbered formulas.",
+        "description": "Display math only: show an equation number, counted in document order. TeX that numbers itself (equation, align, gather, \\tag) keeps its own numbers instead.",
         "type": "boolean",
       },
       "tex": {

@@ -29,11 +29,36 @@ export function hasMath(blocks: Block[]): boolean {
   return found;
 }
 
-/** Equation numbers of the numbered display formulas, 1-based in document (reading) order. */
-export function mathNumbers(blocks: Block[]): Map<string, number> {
-  const numbers = new Map<string, number>();
+/**
+ * How a display formula is numbered: our `(n)` label (a `numbered` formula), or KaTeX's own numbers
+ * (`equation`, `align`, `gather`, …) continuing the document's sequence from `counterStart`.
+ */
+export type MathNumber = { label: number } | { counterStart: number };
+
+/** TeX that numbers or tags itself: numbered environments (not their starred forms) and `\tag`. */
+const SELF_NUMBERING_TEX = /\\tag\*?\s*\{|\\begin\s*\{(?:equation|align|alignat|gather|multline|flalign)\}/;
+const KATEX_TAG = 'class="katex-tag"';
+const KATEX_EQN_NUM = /class="eqn-num"/g;
+
+/**
+ * Equation numbering in document (reading) order. One counter runs through our labels and KaTeX's
+ * automatic numbers, so a document never shows the same number twice. A formula that numbers or tags
+ * itself never gets our label as well, even when it is marked `numbered`. With server markup the
+ * decision and the count come from KaTeX's output; without it, from the TeX.
+ */
+export function mathNumbers(blocks: Block[], renders?: MathRenders): Map<string, MathNumber> {
+  const numbers = new Map<string, MathNumber>();
+  let counter = 0;
   walkBlocks(blocks, b => {
-    if (b.type === 'math' && b.numbered && b.mode !== 'inline') numbers.set(b.id, numbers.size + 1);
+    if (b.type !== 'math' || b.mode === 'inline') return;
+    const markup = mathMarkup(renders, b.id);
+    if (markup ? markup.includes(KATEX_TAG) : SELF_NUMBERING_TEX.test(b.tex)) {
+      numbers.set(b.id, { counterStart: counter });
+      counter += markup?.match(KATEX_EQN_NUM)?.length ?? 0;
+    } else if (b.numbered) {
+      counter += 1;
+      numbers.set(b.id, { label: counter });
+    }
   });
   return numbers;
 }

@@ -14,6 +14,7 @@ import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
 import { MathView } from './MathBlock';
 import { mathMarkup, mathNumbers } from '../../lib/blocks/math';
+import type { MathNumber } from '../../lib/blocks/math';
 import type { MathRenders } from '../../lib/blocks/math';
 import { CardView, SectionView } from './ContainerBlocks';
 import { DiagramBlock } from './DiagramBlock';
@@ -64,8 +65,8 @@ interface RenderContext {
   imageSizes: string;
   /** Server-typeset KaTeX markup by math block id. */
   math?: MathRenders;
-  /** Equation numbers of numbered display formulas by block id. */
-  mathNumbers: Map<string, number>;
+  /** Equation numbering of display formulas by block id. */
+  mathNumbers: Map<string, MathNumber>;
   liveMath: boolean;
 }
 
@@ -306,7 +307,7 @@ interface BlockRendererProps {
   /** Typeset math on the client by lazy-loading KaTeX (Studio previews). */
   liveMath?: boolean;
   /** Equation numbers when doc is one part of a longer document (lesson runs); computed from doc otherwise. */
-  mathNumbering?: Map<string, number>;
+  mathNumbering?: Map<string, MathNumber>;
 }
 
 /** Article column width in CSS px: max-w-[860px] or the 1240px lanes, minus the card's horizontal padding. */
@@ -319,14 +320,14 @@ export function BlockRenderer({
   doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms,
   math, liveMath = false, mathNumbering,
 }: BlockRendererProps) {
-  const ownNumbers = useMemo(() => (mathNumbering ? null : mathNumbers(doc.blocks)), [doc, mathNumbering]);
+  const ownNumbers = useMemo(() => (mathNumbering ? null : mathNumbers(doc.blocks, math)), [doc, math, mathNumbering]);
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
   const lanes = documentLanes(doc);
   const ctx: RenderContext = {
     articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, imageTransforms,
     leadImageId: eagerLeadImage ? leadImageBlockId(doc.blocks) : undefined,
     imageSizes: bodyImageSizes(lanes.length > 0),
-    math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, number>(), liveMath,
+    math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, MathNumber>(), liveMath,
   };
   return (
     <div className="zb-doc" data-lanes={lanes.length > 0 ? lanes.join(' ') : undefined}>

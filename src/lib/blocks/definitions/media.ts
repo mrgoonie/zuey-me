@@ -2,10 +2,10 @@
 import type { BlockDefinition, BlockValidator, RawBlock } from '../block-definition';
 import { EMBED_PROVIDERS, LIMITS, MATH_MODES, isPdfUrl } from '../schema';
 import type {
-  AudioBlock, BookmarkBlock, EmbedBlock, EmbedProvider, FileBlock, GalleryBlock, GalleryImage, ImageBlock, MathBlock, VideoBlock,
+  AudioBlock, BookmarkBlock, EmbedBlock, EmbedProvider, FileBlock, GalleryBlock, GalleryImage, ImageBlock, MathBlock, MathMode, VideoBlock,
 } from '../schema';
 import { PROVIDER_LABELS, detectProvider } from '../embed';
-import { fileName, formatBytes, linkText, mdCaption } from '../markdown-format';
+import { fence, fileName, formatBytes, linkText, mdCaption } from '../markdown-format';
 import { httpsUrl, imageSize, imageSizeTogether, short } from './schema-fragments';
 import { isInt, isObj, isOneOf, plain, plainLength } from './shared';
 
@@ -80,6 +80,16 @@ export const MATH_EXAMPLE = {
   type: 'math', tex: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}', numbered: true, caption: 'Tích phân Gauss',
 } as const;
 
+/**
+ * `$…$` / `$$…$$` Markdown math. TeX holding the delimiter itself (`\$5` inline, `$$` in display math)
+ * would end the fence early, so it is exported as a fenced `math` code block instead.
+ */
+function mathMarkdown(tex: string, mode: MathMode): string {
+  if (mode === 'inline' && !tex.includes('$')) return `$${tex.replace(/\s*\r?\n\s*/g, ' ').trim()}$`;
+  if (mode === 'display' && !tex.includes('$$')) return `$$\n${tex}\n$$`;
+  return fence(tex, 'math');
+}
+
 export const math: BlockDefinition<MathBlock> = {
   type: 'math',
   validate(v, raw, { id, path }) {
@@ -101,9 +111,7 @@ export const math: BlockDefinition<MathBlock> = {
     // Defaults are not stored, so documents saved before modes and numbering existed keep their exact shape.
     return { id, type: 'math', tex, ...(mode === 'inline' ? { mode } : {}), ...(numbered ? { numbered } : {}), ...withCaption };
   },
-  markdown: b => (b.mode === 'inline'
-    ? `$${b.tex.replace(/\s*\r?\n\s*/g, ' ').trim()}$`
-    : `$$\n${b.tex}\n$$`) + mdCaption(b.caption),
+  markdown: b => mathMarkdown(b.tex, b.mode ?? 'display') + mdCaption(b.caption),
   searchText: b => [b.tex, plain(b.caption)],
   aiText: b => [b.tex, plain(b.caption)].join(' '),
   weight: b => b.tex.length + plainLength(b.caption),
@@ -114,7 +122,7 @@ export const math: BlockDefinition<MathBlock> = {
         description: 'TeX source (KaTeX subset), without surrounding $ or $$. Typeset on the server to HTML plus MathML; the source stays readable and copyable. Malformed TeX is shown as source with an error note. \\href, \\url, \\includegraphics and \\html* commands are not trusted and render as plain text.',
       },
       mode: { type: 'string', enum: [...MATH_MODES], default: 'display', description: '`display`: centred on its own line (scrolls horizontally when wide). `inline`: text-sized, left-aligned in the reading flow.' },
-      numbered: { type: 'boolean', default: false, description: 'Display math only: show an equation number, counted in document order across numbered formulas.' },
+      numbered: { type: 'boolean', default: false, description: 'Display math only: show an equation number, counted in document order. TeX that numbers itself (equation, align, gather, \\tag) keeps its own numbers instead.' },
       caption: short,
     },
     required: ['tex'],

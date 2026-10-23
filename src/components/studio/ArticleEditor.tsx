@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
 import { MathView } from '../blocks/MathBlock';
+import { mathNumbers } from '../../lib/blocks/math';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
   BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
@@ -647,8 +648,8 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
           </div>
           <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
           {block.tex.trim() && (
-            <div className="rounded-2xl bg-[#F5EFEB] p-3 text-stone-900 min-w-0" aria-label="Xem trước công thức">
-              <MathView block={block} html={null} number={block.numbered && block.mode !== 'inline' ? 1 : undefined} live />
+            <div className="rounded-2xl bg-[#F5EFEB] p-3 text-stone-900 min-w-0" role="group" aria-label="Xem trước công thức">
+              <MathView block={block} html={null} number={mathNumbers([block]).get(block.id)} live />
             </div>
           )}
         </div>
