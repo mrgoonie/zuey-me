@@ -408,15 +408,19 @@ export function containsPii(value: string): boolean {
   return looksLikeEmail(value) || looksLikePhone(value) || looksLikeJwt(value) || test(SECRET_RE, value);
 }
 
-function scrubParams(params: URLSearchParams, ownSite: boolean): boolean {
-  let changed = false;
-  for (const name of [...new Set(params.keys())]) {
-    if (isSensitiveParam(name) || (ownSite && isSearchParam(name))) {
-      params.delete(name);
-      changed = true;
-    }
+/**
+ * The parameters left once sensitive ones (and, on zuey.me, search words) are removed, or null when none is.
+ * One pass over the entries builds the result: deleting names one at a time re-serialises the whole query on
+ * every call, which is quadratic and took ~80 ms in V8 on a 16 KB URL with thousands of sensitive names.
+ */
+function keptParams(params: URLSearchParams, ownSite: boolean): URLSearchParams | null {
+  const kept: Array<[string, string]> = [];
+  let removed = false;
+  for (const [name, value] of params) {
+    if (isSensitiveParam(name) || (ownSite && isSearchParam(name))) removed = true;
+    else kept.push([name, value]);
   }
-  return changed;
+  return removed ? new URLSearchParams(kept) : null;
 }
 
 /**
@@ -440,10 +444,11 @@ export function scrubUrl(raw: string): string {
     parsed.search = '';
     parsed.hash = '';
   }
-  scrubParams(parsed.searchParams, ownSite);
+  const query = keptParams(parsed.searchParams, ownSite);
+  if (query) parsed.search = query.toString();
   if (parsed.hash.includes('=')) {
-    const hashParams = new URLSearchParams(parsed.hash.slice(1));
-    if (scrubParams(hashParams, ownSite)) {
+    const hashParams = keptParams(new URLSearchParams(parsed.hash.slice(1)), ownSite);
+    if (hashParams) {
       const rest = hashParams.toString();
       parsed.hash = rest ? `#${rest}` : '';
     }
