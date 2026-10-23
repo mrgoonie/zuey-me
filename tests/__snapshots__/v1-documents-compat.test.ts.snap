@@ -2152,7 +2152,129 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
     "type": "object",
   },
   "BlockTable": {
+    "examples": [
+      {
+        "caption": "Giá đã gồm VAT.",
+        "columns": [
+          {
+            "type": "text",
+          },
+          {
+            "currency": "VND",
+            "filter": true,
+            "type": "currency",
+          },
+          {
+            "decimals": 1,
+            "type": "percent",
+          },
+          {
+            "type": "date",
+          },
+          {
+            "filter": true,
+            "type": "boolean",
+          },
+          {
+            "type": "link",
+          },
+          {
+            "filter": true,
+            "type": "badge",
+          },
+        ],
+        "csv": true,
+        "headers": [
+          "Gói",
+          "Giá",
+          "Giảm",
+          "Ra mắt",
+          "Hỗ trợ 24/7",
+          "Chi tiết",
+          "Nhãn",
+        ],
+        "mobile": "cards",
+        "rows": [
+          [
+            "**Pro**",
+            "490000",
+            "12.5",
+            "2026-01-15",
+            "true",
+            "[Xem gói](https://zuey.me/pricing)",
+            "Phổ biến",
+          ],
+          [
+            "Cơ bản",
+            "190000",
+            "0",
+            "2025-06",
+            "false",
+            "https://zuey.me/pricing",
+            "Mới",
+          ],
+        ],
+        "search": true,
+        "sortable": true,
+        "stickyHeader": true,
+        "title": "Bảng giá gói",
+        "type": "table",
+      },
+    ],
     "properties": {
+      "caption": {
+        "description": "Inline text under the table",
+        "maxLength": 500,
+        "type": "string",
+      },
+      "columns": {
+        "description": "One per header; cells of a typed column hold its canonical value, or are empty. Cell formats: text: inline text; number: a plain number such as 1234.5 or -3 (no thousands separators); currency: a plain number such as 1234.5 (the column sets the currency); percent: a plain number of percent such as 12.5 for 12.5%; date: an ISO date: YYYY, YYYY-MM or YYYY-MM-DD; boolean: true or false; link: an https:// URL or [label](https://…); badge: a one-line label of at most 100 characters. Values are shown formatted (1.234.567 ₫, 12,5%, 15/01/2026) and sort by value",
+        "items": {
+          "properties": {
+            "currency": {
+              "description": "Required for currency columns: ISO 4217 code such as VND or USD",
+              "pattern": "^[A-Z]{3}$",
+              "type": "string",
+            },
+            "decimals": {
+              "description": "number, currency and percent only: fixed decimals",
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "filter": {
+              "default": false,
+              "description": "Readers get a filter for this column: a from/to range for numbers and dates, a value list (or text box) otherwise",
+              "type": "boolean",
+            },
+            "type": {
+              "default": "text",
+              "enum": [
+                "text",
+                "number",
+                "currency",
+                "percent",
+                "date",
+                "boolean",
+                "link",
+                "badge",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "type",
+          ],
+          "type": "object",
+        },
+        "maxItems": 20,
+        "type": "array",
+      },
+      "csv": {
+        "default": false,
+        "description": "A button downloads the rows on screen as CSV (UTF-8, formula-safe)",
+        "type": "boolean",
+      },
       "headers": {
         "items": {
           "maxLength": 500,
@@ -2167,6 +2289,15 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
         "pattern": "^[A-Za-z0-9_-]{1,64}$",
         "type": "string",
       },
+      "mobile": {
+        "default": "scroll",
+        "description": "Narrow screens: scroll sideways, or show each row as a card of label/value pairs",
+        "enum": [
+          "scroll",
+          "cards",
+        ],
+        "type": "string",
+      },
       "rows": {
         "items": {
           "description": "Same length as headers",
@@ -2179,6 +2310,26 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
         },
         "maxItems": 200,
         "type": "array",
+      },
+      "search": {
+        "default": false,
+        "description": "A search box filters rows by every word (accents ignored)",
+        "type": "boolean",
+      },
+      "sortable": {
+        "default": false,
+        "description": "Column headers become sort buttons (ascending, descending, original order)",
+        "type": "boolean",
+      },
+      "stickyHeader": {
+        "default": false,
+        "description": "The table scrolls inside a box at most 70% of the screen tall, keeping the header row in view",
+        "type": "boolean",
+      },
+      "title": {
+        "description": "Plain-text name above the table (its accessible name and the CSV file name)",
+        "maxLength": 200,
+        "type": "string",
       },
       "type": {
         "const": "table",

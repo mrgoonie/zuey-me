@@ -3,6 +3,7 @@ import type { ArticleView } from './articles';
 import { childBlockLists, findBlock, walkBlocks } from './schema';
 import type { ArticleDocument, Block } from './schema';
 import { sha256Hex, stableStringify } from './schema-view';
+import { columnOf, isProseColumn } from './table-data';
 
 /** How much of an article an agent reads; `full` (the default) is the complete document. */
 export const READ_MODES = ['summary', 'outline', 'translatables', 'section', 'full'] as const;
@@ -117,8 +118,10 @@ function blockTexts(block: Block): TextField[] {
     case 'image': return [...text('alt', block.alt), ...text('caption', block.caption)];
     case 'embed': case 'diagram': case 'math': return text('caption', block.caption);
     case 'table': return [
+      ...text('title', block.title),
       ...block.headers.flatMap((h, i) => text(`headers.${i}`, h)),
-      ...block.rows.flatMap((row, r) => row.flatMap((cell, c) => text(`rows.${r}.${c}`, cell))),
+      ...block.rows.flatMap((row, r) => row.flatMap((cell, c) => (isProseColumn(columnOf(block, c)) ? text(`rows.${r}.${c}`, cell) : []))),
+      ...text('caption', block.caption),
     ];
     case 'chart': return [
       ...text('title', block.title),

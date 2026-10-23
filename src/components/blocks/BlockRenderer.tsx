@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
 import type { ArticleDocument, Block, LayoutBlock } from '../../lib/blocks/schema';
 import type { CodeHighlights } from '../../lib/blocks/code-syntax';
-import { childBlockLists, documentLanes, imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
+import { childBlockLists, documentLanes, imageSizeAttrs, isDataTable, resolveSpan } from '../../lib/blocks/schema';
 import { responsiveImage } from '../../lib/media/image-transform';
 import type { ImageTransforms } from '../../lib/media/image-transform';
 import { parseInline } from '../../lib/blocks/inline';
@@ -22,6 +22,8 @@ import { SurveyBlock } from './SurveyBlock';
 import { IconGlyph as StaticIconGlyph } from './block-icons';
 import type { IconGlyphProps } from './block-icons';
 import { ICON_PIXELS, isIconName } from '../../lib/blocks/icons';
+import { DataTable as StaticDataTable } from './TableBlock';
+import type { DataTableProps } from './TableBlock';
 import { InteractiveFrame } from '../ai/InteractiveFrame';
 
 type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
@@ -47,6 +49,36 @@ function IconSlot(props: IconGlyphProps) {
   return (
     <Suspense fallback={<IconPlaceholder size={props.size} />}>
       {import.meta.env.SSR ? <StaticIconGlyph {...props} /> : <LazyIconGlyph {...props} />}
+    </Suspense>
+  );
+}
+
+/**
+ * Data tables (sort, search, filters, CSV) load their script only on pages that have one, like icons: the
+ * server renders the full table, and hydration keeps that markup until the chunk resolves.
+ */
+const LazyDataTable = lazy(() => import('./TableBlock'));
+
+/** Plain table markup: every stored table without options, and the placeholder while a data table loads on the client. */
+function PlainTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
+  return (
+    <div className="zb-scroll">
+      <table className="zb-table">
+        <thead><tr>{headers.map((h, i) => <th scope="col" key={i}>{h}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((row, r) => (
+            <tr key={r}>{row.map((c, i) => <td key={i}><Inline text={c} /></td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DataTableSlot(props: DataTableProps) {
+  return (
+    <Suspense fallback={<PlainTable headers={props.block.headers} rows={props.block.rows} />}>
+      {import.meta.env.SSR ? <StaticDataTable {...props} /> : <LazyDataTable {...props} />}
     </Suspense>
   );
 }
@@ -188,18 +220,9 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     }
     case 'embed': return <EmbedView key={block.url} block={block} autoLoad={ctx.autoLoadEmbeds} />;
     case 'table':
-      return (
-        <div className="zb-scroll">
-          <table className="zb-table">
-            <thead><tr>{block.headers.map((h, i) => <th scope="col" key={i}>{h}</th>)}</tr></thead>
-            <tbody>
-              {block.rows.map((row, r) => (
-                <tr key={r}>{row.map((c, i) => <td key={i}><Inline text={c} /></td>)}</tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
+      return isDataTable(block)
+        ? <DataTableSlot block={block} renderInline={text => <Inline text={text} />} />
+        : <PlainTable headers={block.headers} rows={block.rows} />;
     case 'chart': return <ChartBlock block={block} />;
     case 'diagram': return <DiagramBlock block={block} />;
     case 'survey': return <SurveyBlock block={block} articleSlug={ctx.articleSlug} interactive={ctx.interactive} />;
