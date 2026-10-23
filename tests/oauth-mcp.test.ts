@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { jsonError, withRequestId } from '../src/lib/http';
 import { createUserKey } from '../src/lib/members/api-keys';
@@ -508,10 +509,61 @@ describe('refresh tokens and revocation', () => {
   it('lets only one of two concurrent refreshes rotate the token', async () => {
     const f = await fullFlow('lan@example.com');
     const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
-    const results = await Promise.all([exchange(base), exchange(base)]);
+    // In-process SQLite answers synchronously, so the second request would always see the first one's rotation
+    // in its initial read. Hold both requests at that read until both have made it: each then sees the token
+    // unrotated, passes every check, and only the rotation's single-winner guard can stop one of them.
+    let arrived = 0;
+    let release = (): void => {};
+    const bothRead = new Promise<void>(resolve => { release = resolve; });
+    const racing: D1DatabaseLike = {
+      prepare: (sql: string) => {
+        const stmt = d1.prepare(sql);
+        if (!sql.startsWith('SELECT * FROM oauth_tokens WHERE refresh_hash')) return stmt;
+        const held = (bound: D1PreparedStatementLike): D1PreparedStatementLike => ({
+          bind: (...values: unknown[]) => held(bound.bind(...values)),
+          first: async <T = Record<string, unknown>>(): Promise<T | null> => {
+            const snapshot = await bound.first<T>();
+            if (++arrived === 2) release();
+            await bothRead;
+            return snapshot;
+          },
+          all: <T = Record<string, unknown>>() => bound.all<T>(),
+          run: () => bound.run(),
+        });
+        return held(stmt);
+      },
+      batch: statements => d1.batch(statements),
+    };
+    const refresh = async (): Promise<{ status: number; body: unknown }> => {
+      const res = await tokenApi(ctx({ url: `${ORIGIN}/oauth/token`, form: base, env: { DB: racing } }));
+      return { status: res.status, body: await body(res) };
+    };
+    const results = await Promise.all([refresh(), refresh()]);
+    expect(arrived).toBe(2);
     expect(results.filter(r => r.status === 200).length).toBe(1);
+    const winner = results.find(r => r.status === 200);
     const loser = results.find(r => r.status !== 200);
     expect(get(loser?.body, 'error')).toBe('invalid_grant');
+    // Exactly one new pair was inserted, and the loser's reuse-revoke always covers it (never timing-dependent).
+    expect(d1.raw.query('SELECT COUNT(*) AS n FROM oauth_tokens').get()).toEqual({ n: 2 });
+    expect((await mcp('ping', {}, { token: String(get(winner?.body, 'access_token')) })).status).toBe(401);
+    const afterRace = await exchange({ ...base, refresh_token: String(get(winner?.body, 'refresh_token')) });
+    expect(get(afterRace.body, 'error')).toBe('invalid_grant');
+  });
+
+  it('keeps the refresh token usable when issuing the new pair fails', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    d1.raw.run("CREATE TRIGGER fail_issue BEFORE INSERT ON oauth_tokens BEGIN SELECT RAISE(ABORT, 'insert failed'); END");
+    const failed = await exchange(base);
+    expect(failed.status).not.toBe(200);
+    // The rotation rolled back with the failed insert.
+    expect(d1.raw.query('SELECT COUNT(*) AS n FROM oauth_tokens WHERE rotated_at IS NOT NULL OR revoked_at IS NOT NULL').get()).toEqual({ n: 0 });
+
+    d1.raw.run('DROP TRIGGER fail_issue');
+    const retry = await exchange(base);
+    expect(retry.status).toBe(200);
+    expect((await mcp('ping', {}, { token: String(get(retry.body, 'access_token')) })).status).toBe(200);
   });
 
   it('refuses refresh tokens presented by another client', async () => {

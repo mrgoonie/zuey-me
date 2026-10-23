@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import { AppError } from '../http';
 import type { Row } from '../members/runtime';
 import { base64Url, iso, membersRuntime, randomId, randomSecret, sha256Hex, str, strOrNull } from '../members/runtime';
@@ -53,29 +53,50 @@ async function consentActive(d1: D1DatabaseLike, userId: string, clientId: strin
   return row !== null;
 }
 
-async function issueTokens(
+/** A token row still in play: refreshing it may rotate it. */
+const UNROTATED = 'rotated_at IS NULL AND revoked_at IS NULL';
+
+/**
+ * Mints a token pair and prepares its insert. With `rotatesId` the insert only lands while that refresh
+ * token is unrotated, so it can run in one batch with the rotation and at most one refresh wins.
+ */
+async function prepareTokens(
   d1: D1DatabaseLike,
-  input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string },
-): Promise<TokenResponse> {
+  input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string; rotatesId?: string },
+): Promise<{ insert: D1PreparedStatementLike; response: TokenResponse }> {
   const now = membersRuntime.now();
   const access = ACCESS_TOKEN_PREFIX + randomSecret(32);
   const withRefresh = input.client.grant_types.includes('refresh_token');
   const refresh = withRefresh ? REFRESH_TOKEN_PREFIX + randomSecret(32) : null;
   const scopes = sortScopes(input.scopes);
-  await d1.prepare(
-    `INSERT INTO oauth_tokens (id, family_id, client_id, user_id, access_hash, refresh_hash, scopes, audience, created_at, access_expires_at, refresh_expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
+  const values = [
     randomId('ot'), input.familyId, input.client.client_id, input.userId, await sha256Hex(access), refresh ? await sha256Hex(refresh) : null,
     JSON.stringify(scopes), input.audience, iso(now), iso(now + ACCESS_TOKEN_TTL_MS), refresh ? iso(now + REFRESH_TOKEN_TTL_MS) : null,
-  ).run();
+  ];
+  const columns = 'INSERT INTO oauth_tokens (id, family_id, client_id, user_id, access_hash, refresh_hash, scopes, audience, created_at, access_expires_at, refresh_expires_at)';
+  const insert = input.rotatesId === undefined
+    ? d1.prepare(`${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values)
+    : d1.prepare(`${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM oauth_tokens WHERE id = ? AND ${UNROTATED})`)
+      .bind(...values, input.rotatesId);
   return {
-    access_token: access,
-    token_type: 'Bearer',
-    expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
-    ...(refresh ? { refresh_token: refresh } : {}),
-    scope: scopes.join(' '),
+    insert,
+    response: {
+      access_token: access,
+      token_type: 'Bearer',
+      expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
+      ...(refresh ? { refresh_token: refresh } : {}),
+      scope: scopes.join(' '),
+    },
   };
+}
+
+async function issueTokens(
+  d1: D1DatabaseLike,
+  input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string },
+): Promise<TokenResponse> {
+  const { insert, response } = await prepareTokens(d1, input);
+  await insert.run();
+  return response;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,14 +188,21 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
     throw invalidGrant('Access was revoked');
   }
 
-  // Compare-and-set claim: of two concurrent refreshes only one rotates; the loser is treated as reuse.
-  const claim = await d1.prepare('UPDATE oauth_tokens SET rotated_at = ? WHERE id = ? AND rotated_at IS NULL AND revoked_at IS NULL')
-    .bind(iso(now), str(row, 'id')).run();
-  if (!claim.meta?.changes) {
+  // Rotate and issue in one batch (one transaction on D1): the new pair is inserted only while the old token
+  // is unrotated, and the old token is marked rotated in the same step. Of two concurrent refreshes exactly one
+  // inserts; the loser is treated as reuse and revokes the family, including the winner's new pair. A failed
+  // write rolls back both, so the presented refresh token stays usable for a retry.
+  const tokenId = str(row, 'id');
+  const { insert, response } = await prepareTokens(d1, { familyId, client, userId, scopes, audience, rotatesId: tokenId });
+  const [issued] = await d1.batch([
+    insert,
+    d1.prepare(`UPDATE oauth_tokens SET rotated_at = ? WHERE id = ? AND ${UNROTATED}`).bind(iso(now), tokenId),
+  ]);
+  if (!issued?.meta?.changes) {
     await revokeFamily(d1, familyId);
     throw invalidGrant('Refresh token was already used');
   }
-  return issueTokens(d1, { familyId, client, userId, scopes, audience });
+  return response;
 }
 
 export type AccessTokenCheck =
