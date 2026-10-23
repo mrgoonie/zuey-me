@@ -68,15 +68,15 @@ describe('percent-encoded emails', () => {
     const urls = [
       'https://zuey.me/articles/hello?utm_source=x&utm_medium=y',
       'https://www.google.com/search?q=zuey+me+review&hl=vi',
-      'https://zuey.me/search?q=100%25%20free%2Bcourse',
-      'https://zuey.me/vi/b%C3%A0i-vi%E1%BA%BFt?q=c%C3%A1ch%20h%E1%BB%8Dc',
+      'https://zuey.me/search?topic=100%25%20free%2Bcourse',
+      'https://zuey.me/vi/b%C3%A0i-vi%E1%BA%BFt?topic=c%C3%A1ch%20h%E1%BB%8Dc',
     ];
     for (const url of urls) expect(scrubUrl(url)).toBe(new URL(url).toString());
   });
 
   test('malformed escapes never throw and do not hide an email', () => {
-    expect(() => scrubUrl('https://zuey.me/?q=%E0%A4%A%zz%')).not.toThrow();
-    expect(scrubUrl('https://zuey.me/?q=%E0%A4%A%zz%')).toContain('%zz');
+    expect(() => scrubUrl('https://ref.example.org/?q=%E0%A4%A%zz%')).not.toThrow();
+    expect(scrubUrl('https://ref.example.org/?q=%E0%A4%A%zz%')).toContain('%zz');
     const out = scrubUrl('https://ref.example.org/?q=%E0%%ZZjane.doe%40example.com%');
     expect(leaksEmail(out)).toBe(false);
     expect(() => redactString('%%%40%4')).not.toThrow();
