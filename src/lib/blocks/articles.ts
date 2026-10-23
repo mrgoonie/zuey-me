@@ -376,15 +376,21 @@ function buildSummary(
   };
 }
 
-/** Compact, unambiguous result of a draft write; `status` stays as the public state of the edition. */
+export const WRITE_OPERATIONS = ['create', 'update', 'publish', 'tags_set', 'edition_delete'] as const;
+export type WriteOperation = (typeof WRITE_OPERATIONS)[number];
+
+/** Compact, unambiguous result of a write; `status` on the article stays the public state of the edition. */
 export interface WriteReceipt {
   operation_success: true;
+  /** The writer that produced this receipt. */
+  operation: WriteOperation;
+  /** Edition the write is about: the saved, published or deleted one; the primary edition for tags_set. */
   locale: Locale;
   /** Article-wide revision read right after the write (the next expected_revision unless another writer got in first). */
   article_revision: number;
-  /** Edition revision after the save; equals article_revision because a save bumps both together. */
+  /** Revision at which this edition last changed; below article_revision after a write that left the edition alone (tags_set, a metadata-only save). */
   edition_draft_revision: number;
-  /** Revision of the edition's currently public snapshot; null when it was never published. */
+  /** Revision of the edition's currently public snapshot; null when it was never published (or was just deleted). */
   published_revision: number | null;
   has_unpublished_changes: boolean;
   /** Fields present in the request (not a diff against the stored values). */
@@ -394,16 +400,40 @@ export interface WriteReceipt {
 
 const RECEIPT_FIELDS = ['slug', 'title', 'excerpt', 'primary_locale', 'access', 'tags', 'category', 'document'] as const;
 
-export function toWriteReceipt(rec: ArticleRecord, input: ArticleInput): WriteReceipt {
+/** Article fields present in a create or update request. */
+export function submittedArticleFields(input: ArticleInput): string[] {
+  return RECEIPT_FIELDS.filter(f => input[f] !== undefined);
+}
+
+/** Request fields of a publish that change what is stored besides the snapshot. */
+export function submittedPublishFields(body: Record<string, unknown>): string[] {
+  return (['published_at', 'notify'] as const).filter(f => body[f] !== undefined);
+}
+
+/**
+ * Receipt of a writer call, built from the article read back after the commit. For edition_delete pass the
+ * deleted locale: the record then shows the primary edition, and the receipt describes the edition that is gone.
+ */
+export function toWriteReceipt(
+  rec: ArticleRecord, operation: WriteOperation, submittedFields: string[], deletedLocale?: Locale,
+): WriteReceipt {
+  if (operation === 'edition_delete') {
+    return {
+      operation_success: true, operation, locale: deletedLocale ?? rec.locale, article_revision: rec.revision,
+      edition_draft_revision: rec.revision, published_revision: null, has_unpublished_changes: false,
+      submitted_fields: submittedFields, next_action: 'none',
+    };
+  }
   const edition = rec.editions.find(e => e.locale === rec.locale);
   return {
     operation_success: true,
+    operation,
     locale: rec.locale,
     article_revision: rec.revision,
     edition_draft_revision: edition?.revision ?? rec.revision,
     published_revision: rec.published_revision,
     has_unpublished_changes: rec.has_unpublished_changes,
-    submitted_fields: RECEIPT_FIELDS.filter(f => input[f] !== undefined),
+    submitted_fields: submittedFields,
     next_action: rec.has_unpublished_changes ? 'publish' : 'none',
   };
 }
