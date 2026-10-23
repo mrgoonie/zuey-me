@@ -261,6 +261,8 @@ Dewee hỏi zuey.me trước khi agent trả lời một tin nhắn Telegram (Ch
 
 `/mcp` và OAuth 2.1 (`/.well-known/oauth-authorization-server`) không cần secret mới. Chỉ đặt `MCP_ALLOWED_ORIGINS` (phân tách bằng dấu phẩy) khi một web app ở origin khác cần gọi `/mcp` trực tiếp từ trình duyệt.
 
+Refresh token được xoay vòng mỗi lần refresh. Dùng lại một refresh token đã xoay sẽ thu hồi toàn bộ grant, trừ trong cửa sổ ân hạn 30 giây: token vừa xoay chưa quá 30 giây, grant chưa bị thu hồi, sẽ nhận một cặp token mới cùng grant, tối đa 3 lần. Cửa sổ này dành cho nhiều phiên (ví dụ nhiều phiên Claude Code) dùng chung một token và refresh cùng lúc (RFC 9700 §4.14.2). Đánh đổi: token bị lộ và được dùng lại trong 30 giây đó vẫn nhận được cặp token mà không kích hoạt thu hồi. Cửa sổ cần migration `0032_oauth_refresh_grace.sql` (cột `oauth_tokens.grace_uses`); trước khi áp dụng, việc dùng lại bị xử lý nghiêm ngặt (thu hồi grant), không lỗi 500.
+
 ## 11. Kiểm tra
 
 1. Mở `/docs`. Kiểm tra có các nhóm Reads, Courses, Courses admin, Booking, Articles, Members & account và Membership billing.

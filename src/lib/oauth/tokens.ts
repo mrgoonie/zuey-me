@@ -57,12 +57,39 @@ async function consentActive(d1: D1DatabaseLike, userId: string, clientId: strin
 const UNROTATED = 'rotated_at IS NULL AND revoked_at IS NULL';
 
 /**
- * Mints a token pair and prepares its insert. With `rotatesId` the insert only lands while that refresh
- * token is unrotated, so it can run in one batch with the rotation and at most one refresh wins.
+ * Concurrent-refresh grace window. Real MCP clients present one refresh token several times at nearly the
+ * same moment (several sessions sharing one stored token, an SDK refreshing on parallel 401s), and a client
+ * whose response was lost retries with the token that was just rotated. Strict reuse detection would revoke
+ * the grant each time and log the user out.
+ *
+ * RFC 9700 §4.14.2 allows an authorization server to tolerate such concurrent refreshes. A refresh token
+ * rotated less than REFRESH_GRACE_MS ago, whose grant is not revoked, therefore gets a new sibling pair in the
+ * same grant (only hashes are stored, so the earlier response cannot be replayed), at most REFRESH_GRACE_MAX
+ * times. The sibling is issued under the same guard in one batch, so a revoke landing first always wins.
+ * Any other presentation of a rotated token (outside the window, cap used up, grant revoked) still revokes the
+ * whole grant.
+ *
+ * Security trade-off: an attacker replaying a stolen refresh token within the window after a legitimate
+ * rotation gets a pair, and that presentation does not trigger reuse revocation. The attacker already held a
+ * usable token, the window is short and the cap bounds the replays. Without the `grace_uses` column
+ * (migration 0032 not applied yet) the window is off and reuse is strict.
+ */
+export const REFRESH_GRACE_MS = 30_000;
+export const REFRESH_GRACE_MAX = 3;
+/** A rotated token still inside the grace window; binds the window start (ISO). */
+const IN_GRACE = `rotated_at IS NOT NULL AND rotated_at > ? AND revoked_at IS NULL AND grace_uses < ${REFRESH_GRACE_MAX}`;
+
+/** Only revoked or rotated tokens reach this; the message covers both. */
+const reusedGrant = (): OAuthError => invalidGrant('Refresh token was already used or revoked; all tokens of this grant are now revoked');
+
+/**
+ * Mints a token pair and prepares its insert. With `guard` the insert only lands while row `guard.id`
+ * matches `guard.where`, so it can run in one batch with the write that changes that row and at most one
+ * request wins.
  */
 async function prepareTokens(
   d1: D1DatabaseLike,
-  input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string; rotatesId?: string },
+  input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string; guard?: { id: string; where: string; binds: unknown[] } },
 ): Promise<{ insert: D1PreparedStatementLike; response: TokenResponse }> {
   const now = membersRuntime.now();
   const access = ACCESS_TOKEN_PREFIX + randomSecret(32);
@@ -74,10 +101,11 @@ async function prepareTokens(
     JSON.stringify(scopes), input.audience, iso(now), iso(now + ACCESS_TOKEN_TTL_MS), refresh ? iso(now + REFRESH_TOKEN_TTL_MS) : null,
   ];
   const columns = 'INSERT INTO oauth_tokens (id, family_id, client_id, user_id, access_hash, refresh_hash, scopes, audience, created_at, access_expires_at, refresh_expires_at)';
-  const insert = input.rotatesId === undefined
+  const guard = input.guard;
+  const insert = guard === undefined
     ? d1.prepare(`${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values)
-    : d1.prepare(`${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM oauth_tokens WHERE id = ? AND ${UNROTATED})`)
-      .bind(...values, input.rotatesId);
+    : d1.prepare(`${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM oauth_tokens WHERE id = ? AND ${guard.where})`)
+      .bind(...values, guard.id, ...guard.binds);
   return {
     insert,
     response: {
@@ -153,7 +181,10 @@ export async function exchangeAuthorizationCode(d1: D1DatabaseLike, client: OAut
   return issueTokens(d1, { familyId: codeId, client, userId, scopes: parseStoredScopes(str(row, 'scopes')), audience: resource });
 }
 
-/** refresh_token grant with rotation; presenting an already-rotated token revokes the whole family. */
+/**
+ * refresh_token grant with rotation. Presenting an already-rotated token revokes the whole family, except a
+ * concurrent refresh inside the grace window (see REFRESH_GRACE_MS), which gets a sibling pair.
+ */
 export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, form: Record<string, string>): Promise<TokenResponse> {
   if (!client.grant_types.includes('refresh_token')) throw new OAuthError(400, 'unauthorized_client', 'This client is not registered for refresh_token');
   const token = form.refresh_token;
@@ -161,13 +192,19 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
   const row = await d1.prepare('SELECT * FROM oauth_tokens WHERE refresh_hash = ?').bind(await sha256Hex(token)).first<Row>();
   if (!row || str(row, 'client_id') !== client.client_id) throw invalidGrant('Invalid refresh token');
   const familyId = str(row, 'family_id');
-  if (strOrNull(row, 'rotated_at') || strOrNull(row, 'revoked_at')) {
-    await revokeFamily(d1, familyId);
-    throw invalidGrant('Refresh token was already used or revoked; all tokens of this grant are now revoked');
-  }
   const now = membersRuntime.now();
   const expires = strOrNull(row, 'refresh_expires_at');
-  if (!expires || Date.parse(expires) <= now) throw invalidGrant('Refresh token expired');
+  const expired = !expires || Date.parse(expires) <= now;
+  const rotatedAt = strOrNull(row, 'rotated_at');
+  // Without migration 0032 the row has no `grace_uses`: no grace window, reuse stays strict.
+  const graceUses = typeof row.grace_uses === 'number' ? row.grace_uses : null;
+  const graceStart = iso(now - REFRESH_GRACE_MS);
+  const inGrace = rotatedAt !== null && graceUses !== null && graceUses < REFRESH_GRACE_MAX && rotatedAt > graceStart && !expired;
+  if (strOrNull(row, 'revoked_at') || (rotatedAt !== null && !inGrace)) {
+    await revokeFamily(d1, familyId);
+    throw reusedGrant();
+  }
+  if (expired) throw invalidGrant('Refresh token expired');
 
   // Validate everything before rotating, so a rejected request leaves the token usable for a corrected retry.
   // RFC 6749 §6: a refresh may narrow but never widen; a scope outside the grant is rejected, not intersected.
@@ -188,21 +225,37 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
     throw invalidGrant('Access was revoked');
   }
 
-  // Rotate and issue in one batch (one transaction on D1): the new pair is inserted only while the old token
-  // is unrotated, and the old token is marked rotated in the same step. Of two concurrent refreshes exactly one
-  // inserts; the loser is treated as reuse and revokes the family, including the winner's new pair. A failed
-  // write rolls back both, so the presented refresh token stays usable for a retry.
   const tokenId = str(row, 'id');
-  const { insert, response } = await prepareTokens(d1, { familyId, client, userId, scopes, audience, rotatesId: tokenId });
-  const [issued] = await d1.batch([
-    insert,
-    d1.prepare(`UPDATE oauth_tokens SET rotated_at = ? WHERE id = ? AND ${UNROTATED}`).bind(iso(now), tokenId),
-  ]);
-  if (!issued?.meta?.changes) {
-    await revokeFamily(d1, familyId);
-    throw invalidGrant('Refresh token was already used');
+  const tokens = { familyId, client, userId, scopes, audience };
+
+  // Rotate and issue in one batch (one transaction on D1): the new pair is inserted only while the old token
+  // is unrotated, and the old token is marked rotated in the same step, so of two concurrent refreshes exactly
+  // one rotates. A failed write rolls back both, so the presented refresh token stays usable for a retry.
+  if (rotatedAt === null) {
+    const { insert, response } = await prepareTokens(d1, { ...tokens, guard: { id: tokenId, where: UNROTATED, binds: [] } });
+    const [issued] = await d1.batch([
+      insert,
+      d1.prepare(`UPDATE oauth_tokens SET rotated_at = ? WHERE id = ? AND ${UNROTATED}`).bind(iso(now), tokenId),
+    ]);
+    if (issued?.meta?.changes) return response;
+    // Lost to a concurrent refresh (or revoke) that changed the token after our read: try the grace window.
   }
-  return response;
+
+  // Grace sibling, guarded and counted in one batch: it lands only while the token is still inside the window
+  // and its grant is unrevoked, so a concurrent revoke or the last allowed sibling always wins.
+  if (graceUses !== null) {
+    const { insert, response } = await prepareTokens(d1, { ...tokens, guard: { id: tokenId, where: IN_GRACE, binds: [graceStart] } });
+    const [issued] = await d1.batch([
+      insert,
+      d1.prepare(`UPDATE oauth_tokens SET grace_uses = grace_uses + 1 WHERE id = ? AND ${IN_GRACE}`).bind(tokenId, graceStart),
+    ]);
+    if (issued?.meta?.changes) return response;
+  }
+
+  // Reuse outside the window. This revoke runs after our batch, which committed after any concurrent winner's
+  // batch, so it also covers the pair that winner was just issued.
+  await revokeFamily(d1, familyId);
+  throw reusedGrant();
 }
 
 export type AccessTokenCheck =

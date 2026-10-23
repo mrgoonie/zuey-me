@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
-import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
+import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { jsonError, withRequestId } from '../src/lib/http';
 import { createUserKey } from '../src/lib/members/api-keys';
@@ -13,7 +13,7 @@ import { allMcpTools } from '../src/lib/mcp/dispatch';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { loadConsent, startAuthorization } from '../src/lib/oauth/authorize';
 import { ACCESS_TOKEN_TTL_MS } from '../src/lib/oauth/config';
-import { pkceChallenge } from '../src/lib/oauth/tokens';
+import { REFRESH_GRACE_MAX, REFRESH_GRACE_MS, pkceChallenge } from '../src/lib/oauth/tokens';
 import { TOOL_ACCESS } from '../src/lib/oauth/tool-access';
 import { GET as asMetadataApi } from '../src/pages/.well-known/oauth-authorization-server';
 import { GET as prmRootApi } from '../src/pages/.well-known/oauth-protected-resource';
@@ -475,6 +475,7 @@ describe('refresh tokens and revocation', () => {
     const widen = await exchange({ grant_type: 'refresh_token', refresh_token: refresh3, client_id: f.clientId, scope: 'articles:read admin' });
     expect(get(widen.body, 'error')).toBe('invalid_scope');
 
+    now += REFRESH_GRACE_MS;
     const reuse = await exchange({ grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId });
     expect(reuse.status).toBe(400);
     expect(get(reuse.body, 'error')).toBe('invalid_grant');
@@ -500,52 +501,73 @@ describe('refresh tokens and revocation', () => {
     expect(get(retry.body, 'scope')).toBe('articles:read');
     const refresh2 = String(get(retry.body, 'refresh_token'));
 
+    now += REFRESH_GRACE_MS;
     const reuse = await exchange(base);
     expect(get(reuse.body, 'error')).toBe('invalid_grant');
     const afterReuse = await exchange({ ...base, refresh_token: refresh2 });
     expect(get(afterReuse.body, 'error')).toBe('invalid_grant');
   });
 
-  it('lets only one of two concurrent refreshes rotate the token', async () => {
-    const f = await fullFlow('lan@example.com');
-    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
-    // In-process SQLite answers synchronously, so the second request would always see the first one's rotation
-    // in its initial read. Hold both requests at that read until both have made it: each then sees the token
-    // unrotated, passes every check, and only the rotation's single-winner guard can stop one of them.
+  // In-process SQLite answers synchronously, so a second request would always see the first one's rotation.
+  // This database holds the first `n` batches (the guarded writes) until all `n` requests have reached theirs:
+  // each then validated the token as unrotated, and only the single-winner guard inside the batch decides.
+  // A request that never arrives releases the others after a second, so the test fails on `arrived` instead of
+  // hanging.
+  function holdGuardedWrites(n: number): { db: D1DatabaseLike; arrived: () => number } {
     let arrived = 0;
     let release = (): void => {};
-    const bothRead = new Promise<void>(resolve => { release = resolve; });
-    const racing: D1DatabaseLike = {
-      prepare: (sql: string) => {
-        const stmt = d1.prepare(sql);
-        if (!sql.startsWith('SELECT * FROM oauth_tokens WHERE refresh_hash')) return stmt;
-        const held = (bound: D1PreparedStatementLike): D1PreparedStatementLike => ({
-          bind: (...values: unknown[]) => held(bound.bind(...values)),
-          first: async <T = Record<string, unknown>>(): Promise<T | null> => {
-            const snapshot = await bound.first<T>();
-            if (++arrived === 2) release();
-            await bothRead;
-            return snapshot;
-          },
-          all: <T = Record<string, unknown>>() => bound.all<T>(),
-          run: () => bound.run(),
-        });
-        return held(stmt);
+    const allArrived = new Promise<void>(resolve => { release = resolve; });
+    const db: D1DatabaseLike = {
+      prepare: (sql: string) => d1.prepare(sql),
+      batch: async statements => {
+        if (arrived < n) {
+          if (++arrived === n) release();
+          await Promise.race([allArrived, new Promise<void>(resolve => setTimeout(resolve, 1000))]);
+        }
+        return d1.batch(statements);
       },
-      batch: statements => d1.batch(statements),
     };
-    const refresh = async (): Promise<{ status: number; body: unknown }> => {
-      const res = await tokenApi(ctx({ url: `${ORIGIN}/oauth/token`, form: base, env: { DB: racing } }));
-      return { status: res.status, body: await body(res) };
-    };
-    const results = await Promise.all([refresh(), refresh()]);
-    expect(arrived).toBe(2);
+    return { db, arrived: () => arrived };
+  }
+
+  async function refreshVia(db: D1DatabaseLike, form: Record<string, string>): Promise<{ status: number; body: unknown }> {
+    const res = await tokenApi(ctx({ url: `${ORIGIN}/oauth/token`, form, env: { DB: db } }));
+    return { status: res.status, body: await body(res) };
+  }
+
+  const tokenCount = (): unknown => d1.raw.query('SELECT COUNT(*) AS n FROM oauth_tokens').get();
+  const graceUses = (id: string): unknown => d1.raw.query('SELECT grace_uses FROM oauth_tokens WHERE id = ?').get(id);
+  const firstTokenId = (): string => String(get(d1.raw.query('SELECT id FROM oauth_tokens ORDER BY created_at, rowid LIMIT 1').get(), 'id'));
+
+  it('gives both of two concurrent refreshes a pair inside the grace window, rotating the token once', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const hold = holdGuardedWrites(2);
+    const results = await Promise.all([refreshVia(hold.db, base), refreshVia(hold.db, base)]);
+    expect(hold.arrived()).toBe(2);
+    expect(results.map(r => r.status)).toEqual([200, 200]);
+    const [a, b] = results.map(r => String(get(r.body, 'refresh_token')));
+    expect(a).not.toBe(b);
+    // One rotation plus one grace sibling, both in the original grant.
+    expect(tokenCount()).toEqual({ n: 3 });
+    expect(graceUses(firstTokenId())).toEqual({ grace_uses: 1 });
+    expect(d1.raw.query('SELECT COUNT(DISTINCT family_id) AS n FROM oauth_tokens').get()).toEqual({ n: 1 });
+    for (const r of results) expect((await mcp('ping', {}, { token: String(get(r.body, 'access_token')) })).status).toBe(200);
+  });
+
+  it('lets only one of two concurrent refreshes win once the grace cap is used up, and revokes the grant', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    d1.raw.run('UPDATE oauth_tokens SET grace_uses = ?', [REFRESH_GRACE_MAX]);
+    const hold = holdGuardedWrites(2);
+    const results = await Promise.all([refreshVia(hold.db, base), refreshVia(hold.db, base)]);
+    expect(hold.arrived()).toBe(2);
     expect(results.filter(r => r.status === 200).length).toBe(1);
     const winner = results.find(r => r.status === 200);
     const loser = results.find(r => r.status !== 200);
     expect(get(loser?.body, 'error')).toBe('invalid_grant');
     // Exactly one new pair was inserted, and the loser's reuse-revoke always covers it (never timing-dependent).
-    expect(d1.raw.query('SELECT COUNT(*) AS n FROM oauth_tokens').get()).toEqual({ n: 2 });
+    expect(tokenCount()).toEqual({ n: 2 });
     expect((await mcp('ping', {}, { token: String(get(winner?.body, 'access_token')) })).status).toBe(401);
     const afterRace = await exchange({ ...base, refresh_token: String(get(winner?.body, 'refresh_token')) });
     expect(get(afterRace.body, 'error')).toBe('invalid_grant');
@@ -564,6 +586,100 @@ describe('refresh tokens and revocation', () => {
     const retry = await exchange(base);
     expect(retry.status).toBe(200);
     expect((await mcp('ping', {}, { token: String(get(retry.body, 'access_token')) })).status).toBe(200);
+  });
+
+  it('rolls back the new pair when marking the old token rotated fails', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    d1.raw.run("CREATE TRIGGER fail_rotate BEFORE UPDATE OF rotated_at ON oauth_tokens BEGIN SELECT RAISE(ABORT, 'rotate failed'); END");
+    const failed = await exchange(base);
+    expect(failed.status).not.toBe(200);
+    // Insert and rotation are one transaction: no orphan pair that was never handed to the client.
+    expect(tokenCount()).toEqual({ n: 1 });
+
+    d1.raw.run('DROP TRIGGER fail_rotate');
+    const retry = await exchange(base);
+    expect(retry.status).toBe(200);
+    expect(tokenCount()).toEqual({ n: 2 });
+  });
+
+  it('issues a sibling pair when a just-rotated token is presented again inside the grace window', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const first = await exchange(base);
+    expect(first.status).toBe(200);
+    now += REFRESH_GRACE_MS - 1;
+    const sibling = await exchange(base);
+    expect(sibling.status).toBe(200);
+    expect(get(sibling.body, 'refresh_token')).not.toBe(get(first.body, 'refresh_token'));
+    expect(graceUses(firstTokenId())).toEqual({ grace_uses: 1 });
+    // Both pairs stay live and both refresh tokens rotate normally.
+    for (const r of [first, sibling]) {
+      expect((await mcp('ping', {}, { token: String(get(r.body, 'access_token')) })).status).toBe(200);
+      expect((await exchange({ ...base, refresh_token: String(get(r.body, 'refresh_token')) })).status).toBe(200);
+    }
+  });
+
+  it('revokes the grant once the grace siblings are used up', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const first = await exchange(base);
+    const siblings: { status: number; body: unknown }[] = [];
+    for (let i = 0; i < REFRESH_GRACE_MAX; i++) siblings.push(await exchange(base));
+    expect(siblings.map(s => s.status)).toEqual(Array.from({ length: REFRESH_GRACE_MAX }, () => 200));
+    const over = await exchange(base);
+    expect(over.status).toBe(400);
+    expect(get(over.body, 'error')).toBe('invalid_grant');
+    for (const r of [first, ...siblings]) expect((await mcp('ping', {}, { token: String(get(r.body, 'access_token')) })).status).toBe(401);
+  });
+
+  it('revokes the grant when a rotated token is presented after the grace window', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const first = await exchange(base);
+    now += REFRESH_GRACE_MS;
+    const late = await exchange(base);
+    expect(get(late.body, 'error')).toBe('invalid_grant');
+    expect(get(late.body, 'error_description')).toContain('already used or revoked');
+    expect((await mcp('ping', {}, { token: String(get(first.body, 'access_token')) })).status).toBe(401);
+    expect(tokenCount()).toEqual({ n: 2 });
+  });
+
+  it('lets a revoke win over a grace sibling, before or during the refresh', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const first = await exchange(base);
+    await revokeApi(ctx({ url: `${ORIGIN}/oauth/revoke`, form: { token: String(get(first.body, 'access_token')), client_id: f.clientId } }));
+    expect(get((await exchange(base)).body, 'error')).toBe('invalid_grant');
+    expect(tokenCount()).toEqual({ n: 2 });
+
+    // A revoke landing after the token was read but before the guarded sibling write.
+    const g = await fullFlow('mai@example.com');
+    const gBase = { grant_type: 'refresh_token', refresh_token: g.refresh, client_id: g.clientId };
+    expect((await exchange(gBase)).status).toBe(200);
+    const before = Number(get(tokenCount(), 'n'));
+    const revoking: D1DatabaseLike = {
+      prepare: (sql: string) => d1.prepare(sql),
+      batch: async statements => {
+        d1.raw.run('UPDATE oauth_tokens SET revoked_at = ? WHERE user_id = ?', [new Date(now).toISOString(), g.userId]);
+        return d1.batch(statements);
+      },
+    };
+    const raced = await refreshVia(revoking, gBase);
+    expect(get(raced.body, 'error')).toBe('invalid_grant');
+    expect(tokenCount()).toEqual({ n: before });
+  });
+
+  it('keeps reuse strict without the grace_uses column (migration not applied yet)', async () => {
+    d1.raw.run('ALTER TABLE oauth_tokens DROP COLUMN grace_uses');
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const first = await exchange(base);
+    expect(first.status).toBe(200);
+    const reuse = await exchange(base);
+    expect(reuse.status).toBe(400);
+    expect(get(reuse.body, 'error')).toBe('invalid_grant');
+    expect((await mcp('ping', {}, { token: String(get(first.body, 'access_token')) })).status).toBe(401);
   });
 
   it('refuses refresh tokens presented by another client', async () => {
