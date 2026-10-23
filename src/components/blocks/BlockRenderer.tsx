@@ -57,6 +57,7 @@ interface RenderContext {
   highlights?: CodeHighlights;
   liveHighlight: boolean;
   autoLoadEmbeds: boolean;
+  autoRunInteractives: boolean;
   /** Id of the image or gallery block whose (first) image is the page's likely LCP element; it loads eagerly at high priority. */
   leadImageId?: string;
   /** Resized `srcset` through Cloudflare Image Transformations; absent for HTML fragments (email, feeds), which keep originals. */
@@ -247,8 +248,8 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
     case 'diagram': return <DiagramBlock block={block} />;
     case 'survey': return <SurveyBlock block={block} articleSlug={ctx.articleSlug} interactive={ctx.interactive} />;
     case 'layout': return <LayoutView block={block} ctx={ctx} />;
-    // Sandboxed, click-to-run in articles; previews never execute code automatically.
-    case 'interactive': return <InteractiveFrame block={block} />;
+    // Always sandboxed. Published readers start it when it nears the viewport; Studio previews and drafts stay click-to-run.
+    case 'interactive': return <InteractiveFrame block={block} runWhenVisible={ctx.autoRunInteractives} />;
     case 'icon':
       return (
         <div className={`zb-icon zb-icon-${block.align ?? 'start'} zb-icon-tone-${block.tone}`}>
@@ -298,6 +299,11 @@ interface BlockRendererProps {
   liveHighlight?: boolean;
   /** Third-party embeds load by themselves when scrolled into view (default). False keeps them click-to-load (every Studio preview). */
   autoLoadEmbeds?: boolean;
+  /**
+   * Interactive widgets start by themselves when scrolled into view (published article and lesson readers only).
+   * Off by default, so Studio previews, drafts and HTML fragments never run widget code without a click.
+   */
+  autoRunInteractives?: boolean;
   /** Load the first image eagerly at high priority (the article page, where it is usually the LCP element). Off for HTML fragments. */
   eagerLeadImage?: boolean;
   /** Serve resized images (see `imageTransformsFor`); only the article page passes it, so fragments keep original URLs. */
@@ -317,14 +323,14 @@ function bodyImageSizes(lanes: boolean): string {
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
 export function BlockRenderer({
-  doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms,
-  math, liveMath = false, mathNumbering,
+  doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, autoRunInteractives = false,
+  eagerLeadImage = false, imageTransforms, math, liveMath = false, mathNumbering,
 }: BlockRendererProps) {
   const ownNumbers = useMemo(() => (mathNumbering ? null : mathNumbers(doc.blocks, math)), [doc, math, mathNumbering]);
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
   const lanes = documentLanes(doc);
   const ctx: RenderContext = {
-    articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, imageTransforms,
+    articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, autoRunInteractives, imageTransforms,
     leadImageId: eagerLeadImage ? leadImageBlockId(doc.blocks) : undefined,
     imageSizes: bodyImageSizes(lanes.length > 0),
     math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, MathNumber>(), liveMath,

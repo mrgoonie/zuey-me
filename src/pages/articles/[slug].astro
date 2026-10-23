@@ -160,7 +160,7 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
 
           {/* Readable body: selections inside it get the "Ask Zuey AI" tooltip; tabindex lets the drawer return focus here. */}
           <div data-ask-ai-scope tabindex="-1" class="focus:outline-none">
-            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} math={mathRenders} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} eagerLeadImage={!showCover} imageTransforms={imageTransforms} />
+            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} math={mathRenders} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} autoRunInteractives={!view.preview} eagerLeadImage={!showCover} imageTransforms={imageTransforms} />
           </div>
 
           {view.truncated && (

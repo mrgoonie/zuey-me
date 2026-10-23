@@ -83,6 +83,11 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 - **The first publish of an article emails verified members 30 minutes later** unless `notify: false` (backdated `published_at` defaults to no email). Pass `notify` explicitly. `article_verify_public` reports the pending email under `pending_side_effects`.
 - Share images are re-rendered in the background after writes; a just-published page can take a moment to show its final `og:image`.
 
+## Widgets and embeds on reader pages
+
+- **Interactive widgets** (`interactive` blocks) are first-party code from the article. Published article and lesson pages start each one automatically when it comes within 200 px of the viewport, one start every 150 ms at most, once per page view (scrolling away keeps it running; a frame the watchdog halted waits for **Run**). A widget inside a closed toggle starts when the toggle is opened. Without `IntersectionObserver` the widget stays click-to-run. Auto-start changes nothing about isolation: `sandbox="allow-scripts"` without `allow-same-origin`, the CSP with `connect-src 'none'`, network only through `zuey.fetch` and the allowlisted proxy (50 requests per run, 4 at a time), the 10 s ready watchdog and heartbeat. Studio previews, `?preview=1` article drafts and unpublished lessons opened by an admin never start a widget without a click, and the paywall removes withheld widgets from the page before anything can run them.
+- **Social embeds** (`embed` blocks) are third-party frames from allowlisted provider hosts. They load within 200 px of the viewport unless the reader chose "do not auto-load embeds on this device" (`zuey:embeds=click` in local storage), which is always honoured. Studio previews keep them click-to-load.
+
 ## Browser smoke for widgets
 
 ```bash
