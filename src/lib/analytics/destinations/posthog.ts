@@ -293,6 +293,13 @@ export const SERVER_EVENT_FLAGS = { $lib: 'zuey-me-server', $geoip_disable: true
 /** Booking guests are one-off hashed ids: their events never create a PostHog person profile. */
 export const GUEST_EVENT_FLAGS = { $process_person_profile: false } as const;
 
+/** GA4-only attribution properties of server events (the GA client and session ids); never sent to PostHog. */
+export const GA4_ONLY_PROPERTIES: readonly string[] = ['ga_client_id', 'ga_session_id'];
+
+function withoutGa4Only(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(properties).filter(([key]) => !GA4_ONLY_PROPERTIES.includes(key)));
+}
+
 /** Server adapter posting one event to PostHog's capture endpoint. Resolves with a result, never rejects. */
 export function createPostHogServerDestination(config: PostHogConfig, fetchImpl: FetchLike = fetch): ServerDestination {
   return {
@@ -308,7 +315,7 @@ export function createPostHogServerDestination(config: PostHogConfig, fetchImpl:
             distinct_id: event.distinctId,
             uuid: event.uuid,
             timestamp: event.occurredAt,
-            properties: { ...event.properties, ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
+            properties: { ...withoutGa4Only(event.properties), ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
           }),
           signal,
         });

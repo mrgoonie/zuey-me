@@ -88,17 +88,47 @@ export interface Ga4BrowserHost {
 
 type Gtag = (...args: unknown[]) => void;
 
+/**
+ * Free-text search parameters (GA4 site search reads these names, plus common variants). Search words are
+ * never sent to GA4, whatever the shared URL scrubber keeps.
+ */
+export const GA4_SEARCH_PARAMS: readonly string[] = ['q', 's', 'search', 'query', 'keyword', 'keywords', 'term', 'search_term', 'searchterm'];
+
+/** Removes free-text search parameters from an absolute URL; an unparsable one loses its whole query. */
+export function dropSearchParams(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url.split(/[?#]/)[0] ?? '';
+  }
+  const names = [...parsed.searchParams.keys()].filter(k => GA4_SEARCH_PARAMS.includes(k.toLowerCase()));
+  if (names.length === 0) return url;
+  for (const name of names) parsed.searchParams.delete(name);
+  return parsed.toString();
+}
+
 /** Page fields gtag would otherwise read raw from `location`, `document.referrer` and `document.title`. */
 export function ga4PageFields(href: string, pathname: string, referrer: string, title: string): Record<string, string> {
   return {
-    page_location: scrubUrl(href),
-    ...(referrer ? { page_referrer: scrubUrl(referrer) } : {}),
+    page_location: dropSearchParams(scrubUrl(href)),
+    ...(referrer ? { page_referrer: dropSearchParams(scrubUrl(referrer)) } : {}),
     page_title: hasPrivateIdentifier(pathname) ? GA4_PRIVATE_TITLE : title,
   };
 }
 
-/** Removes the `_ga` / `_ga_<stream>` cookies gtag set on this host and its parent domain. */
-function deleteGaCookies(host: Ga4BrowserHost): void {
+/** The cookie and location parts of `document` / `window` that GA cookie cleanup needs. */
+export interface Ga4CookieHost {
+  win: { location: { hostname: string } };
+  doc: { cookie: string };
+}
+
+/**
+ * Removes the `_ga` / `_ga_<stream>` cookies gtag set on this host and its parent domain. Also run on every
+ * page load without consent, so cookies left from before Do Not Track or GPC was switched on never linger
+ * (and never reach the checkout request that reads them for attribution).
+ */
+export function deleteGaCookies(host: Ga4CookieHost): void {
   const names = host.doc.cookie.split(';').map(c => c.split('=')[0]?.trim() ?? '').filter(n => n === '_ga' || n.startsWith('_ga_'));
   const hostname = host.win.location.hostname;
   const domains = [null, hostname, `.${hostname.replace(/^www\./, '')}`];
@@ -113,8 +143,9 @@ export interface Ga4Client {
   /**
    * Installs gtag with Consent Mode defaults, then loads `gtag/js` and sends the page view, only when consent
    * reads `granted` (no opt-out, Do Not Track or Global Privacy Control). Returns whether it started.
+   * `memberId` is the member this browser is already identified as, so the first page view carries it.
    */
-  start(host: Ga4BrowserHost, measurementId: string, consent: ConsentEnvironment): boolean;
+  start(host: Ga4BrowserHost, measurementId: string, consent: ConsentEnvironment, memberId?: string | null): boolean;
   destination: ClientDestination;
 }
 
@@ -134,7 +165,7 @@ export function createGa4Client(): Ga4Client {
   };
 
   return {
-    start(host, measurementId, consent) {
+    start(host, measurementId, consent, memberId = null) {
       try {
         if (state) return true;
         if (consentState(consent) !== 'granted') return false;
@@ -149,11 +180,19 @@ export function createGa4Client(): Ga4Client {
         state = { host, id: measurementId, gtag };
         setDisabled(false);
         const { location } = host.win;
+        const page = ga4PageFields(location.href, location.pathname, host.doc.referrer, host.doc.title);
         call('consent', 'default', GA4_CONSENT_DEFAULTS);
         call('consent', 'update', GA4_CONSENT_GRANTED);
         call('js', new Date());
-        call('set', ga4PageFields(location.href, location.pathname, host.doc.referrer, host.doc.title));
-        call('config', measurementId, { allow_google_signals: false, allow_ad_personalization_signals: false });
+        // Every later hit (begin_checkout, enhanced measurement) reuses these scrubbed fields.
+        call('set', page);
+        if (memberId) {
+          userId = memberId;
+          call('set', { user_id: memberId });
+        }
+        // No automatic page view (it would read the raw URL): the one page view is sent below with scrubbed fields.
+        call('config', measurementId, { allow_google_signals: false, allow_ad_personalization_signals: false, send_page_view: false });
+        call('event', 'page_view', page);
         const script = host.doc.createElement('script');
         script.async = true;
         script.src = `${GA4_SCRIPT_URL}?id=${encodeURIComponent(measurementId)}`;
@@ -217,9 +256,9 @@ export function resolveGa4ServerConfig(env: { PUBLIC_GA4_MEASUREMENT_ID?: string
 }
 
 /**
- * Stable, non-identifying GA4 `client_id` for a server event: `<u32>.<u32>` from SHA-256 of the distinct id.
- * Outbox events come from webhooks and the scheduler, never from a browser request, so no `_ga` cookie exists
- * to read; the member is joined to their browser sessions through `user_id` instead.
+ * Fallback GA4 `client_id` for a server event: `<u32>.<u32>` from SHA-256 of the distinct id. Used when no
+ * browser GA id was captured at checkout start (`ga4-attribution.ts`): outbox events come from webhooks and the
+ * scheduler, so no `_ga` cookie is at hand; the member is still joined through `user_id`.
  */
 export async function ga4ClientId(distinctId: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`ga4:${distinctId}`)));
@@ -236,10 +275,16 @@ export async function measurementProtocolPayload(event: ServerAnalyticsEvent, no
   const props = event.properties;
   const m = money(props, 'amount');
   if (event.event === 'purchase' && m.value === undefined) return null;
+  // A refund that names no known purchase would show in GA4 as a refund of nothing: skipped.
+  const transactionId = text(props, 'transaction_id') ?? (event.event === 'purchase' ? event.uuid : undefined);
+  if (!transactionId) return null;
+  // The browser's GA ids captured at checkout start join the event to that web session; otherwise a stable hash.
+  const gaClientId = text(props, 'ga_client_id');
+  const gaSessionId = text(props, 'ga_session_id');
   const at = Date.parse(event.occurredAt);
   const backdate = Number.isFinite(at) && at <= nowMs && nowMs - at <= MP_MAX_BACKDATE_MS;
   return {
-    client_id: await ga4ClientId(event.distinctId),
+    client_id: gaClientId ?? await ga4ClientId(event.distinctId),
     ...(isGuestDistinctId(event.distinctId) ? {} : { user_id: event.distinctId }),
     ...(backdate ? { timestamp_micros: at * 1000 } : {}),
     non_personalized_ads: true,
@@ -247,7 +292,8 @@ export async function measurementProtocolPayload(event: ServerAnalyticsEvent, no
     events: [{
       name: event.event,
       params: {
-        transaction_id: text(props, 'transaction_id') ?? event.uuid,
+        transaction_id: transactionId,
+        ...(gaSessionId && /^\d{1,20}$/.test(gaSessionId) ? { session_id: gaSessionId } : {}),
         ...m,
         ...(m.value !== undefined ? { items: ga4Items(props, m.value) } : {}),
       },
@@ -261,6 +307,7 @@ export function createGa4ServerDestination(
 ): ServerDestination {
   return {
     name: 'ga4',
+    secondary: true,
     accepts: event => GA4_SERVER_EVENTS.includes(event),
     async send(event, signal): Promise<DestinationResult> {
       try {

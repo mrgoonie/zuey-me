@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 import { createTestD1 } from './helpers/d1';
 import { createAnalyticsClient } from '../src/lib/analytics/client';
-import { ecommerceTransactionId } from '../src/lib/analytics/commerce-events';
+import { ecommerceTransactionId, queuePurchase, queueRefund } from '../src/lib/analytics/commerce-events';
 import { OPT_OUT_STORAGE_KEY, type ConsentEnvironment } from '../src/lib/analytics/consent';
 import {
   GA4_CLIENT_EVENTS, GA4_MP_ENDPOINT, GA4_PRIVATE_TITLE, GA4_SCRIPT_URL, GA4_SERVER_EVENTS, MP_MAX_BACKDATE_MS,
-  beginCheckoutParams, createGa4Client, createGa4ServerDestination, ga4ClientId, measurementProtocolPayload,
+  beginCheckoutParams, createGa4Client, createGa4ServerDestination, dropSearchParams, ga4ClientId, measurementProtocolPayload,
   resolveGa4MeasurementId, resolveGa4ServerConfig, type Ga4BrowserHost,
 } from '../src/lib/analytics/destinations/ga4';
+import {
+  GA4_CLIENT_RETENTION_MS, ga4IdsFromRequest, ga4OutboxProperties, parseGaClientCookie, parseGaSessionCookie, rememberGa4Client,
+} from '../src/lib/analytics/ga4-attribution';
+import { membersRuntime } from '../src/lib/members/runtime';
 import type { ClientDestination, ServerAnalyticsEvent, ServerDestination } from '../src/lib/analytics/destinations/types';
 import { ANALYTICS_EVENTS } from '../src/lib/analytics/events';
 import { drainAnalyticsOutbox, enqueueServerEvent } from '../src/lib/analytics/outbox';
@@ -111,7 +115,12 @@ describe('gtag consent gating', () => {
     expect(sent[0]).toEqual(['consent', 'default', { ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied', analytics_storage: 'denied' }]);
     expect(sent[1]).toEqual(['consent', 'update', { analytics_storage: 'granted' }]);
     expect(sent[2]?.[0]).toBe('js');
-    expect(sent[4]).toEqual(['config', GA4_ID, { allow_google_signals: false, allow_ad_personalization_signals: false }]);
+    const page = { page_location: 'https://zuey.me/pricing', page_title: 'Pricing' };
+    expect(sent[3]).toEqual(['set', page]);
+    // No automatic page view: the only one is ours, with the scrubbed fields.
+    expect(sent[4]).toEqual(['config', GA4_ID, { allow_google_signals: false, allow_ad_personalization_signals: false, send_page_view: false }]);
+    expect(sent[5]).toEqual(['event', 'page_view', page]);
+    expect(sent).toHaveLength(6);
     expect(appended).toEqual([{ async: true, src: `${GA4_SCRIPT_URL}?id=${GA4_ID}` }]);
     expect(ga4.start(host, GA4_ID, GRANTED)).toBe(true);
     expect(appended).toHaveLength(1);
@@ -128,10 +137,38 @@ describe('gtag page fields', () => {
     const set = commands(win).find(c => c[0] === 'set');
     expect(set?.[1]).toEqual({
       page_location: 'https://zuey.me/pricing?plan=ai&utm_source=x',
-      page_referrer: expect.stringMatching(/^https:\/\/news\.example\/\?q=.*redacted.*&ref=a$/),
+      page_referrer: 'https://news.example/?ref=a',
       page_title: 'Pricing',
     });
     expect(JSON.stringify(commands(win))).not.toContain('example.com');
+  });
+
+  it('never sends search words, whatever the shared scrubber keeps', () => {
+    const ga4 = createGa4Client();
+    const { host, win } = fakeHost('https://zuey.me/articles?q=react+hooks&tag=ai&page=2&Search=x&keyword=y', {
+      referrer: 'https://www.google.com/search?q=zuey+react', title: 'Articles',
+    });
+    ga4.start(host, GA4_ID, GRANTED);
+    const pageView = commands(win).find(c => c[0] === 'event' && c[1] === 'page_view');
+    expect(pageView?.[2]).toEqual({
+      page_location: 'https://zuey.me/articles?tag=ai&page=2', page_referrer: 'https://www.google.com/search', page_title: 'Articles',
+    });
+    const all = JSON.stringify(commands(win));
+    for (const word of ['react', 'hooks', 'zuey+react']) expect(all).not.toContain(word);
+    expect(dropSearchParams('not a url?q=secret')).toBe('not a url');
+    expect(dropSearchParams('https://zuey.me/a?b=1')).toBe('https://zuey.me/a?b=1');
+  });
+
+  it('puts the already identified member on the first page view', () => {
+    const ga4 = createGa4Client();
+    const { host, win } = fakeHost('https://zuey.me/');
+    ga4.start(host, GA4_ID, GRANTED, MEMBER);
+    const sent = commands(win);
+    const userAt = sent.findIndex(c => c[0] === 'set' && JSON.stringify(c[1]) === JSON.stringify({ user_id: MEMBER }));
+    const viewAt = sent.findIndex(c => c[0] === 'event' && c[1] === 'page_view');
+    expect(userAt).toBeGreaterThan(-1);
+    expect(userAt).toBeLessThan(viewAt);
+    expect(ga4.destination.distinctId()).toBe(MEMBER);
   });
 
   it('drops the query, templates the order code and hides the title on order pages', () => {
@@ -231,19 +268,32 @@ describe('Measurement Protocol payload', () => {
     expect(JSON.stringify(body)).not.toContain('ord_1');
   });
 
-  it('maps a refund, falls back to the event uuid without a transaction, and gives guests no user_id', async () => {
-    const body = await measurementProtocolPayload(serverEvent('refund', {
-      provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 19.99, currency: 'USD', partial: false,
-    }, { distinctId: 'guest_0123456789abcdef01234567' }), Date.now());
+  it('maps a refund of a known purchase, skips one without, and gives guests no user_id', async () => {
+    const tx = await ecommerceTransactionId('paypal', 'CAPTURE1');
+    const refund = { provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 19.99, currency: 'USD', partial: false };
+    const guest = { distinctId: 'guest_0123456789abcdef01234567' };
+    const body = await measurementProtocolPayload(serverEvent('refund', { ...refund, transaction_id: tx }, guest), Date.now());
     expect(body?.user_id).toBeUndefined();
     expect(body?.client_id).toMatch(/^\d+\.\d+$/);
     expect(body?.events).toEqual([{
       name: 'refund',
       params: {
-        transaction_id: '0b3f2a1e-1111-4222-8333-444455556666', value: 19.99, currency: 'USD',
+        transaction_id: tx, value: 19.99, currency: 'USD',
         items: [{ item_id: 'booking', item_name: 'booking', item_category: 'booking', quantity: 1, price: 19.99 }],
       },
     }]);
+    // No purchase transaction known: GA4 would show a refund of nothing, so nothing is built.
+    expect(await measurementProtocolPayload(serverEvent('refund', refund, guest), Date.now())).toBeNull();
+  });
+
+  it('uses the browser GA ids captured at checkout for client_id and session_id', async () => {
+    const body = await measurementProtocolPayload(serverEvent('purchase', {
+      provider: 'sepay', order_type: 'membership', amount: 199000, currency: 'VND', renewal: false, transaction_id: 'tx_abc',
+      ga_client_id: '1234567890.1700000000', ga_session_id: '1700000500',
+    }), Date.now());
+    expect(body?.client_id).toBe('1234567890.1700000000');
+    expect(body?.events).toEqual([{ name: 'purchase', params: expect.objectContaining({ transaction_id: 'tx_abc', session_id: '1700000500' }) }]);
+    expect(JSON.stringify(body)).not.toContain('ga_client_id');
   });
 
   it('derives a stable client_id and drops timestamps GA4 would reject', async () => {
@@ -289,22 +339,45 @@ describe('server destinations', () => {
     expect(serverDestinations({ PUBLIC_GA4_MEASUREMENT_ID: GA4_ID, GA4_API_SECRET: SECRET }, { production: false, requestHost: 'zuey.me' })).toEqual([]);
   });
 
-  it('sends GA4 only purchase and refund', async () => {
+  it('needs a valid PostHog config: GA4 alone never makes a server destination', () => {
+    const env = { PUBLIC_POSTHOG_KEY: 'not a key', PUBLIC_GA4_MEASUREMENT_ID: GA4_ID, GA4_API_SECRET: SECRET };
+    expect(serverDestinations(env, prod)).toEqual([]);
+  });
+
+  const purchase = {
+    event: 'purchase', distinctId: MEMBER,
+    properties: { provider: 'dodo', order_type: 'membership', amount: 9, currency: 'USD', renewal: false, transaction_id: 'tx_1' },
+  };
+  function scripted(name: string, statuses: number[], seen: string[], secondary = false): ServerDestination {
+    return {
+      name, secondary, accepts: secondary ? (e: string) => GA4_SERVER_EVENTS.includes(e) : undefined,
+      send: async event => {
+        seen.push(`${name}:${event.event}`);
+        const status = statuses.shift() ?? 200;
+        return status < 300 ? { destination: name, ok: true, status } : { destination: name, ok: false, reason: 'http', status };
+      },
+    };
+  }
+
+  it('sends GA4 only purchase and refund, after PostHog accepted', async () => {
     const seen: string[] = [];
-    const record = (name: string, accepts?: (e: string) => boolean): ServerDestination => ({
-      name, accepts,
-      send: async event => { seen.push(`${name}:${event.event}`); return { destination: name, ok: true, status: 200 }; },
-    });
-    const destinations = [record('posthog'), record('ga4', e => GA4_SERVER_EVENTS.includes(e))];
+    const destinations = [scripted('posthog', [], seen), scripted('ga4', [], seen, true)];
     await sendServerEvent({ event: 'sign_up', distinctId: MEMBER, properties: { method: 'google' } }, destinations);
-    await sendServerEvent({
-      event: 'purchase', distinctId: MEMBER,
-      properties: { provider: 'dodo', order_type: 'membership', amount: 9, currency: 'USD', renewal: false },
-    }, destinations);
+    expect(await sendServerEvent(purchase, destinations)).toMatchObject({ delivered: true });
     expect(seen).toEqual(['posthog:sign_up', 'posthog:purchase', 'ga4:purchase']);
-    // Only GA4 configured: an event it does not take is done, not failed.
+    // Only a secondary destination: nothing is delivered.
     expect(await sendServerEvent({ event: 'login', distinctId: MEMBER, properties: { method: 'google' } }, [destinations[1]!]))
-      .toMatchObject({ delivered: true, results: [] });
+      .toMatchObject({ delivered: false, results: [{ destination: 'none', ok: false, reason: 'disabled' }] });
+  });
+
+  it('a PostHog failure is not delivered and GA4 is not sent; a GA4 failure never fails the event', async () => {
+    const seen: string[] = [];
+    const failingPostHog = await sendServerEvent(purchase, [scripted('posthog', [503], seen), scripted('ga4', [], seen, true)]);
+    expect(failingPostHog).toMatchObject({ delivered: false, results: [{ destination: 'posthog', ok: false, status: 503 }] });
+    expect(seen).toEqual(['posthog:purchase']);
+    const failingGa4 = await sendServerEvent(purchase, [scripted('posthog', [], seen), scripted('ga4', [500], seen, true)]);
+    expect(failingGa4.delivered).toBe(true);
+    expect(failingGa4.results.map(r => r.ok)).toEqual([true, false]);
   });
 });
 
@@ -340,6 +413,47 @@ describe('outbox drain with GA4', () => {
     expect(urls.filter(u => !u.startsWith(GA4_MP_ENDPOINT))).toHaveLength(2);
   });
 
+  it('keeps retrying a purchase PostHog failed, and sends GA4 its one copy only once PostHog accepted', async () => {
+    const realNow = membersRuntime.now;
+    let now = Date.parse('2026-10-20T03:00:00.000Z');
+    membersRuntime.now = () => now;
+    try {
+      const d1 = createTestD1();
+      await enqueueServerEvent(d1, {
+        event: 'purchase', distinctId: MEMBER, dedupeKey: 'purchase:dodo:pay_2', occurredAt: new Date(now).toISOString(),
+        properties: { provider: 'dodo', order_type: 'membership', amount: 9, currency: 'USD', renewal: false, transaction_id: 'tx_2' },
+      });
+      const calls: string[] = [];
+      let posthogStatus = 503;
+      const fetchImpl = async (url: string): Promise<Response> => {
+        const ga4 = url.startsWith(GA4_MP_ENDPOINT);
+        calls.push(ga4 ? 'ga4' : 'posthog');
+        return new Response(null, { status: ga4 ? 204 : posthogStatus });
+      };
+      const destinations = serverDestinations({ PUBLIC_GA4_MEASUREMENT_ID: GA4_ID, GA4_API_SECRET: SECRET }, { production: true, requestHost: 'zuey.me', fetchImpl });
+      expect(await drainAnalyticsOutbox(d1, { destinations })).toMatchObject({ sent: 0, retried: 1, dead: 0 });
+      expect(calls).toEqual(['posthog']);
+      now += 60 * 60 * 1000;
+      posthogStatus = 200;
+      expect(await drainAnalyticsOutbox(d1, { destinations })).toMatchObject({ sent: 1, retried: 0 });
+      expect(calls).toEqual(['posthog', 'posthog', 'ga4']);
+      now += 60 * 60 * 1000;
+      expect(await drainAnalyticsOutbox(d1, { destinations })).toMatchObject({ claimed: 0 });
+      expect(calls).toHaveLength(3);
+    } finally {
+      membersRuntime.now = realNow;
+    }
+  });
+
+  it('with a broken PostHog config and the GA4 secret, rows stay queued and the drain reports skipped', async () => {
+    const d1 = createTestD1();
+    await queueSamples(d1);
+    const destinations = serverDestinations({ PUBLIC_POSTHOG_KEY: 'bad', PUBLIC_GA4_MEASUREMENT_ID: GA4_ID, GA4_API_SECRET: SECRET }, {
+      production: true, requestHost: 'zuey.me', fetchImpl: async () => new Response(null, { status: 204 }),
+    });
+    expect(await drainAnalyticsOutbox(d1, { destinations })).toMatchObject({ status: 'skipped', sent: 0, pending: 2 });
+  });
+
   it('halves the per-run row limit when two destinations share the subrequest budget', async () => {
     const d1 = createTestD1();
     for (let i = 0; i < 25; i++) {
@@ -347,6 +461,94 @@ describe('outbox drain with GA4', () => {
     }
     const ok = (name: string): ServerDestination => ({ name, send: async () => ({ destination: name, ok: true, status: 200 }) });
     expect((await drainAnalyticsOutbox(d1, { destinations: [ok('a'), ok('b')], limit: 40 })).claimed).toBe(20);
+  });
+});
+
+describe('GA4 attribution of server purchases', () => {
+  const COOKIES = `other=1; _ga=GA1.1.1234567890.1700000000; _ga_${GA4_ID.slice(2)}=GS2.1.s1700000500$o3$g1$t1700000600$j0$l0$h0`;
+  const request = (headers: Record<string, string>) => new Request('https://zuey.me/api/v1/billing/orders', { method: 'POST', headers });
+
+  it('parses the GA client and session cookies', () => {
+    expect(parseGaClientCookie('GA1.1.1234567890.1700000000')).toBe('1234567890.1700000000');
+    expect(parseGaClientCookie('GA1.2.x.1')).toBeNull();
+    expect(parseGaClientCookie(null)).toBeNull();
+    expect(parseGaSessionCookie('GS1.1.1700000500.3.1.1700000600.0.0.0')).toBe('1700000500');
+    expect(parseGaSessionCookie('GS2.1.s1700000500$o3$g1$t1700000600$j0$l0$h0')).toBe('1700000500');
+    expect(parseGaSessionCookie('GS9.1.1')).toBeNull();
+  });
+
+  it('reads the ids only when GA4 is on and the browser sends neither Do Not Track nor GPC', () => {
+    expect(ga4IdsFromRequest(request({ Cookie: COOKIES }), GA4_ID)).toEqual({ clientId: '1234567890.1700000000', sessionId: '1700000500' });
+    expect(ga4IdsFromRequest(request({ Cookie: COOKIES }), undefined)).toBeNull();
+    expect(ga4IdsFromRequest(request({ Cookie: COOKIES, DNT: '1' }), GA4_ID)).toBeNull();
+    expect(ga4IdsFromRequest(request({ Cookie: COOKIES, 'Sec-GPC': '1' }), GA4_ID)).toBeNull();
+    expect(ga4IdsFromRequest(request({ Cookie: 'other=1' }), GA4_ID)).toBeNull();
+  });
+
+  it('stores them at checkout and puts them on the purchase and refund rows, never on PostHog', async () => {
+    const realNow = membersRuntime.now;
+    let now = Date.parse('2026-10-20T03:00:00.000Z');
+    membersRuntime.now = () => now;
+    try {
+      const d1 = createTestD1();
+      await rememberGa4Client(d1, GA4_ID, MEMBER, request({ Cookie: COOKIES }));
+      now += 10 * 60 * 1000;
+      await queuePurchase(d1, { distinctId: MEMBER, provider: 'sepay', orderType: 'membership', transactionId: 'billing_order:o1', amountMinor: 199000, currency: 'VND' });
+      await queueRefund(d1, { distinctId: MEMBER, provider: 'sepay', orderType: 'membership', reference: 'r1', reason: 'refund', purchaseTransactionId: 'billing_order:o1' });
+      const rows = await d1.prepare('SELECT event, properties FROM analytics_outbox ORDER BY event').all<{ event: string; properties: string }>();
+      const props = Object.fromEntries((rows.results ?? []).map(r => [r.event, JSON.parse(r.properties)]));
+      expect(props.purchase).toMatchObject({ ga_client_id: '1234567890.1700000000', ga_session_id: '1700000500' });
+      expect(props.refund).toMatchObject({ ga_client_id: '1234567890.1700000000' });
+      expect(props.refund.ga_session_id).toBeUndefined();
+
+      const bodies: Array<{ url: string; body: string }> = [];
+      const destinations = serverDestinations({ PUBLIC_GA4_MEASUREMENT_ID: GA4_ID, GA4_API_SECRET: SECRET }, {
+        production: true, requestHost: 'zuey.me',
+        fetchImpl: async (url, init) => { bodies.push({ url, body: String(init.body) }); return new Response(null, { status: 204 }); },
+      });
+      expect(await drainAnalyticsOutbox(d1, { destinations })).toMatchObject({ sent: 2 });
+      const posthog = bodies.filter(b => !b.url.startsWith(GA4_MP_ENDPOINT));
+      const ga4 = bodies.filter(b => b.url.startsWith(GA4_MP_ENDPOINT)).map(b => JSON.parse(b.body));
+      expect(posthog).toHaveLength(2);
+      for (const b of posthog) expect(b.body).not.toContain('1234567890');
+      expect(ga4.map(b => b.client_id)).toEqual(['1234567890.1700000000', '1234567890.1700000000']);
+
+      // Past the retention window the ids are neither used nor kept.
+      now += GA4_CLIENT_RETENTION_MS + 1000;
+      expect(await ga4OutboxProperties(d1, MEMBER, true)).toEqual({});
+      await rememberGa4Client(d1, GA4_ID, 'usr_other', request({ Cookie: COOKIES }));
+      const left = await d1.prepare('SELECT user_id FROM analytics_ga4_clients').all<{ user_id: string }>();
+      expect((left.results ?? []).map(r => r.user_id)).toEqual(['usr_other']);
+    } finally {
+      membersRuntime.now = realNow;
+    }
+  });
+
+  it('stores nothing without consent signals or cookies, and ignores guests', async () => {
+    const d1 = createTestD1();
+    await rememberGa4Client(d1, GA4_ID, MEMBER, request({ Cookie: COOKIES, DNT: '1' }));
+    await rememberGa4Client(d1, undefined, MEMBER, request({ Cookie: COOKIES }));
+    expect(await d1.prepare('SELECT COUNT(*) AS n FROM analytics_ga4_clients').first<{ n: number }>()).toEqual({ n: 0 });
+    expect(await ga4OutboxProperties(d1, 'guest_0123456789abcdef01234567', true)).toEqual({});
+  });
+});
+
+describe('client identity with GA4 started for a known member', () => {
+  it('does not re-run identify on every page load', () => {
+    const calls: string[] = [];
+    const posthog: ClientDestination = {
+      name: 'posthog', capture: () => undefined, identify: id => calls.push(`posthog:identify:${id}`),
+      reset: () => calls.push('posthog:reset'), optOut: () => undefined, optIn: () => undefined, distinctId: () => MEMBER,
+    };
+    const ga4 = createGa4Client();
+    ga4.start(fakeHost('https://zuey.me/').host, GA4_ID, GRANTED, MEMBER);
+    const client = createAnalyticsClient({
+      destinations: [posthog, ga4.destination], consent: () => GRANTED, local: () => memoryStorage({ zuey_analytics_member: MEMBER }),
+      session: () => memoryStorage(), fetchIdentity: async () => undefined, now: () => 0, debug: () => undefined,
+    });
+    client.activate(false);
+    client.identify(MEMBER);
+    expect(calls).toEqual([]);
   });
 });
 

@@ -41,5 +41,10 @@ export interface ServerDestination {
   readonly name: string;
   /** Whether this destination takes the event (absent: every event). */
   accepts?(event: string): boolean;
+  /**
+   * Best-effort copy (GA4): sent only after every primary destination accepted the event in the same
+   * attempt, and its outcome never decides whether the event is delivered or retried. Absent: primary.
+   */
+  readonly secondary?: boolean;
   send(event: ServerAnalyticsEvent, signal: AbortSignal): Promise<DestinationResult>;
 }

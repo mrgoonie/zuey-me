@@ -7,8 +7,9 @@
  * - One row per business fact: every row has a `dedupe_key` built from the provider transaction or event id
  *   (unique index), so a repeated webhook, a reconciliation or a recompute inserts nothing.
  * - Delivery is at-least-once with an idempotent id: the row id is the event `uuid` sent on every attempt,
- *   so PostHog de-duplicates a retried send (eventually, at merge time). A row counts as sent once one
- *   destination accepted it.
+ *   so PostHog de-duplicates a retried send (eventually, at merge time). A row counts as sent once PostHog
+ *   (the primary destination) accepted it; GA4 gets a single best-effort copy after that and never decides
+ *   whether a row is sent, retried or dead.
  * - Analytics never affects payment: enqueueing validates and inserts inside a catch-all and returns an
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
  *   with it) so a missing table or a failed insert can never roll a payment back.

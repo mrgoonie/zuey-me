@@ -8,6 +8,7 @@
  * VND as-is, USD cents divided by 100.
  */
 import type { D1DatabaseLike } from '../../db/store';
+import { ga4OutboxProperties } from './ga4-attribution';
 import { GUEST_ID_PREFIX } from './identity';
 import type { EnqueueOutcome } from './outbox';
 import { enqueueServerEvent, subscriptionExpiredKey } from './outbox';
@@ -86,6 +87,8 @@ export async function queuePurchase(d1: D1DatabaseLike, p: PurchaseInput): Promi
       ...(typeof p.months === 'number' ? { months: p.months } : {}),
       ...(p.flagged ? { flagged: true } : {}),
       transaction_id: await ecommerceTransactionId(p.provider, p.transactionId),
+      // GA ids from the member's checkout start (GA4 attribution only; never sent to PostHog).
+      ...(await ga4OutboxProperties(d1, p.distinctId, !(p.renewal ?? false))),
     },
     occurredAt: p.occurredAt,
   });
@@ -141,6 +144,7 @@ export async function queueRefund(
       provider: p.provider, order_type: p.orderType, reason: p.reason, ...money(p.amountMinor, p.currency),
       ...(typeof p.partial === 'boolean' ? { partial: p.partial } : {}), ...(p.plan ? { plan: p.plan } : {}),
       ...(p.purchaseTransactionId ? { transaction_id: await ecommerceTransactionId(p.provider, p.purchaseTransactionId) } : {}),
+      ...(await ga4OutboxProperties(d1, p.distinctId, false)),
     },
     occurredAt: p.occurredAt,
   });

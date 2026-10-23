@@ -253,6 +253,7 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
     d1.prepare('UPDATE user_api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, user.id),
     d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email),
     d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id),
+    d1.prepare('DELETE FROM analytics_ga4_clients WHERE user_id = ?').bind(user.id),
     d1.prepare("UPDATE email_log SET to_email = '' WHERE user_id = ?").bind(user.id),
     ...referralAccountScrubStatements(d1, user.id),
   ]);

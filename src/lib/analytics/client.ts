@@ -12,7 +12,7 @@ import { browserConsentEnvironment, consentState, setOptOut, type ConsentEnviron
 import {
   getPostHog, postHogClientDestination, postHogInitOptions, resolvePostHogConfig, type PostHogConfig,
 } from './destinations/posthog';
-import { ga4Browser, resolveGa4MeasurementId } from './destinations/ga4';
+import { deleteGaCookies, ga4Browser, resolveGa4MeasurementId } from './destinations/ga4';
 import type { ClientDestination } from './destinations/types';
 import {
   ANALYTICS_SCHEMA_VERSION, validateEvent, type ClientEventName, type EventProperties,
@@ -385,13 +385,25 @@ export function bootAnalytics(): void {
     if (!config) return;
     const devBuild = import.meta.env.DEV === true;
     if (!shouldCaptureOn(window.location.hostname, config, devBuild)) return;
-    if (consentState(browserConsentEnvironment()) !== 'granted') return;
+    if (consentState(browserConsentEnvironment()) !== 'granted') {
+      // GA cookies left from before an opt-out, Do Not Track or GPC: gtag stays off, and they must not linger.
+      try {
+        deleteGaCookies({ win: window, doc: document });
+      } catch {
+        // Cookies blocked: there is nothing to delete.
+      }
+      return;
+    }
     const ph = getPostHog();
     if (!ph) return;
     ph.init(config.key, { ...postHogInitOptions(config, window.location.pathname), ...PERFORMANCE_CAPTURE_OPTIONS });
     // GA4 runs under the same environment and consent checks; start() checks consent again before loading gtag.
     const ga4Id = resolveGa4MeasurementId(document.getElementById(CONFIG_ELEMENT_ID)?.getAttribute('data-ga4'));
-    if (ga4Id) ga4Browser.start({ win: window, doc: document }, ga4Id, browserConsentEnvironment());
+    // The member this browser is already identified as goes on the first page view (re-checked by syncIdentity).
+    const knownMember = read(safeLocalStorage(), IDENTITY_STORAGE_KEY);
+    if (ga4Id) {
+      ga4Browser.start({ win: window, doc: document }, ga4Id, browserConsentEnvironment(), isValidDistinctId(knownMember ?? '') ? knownMember : null);
+    }
     browserClient.activate(config.debug);
     void browserClient.syncIdentity(window.location.pathname);
   } catch (err) {
