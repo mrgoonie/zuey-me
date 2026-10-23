@@ -61,6 +61,9 @@ export const EMBED_PROVIDERS = [
 export type EmbedProvider = (typeof EMBED_PROVIDERS)[number];
 
 export const CALLOUT_TONES = ['info', 'warn', 'tip'] as const;
+/** Math layout: `display` (default when absent) or `inline`. */
+export const MATH_MODES = ['display', 'inline'] as const;
+export type MathMode = (typeof MATH_MODES)[number];
 export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut'] as const;
 export const LAYOUT_VARIANTS = ['columns', 'grid', 'bento'] as const;
 export const LAYOUT_GAPS = ['sm', 'md', 'lg'] as const;
@@ -148,8 +151,12 @@ export interface LayoutBlock extends BlockBase {
   children: LayoutChild[];
 }
 
-/** TeX source; rendered as accessible source text (no math engine is bundled). */
-export interface MathBlock extends BlockBase { type: 'math'; tex: string; caption?: string }
+/**
+ * TeX formula typeset with KaTeX on the server (HTML + MathML); the TeX source stays available as the
+ * fallback. `mode` is `display` (centred, own line) unless `inline` (text-sized, in the reading flow);
+ * `numbered` display formulas get an equation number in document order.
+ */
+export interface MathBlock extends BlockBase { type: 'math'; tex: string; mode?: MathMode; numbered?: boolean; caption?: string }
 export interface GalleryImage extends ImageSize { url: string; alt: string; caption?: string }
 export interface GalleryBlock extends BlockBase { type: 'gallery'; images: GalleryImage[]; caption?: string }
 /** Direct https audio file (hosted players such as SoundCloud/Spotify use `embed`). */

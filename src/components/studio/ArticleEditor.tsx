@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
+import { MathView } from '../blocks/MathBlock';
+import { mathNumbers } from '../../lib/blocks/math';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
-  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, SECTION_PADDINGS,
+  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
   SECTION_SURFACES, SECTION_WIDTHS, emptyDocument,
 } from '../../lib/blocks/schema';
 import type {
-  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
+  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, MathMode, ParagraphBlock,
   ResponsiveSpan, SectionBlock, SurveyBlock, ToggleBlock,
 } from '../../lib/blocks/schema';
 import { canContain, childContext } from '../../lib/blocks/nesting';
@@ -60,6 +62,8 @@ const TYPE_HINTS: Partial<Record<BlockType, string>> = {
 };
 
 const typeLabel = (t: BlockType): string => TYPE_LABELS[t] ?? t;
+
+const MATH_MODE_LABELS: Record<MathMode, string> = { display: 'Khối (căn giữa, dòng riêng)', inline: 'Trong dòng (cỡ chữ thường)' };
 
 const ICON_SIZE_LABELS: Record<IconSize, string> = {
   sm: `sm (${ICON_PIXELS.sm}px)`, md: `md (${ICON_PIXELS.md}px)`, lg: `lg (${ICON_PIXELS.lg}px)`, xl: `xl (${ICON_PIXELS.xl}px)`,
@@ -632,8 +636,22 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
     case 'math':
       return (
         <div className="space-y-2">
-          <Area label="Công thức TeX (hiển thị nguyên văn, có thể đọc bằng trình đọc màn hình)" value={block.tex} onChange={tex => onChange({ ...block, tex })} rows={3} mono />
+          <Area label="Công thức TeX (KaTeX, không cần $ hay $$)" value={block.tex} onChange={tex => onChange({ ...block, tex })} rows={3} mono />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
+            <Select label="Kiểu hiển thị" value={block.mode ?? 'display'} options={MATH_MODES} labels={MATH_MODE_LABELS}
+              onChange={mode => onChange(mode === 'inline' ? { ...block, mode, numbered: undefined } : { ...block, mode: undefined })} />
+            <label className="text-[11px] text-stone-300 flex items-center gap-1.5 min-h-[34px]">
+              <input type="checkbox" checked={block.numbered === true} disabled={block.mode === 'inline'}
+                onChange={e => onChange({ ...block, numbered: e.target.checked || undefined })} />
+              Đánh số phương trình (chỉ kiểu khối)
+            </label>
+          </div>
           <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
+          {block.tex.trim() && (
+            <div className="rounded-2xl bg-[#F5EFEB] p-3 text-stone-900 min-w-0" role="group" aria-label="Xem trước công thức">
+              <MathView block={block} html={null} number={mathNumbers([block]).get(block.id)} live />
+            </div>
+          )}
         </div>
       );
     case 'gallery':
@@ -703,7 +721,7 @@ function BlockPreview({ block, slug }: { block: Block; slug: string }) {
   return (
     <div className="rounded-2xl bg-[#F5EFEB] p-3 sm:p-4 min-w-0 overflow-hidden">
       {res.ok
-        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight autoLoadEmbeds={false} />
+        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight liveMath autoLoadEmbeds={false} />
         : <ul className="text-[11px] text-rose-700 font-mono">{res.errors.slice(0, 5).map((e, i) => <li key={i}>{e.path}: {e.message}</li>)}</ul>}
     </div>
   );
@@ -1025,7 +1043,7 @@ function HistoryView({ slug, locale, onRestore }: {
             </p>
           )}
           <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight autoLoadEmbeds={false} />
+            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight liveMath autoLoadEmbeds={false} />
           </div>
         </div>
       )}
@@ -1354,7 +1372,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       )}
       {tab === 'preview' && (
         <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight autoLoadEmbeds={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
+          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight liveMath autoLoadEmbeds={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
         </div>
       )}
       {tab === 'json' && (
