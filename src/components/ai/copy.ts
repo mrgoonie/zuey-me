@@ -50,6 +50,9 @@ export interface AiCopy {
   you: string;
   artifact: string;
   runDemo: string;
+  stopDemo: string;
+  /** Shown on a widget that did not start by itself because enough widgets already run on the page. */
+  autoRunLimit: string;
   openFull: string;
   close: string;
   reload: string;
@@ -122,6 +125,8 @@ const vi: AiCopy = {
   you: 'Bạn',
   artifact: 'Khối tương tác',
   runDemo: 'Chạy demo',
+  stopDemo: 'Dừng',
+  autoRunLimit: 'Trang đang chạy nhiều demo; bấm Chạy demo để chạy demo này.',
   openFull: 'Mở toàn màn hình',
   close: 'Đóng',
   reload: 'Chạy lại',
@@ -205,6 +210,8 @@ const en: AiCopy = {
   you: 'You',
   artifact: 'Interactive block',
   runDemo: 'Run demo',
+  stopDemo: 'Stop',
+  autoRunLimit: 'Several demos are already running on this page; press Run demo to start this one.',
   openFull: 'Open full screen',
   close: 'Close',
   reload: 'Run again',
@@ -288,6 +295,8 @@ const zh: AiCopy = {
   you: '你',
   artifact: '交互模块',
   runDemo: '运行演示',
+  stopDemo: '停止',
+  autoRunLimit: '此页面已有多个演示在运行；点击“运行演示”即可启动这个演示。',
   openFull: '全屏打开',
   close: '关闭',
   reload: '重新运行',
@@ -371,6 +380,8 @@ const ko: AiCopy = {
   you: '나',
   artifact: '인터랙티브 블록',
   runDemo: '데모 실행',
+  stopDemo: '중지',
+  autoRunLimit: '이 페이지에서 이미 여러 데모가 실행 중입니다. 이 데모를 시작하려면 데모 실행을 누르세요.',
   openFull: '전체 화면',
   close: '닫기',
   reload: '다시 실행',
@@ -454,6 +465,8 @@ const ja: AiCopy = {
   you: 'あなた',
   artifact: 'インタラクティブブロック',
   runDemo: 'デモを実行',
+  stopDemo: '停止',
+  autoRunLimit: 'このページではすでに複数のデモが実行中です。このデモを始めるには「デモを実行」を押してください。',
   openFull: '全画面で開く',
   close: '閉じる',
   reload: '再実行',

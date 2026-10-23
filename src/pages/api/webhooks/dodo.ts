@@ -11,7 +11,7 @@ import { announceOrder, shouldNotifyOrder } from '../../../lib/notifications/ord
 /**
  * Dodo Payments webhook (Standard Webhooks signature, 5-minute replay window). Subscription and
  * payment events drive card memberships, course payments, refunds and disputes; the `webhook-id` makes every delivery idempotent.
- * refund.succeeded / dispute.opened / dispute.lost of a card charge (first or renewal) are logged once; on the first payment they also reverse the referral commission.
+ * refund.succeeded / dispute.opened / dispute.accepted / dispute.lost / dispute.expired of a card charge (first or renewal) are logged once; on the first payment they also reverse the referral commission.
  * One for a payment with no recorded charge is looked up at Dodo (matched by subscription id or the checkout's card reference): a renewal of a known card is applied at once, and one on a card
  * with no first payment yet answers 409 so Dodo redelivers it after the charge. A lookup that hits a Dodo outage answers 502 for a redelivery.
  * A course order it pays, a card subscription it activates, and anything it flags are announced to the admin channels.

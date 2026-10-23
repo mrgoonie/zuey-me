@@ -13,6 +13,12 @@ export const LIMITS = {
   text: 20_000,
   shortText: 500,
   code: 50_000,
+  codeFilename: 200,
+  /** Ranges in a code block's `highlightLines`. */
+  codeLineRanges: 50,
+  /** Bounds of a code block's `collapseAfter` (lines). */
+  codeCollapseMin: 3,
+  codeCollapseMax: 500,
   mermaid: 20_000,
   url: 2_048,
   listItems: 200,
@@ -98,7 +104,24 @@ export interface CalloutBlock extends BlockBase {
   /** Allowlisted icon replacing the tone's default glyph. */
   icon?: IconName;
 }
-export interface CodeBlock extends BlockBase { type: 'code'; language: string; code: string }
+/** Source code. Every option is optional, so blocks stored before they existed read and render unchanged. */
+export interface CodeBlock extends BlockBase {
+  type: 'code';
+  language: string;
+  code: string;
+  /** File name or path shown as the block's caption. */
+  filename?: string;
+  /** Line number gutter (true only; false is stored as absent). */
+  lineNumbers?: true;
+  /** Emphasised lines, 1-based: "2,4-6" (normalised without spaces). */
+  highlightLines?: string;
+  /** Each line starts with a diff marker: `+` added, `-` removed, a space for context. */
+  diff?: true;
+  /** Soft-wrap long lines by default instead of scrolling sideways (readers can switch). */
+  wrap?: true;
+  /** Code longer than this many lines starts collapsed to that height, with a button to show it all. */
+  collapseAfter?: number;
+}
 export interface DividerBlock extends BlockBase { type: 'divider' }
 /**
  * Natural pixel size of an image, recorded when the URL is entered so readers reserve its box before it loads.
