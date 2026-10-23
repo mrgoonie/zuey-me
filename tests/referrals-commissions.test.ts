@@ -328,6 +328,64 @@ describe('Dodo commission and refunds', () => {
     expect(parseDodoReversalEvent({ type: 'refund.succeeded', data: {} })).toBeNull();
   });
 
+  // Dodo's dispute webhook object: no customer, the amount as a string.
+  const disputeData = (status: string) => ({
+    payload_type: 'Dispute', dispute_id: 'dsp_1', payment_id: 'pay_first', business_id: 'bus_test', amount: '1777', currency: 'USD',
+    created_at: new Date(T0).toISOString(), dispute_stage: 'chargeback', dispute_status: status,
+  });
+  const chargebacks = () => d1.raw.query<{ dedupe_key: string; properties: string }, []>("SELECT dedupe_key, properties FROM analytics_outbox WHERE event = 'refund'").all();
+  const reversalLogs = () => d1.raw.query<{ detail: string }, []>("SELECT detail FROM user_activity WHERE action = 'billing.card_reversal' ORDER BY id").all()
+    .map(r => JSON.parse(r.detail));
+
+  for (const outcome of ['dispute.accepted', 'dispute.lost', 'dispute.expired']) {
+    it(`reports ${outcome} as one chargeback after dispute.opened, however often it or another lost outcome is delivered`, async () => {
+      const { cardId } = await paidCard();
+      expect(await dataOf(await signedDodo('msg_open', 'dispute.opened', disputeData('dispute_opened')))).toMatchObject({ outcome: 'reversed' });
+      // An opened dispute may still be won: no chargeback yet.
+      expect(chargebacks()).toEqual([]);
+
+      const lost = await signedDodo('msg_lost', outcome, disputeData(outcome.replace('.', '_')));
+      expect(lost.status).toBe(200);
+      expect(await dataOf(lost)).toMatchObject({ outcome: 'already_reversed', card_subscription_id: cardId });
+      // The same delivery replayed, and the dispute's other funds-lost outcomes, change nothing.
+      expect(await dataOf(await signedDodo('msg_lost', outcome, disputeData(outcome.replace('.', '_'))))).toMatchObject({ outcome: 'already_reversed' });
+      for (const other of ['dispute.accepted', 'dispute.lost', 'dispute.expired']) {
+        expect(await dataOf(await signedDodo(`msg_${other}`, other, disputeData(other.replace('.', '_'))))).toMatchObject({ outcome: 'already_reversed' });
+      }
+
+      const rows = chargebacks();
+      expect(rows.map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_1']);
+      expect(JSON.parse(rows[0].properties)).toMatchObject({ provider: 'dodo', order_type: 'membership', reason: 'chargeback', amount: 17.77, currency: 'USD' });
+      expect(reversalLogs()).toEqual([
+        expect.objectContaining({ kind: 'dispute_opened', event: 'dispute.opened', payment_id: 'pay_first' }),
+        expect.objectContaining({ kind: 'dispute_lost', event: outcome, payment_id: 'pay_first', amount: 1777 }),
+      ]);
+      expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+    });
+  }
+
+  it('reverses the commission and reports the chargeback on a funds-lost outcome that arrives without dispute.opened', async () => {
+    const { cardId } = await paidCard();
+    expect(await sendDodo('dispute.accepted', disputeData('dispute_accepted'))).toBe('reversed');
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+    expect(chargebacks().map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_1']);
+  });
+
+  it('restores nothing on dispute.opened then dispute.won, and ignores challenged and cancelled disputes', async () => {
+    const { cardId } = await paidCard();
+    const purchases = () => d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM analytics_outbox WHERE event = 'purchase'").get()?.n;
+    const purchasesBefore = purchases();
+    expect(await sendDodo('dispute.opened', disputeData('dispute_opened'))).toBe('reversed');
+    for (const type of ['dispute.challenged', 'dispute.won', 'dispute.cancelled']) {
+      expect(await sendDodo(type, disputeData(type.replace('.', '_')))).toBe('ignored');
+    }
+    // The commission reversed on opening stays reversed for the admin; no chargeback and no second purchase is queued.
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+    expect(chargebacks()).toEqual([]);
+    expect(purchases()).toBe(purchasesBefore);
+    expect(reversalLogs()).toHaveLength(1);
+  });
+
   async function signedDodo(id: string, type: string, data: Record<string, unknown>): Promise<Response> {
     const body = JSON.stringify({ business_id: 'bus_test', type, timestamp: new Date(T0).toISOString(), data });
     const ts = String(Math.floor(T0 / 1000));
