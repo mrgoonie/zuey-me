@@ -342,3 +342,65 @@ describe('publish, edition delete and tag writes are atomic with the revision bu
     });
   }
 });
+
+describe('post-commit failures and renames never turn a committed write into an error (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+  // Article at revision 4: primary vi draft, a live en edition, tag "kept" (tag "spare" exists, unassigned).
+  const R = 4;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original') });
+    await updateArticle(d1, 'post', { tags: ['spare'] }, 1);
+    await updateArticle(d1, 'post', { tags: ['kept'] }, 2);
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 3);
+  });
+
+  type Writer = (db: D1DatabaseLike, expected: number) => Promise<ArticleRecord>;
+  const writers: Array<[string, Writer, (rec: ArticleRecord) => void]> = [
+    ['publishArticle', (db, expected) => publishArticle(db, 'post', expected, true, { notify: false }), rec => expect(rec.published_revision).toBe(R + 1)],
+    ['deleteEdition', (db, expected) => deleteEdition(db, 'post', 'en', expected), rec => expect(rec.editions.map(e => e.locale)).toEqual(['vi'])],
+    ['setTagsForArticle', (db, expected) => setTagsForArticle(db, 'post', ['spare'], expected), rec => expect(rec.tags).toEqual(['spare'])],
+  ];
+
+  for (const [name, write, landed] of writers) {
+    it(`${name}: a failed search reindex after commit still returns the committed article`, async () => {
+      d1.raw.run('DROP TABLE knowledge_fts');
+      const rec = await write(d1, R);
+      expect(rec.revision).toBe(R + 1);
+      landed(rec);
+      expect(storedRevision(d1)).toBe(R + 1);
+    });
+
+    it(`${name}: a rename between commit and read-back still returns the committed article`, async () => {
+      const paused = interleaveAtFirstWrite(d1, 'after', async () => {
+        await updateArticle(d1, 'post', { slug: 'moved' }, R + 1);
+      });
+      const rec = await write(paused, R);
+      expect(rec.slug).toBe('moved');
+      expect(rec.revision).toBe(R + 2);
+      landed(rec);
+    });
+  }
+
+  it('setTagsForArticle: a failed legacy tag mirror after commit still returns the committed tags', async () => {
+    d1.raw.run("CREATE TRIGGER fail_mirror BEFORE UPDATE OF tags ON articles BEGIN SELECT RAISE(ABORT, 'mirror failed'); END");
+    const rec = await setTagsForArticle(d1, 'post', ['spare'], R);
+    expect(rec.revision).toBe(R + 1);
+    expect(rec.tags).toEqual(['spare']);
+    // The derived column catches up on the next tag write once the mirror works again.
+    d1.raw.run('DROP TRIGGER fail_mirror');
+    await setTagsForArticle(d1, 'post', ['spare'], R + 1);
+    expect(d1.raw.query('SELECT tags FROM articles').get()).toEqual({ tags: JSON.stringify(['spare']) });
+  });
+
+  it('updateArticle: a rename between commit and read-back still returns the saved article', async () => {
+    const paused = interleaveAtFirstWrite(d1, 'after', async () => {
+      await updateArticle(d1, 'post', { slug: 'moved' }, R + 1);
+    });
+    const rec = await updateArticle(paused, 'post', { document: doc('saved') }, R);
+    expect(rec.slug).toBe('moved');
+    expect(rec.revision).toBe(R + 2);
+    expect(paragraphText(rec)).toBe('saved');
+  });
+});

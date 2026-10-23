@@ -376,15 +376,21 @@ function buildSummary(
   };
 }
 
-/** Compact, unambiguous result of a draft write; `status` stays as the public state of the edition. */
+export const WRITE_OPERATIONS = ['create', 'update', 'publish', 'tags_set', 'edition_delete'] as const;
+export type WriteOperation = (typeof WRITE_OPERATIONS)[number];
+
+/** Compact, unambiguous result of a write; `status` on the article stays the public state of the edition. */
 export interface WriteReceipt {
   operation_success: true;
+  /** The writer that produced this receipt. */
+  operation: WriteOperation;
+  /** Edition the write is about: the saved, published or deleted one; the primary edition for tags_set. */
   locale: Locale;
   /** Article-wide revision read right after the write (the next expected_revision unless another writer got in first). */
   article_revision: number;
-  /** Edition revision after the save; equals article_revision because a save bumps both together. */
+  /** Revision at which this edition last changed; below article_revision after tags_set, which leaves the edition alone. */
   edition_draft_revision: number;
-  /** Revision of the edition's currently public snapshot; null when it was never published. */
+  /** Revision of the edition's currently public snapshot; null when it was never published (or was just deleted). */
   published_revision: number | null;
   has_unpublished_changes: boolean;
   /** Fields present in the request (not a diff against the stored values). */
@@ -394,16 +400,41 @@ export interface WriteReceipt {
 
 const RECEIPT_FIELDS = ['slug', 'title', 'excerpt', 'primary_locale', 'access', 'tags', 'category', 'document'] as const;
 
-export function toWriteReceipt(rec: ArticleRecord, input: ArticleInput): WriteReceipt {
+/** Article fields present in a create or update request. */
+export function submittedArticleFields(input: ArticleInput): string[] {
+  return RECEIPT_FIELDS.filter(f => input[f] !== undefined);
+}
+
+/** Request fields of a publish that change what is stored besides the snapshot. */
+export function submittedPublishFields(body: Record<string, unknown>): string[] {
+  // An empty or null published_at is parsed as absent, so it is not reported as submitted.
+  return (['published_at', 'notify'] as const).filter(f => body[f] !== undefined && (f !== 'published_at' || (body[f] !== null && body[f] !== '')));
+}
+
+/**
+ * Receipt of a writer call, built from the article read back after the commit. For edition_delete pass the
+ * deleted locale: the record then shows the primary edition, and the receipt describes the edition that is gone.
+ */
+export function toWriteReceipt(
+  rec: ArticleRecord, operation: WriteOperation, submittedFields: string[], deletedLocale?: Locale,
+): WriteReceipt {
+  if (operation === 'edition_delete') {
+    return {
+      operation_success: true, operation, locale: deletedLocale ?? rec.locale, article_revision: rec.revision,
+      edition_draft_revision: rec.revision, published_revision: null, has_unpublished_changes: false,
+      submitted_fields: submittedFields, next_action: 'none',
+    };
+  }
   const edition = rec.editions.find(e => e.locale === rec.locale);
   return {
     operation_success: true,
+    operation,
     locale: rec.locale,
     article_revision: rec.revision,
     edition_draft_revision: edition?.revision ?? rec.revision,
     published_revision: rec.published_revision,
     has_unpublished_changes: rec.has_unpublished_changes,
-    submitted_fields: RECEIPT_FIELDS.filter(f => input[f] !== undefined),
+    submitted_fields: submittedFields,
     next_action: rec.has_unpublished_changes ? 'publish' : 'none',
   };
 }
@@ -492,13 +523,32 @@ export async function requireArticleId(d1: D1DatabaseLike | undefined, slug: str
   return art.id;
 }
 
+type RecordOptions = { locale?: Locale; publishedOnly?: boolean };
+
 /** Full record of one article: the requested (or primary) edition plus all edition summaries. */
 export async function getArticle(
-  d1: D1DatabaseLike | undefined, slug: string, opts: { locale?: Locale; publishedOnly?: boolean } = {},
+  d1: D1DatabaseLike | undefined, slug: string, opts: RecordOptions = {},
 ): Promise<(ArticleRecord & { locale_fallback: boolean }) | null> {
   if (!d1) return null;
   const art = await loadArticleRow(d1, slug);
-  if (!art) return null;
+  return art ? articleRecord(d1, art, opts) : null;
+}
+
+/**
+ * Same record by id. Writers read back by id after their commit: a concurrent save may have renamed the
+ * article in between, and the committed write must still be returned rather than reported as missing.
+ */
+async function getArticleById(db: D1DatabaseLike, id: string, missing: string, opts: RecordOptions = {}): Promise<ArticleRecord> {
+  const row = await db.prepare('SELECT * FROM articles WHERE id = ? AND deleted_at IS NULL').bind(id).first<Row>();
+  const rec = row ? await articleRecord(db, toArticleRow(row), opts) : null;
+  if (!rec) throw new AppError(500, 'internal_error', missing);
+  return rec;
+}
+
+async function articleRecord(
+  d1: D1DatabaseLike, art: ArticleRowData, opts: RecordOptions,
+): Promise<(ArticleRecord & { locale_fallback: boolean }) | null> {
+  const slug = art.slug;
   const editions = (await loadEditions(d1, [art.id])).get(art.id) ?? [];
   const candidates = opts.publishedOnly ? editions.filter(e => e.publishedJson !== null) : editions;
   const pick = pickEdition(candidates, opts.locale, art.primary);
@@ -753,8 +803,8 @@ function isSlugUniqueViolation(err: unknown): boolean {
 }
 
 /**
- * Runs a derived-cache rebuild after a save has committed. A failure is logged, not thrown: the save
- * landed, and the cache is rebuilt by the next save or an admin reindex.
+ * Runs a derived-cache rebuild after a write has committed. A failure is logged, not thrown: the write
+ * landed (a retry would only get 409), and the cache is rebuilt by the next write or an admin reindex.
  */
 async function afterCommit(what: string, task: () => Promise<unknown>): Promise<void> {
   try {
@@ -794,9 +844,7 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
   `).bind(newId('ed_'), id, locale, input.title, input.excerpt ?? '', docJson, now, now).run();
   await recordRevision(db, id, locale, 1, 'create', input.title, input.excerpt ?? '', docJson, actor);
   await setArticleTags(db, id, tagIds);
-  const rec = await getArticle(db, input.slug, { locale });
-  if (!rec) throw new AppError(500, 'internal_error', 'Article was not persisted');
-  return rec;
+  return getArticleById(db, id, 'Article was not persisted', { locale });
 }
 
 /**
@@ -875,9 +923,7 @@ export async function updateArticle(
   // Access, tags and category affect what each search tier may contain: always rebuild.
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
-  const updated = await getArticle(db, nextSlug, { locale });
-  if (!updated) throw new AppError(500, 'internal_error', 'Article disappeared after update');
-  return updated;
+  return getArticleById(db, art.id, 'Article disappeared after update', { locale });
 }
 
 /**
@@ -937,13 +983,12 @@ export async function publishArticle(
     `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), coverUrl, now, now, art.id, locale, art.id, expected),
     guardedRevisionStatement(db, art.id, expected, locale, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
   ], bumpRevisionStatement(db, art.id, expected, now), [mirrorPrimaryStatement(db, art.id)]);
-  await reindexArticle(db, art.id, ctx.env);
+  await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
   const nowMs = Date.now();
   const backdated = publishedAt !== null && Date.parse(publishedAt) < nowMs - BACKDATE_THRESHOLD_MS;
   const emailNotification = await applyPublishNotification(db, art.id, { notify, backdated, previouslyPublished, actor: ctx.actor ?? 'admin', nowMs });
-  const rec = await getArticle(db, slug, { locale });
-  if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after publish');
+  const rec = await getArticleById(db, art.id, 'Article disappeared after publish', { locale });
   return { ...rec, email_notification: emailNotification };
 }
 
@@ -965,11 +1010,9 @@ export async function deleteEdition(
       .bind(now, now, expected + 1, art.id, locale, art.id, expected),
     guardedRevisionStatement(db, art.id, expected, locale, 'delete_edition', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
   ], bumpRevisionStatement(db, art.id, expected, now));
-  await reindexArticle(db, art.id, ctx.env);
+  await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
-  const rec = await getArticle(db, slug);
-  if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after edition delete');
-  return rec;
+  return getArticleById(db, art.id, 'Article disappeared after edition delete');
 }
 
 /** Soft delete; the slug stays reserved. Search rows are removed immediately. */
@@ -997,13 +1040,11 @@ export async function setTagsForArticle(
   const tagIds = await resolveTagRefs(db, refs, { createMissing: false, locale: art.primary, actor: ctx.actor ?? 'admin' });
   const now = nowIso();
   await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
-  // Derived cache rebuilt from the committed rows (legacy tag names column); idempotent.
-  await mirrorLegacyTags(db, art.id);
-  await reindexArticle(db, art.id, ctx.env);
+  // Derived caches rebuilt from the committed rows (legacy tag names column, search index); idempotent.
+  await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
+  await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
-  const rec = await getArticle(db, slug);
-  if (!rec) throw new AppError(500, 'internal_error', 'Article disappeared after tag update');
-  return rec;
+  return getArticleById(db, art.id, 'Article disappeared after tag update');
 }
 
 export interface RevisionEntry {

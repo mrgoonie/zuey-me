@@ -34,11 +34,15 @@ class Statement implements D1PreparedStatementLike {
   }
 }
 
-/** Real SQLite database with every migration in /migrations applied, exposed through the D1 interface. */
-export function createTestD1(): D1DatabaseLike & { raw: Database } {
+/**
+ * Real SQLite database with every migration in /migrations applied, exposed through the D1 interface.
+ * `beforeMigration` runs before each migration file, so a test can seed data an upgrade must preserve.
+ */
+export function createTestD1(opts: { beforeMigration?: (file: string, db: Database) => void } = {}): D1DatabaseLike & { raw: Database } {
   const db = new Database(':memory:');
   const dir = path.join(import.meta.dir, '..', '..', 'migrations');
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()) {
+    opts.beforeMigration?.(file, db);
     db.run(fs.readFileSync(path.join(dir, file), 'utf8'));
   }
   return {

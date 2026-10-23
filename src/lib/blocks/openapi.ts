@@ -2,7 +2,7 @@ import type { OpenApiFragment } from '../openapi/types';
 import { idempotencyKeyParam } from '../idempotency/openapi';
 import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
-import { SORTS } from './articles';
+import { SORTS, WRITE_OPERATIONS } from './articles';
 import { MAX_ARTICLE_PAGE } from './pagination';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import { ICON_NAMES } from './icons';
@@ -100,6 +100,8 @@ const ok = (description: string, data: unknown) => ({
   description,
   content: json({ type: 'object', properties: { success: { type: 'boolean' }, data } }),
 });
+/** A writer's answer: the article plus the required `receipt` of the write. */
+const withReceipt = (article: unknown) => ({ allOf: [article, { type: 'object', required: ['receipt'], properties: { receipt: ref('WriteReceipt') } }] });
 const conflict = { description: 'Revision conflict or slug taken (`revision_conflict`, `slug_taken`, `already_voted`)', content: json(ref('Error')) };
 const notFound = { description: 'Not found', content: json(ref('Error')) };
 const slugParam = { name: 'slug', in: 'path', required: true, schema: { type: 'string' } };
@@ -138,15 +140,17 @@ export const articlesOpenApi: OpenApiFragment = {
     ArticleSummary: articleSummary,
     WriteReceipt: {
       type: 'object',
-      required: ['operation_success', 'locale', 'article_revision', 'edition_draft_revision', 'published_revision', 'has_unpublished_changes', 'submitted_fields', 'next_action'],
+      description: 'Outcome of a write, separate from the public `status` of the article it returns.',
+      required: ['operation_success', 'operation', 'locale', 'article_revision', 'edition_draft_revision', 'published_revision', 'has_unpublished_changes', 'submitted_fields', 'next_action'],
       properties: {
         operation_success: { type: 'boolean', const: true },
-        locale: localeEnum,
+        operation: { type: 'string', enum: [...WRITE_OPERATIONS], description: 'The writer that produced the receipt' },
+        locale: { ...localeEnum, description: 'Edition the write is about: the saved, published or deleted one; the primary edition for tags_set' },
         article_revision: { type: 'integer', description: 'Use as the next expected_revision' },
-        edition_draft_revision: { type: 'integer' },
-        published_revision: { type: ['integer', 'null'] },
+        edition_draft_revision: { type: 'integer', description: 'Revision at which this edition last changed; lower than article_revision after tags_set, which leaves the edition alone' },
+        published_revision: { type: ['integer', 'null'], description: 'null when the edition was never published or was just deleted' },
         has_unpublished_changes: { type: 'boolean' },
-        submitted_fields: { type: 'array', items: { type: 'string' }, description: 'Fields present in the request, not a diff' },
+        submitted_fields: { type: 'array', items: { type: 'string' }, description: 'Fields present in the request, not a diff (publish: published_at, notify; tags_set: tags; edition_delete: none)' },
         next_action: { type: 'string', enum: ['publish', 'none'] },
       },
     },
@@ -297,7 +301,7 @@ export const articlesOpenApi: OpenApiFragment = {
         tags, summary: 'Create a draft article', security: adminSecurity, parameters: [idempotencyKeyParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { required: ['slug', 'title'] }] }) },
         responses: {
-          '201': ok('Created draft', ref('Article')), '409': conflict,
+          '201': ok('Created draft with its `receipt`', withReceipt(ref('Article'))), '409': conflict,
           '422': { description: '`invalid_document` with `errors: [{path, message}]`', content: json(ref('Error')) }, ...errorResponses,
         },
       },
@@ -316,7 +320,7 @@ export const articlesOpenApi: OpenApiFragment = {
       put: {
         tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' }, response_mode: responseMode } }] }) },
-        responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', { allOf: [ref('Article'), { type: 'object', required: ['receipt'], properties: { receipt: ref('WriteReceipt') } }] }), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
+        responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', withReceipt(ref('Article'))), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
       delete: {
         tags, summary: 'Soft-delete an article', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
@@ -331,7 +335,7 @@ export const articlesOpenApi: OpenApiFragment = {
           published_at: { type: 'string', format: 'date-time', description: 'Backdate the publish time (not in the future), e.g. archive imports' },
           notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
         } }) },
-        responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+        responses: { '200': ok('Published edition with its `receipt`', withReceipt(ref('Article'))), '404': notFound, '409': conflict, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/localization/prepare': {
@@ -400,7 +404,7 @@ export const articlesOpenApi: OpenApiFragment = {
       delete: {
         tags, summary: 'Delete one non-primary edition', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['locale', 'expected_revision'], properties: { locale: localeEnum, expected_revision: { type: 'integer' } } }) },
-        responses: { '200': ok('Remaining article', ref('ArticleSummary')), '404': notFound, '409': { description: '`revision_conflict` or `primary_edition`', content: json(ref('Error')) }, ...errorResponses },
+        responses: { '200': ok('Primary edition; `receipt` describes the deleted locale', withReceipt(ref('ArticleSummary'))), '404': notFound, '409': { description: '`revision_conflict` or `primary_edition`', content: json(ref('Error')) }, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/revisions': {
@@ -422,7 +426,7 @@ export const articlesOpenApi: OpenApiFragment = {
       put: {
         tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['tags', 'expected_revision'], properties: { tags: { type: 'array', maxItems: 20, items: { type: 'string' } }, expected_revision: { type: 'integer' } } }) },
-        responses: { '200': ok('Article', ref('ArticleSummary')), '404': notFound, '409': conflict, ...errorResponses },
+        responses: { '200': ok('Article with its `receipt`', withReceipt(ref('ArticleSummary'))), '404': notFound, '409': conflict, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/cover': {
