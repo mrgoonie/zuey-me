@@ -14,18 +14,18 @@ export const MATH_MAX_EXPAND = 1000;
 /** Deepest group nesting (braces, `\left`…`\right`, environments) typeset; deeper TeX is costly and never legitimate. */
 export const MATH_MAX_DEPTH = 40;
 /** Longest TeX typeset as one formula; KaTeX's cost per character grows with length, so longer TeX shows as source. */
-export const MATH_MAX_TEX_CHARS = 3_000;
+export const MATH_MAX_TEX_CHARS = 2_000;
 /** Largest markup kept for one formula (deep nesting multiplies spans); bigger output falls back to the source. */
 export const MAX_MATH_HTML_CHARS = 200_000;
 /**
  * Typesetting budget per document, in cost units (see `mathCost`). Workers clocks do not advance during
  * synchronous work, so the budget is a deterministic estimate rather than a timer: with macros refused and
  * nesting capped, KaTeX's cost is close to linear in the TeX length plus a fixed per-formula overhead, and
- * this budget keeps the slowest document measured to a few tens of milliseconds of CPU.
+ * this budget keeps the slowest document measured (about 50 formulas of typical size) to a few tens of milliseconds of CPU.
  */
-export const MAX_DOCUMENT_MATH_COST = 16_000;
+export const MAX_DOCUMENT_MATH_COST = 8_000;
 /** Fixed cost of one formula in characters' worth of TeX (parser and DOM-tree setup). */
-export const MATH_FORMULA_BASE_COST = 120;
+export const MATH_FORMULA_BASE_COST = 100;
 /** Markup typeset per document (it ships twice: in the HTML and in the island props). */
 export const MAX_DOCUMENT_MATH_HTML_CHARS = 1_500_000;
 

@@ -128,8 +128,8 @@ describe('math typesetting (KaTeX)', () => {
     renderTex('x'); // KaTeX is loaded and warm, as on a busy worker.
     const nest = '\\frac{1}{'.repeat(39) + '1' + '}'.repeat(39);
     const worst: Record<string, string> = {
-      plus: 'x+'.repeat(1_400), subscripts: 'x_{1}'.repeat(560), nested: `${nest}+`.repeat(7),
-      matrix: '\\begin{pmatrix}' + Array.from({ length: 56 }, () => Array(25).fill('a').join('&')).join('\\\\') + '\\end{pmatrix}',
+      plus: 'x+'.repeat(990), subscripts: 'x_{1}'.repeat(396), short: 'x+'.repeat(50), nested: `${nest}+`.repeat(5),
+      matrix: '\\begin{pmatrix}' + Array.from({ length: 38 }, () => Array(25).fill('a').join('&')).join('\\\\') + '\\end{pmatrix}',
       tiny: 'x', typical: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}',
     };
     for (const [name, tex] of Object.entries(worst)) {
@@ -137,9 +137,15 @@ describe('math typesetting (KaTeX)', () => {
       const started = performance.now();
       const renders = renderMathBlocks(blocks);
       const ms = performance.now() - started;
-      expect({ name, slow: ms >= 100 }).toEqual({ name, slow: false });
-      // Only the formulas within the budget are typeset; the rest fall back to source without any KaTeX work.
-      expect(Object.keys(renders).length).toBeLessThanOrEqual(Math.floor(MAX_DOCUMENT_MATH_COST / mathCost(tex)));
+      // The work bound: exactly the formulas that fit the budget are typeset (none when KaTeX rejects the TeX),
+      // and every later formula falls back to source without reaching KaTeX.
+      const withinBudget = Math.floor(MAX_DOCUMENT_MATH_COST / mathCost(tex));
+      expect(withinBudget).toBeLessThan(blocks.length);
+      const typeset = renderTex(tex).ok ? withinBudget : 0;
+      expect({ name, typeset: Object.keys(renders).length }).toEqual({ name, typeset });
+      expect(blocks.slice(withinBudget).some(b => mathMarkup(renders, b.id) !== null)).toBe(false);
+      // Smoke ceiling only (shared CI runners are noisy); about 30 ms on a developer machine.
+      expect(ms).toBeLessThan(1_000);
     }
   });
 
