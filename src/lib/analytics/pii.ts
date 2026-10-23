@@ -162,9 +162,9 @@ function redactEmails(value: string): string {
  * Every group needs a digit and a separator, so the regex never backtracks over a run and the scan is linear; which
  * part of a run is a phone number is decided by `phoneRanges`.
  */
-const PHONE_RUN_RE = /\+?\(?\d+(?:(?:[   ]?[.-][   ]?|[   ]|\)[   ]?)\(?\d+)*\)?/g;
-const SPACE_RE = /[   ]/;
-const PLAIN_SPACE_RE = /^[   ]$/;
+const PHONE_RUN_RE = /\+?\(?\d+(?:(?:[ \u00a0\u202f]?[.-][ \u00a0\u202f]?|[ \u00a0\u202f]|\)[ \u00a0\u202f]?)\(?\d+)*\)?/g;
+const SPACE_RE = /[ \u00a0\u202f]/;
+const PLAIN_SPACE_RE = /^[ \u00a0\u202f]$/;
 const WORD_CHAR_RE = /^[\p{L}\p{N}_]$/u;
 const JOINER_RE = /^[-._]$/;
 /** Most digits in a phone number (E.164). A window of groups never grows past this, which bounds the scan. */
@@ -227,12 +227,14 @@ function digitGroups(run: string, runStart: number): DigitGroup[] {
 /**
  * `[start, end)` of every phone number: Vietnamese `0xxxxxxxxx` and `02xxxxxxxxx` (also `84xxxxxxxxx` written as one
  * group), `+` followed by 9 to 15 digits (E.164, `+84 90 123 4567`, `+84 (0) 90 123 4567`), and North American
- * `(415) 555-2671`, with spaces, dots, dashes or a parenthesised area code between groups. A `+` glued to a word is a
- * URL-encoded space (`q=zuey+0901234567`), not a country-code prefix. A run of numbers is split only at spaces, so
- * two numbers in a row are both found, while ISO dates, times, timestamps, prices, versions, IP addresses and order ids
- * never form one of these shapes. Each window of groups is capped at `MAX_PHONE_DIGITS` digits, so the scan stays linear.
+ * `(415) 555-2671`, with spaces, dots, dashes or a parenthesised area code between groups. From `queryStart` on (the
+ * raw query and fragment of a URL) a `+` glued to a word is an encoded space (`q=zuey+0901234567`), not a country-code
+ * prefix; anywhere else (paths, free text, decoded `%2B`) it is a real plus. A run of numbers is split only at spaces,
+ * so two numbers in a row are both found, while ISO dates, times, timestamps, prices, versions, IP addresses and order
+ * ids never form one of these shapes. Each window of groups is capped at `MAX_PHONE_DIGITS` digits, so the scan stays
+ * linear.
  */
-function phoneRanges(value: string): Array<[number, number]> {
+function phoneRanges(value: string, queryStart = Infinity): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   if (!/\d/.test(value)) return ranges;
   PHONE_RUN_RE.lastIndex = 0;
@@ -242,7 +244,7 @@ function phoneRanges(value: string): Array<[number, number]> {
     const runStart = match.index;
     const runEnd = runStart + run.length;
     const groups = digitGroups(run, runStart);
-    const plusSpace = run.startsWith('+') && WORD_CHAR_RE.test(charBefore(value, runStart));
+    const plusSpace = run.startsWith('+') && runStart >= queryStart && WORD_CHAR_RE.test(charBefore(value, runStart));
     const plus = run.startsWith('+') && !plusSpace;
     const gluedBefore = !run.startsWith('+') && !run.startsWith('(') && touchesWord(value, runStart - 1, -1);
     const gluedAfter = touchesWord(value, runEnd, 1);
@@ -309,8 +311,8 @@ function replaceRanges(value: string, ranges: Array<[number, number]>): string {
   return out + value.slice(last);
 }
 
-function redactPhones(value: string): string {
-  return replaceRanges(value, phoneRanges(value));
+function redactPhones(value: string, queryStart = Infinity): string {
+  return replaceRanges(value, phoneRanges(value, queryStart));
 }
 
 function test(re: RegExp, value: string): boolean {
@@ -346,7 +348,14 @@ const ESCAPE_RUN_RE = /(?:%[0-9A-Fa-f]{2})+/g;
 const ASCII_ESCAPE_RE = /%([0-7][0-9A-Fa-f])/g;
 /** Characters a redacted segment keeps as they are: unreserved ones plus those that never split a URL. */
 const SEGMENT_UNSAFE_RE = /[^A-Za-z0-9._~+\-:@!$*,()]/gu;
+/** In a URL query a literal `+` means a space, so a decoded plus (`%2B`) is escaped again there. */
+const QUERY_UNSAFE_RE = /[^A-Za-z0-9._~\-:@!$*,()]/gu;
 const NON_ASCII_RE = /[^\x00-\x7F]/;
+/**
+ * Stands in for a raw `+` of a URL query while its segment is decoded: it is an encoded space there, so it must
+ * neither join an email nor prefix a phone number, unlike a decoded `%2B`. A private-use character never in a URL.
+ */
+const QUERY_SPACE = '\uE000';
 
 /**
  * One percent-decoding pass. Each run of escapes is decoded as UTF-8 (`b%C3%BCcher`, `h%E1%BB%8Dc`); a run
@@ -380,12 +389,14 @@ function decodeEscapes(value: string): string | null {
 /**
  * Re-encodes a decoded segment after redaction. Delimiters, `%` and controls are escaped so the URL keeps its
  * shape; `:` and `@` stay literal (`mailto:`). Non-ASCII text is escaped as UTF-8, matching how it arrived,
- * unless the original segment already carried it raw (free text), in which case it stays raw.
+ * unless the original segment already carried it raw (free text), in which case it stays raw. In a URL query a
+ * decoded plus becomes `%2B` again and each `QUERY_SPACE` its original raw `+`.
  */
-function encodeSegment(value: string, keepRawUnicode: boolean): string {
+function encodeSegment(value: string, keepRawUnicode: boolean, inQuery: boolean): string {
   return value
     .split(REDACTED)
-    .map(part => part.replace(SEGMENT_UNSAFE_RE, (char: string) => {
+    .map(part => part.replace(inQuery ? QUERY_UNSAFE_RE : SEGMENT_UNSAFE_RE, (char: string) => {
+      if (char === QUERY_SPACE) return '+';
       if (keepRawUnicode && NON_ASCII_RE.test(char)) return char;
       try {
         return encodeURIComponent(char);
@@ -400,17 +411,25 @@ function encodeSegment(value: string, keepRawUnicode: boolean): string {
  * Redacts emails and phone numbers that only appear once percent-decoded (`john%40x.com`, `john%2540x.com`,
  * `zuey%20john%40x.com`, `%2B84%20901%20234%20567`). A segment carrying one is decoded, its emails and phone numbers
  * replaced, and re-encoded so the rest of the URL keeps its shape.
- * A segment still encoded after the decoding limit is redacted whole.
+ * A segment still encoded after the decoding limit is redacted whole. From `queryStart` on, a raw `+` is a space
+ * while the segment is inspected, and any plus left after decoding is a real one (`%2B44…`).
  */
-function redactEncodedEmails(value: string): string {
+function redactEncodedEmails(value: string, queryStart = Infinity): string {
   if (!value.includes('%')) return value;
-  return value.replace(SEGMENT_RE, (segment: string) => {
+  return value.replace(SEGMENT_RE, (segment: string, offset: number) => {
     if (!segment.includes('%')) return segment;
-    const decoded = decodeEscapes(segment);
+    const inQuery = offset >= queryStart;
+    const decoded = decodeEscapes(inQuery ? segment.replaceAll('+', QUERY_SPACE) : segment);
     if (decoded === null) return REDACTED;
     if (!hasEmail(decoded) && !hasPhone(decoded)) return segment;
-    return encodeSegment(redactPhones(redactEmails(decoded)), NON_ASCII_RE.test(segment));
+    return encodeSegment(redactPhones(redactEmails(decoded)), NON_ASCII_RE.test(segment), inQuery);
   });
+}
+
+/** Where the query or fragment of a URL starts, or `Infinity` for free text. */
+function queryStartOf(value: string, isUrl: boolean): number {
+  const index = isUrl ? value.search(/[?#]/) : -1;
+  return index < 0 ? Infinity : index;
 }
 
 /** True when a string carries an email address, literally or percent-encoded, or is encoded too deep to inspect. */
@@ -489,15 +508,18 @@ export function scrubUrl(raw: string): string {
     parsed.password = '';
   }
   const out = relative ? `${parsed.pathname}${parsed.search}${parsed.hash}` : parsed.toString();
-  return redactText(out, false);
+  return redactText(out, false, true);
 }
 
-function redactText(value: string, redactSearch: boolean): string {
+/** `isUrl`: the value is a parsed URL, so a `+` in its query or fragment is an encoded space. */
+function redactText(value: string, redactSearch: boolean, isUrl = false): string {
   const params = templatePaths(capLength(value))
     .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (
       isSensitiveParam(name) || (redactSearch && isSearchParam(name)) ? `${lead}${name}=${REDACTED}` : match
     ));
-  return redactEncodedEmails(redactPhones(redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED))));
+  const literal = redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED));
+  const phonesOut = redactPhones(literal, queryStartOf(literal, isUrl));
+  return redactEncodedEmails(phonesOut, queryStartOf(phonesOut, isUrl));
 }
 
 /**

@@ -81,17 +81,40 @@ describe('less common phone formats are redacted', () => {
   });
 
   test('no-break spaces and spaced dashes between groups', () => {
-    for (const phone of ['0901 234 567', '+84 90 123 4567', '0901 - 234 - 567', '028 - 3822 - 1234', '0901 .234. 567']) {
+    for (const phone of ['0901\u00a0234\u00a0567', '+84\u202f90\u202f123\u202f4567', '0901 - 234 - 567', '028 - 3822 - 1234', '0901 .234. 567']) {
       expect(redactString(`Gọi ${phone} nhé`)).toBe(`Gọi ${REDACTED} nhé`);
       expect(containsPii(phone)).toBe(true);
     }
   });
 
-  test('a + glued to a word is a space: the number after it is still found, the + is kept', () => {
+  test('in a raw URL query a + glued to a word is a space: the number after it is still found, the + is kept', () => {
     expect(scrubUrl('https://www.google.com/search?q=zuey+0901234567')).toBe(`https://www.google.com/search?q=zuey+${REDACTED}`);
     expect(scrubUrl('https://www.google.com/search?q=zuey+84901234567')).toBe(`https://www.google.com/search?q=zuey+${REDACTED}`);
     expect(scrubUrl('https://www.google.com/search?q=zuey+123456789')).toBe('https://www.google.com/search?q=zuey+123456789');
+    expect(scrubUrl('https://zuey.me/?ref=a#x=zuey+123456789')).toBe('https://zuey.me/?ref=a#x=zuey+123456789');
     expect(redactString('tel:+84901234567 and to=+84901234567')).toBe(`tel:${REDACTED} and to=${REDACTED}`);
+  });
+});
+
+describe('a plus outside a raw URL query is a real plus', () => {
+  test('free text: a + glued to a word still prefixes a phone number', () => {
+    expect(redactString('call+442071838750')).toBe(`call${REDACTED}`);
+    expect(redactString('SĐT+84 90 123 4567 nhé')).toBe(`SĐT${REDACTED} nhé`);
+    expect(redactString('zuey+123456789')).toBe(`zuey${REDACTED}`);
+    expect(containsPii('call+442071838750')).toBe(true);
+    expect(scrubValue({ $el_text: 'SĐT+84 90 123 4567' })).toEqual({ $el_text: `SĐT${REDACTED}` });
+  });
+
+  test('URL paths and decoded %2B keep the plus as a country-code prefix', () => {
+    expect(scrubUrl('https://zuey.me/?msg=Call%2B442071838750')).toBe(`https://zuey.me/?msg=Call${REDACTED}`);
+    expect(scrubUrl('https://example.com/u/call+442071838750')).toBe(`https://example.com/u/call${REDACTED}`);
+  });
+
+  test('a decoded plus is redacted with its number or escaped again, a raw + stays a space', () => {
+    expect(scrubUrl('https://example.com/?a=x%2B84901234567')).toBe(`https://example.com/?a=x${REDACTED}`);
+    expect(scrubUrl('https://example.com/?a=hi+x%2B84901234567')).toBe(`https://example.com/?a=hi+x${REDACTED}`);
+    expect(scrubUrl('https://example.com/?a=C%2B%2B+call%200901234567')).toBe(`https://example.com/?a=C%2B%2B+call%20${REDACTED}`);
+    expect(scrubUrl('https://example.com/?a=zuey+0901%20234%20567')).toBe(`https://example.com/?a=zuey+${REDACTED}`);
   });
 });
 
@@ -120,8 +143,8 @@ describe('numbers that are not phone numbers are kept', () => {
     '256 384 1024', '300 250 1920', '415 555 2671', '<path d="M 256 384 1024 768 L 300 250 1920 1080"/>',
     // `84` without `+` only counts as one group (`wa.me/84…`); spaced, it reads like an amount
     '84 901 234 567',
-    // `+` glued to a word is an encoded space, so the digits after it are judged without a prefix
-    'zuey+123456789', 'q=zuey+123456789', 'size+1500000',
+    // A plus glued to a word, with too few digits after it for a phone number
+    'size+1500000',
   ];
 
   test('redactString keeps each value unchanged', () => {
