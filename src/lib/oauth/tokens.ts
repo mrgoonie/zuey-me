@@ -65,7 +65,8 @@ const UNROTATED = 'rotated_at IS NULL AND revoked_at IS NULL';
  * RFC 9700 §4.14.2 allows an authorization server to tolerate such concurrent refreshes. A refresh token
  * rotated less than REFRESH_GRACE_MS ago, whose grant is not revoked, therefore gets a new sibling pair in the
  * same grant (only hashes are stored, so the earlier response cannot be replayed), at most REFRESH_GRACE_MAX
- * times. The sibling is issued under the same guard in one batch, so a revoke landing first always wins.
+ * times; the next one revokes the grant. The sibling's refresh token keeps the expiry of the token it replaces
+ * instead of a fresh REFRESH_TOKEN_TTL_MS. The sibling is issued under the same guard in one batch, so a revoke landing first always wins.
  * Any other presentation of a rotated token (outside the window, cap used up, grant revoked) still revokes the
  * whole grant.
  *
@@ -89,7 +90,12 @@ const reusedGrant = (): OAuthError => invalidGrant('Refresh token was already us
  */
 async function prepareTokens(
   d1: D1DatabaseLike,
-  input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string; guard?: { id: string; where: string; binds: unknown[] } },
+  input: {
+    familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string;
+    guard?: { id: string; where: string; binds: unknown[] };
+    /** Refresh expiry to keep instead of a fresh REFRESH_TOKEN_TTL_MS (ISO). */
+    refreshExpiresAt?: string;
+  },
 ): Promise<{ insert: D1PreparedStatementLike; response: TokenResponse }> {
   const now = membersRuntime.now();
   const access = ACCESS_TOKEN_PREFIX + randomSecret(32);
@@ -98,7 +104,7 @@ async function prepareTokens(
   const scopes = sortScopes(input.scopes);
   const values = [
     randomId('ot'), input.familyId, input.client.client_id, input.userId, await sha256Hex(access), refresh ? await sha256Hex(refresh) : null,
-    JSON.stringify(scopes), input.audience, iso(now), iso(now + ACCESS_TOKEN_TTL_MS), refresh ? iso(now + REFRESH_TOKEN_TTL_MS) : null,
+    JSON.stringify(scopes), input.audience, iso(now), iso(now + ACCESS_TOKEN_TTL_MS), refresh ? input.refreshExpiresAt ?? iso(now + REFRESH_TOKEN_TTL_MS) : null,
   ];
   const columns = 'INSERT INTO oauth_tokens (id, family_id, client_id, user_id, access_hash, refresh_hash, scopes, audience, created_at, access_expires_at, refresh_expires_at)';
   const guard = input.guard;
@@ -242,9 +248,12 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
   }
 
   // Grace sibling, guarded and counted in one batch: it lands only while the token is still inside the window
-  // and its grant is unrevoked, so a concurrent revoke or the last allowed sibling always wins.
-  if (graceUses !== null) {
-    const { insert, response } = await prepareTokens(d1, { ...tokens, guard: { id: tokenId, where: IN_GRACE, binds: [graceStart] } });
+  // and its grant is unrevoked, so a concurrent revoke or the last allowed sibling always wins. Its refresh
+  // token keeps the expiry of the token it replaces, so a sibling never gets a longer life than that token.
+  if (graceUses !== null && expires !== null) {
+    const { insert, response } = await prepareTokens(d1, {
+      ...tokens, guard: { id: tokenId, where: IN_GRACE, binds: [graceStart] }, refreshExpiresAt: expires,
+    });
     const [issued] = await d1.batch([
       insert,
       d1.prepare(`UPDATE oauth_tokens SET grace_uses = grace_uses + 1 WHERE id = ? AND ${IN_GRACE}`).bind(tokenId, graceStart),

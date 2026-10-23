@@ -6,13 +6,13 @@ import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { jsonError, withRequestId } from '../src/lib/http';
 import { createUserKey } from '../src/lib/members/api-keys';
-import { membersRuntime } from '../src/lib/members/runtime';
+import { membersRuntime, sha256Hex } from '../src/lib/members/runtime';
 import { createMemberSession } from '../src/lib/members/session';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import { allMcpTools } from '../src/lib/mcp/dispatch';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { loadConsent, startAuthorization } from '../src/lib/oauth/authorize';
-import { ACCESS_TOKEN_TTL_MS } from '../src/lib/oauth/config';
+import { ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from '../src/lib/oauth/config';
 import { REFRESH_GRACE_MAX, REFRESH_GRACE_MS, pkceChallenge } from '../src/lib/oauth/tokens';
 import { TOOL_ACCESS } from '../src/lib/oauth/tool-access';
 import { GET as asMetadataApi } from '../src/pages/.well-known/oauth-authorization-server';
@@ -637,12 +637,53 @@ describe('refresh tokens and revocation', () => {
     const f = await fullFlow('lan@example.com');
     const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
     const first = await exchange(base);
+    const sibling = await exchange(base);
+    expect(sibling.status).toBe(200);
     now += REFRESH_GRACE_MS;
     const late = await exchange(base);
     expect(get(late.body, 'error')).toBe('invalid_grant');
     expect(get(late.body, 'error_description')).toContain('already used or revoked');
-    expect((await mcp('ping', {}, { token: String(get(first.body, 'access_token')) })).status).toBe(401);
+    // The reuse revokes the whole grant, the sibling's own pair included.
+    for (const r of [first, sibling]) {
+      expect((await mcp('ping', {}, { token: String(get(r.body, 'access_token')) })).status).toBe(401);
+      expect(get((await exchange({ ...base, refresh_token: String(get(r.body, 'refresh_token')) })).body, 'error')).toBe('invalid_grant');
+    }
+    expect(tokenCount()).toEqual({ n: 3 });
+  });
+
+  it('rejects a sibling in the guarded write when the token left the window after it was read', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const first = await exchange(base);
+    expect(first.status).toBe(200);
+    // The token is inside the window when read; just before the write it is moved outside, so only the
+    // window check inside the batch can stop the sibling.
+    const aging: D1DatabaseLike = {
+      prepare: (sql: string) => d1.prepare(sql),
+      batch: async statements => {
+        d1.raw.run('UPDATE oauth_tokens SET rotated_at = ? WHERE rotated_at IS NOT NULL', [new Date(now - REFRESH_GRACE_MS).toISOString()]);
+        return d1.batch(statements);
+      },
+    };
+    const raced = await refreshVia(aging, base);
+    expect(get(raced.body, 'error')).toBe('invalid_grant');
     expect(tokenCount()).toEqual({ n: 2 });
+    expect((await mcp('ping', {}, { token: String(get(first.body, 'access_token')) })).status).toBe(401);
+  });
+
+  it('gives a grace sibling the refresh expiry of the token it replaces', async () => {
+    const f = await fullFlow('lan@example.com');
+    const base = { grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId };
+    const expiryOf = async (refresh: string): Promise<unknown> =>
+      get(d1.raw.query('SELECT refresh_expires_at FROM oauth_tokens WHERE refresh_hash = ?').get(await sha256Hex(refresh)), 'refresh_expires_at');
+    const original = await expiryOf(f.refresh);
+    now += 1000;
+    const first = await exchange(base);
+    now += 1000;
+    const sibling = await exchange(base);
+    expect(sibling.status).toBe(200);
+    expect(await expiryOf(String(get(first.body, 'refresh_token')))).toBe(new Date(now - 1000 + REFRESH_TOKEN_TTL_MS).toISOString());
+    expect(await expiryOf(String(get(sibling.body, 'refresh_token')))).toBe(original);
   });
 
   it('lets a revoke win over a grace sibling, before or during the refresh', async () => {
