@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { Root } from 'react-dom/client';
@@ -299,17 +299,39 @@ class FakeAnimation extends EventTarget {
   cancel(): void {}
 }
 
-async function settle(rounds = 6) {
-  for (let i = 0; i < rounds; i++) await React.act(async () => { await new Promise(r => setTimeout(r, 20)); });
+/** How long a condition may take to hold. Tests get room for a few such waits, so load slows them instead of failing them. */
+const WAIT_MS = 10_000;
+setDefaultTimeout(30_000);
+
+/** One React flush that also lets already-queued tasks (zero-delay timers, frames, fetch replies) run. */
+async function flush() {
+  await React.act(async () => { await new Promise(r => setTimeout(r, 0)); });
 }
 
-async function mountOs(): Promise<HTMLElement> {
+/**
+ * happy-dom delivers `hashchange` as a later task for every hash change (`history.replaceState`
+ * included), and Zuey OS opens the named window when it lands, so a queued one is unfinished work.
+ */
+let deliveredHash = '';
+const hashSettled = () => deliveredHash === window.location.hash;
+
+/**
+ * Flushes until `ready()` holds and no hashchange is queued, instead of sleeping a fixed time, so a
+ * loaded machine waits longer rather than failing. It never throws: the caller's `expect` reports it.
+ */
+async function waitFor(ready: () => boolean, timeoutMs = WAIT_MS) {
+  const until = Date.now() + timeoutMs;
+  while (!(hashSettled() && ready()) && Date.now() < until) await flush();
+}
+
+/** Mounts the desktop and waits until its root (and anything `ready` names) is on screen. */
+async function mountOs(ready: (root: HTMLElement) => boolean = () => true): Promise<HTMLElement> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = client.createRoot(container);
   React.act(() => root.render(React.createElement(os.ZueyOS, { locale: 'en', profile, links: [], signedIn: false })));
   mounted.push({ root, container });
-  await settle();
+  await waitFor(() => tierOf(container) != null && ready(container));
   return container;
 }
 function unmountAll() {
@@ -328,6 +350,7 @@ const storedGlass = (): unknown => {
 describe('Liquid Glass in Zuey OS', () => {
   beforeAll(async () => {
     GlobalRegistrator.register({ url: 'https://zuey.me/', width: 1440, height: 900 });
+    window.addEventListener('hashchange', e => { deliveredHash = new URL(e.newURL).hash; });
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: (q: string) => new FakeMediaQueryList(q) });
     Object.defineProperty(window.CSS, 'supports', { configurable: true, value: (p: string, v?: string) => p === 'backdrop-filter' && typeof v === 'string' });
@@ -404,15 +427,16 @@ describe('Liquid Glass in Zuey OS', () => {
     setChromium(true);
     const s = i18n.osStrings('en').look;
     window.history.replaceState(null, '', '/#appearance');
-    const root = await mountOs();
-    const toggle = () => root.querySelector<HTMLButtonElement>('.osw[data-app="appearance"] [role="switch"]');
+    const switchOf = (r: HTMLElement) => r.querySelector<HTMLButtonElement>('.osw[data-app="appearance"] [role="switch"]');
+    const root = await mountOs(r => switchOf(r) !== null);
+    const toggle = () => switchOf(root);
     expect(toggle()?.getAttribute('aria-checked')).toBe('true');
     const labelId = toggle()?.getAttribute('aria-labelledby') ?? '';
     expect(document.getElementById(labelId)?.textContent).toBe(s.glass);
     expect(tierOf(root)).toBe('liquid');
 
     React.act(() => toggle()?.click());
-    await settle(2);
+    await waitFor(() => toggle()?.getAttribute('aria-checked') === 'false' && tierOf(root) === 'off' && storedGlass() === false);
     expect(toggle()?.getAttribute('aria-checked')).toBe('false');
     expect(tierOf(root)).toBe('off');
     expect(filtersOf(root)).toEqual([]);
@@ -420,12 +444,12 @@ describe('Liquid Glass in Zuey OS', () => {
 
     // A new visit reads the saved look and keeps the glass off.
     unmountAll();
-    const again = await mountOs();
+    const again = await mountOs(r => switchOf(r) !== null);
     expect(tierOf(again)).toBe('off');
-    const toggleAgain = again.querySelector<HTMLButtonElement>('.osw[data-app="appearance"] [role="switch"]');
+    const toggleAgain = switchOf(again);
     expect(toggleAgain?.getAttribute('aria-checked')).toBe('false');
     React.act(() => toggleAgain?.click());
-    await settle(2);
+    await waitFor(() => tierOf(again) === 'liquid' && storedGlass() === true);
     expect(tierOf(again)).toBe('liquid');
     expect(storedGlass()).toBe(true);
   });
