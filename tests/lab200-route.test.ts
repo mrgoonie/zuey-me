@@ -63,6 +63,15 @@ describe('GET /api/v1/lab200', () => {
     });
   });
 
+  test('before migration 0030 the endpoint answers with empty lists, not a 500', async () => {
+    const d1 = createTestD1();
+    d1.raw.run('DROP TABLE lab200_catalog');
+    const res = await call(d1);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data).toMatchObject({ courses: [], learning_paths: [], synced_at: null, learning_paths_synced_at: null });
+  });
+
   test('a database error is a 500 error envelope that is not publicly cached', async () => {
     const broken: D1DatabaseLike = { ...createTestD1(), prepare: () => { throw new Error('D1 unavailable'); } };
     const res = await call(broken);

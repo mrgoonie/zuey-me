@@ -101,7 +101,9 @@ export async function fetchLab200Feed(kind: Lab200Kind, fetchImpl: FetchImpl = f
 /**
  * Refresh one feed unless another request checked it within `LAB200_STALE_MS` (the conditional
  * update on `checked_at` lets exactly one request win). Returns true when a valid feed was saved.
- * Any failure keeps the previous items and `synced_at`.
+ * Any failure keeps the previous items and `synced_at`, and so does a feed with fewer than half as
+ * many valid items as the saved copy (schema drift upstream must not shrink the last good catalog).
+ * An unchanged feed (same content hash) only moves `synced_at`.
  */
 export async function refreshLab200Feed(d1: D1DatabaseLike, kind: Lab200Kind, opts: Lab200Options = {}): Promise<boolean> {
   const now = (opts.now ?? (() => new Date()))();
@@ -113,8 +115,20 @@ export async function refreshLab200Feed(d1: D1DatabaseLike, kind: Lab200Kind, op
   if (!claim.meta?.changes) return false;
   try {
     const feed = await fetchLab200Feed(kind, opts.fetchImpl);
+    const saved = await d1
+      .prepare('SELECT content_hash, CASE WHEN json_valid(items_json) THEN json_array_length(items_json) ELSE 0 END AS saved_count FROM lab200_catalog WHERE kind = ?')
+      .bind(ROW_KIND[kind])
+      .first<{ content_hash: string; saved_count: number }>();
+    const savedCount = saved?.saved_count ?? 0;
+    if (feed.items.length * 2 < savedCount) {
+      throw new Error(`only ${feed.items.length} valid items against ${savedCount} saved`);
+    }
     const json = JSON.stringify(feed.items);
     const hash = await hashString(`${feed.locale}\n${json}`);
+    if (saved?.content_hash === hash) {
+      await d1.prepare('UPDATE lab200_catalog SET synced_at = ? WHERE kind = ?').bind(now.toISOString(), ROW_KIND[kind]).run();
+      return true;
+    }
     await d1
       .prepare('UPDATE lab200_catalog SET items_json = ?, locale = ?, content_hash = ?, synced_at = ? WHERE kind = ?')
       .bind(json, feed.locale, hash, now.toISOString(), ROW_KIND[kind])
@@ -182,7 +196,17 @@ async function loadFeed<T>(
  * so an outage of one feed never blocks or wipes the other. Without D1 (local dev) both are fetched live.
  */
 export async function getLab200Catalog(d1: D1DatabaseLike | undefined, opts: Lab200Options = {}): Promise<Lab200Catalog> {
-  const rows = d1 ? await readRows(d1) : new Map<string, CatalogRow>();
+  let rows = new Map<string, CatalogRow>();
+  if (d1) {
+    try {
+      rows = await readRows(d1);
+    } catch (err) {
+      // Code deployed before migration 0030: show an honest empty catalog instead of a 500.
+      if (!/no such table: lab200_catalog/.test(err instanceof Error ? err.message : String(err))) throw err;
+      console.warn('200lab: table lab200_catalog is missing (apply migration 0030); serving an empty catalog');
+      return emptyLab200Catalog();
+    }
+  }
   const [courses, learningPaths] = await Promise.all([
     loadFeed(d1, rows, {
       kind: 'courses',

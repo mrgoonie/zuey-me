@@ -8,7 +8,7 @@ import {
   parseLab200LearningPath, parseLab200Pricing, sanitizeText, splitFeatured, LAB200_FEEDS,
 } from '../src/lib/lab200/catalog';
 import { renderLab200Markdown } from '../src/lib/lab200/markdown';
-import { getLab200Catalog, LAB200_MAX_FEED_BYTES, LAB200_STALE_MS, refreshLab200Feed } from '../src/lib/lab200/store';
+import { emptyLab200Catalog, getLab200Catalog, LAB200_MAX_FEED_BYTES, LAB200_STALE_MS, refreshLab200Feed } from '../src/lib/lab200/store';
 import { parseLab200Catalog } from '../src/components/lab200/lab200-api-client';
 import { GET as getLab200Md } from '../src/pages/200lab.md';
 
@@ -333,14 +333,51 @@ describe('200lab D1 catalog', () => {
     const d1 = createTestD1();
     await refreshLab200Feed(d1, 'learningPaths', { fetchImpl: fakeFetch({ learningPaths: [ok(PATHS_JSON)] }).fetchImpl, now: () => t0 });
     const before = row(d1, 'learning_paths');
+    // Reformat the stored JSON: an unchanged feed must not rewrite it, only move synced_at.
+    const pretty = JSON.stringify(JSON.parse(before.items_json), null, 1);
+    d1.raw.query('UPDATE lab200_catalog SET items_json = ? WHERE kind = ?').run(pretty, 'learning_paths');
     const t1 = after(t0);
-    await refreshLab200Feed(d1, 'learningPaths', { fetchImpl: fakeFetch({ learningPaths: [ok(PATHS_JSON)] }).fetchImpl, now: () => t1 });
+    expect(await refreshLab200Feed(d1, 'learningPaths', { fetchImpl: fakeFetch({ learningPaths: [ok(PATHS_JSON)] }).fetchImpl, now: () => t1 })).toBe(true);
     expect(row(d1, 'learning_paths').content_hash).toBe(before.content_hash);
+    expect(row(d1, 'learning_paths').items_json).toBe(pretty);
     expect(row(d1, 'learning_paths').synced_at).toBe(t1.toISOString());
     const changed = PATHS_JSON.replace('"courseCount": 5', '"courseCount": 6');
     const t2 = after(t1);
     await refreshLab200Feed(d1, 'learningPaths', { fetchImpl: fakeFetch({ learningPaths: [ok(changed)] }).fetchImpl, now: () => t2 });
     expect(row(d1, 'learning_paths').content_hash).not.toBe(before.content_hash);
+    expect(row(d1, 'learning_paths').items_json).not.toBe(pretty);
+  });
+
+  test('rejects a feed with fewer than half as many valid items as the saved copy', async () => {
+    const d1 = createTestD1();
+    const feed = (n: number) => ok(JSON.stringify({
+      version: 1,
+      locale: 'vi',
+      courses: Array.from({ length: 6 }, (_, i) => (i < n ? course({ slug: `c${i}` }) : course({ slug: `c${i}`, url: `https://200lab.io/khoa-hoc/c${i}` }))),
+    }));
+    expect(await refreshLab200Feed(d1, 'courses', { fetchImpl: fakeFetch({ courses: [feed(6)] }).fetchImpl, now: () => t0 })).toBe(true);
+    const good = row(d1, 'courses');
+
+    // A URL scheme change upstream leaves 2 of 6 valid: keep the 6 saved courses.
+    const t1 = after(t0);
+    expect(await refreshLab200Feed(d1, 'courses', { fetchImpl: fakeFetch({ courses: [feed(2)] }).fetchImpl, now: () => t1 })).toBe(false);
+    expect(row(d1, 'courses')).toMatchObject({ items_json: good.items_json, synced_at: t0.toISOString() });
+
+    // Half of the saved count is still accepted (200lab may retire courses).
+    const t2 = after(t1);
+    expect(await refreshLab200Feed(d1, 'courses', { fetchImpl: fakeFetch({ courses: [feed(3)] }).fetchImpl, now: () => t2 })).toBe(true);
+    expect(JSON.parse(row(d1, 'courses').items_json)).toHaveLength(3);
+  });
+
+  test('serves an empty catalog when the lab200_catalog table is missing, but surfaces other DB errors', async () => {
+    const d1 = createTestD1();
+    d1.raw.run('DROP TABLE lab200_catalog');
+    const { fetchImpl, calls } = fakeFetch({ courses: [ok(COURSES_JSON)], learningPaths: [ok(PATHS_JSON)] });
+    expect(await getLab200Catalog(d1, { fetchImpl, now: () => t0 })).toEqual(emptyLab200Catalog());
+    expect(calls).toEqual([]);
+
+    const broken = { ...d1, prepare: () => { throw new Error('D1_ERROR: network connection lost'); } };
+    await expect(getLab200Catalog(broken, { fetchImpl, now: () => t0 })).rejects.toThrow('network connection lost');
   });
 
   test('lets only one request refresh each feed within the stale window', async () => {
@@ -468,6 +505,13 @@ describe('/200lab.md', () => {
     });
     expect(md).toContain('- [A \\[link\\](https://evil.example) › b](https://200lab.io/courses/demo-course?ref=T2CWW3D7): ‹x');
     expect(md).toContain('The learning paths could not be loaded');
+
+    // Summaries cannot plant links, images or code spans either.
+    const hostile = parseLab200Course(course({ summary: 'go [click](javascript:alert(1)) ![x](https://evil.example/x.png) `code` \\' }));
+    if (!hostile) throw new Error('fixture invalid');
+    const md2 = renderLab200Markdown({ courses: { items: [hostile], locale: 'vi', syncedAt: null }, learningPaths: { items: [], locale: null, syncedAt: null } });
+    expect(md2).toContain('go \\[click\\](javascript:alert(1)) !\\[x\\](https://evil.example/x.png) \\`code\\` \\\\');
+    expect(md2).not.toMatch(/[^\\]\[click\]/);
     expect(md).toContain('https://200lab.io/?ref=T2CWW3D7');
   });
 });

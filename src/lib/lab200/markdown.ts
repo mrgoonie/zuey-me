@@ -8,13 +8,12 @@ import type { Lab200Catalog, Lab200Feed } from './store';
 const vi = lab200Copy('vi');
 const en = lab200Copy('en');
 
-/** Feed text is already one sanitized line; also neutralize Markdown/HTML syntax it could carry. */
+/**
+ * Feed text is already one sanitized line; also neutralize the Markdown/HTML syntax it could carry:
+ * no HTML, no inline or image links (brackets escaped), no code spans.
+ */
 function mdText(s: string): string {
-  return s.replace(/[<>]/g, c => (c === '<' ? '‹' : '›')).replace(/\s+/g, ' ').trim();
-}
-
-function escapeLinkText(s: string): string {
-  return mdText(s).replace(/([\\[\]])/g, '\\$1');
+  return s.replace(/[<>]/g, c => (c === '<' ? '‹' : '›')).replace(/\s+/g, ' ').trim().replace(/([\\[\]`])/g, '\\$1');
 }
 
 function priceText(pricing: Lab200Pricing): string {
@@ -32,7 +31,7 @@ function priceText(pricing: Lab200Pricing): string {
 
 function line(title: string, url: string, summary: string, meta: string[]): string {
   const tail = meta.filter(Boolean).join(' · ');
-  return `- [${escapeLinkText(title)}](${lab200Link(url)}): ${mdText(summary)}${tail ? ` · ${mdText(tail)}` : ''}`;
+  return `- [${mdText(title)}](${lab200Link(url)}): ${mdText(summary)}${tail ? ` · ${mdText(tail)}` : ''}`;
 }
 
 function courseLine(c: Lab200Course): string {
