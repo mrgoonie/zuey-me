@@ -1,187 +1,199 @@
 import { hashString, type D1DatabaseLike } from '../../db/store';
-import { coursePageUrl, courseImageFromHtml, LAB200_COURSES_MD, parseCoursesMarkdown, type Lab200Course } from './courses';
+import {
+  LAB200_FEEDS, parseLab200Feed, parseLab200Items,
+  type Lab200Course, type Lab200Kind, type Lab200LearningPath,
+} from './catalog';
 
-/** A snapshot older than this is refreshed in the background after the response. */
+/** A feed older than this is refreshed in the background after the response. */
 export const LAB200_STALE_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
-/** Course pages are fetched a few at a time, and only their <head> is read (og:image sits there). */
-const IMAGE_FETCH_CONCURRENCY = 4;
-const IMAGE_HEAD_MAX_BYTES = 512 * 1024;
+/** Upper bound on one feed response (courses.json was ~57 KB in October 2026). */
+export const LAB200_MAX_FEED_BYTES = 1024 * 1024;
 
-export interface Lab200Snapshot {
-  courses: Lab200Course[];
-  /** Last successful fetch of courses.md (ISO), null when 200lab was never reached. */
+export interface Lab200Feed<T> {
+  items: T[];
+  /** Locale 200lab reported for this feed (e.g. "vi"); null before the first sync. */
+  locale: string | null;
+  /** Last valid fetch of this feed (ISO); null when it was never fetched. */
   syncedAt: string | null;
 }
 
+export interface Lab200Catalog {
+  courses: Lab200Feed<Lab200Course>;
+  learningPaths: Lab200Feed<Lab200LearningPath>;
+}
+
+type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
+
 export interface Lab200Options {
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: FetchImpl;
   /** Cloudflare `ctx.waitUntil`; without it a stale refresh runs detached (dev, tests). */
   waitUntil?: (promise: Promise<unknown>) => void;
   now?: () => Date;
-  /**
-   * Save the course list first and fetch missing thumbnails after the response (`waitUntil`).
-   * Used by the first request, which must not wait for a dozen course pages.
-   */
-  deferImages?: boolean;
 }
 
-interface SnapshotRow {
-  courses_json: string;
-  content_hash: string;
+/** D1 `kind` value for each feed. */
+const ROW_KIND: Record<Lab200Kind, string> = { courses: 'courses', learningPaths: 'learning_paths' };
+
+interface CatalogRow {
+  kind: string;
+  items_json: string;
+  locale: string | null;
   synced_at: string | null;
   checked_at: string;
 }
 
-function parseCourses(json: string): Lab200Course[] {
-  try {
-    const v: unknown = JSON.parse(json);
-    return Array.isArray(v) ? (v as Lab200Course[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-async function readRow(d1: D1DatabaseLike): Promise<SnapshotRow | null> {
-  return d1.prepare('SELECT courses_json, content_hash, synced_at, checked_at FROM lab200_snapshot WHERE id = 1').first<SnapshotRow>();
-}
-
-/** Fetch and parse courses.md; throws on HTTP errors, timeouts and an empty course list. */
-export async function fetchLab200Courses(fetchImpl: NonNullable<Lab200Options['fetchImpl']> = fetch): Promise<Lab200Course[]> {
-  const res = await fetchImpl(LAB200_COURSES_MD, {
-    headers: { Accept: 'text/markdown, text/plain' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`200lab courses.md returned HTTP ${res.status}`);
-  const courses = parseCoursesMarkdown(await res.text());
-  if (courses.length === 0) throw new Error('200lab courses.md contained no parsable courses');
-  return courses;
-}
-
-/** Read a course page until its og:image appears (or </head>), then stop downloading. */
-async function fetchCourseImage(slug: string, fetchImpl: NonNullable<Lab200Options['fetchImpl']>): Promise<string | null> {
-  const res = await fetchImpl(coursePageUrl(slug), {
-    headers: { Accept: 'text/html' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok || !res.body) return null;
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let html = '';
-  try {
-    while (html.length < IMAGE_HEAD_MAX_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      html += decoder.decode(value, { stream: true });
-      const image = courseImageFromHtml(html);
-      if (image) return image;
-      if (/<\/head>/i.test(html)) break;
-    }
-    return courseImageFromHtml(html);
-  } finally {
-    reader.cancel().catch(() => {});
-  }
-}
-
-/** Thumbnails for `slugs`, fetched with bounded concurrency; a failed page maps to null. */
-async function fetchCourseImages(slugs: string[], fetchImpl: NonNullable<Lab200Options['fetchImpl']>): Promise<Map<string, string | null>> {
-  const images = new Map<string, string | null>();
-  let next = 0;
-  const worker = async () => {
-    while (next < slugs.length) {
-      const slug = slugs[next++];
-      images.set(slug, await fetchCourseImage(slug, fetchImpl).catch(() => null));
-    }
+export function emptyLab200Catalog(): Lab200Catalog {
+  return {
+    courses: { items: [], locale: null, syncedAt: null },
+    learningPaths: { items: [], locale: null, syncedAt: null },
   };
-  await Promise.all(Array.from({ length: Math.min(IMAGE_FETCH_CONCURRENCY, slugs.length) }, worker));
-  return images;
+}
+
+/** Body text, refusing anything larger than `max` bytes (by header or while streaming). */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) throw new Error(`response larger than ${max} bytes`);
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      reader.cancel().catch(() => {});
+      throw new Error(`response larger than ${max} bytes`);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    bytes.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 /**
- * Fill thumbnails for `courses` (saved under `hash`): every course when courses.md changed,
- * otherwise only the ones still without an image. A failed page keeps the previous image.
- * The write is skipped when a newer course list was saved in the meantime.
+ * Fetch and validate one feed from its fixed 200lab URL. Redirects are not followed; HTTP errors,
+ * timeouts, oversized bodies, invalid JSON and feeds that fail validation all throw.
  */
-async function fillCourseImages(
-  d1: D1DatabaseLike,
-  courses: Lab200Course[],
-  hash: string,
-  refetchAll: boolean,
-  fetchImpl: NonNullable<Lab200Options['fetchImpl']>,
-): Promise<void> {
-  const slugs = courses.filter(c => refetchAll || !c.image).map(c => c.slug);
-  if (slugs.length === 0) return;
-  const fetched = await fetchCourseImages(slugs, fetchImpl);
-  const withImages = courses.map(c => ({ ...c, image: fetched.get(c.slug) ?? c.image ?? null }));
-  if (withImages.every((c, i) => c.image === (courses[i].image ?? null))) return;
-  await d1
-    .prepare('UPDATE lab200_snapshot SET courses_json = ? WHERE id = 1 AND content_hash = ?')
-    .bind(JSON.stringify(withImages), hash)
-    .run();
+export async function fetchLab200Feed(kind: 'courses', fetchImpl?: FetchImpl): Promise<{ locale: string; items: Lab200Course[] }>;
+export async function fetchLab200Feed(kind: 'learningPaths', fetchImpl?: FetchImpl): Promise<{ locale: string; items: Lab200LearningPath[] }>;
+export async function fetchLab200Feed(kind: Lab200Kind, fetchImpl?: FetchImpl): Promise<{ locale: string; items: Array<Lab200Course | Lab200LearningPath> }>;
+export async function fetchLab200Feed(kind: Lab200Kind, fetchImpl: FetchImpl = fetch): Promise<{ locale: string; items: Array<Lab200Course | Lab200LearningPath> }> {
+  const { url } = LAB200_FEEDS[kind];
+  const res = await fetchImpl(url, {
+    headers: { Accept: 'application/json' },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (res.status !== 200) throw new Error(`${url} returned HTTP ${res.status}`);
+  const payload: unknown = JSON.parse(await readCapped(res, LAB200_MAX_FEED_BYTES));
+  const parsed = parseLab200Feed(kind, payload);
+  if (!parsed.ok) throw new Error(`${url} rejected: ${parsed.reason}`);
+  return { locale: parsed.locale, items: parsed.items };
 }
 
 /**
- * Refresh the snapshot unless another request refreshed it within `LAB200_STALE_MS` (the
- * conditional update on `checked_at` lets one request win). Returns true when new data was saved.
- * Failures keep the previous courses. `content_hash` covers courses.md only, not thumbnails.
+ * Refresh one feed unless another request checked it within `LAB200_STALE_MS` (the conditional
+ * update on `checked_at` lets exactly one request win). Returns true when a valid feed was saved.
+ * Any failure keeps the previous items and `synced_at`.
  */
-export async function refreshLab200Snapshot(d1: D1DatabaseLike, opts: Lab200Options = {}): Promise<boolean> {
+export async function refreshLab200Feed(d1: D1DatabaseLike, kind: Lab200Kind, opts: Lab200Options = {}): Promise<boolean> {
   const now = (opts.now ?? (() => new Date()))();
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const cutoff = new Date(now.getTime() - LAB200_STALE_MS).toISOString();
   const claim = await d1
-    .prepare('UPDATE lab200_snapshot SET checked_at = ? WHERE id = 1 AND checked_at < ?')
-    .bind(now.toISOString(), cutoff)
+    .prepare('UPDATE lab200_catalog SET checked_at = ? WHERE kind = ? AND checked_at < ?')
+    .bind(now.toISOString(), ROW_KIND[kind], cutoff)
     .run();
   if (!claim.meta?.changes) return false;
   try {
-    const fresh = await fetchLab200Courses(fetchImpl);
-    const hash = await hashString(JSON.stringify(fresh));
-    const previous = await readRow(d1);
-    const known = new Map(parseCourses(previous?.courses_json ?? '[]').map(c => [c.slug, c.image ?? null]));
-    const courses = fresh.map(c => ({ ...c, image: known.get(c.slug) ?? null }));
+    const feed = await fetchLab200Feed(kind, opts.fetchImpl);
+    const json = JSON.stringify(feed.items);
+    const hash = await hashString(`${feed.locale}\n${json}`);
     await d1
-      .prepare('UPDATE lab200_snapshot SET courses_json = ?, content_hash = ?, synced_at = ? WHERE id = 1')
-      .bind(JSON.stringify(courses), hash, now.toISOString())
+      .prepare('UPDATE lab200_catalog SET items_json = ?, locale = ?, content_hash = ?, synced_at = ? WHERE kind = ?')
+      .bind(json, feed.locale, hash, now.toISOString(), ROW_KIND[kind])
       .run();
-    const images = fillCourseImages(d1, courses, hash, previous?.content_hash !== hash, fetchImpl).catch(err => {
-      console.warn('200lab thumbnails refresh failed; keeping the previous images:', err);
-    });
-    if (opts.deferImages && opts.waitUntil) opts.waitUntil(images);
-    else await images;
     return true;
   } catch (err) {
-    console.warn('200lab courses refresh failed; keeping the last snapshot:', err);
+    console.warn(`200lab ${kind} refresh failed; keeping the last good copy:`, err);
     return false;
   }
 }
 
-/**
- * Courses for the 200lab app. Reads the D1 snapshot and never waits for 200lab, except on the
- * very first request when the snapshot is still empty. A stale snapshot is refreshed after the
- * response. Without D1 (local dev) the list is fetched live.
- */
-export async function getLab200Snapshot(d1: D1DatabaseLike | undefined, opts: Lab200Options = {}): Promise<Lab200Snapshot> {
+async function readRows(d1: D1DatabaseLike): Promise<Map<string, CatalogRow>> {
+  const { results } = await d1
+    .prepare('SELECT kind, items_json, locale, synced_at, checked_at FROM lab200_catalog')
+    .all<CatalogRow>();
+  return new Map((results ?? []).map(r => [r.kind, r]));
+}
+
+interface FeedSource<T> {
+  kind: Lab200Kind;
+  parse: (list: unknown) => T[];
+  fetchLive: () => Promise<{ locale: string; items: T[] }>;
+}
+
+async function loadFeed<T>(
+  d1: D1DatabaseLike | undefined,
+  rows: Map<string, CatalogRow>,
+  src: FeedSource<T>,
+  opts: Lab200Options,
+): Promise<Lab200Feed<T>> {
+  const now = (opts.now ?? (() => new Date()))();
   if (!d1) {
     try {
-      return { courses: await fetchLab200Courses(opts.fetchImpl), syncedAt: (opts.now ?? (() => new Date()))().toISOString() };
+      const feed = await src.fetchLive();
+      return { items: feed.items, locale: feed.locale, syncedAt: now.toISOString() };
     } catch {
-      return { courses: [], syncedAt: null };
+      return { items: [], locale: null, syncedAt: null };
     }
   }
-  let row = await readRow(d1);
-  if (!row) return { courses: [], syncedAt: null };
-  let courses = parseCourses(row.courses_json);
-  if (courses.length === 0) {
-    await refreshLab200Snapshot(d1, { ...opts, deferImages: true });
-    row = (await readRow(d1)) ?? row;
-    courses = parseCourses(row.courses_json);
-  } else {
-    const now = (opts.now ?? (() => new Date()))().getTime();
-    if (now - Date.parse(row.checked_at) >= LAB200_STALE_MS) {
-      const job = refreshLab200Snapshot(d1, opts).catch(() => false);
-      opts.waitUntil?.(job);
+  let row = rows.get(ROW_KIND[src.kind]);
+  if (!row) return { items: [], locale: null, syncedAt: null };
+  const parseRow = (r: CatalogRow): T[] => {
+    try {
+      return src.parse(JSON.parse(r.items_json));
+    } catch {
+      return [];
     }
+  };
+  let items = parseRow(row);
+  if (items.length === 0) {
+    if (await refreshLab200Feed(d1, src.kind, opts)) {
+      row = (await readRows(d1)).get(ROW_KIND[src.kind]) ?? row;
+      items = parseRow(row);
+    }
+  } else if (now.getTime() - Date.parse(row.checked_at) >= LAB200_STALE_MS) {
+    const job = refreshLab200Feed(d1, src.kind, opts).catch(() => false);
+    opts.waitUntil?.(job);
   }
-  return { courses, syncedAt: row.synced_at };
+  return { items, locale: row.locale, syncedAt: row.synced_at };
+}
+
+/**
+ * Both catalogs for the 200lab app. Reads D1 and never waits for 200lab, except for a feed that
+ * has no items yet (first request). Each stale feed is refreshed independently after the response,
+ * so an outage of one feed never blocks or wipes the other. Without D1 (local dev) both are fetched live.
+ */
+export async function getLab200Catalog(d1: D1DatabaseLike | undefined, opts: Lab200Options = {}): Promise<Lab200Catalog> {
+  const rows = d1 ? await readRows(d1) : new Map<string, CatalogRow>();
+  const [courses, learningPaths] = await Promise.all([
+    loadFeed(d1, rows, {
+      kind: 'courses',
+      parse: list => parseLab200Items('courses', list),
+      fetchLive: () => fetchLab200Feed('courses', opts.fetchImpl),
+    }, opts),
+    loadFeed(d1, rows, {
+      kind: 'learningPaths',
+      parse: list => parseLab200Items('learningPaths', list),
+      fetchLive: () => fetchLab200Feed('learningPaths', opts.fetchImpl),
+    }, opts),
+  ]);
+  return { courses, learningPaths };
 }

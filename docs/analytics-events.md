@@ -84,7 +84,8 @@ Owner values: `growth` (acquisition, profile, affiliate, sign-up), `product` (in
 | `command_palette_action` | 1 | client | An action is run from the command palette | `action` string (palette action id) | `src/components/home/CommandPalette.tsx` | product |
 | `command_palette_article` | 1 | client | An article result is opened from the command palette | `slug` string | `src/components/home/CommandPalette.tsx` | product |
 | `command_palette_video` | 1 | client | A video result is opened from the command palette | `youtube_id` string | `src/components/home/CommandPalette.tsx` | product |
-| `200lab_course_click` | 1 | client | A 200lab course card (affiliate) is clicked | `slug` string, `source` string (`app` \| `route` \| `featured`) | `src/components/lab200/Lab200Courses.tsx` | growth |
+| `200lab_course_click` | 1 | client | A 200lab course card (affiliate) is clicked | `slug` string, `source` string (`app` \| `route` \| `featured`) | `src/components/lab200/Lab200Catalog.tsx` | growth |
+| `200lab_learning_path_click` | 1 | client | A 200lab learning path card (affiliate) is clicked | `slug` string, `source` string (`app` \| `route`) | `src/components/lab200/Lab200Catalog.tsx` | growth |
 | `article_ask_ai_opened` | 1 | client | The Ask Zuey AI button of an article is pressed | `slug` string | `src/components/ai/ArticleAskAi.tsx` | product |
 | `article_ask_ai_clicked` | 1 | client | Ask AI is pressed on a text selection in an article | `slug` string, `chars` number (selection length, not the text) | `src/components/ai/ArticleAskAi.tsx` | product |
 | `article_ask_ai_sent` | 1 | client | A question started from an article is sent to Zuey AI | `slug` string, `quoted` boolean | `src/components/ai/ZueyAiPanel.tsx` | product |
