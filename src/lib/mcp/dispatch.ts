@@ -54,7 +54,7 @@ export const CORE_TOOLS: McpTool[] = [
         subtitle_en: { type: 'string', description: 'English short description' },
         subtitle_vi: { type: 'string', description: 'Vietnamese short description' },
         url: { type: 'string', description: 'Destination web URL' },
-        icon: { type: 'string', description: 'Icon name (agentkit, dewee, tose, substack, etc.)' },
+        icon: { type: 'string', description: 'Icon name: a brand or product mark (agentkit, dewee, tose, substack, cloud, vault, render, multix, anymd, motion, etc.) or any curated Lucide icon name or alias from block_schema icons (e.g. rocket, database). Unknown names render a neutral link mark.' },
       },
     },
   },

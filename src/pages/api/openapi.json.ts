@@ -198,7 +198,7 @@ export const GET: APIRoute = async () => {
                     subtitle_en: { type: 'string' },
                     subtitle_vi: { type: 'string' },
                     url: { type: 'string' },
-                    icon: { type: 'string' }
+                    icon: { type: 'string', description: 'Icon name: a brand or product mark (agentkit, dewee, tose, substack, cloud, vault, render, multix, anymd, motion, etc.) or any curated Lucide icon name or alias from block_schema icons (e.g. rocket, database). Unknown names render a neutral link mark.' }
                   }
                 }
               }
