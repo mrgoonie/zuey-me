@@ -1279,9 +1279,47 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
     "type": "object",
   },
   "BlockCode": {
+    "examples": [
+      {
+        "code": 
+" export const config = {
+-  retries: 1,
++  retries: 3,
+ };"
+,
+        "diff": true,
+        "filename": "src/config.ts",
+        "highlightLines": "2",
+        "language": "ts",
+        "lineNumbers": true,
+        "type": "code",
+      },
+    ],
     "properties": {
       "code": {
         "maxLength": 50000,
+        "type": "string",
+      },
+      "collapseAfter": {
+        "description": "Code longer than this many lines starts collapsed to that height (scrollable) with a button to show it all",
+        "maximum": 500,
+        "minimum": 3,
+        "type": "integer",
+      },
+      "diff": {
+        "default": false,
+        "description": "Each line starts with a marker: + added, - removed, a space for context. The marker is shown in the gutter, not as code; the copy button copies the code after the change (added and context lines, markers removed). language still picks the highlighter",
+        "type": "boolean",
+      },
+      "filename": {
+        "description": "File name or path shown above the code (one line, no backticks or double quotes)",
+        "maxLength": 200,
+        "type": "string",
+      },
+      "highlightLines": {
+        "description": "Lines to emphasise, 1-based, comma-separated numbers and ranges such as "2,4-6" (at most 50 ranges, within the code's lines)",
+        "maxLength": 200,
+        "pattern": "^\\d{1,6}(?:-\\d{1,6})?(?:,\\d{1,6}(?:-\\d{1,6})?)*$",
         "type": "string",
       },
       "id": {
@@ -1293,9 +1331,19 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
         "maxLength": 40,
         "type": "string",
       },
+      "lineNumbers": {
+        "default": false,
+        "description": "Show a line number gutter (numbers are never copied)",
+        "type": "boolean",
+      },
       "type": {
         "const": "code",
         "type": "string",
+      },
+      "wrap": {
+        "default": false,
+        "description": "Soft-wrap long lines by default instead of scrolling sideways; readers can switch",
+        "type": "boolean",
       },
     },
     "required": [

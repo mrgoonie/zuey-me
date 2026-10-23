@@ -15,6 +15,10 @@ export interface AnalyticsEnv {
   PUBLIC_POSTHOG_KEY?: string;
   PUBLIC_POSTHOG_HOST?: string;
   PUBLIC_ANALYTICS_DEBUG?: string;
+  /** GA4 web stream measurement id (`G-…`, public). Absent: GA4 is off in the browser and on the server. */
+  PUBLIC_GA4_MEASUREMENT_ID?: string;
+  /** GA4 Measurement Protocol API secret, server-only (runtime binding). Absent: the server GA4 path is skipped. */
+  GA4_API_SECRET?: string;
 }
 
 export interface PostHogConfig {
@@ -61,13 +65,18 @@ function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
-/** Merges runtime bindings (Cloudflare) over build-time `import.meta.env`. */
+/**
+ * Merges runtime bindings (Cloudflare) over build-time `import.meta.env`. The GA4 API secret is read from the
+ * runtime only, so it is never inlined into a build.
+ */
 export function analyticsEnvFrom(runtime: AnalyticsEnv | undefined): AnalyticsEnv {
   const build: Record<string, unknown> = import.meta.env ?? {};
   return {
     PUBLIC_POSTHOG_KEY: stringOrUndefined(runtime?.PUBLIC_POSTHOG_KEY) ?? stringOrUndefined(build.PUBLIC_POSTHOG_KEY),
     PUBLIC_POSTHOG_HOST: stringOrUndefined(runtime?.PUBLIC_POSTHOG_HOST) ?? stringOrUndefined(build.PUBLIC_POSTHOG_HOST),
     PUBLIC_ANALYTICS_DEBUG: stringOrUndefined(runtime?.PUBLIC_ANALYTICS_DEBUG) ?? stringOrUndefined(build.PUBLIC_ANALYTICS_DEBUG),
+    PUBLIC_GA4_MEASUREMENT_ID: stringOrUndefined(runtime?.PUBLIC_GA4_MEASUREMENT_ID) ?? stringOrUndefined(build.PUBLIC_GA4_MEASUREMENT_ID),
+    GA4_API_SECRET: stringOrUndefined(runtime?.GA4_API_SECRET),
   };
 }
 
@@ -126,7 +135,7 @@ export const MAX_EXCEPTION_TEXT_LENGTH = 200;
 let openSensitiveSurfaces = 0;
 
 /**
- * Marks a mounted surface where visitors type private free text (the Zuey AI panel, on any page). While one
+ * Marks a surface where visitors type private free text (the Zuey AI panel on any page, an open lesson AI tutor). While one
  * is open, exception events carry no message text. Returns the function that unmarks it (a React effect cleanup).
  */
 export function enterSensitiveSurface(): () => void {
@@ -284,6 +293,13 @@ export const SERVER_EVENT_FLAGS = { $lib: 'zuey-me-server', $geoip_disable: true
 /** Booking guests are one-off hashed ids: their events never create a PostHog person profile. */
 export const GUEST_EVENT_FLAGS = { $process_person_profile: false } as const;
 
+/** GA4-only attribution properties of server events (the GA client and session ids); never sent to PostHog. */
+export const GA4_ONLY_PROPERTIES: readonly string[] = ['ga_client_id', 'ga_session_id'];
+
+function withoutGa4Only(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(properties).filter(([key]) => !GA4_ONLY_PROPERTIES.includes(key)));
+}
+
 /** Server adapter posting one event to PostHog's capture endpoint. Resolves with a result, never rejects. */
 export function createPostHogServerDestination(config: PostHogConfig, fetchImpl: FetchLike = fetch): ServerDestination {
   return {
@@ -299,7 +315,7 @@ export function createPostHogServerDestination(config: PostHogConfig, fetchImpl:
             distinct_id: event.distinctId,
             uuid: event.uuid,
             timestamp: event.occurredAt,
-            properties: { ...event.properties, ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
+            properties: { ...withoutGa4Only(event.properties), ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
           }),
           signal,
         });

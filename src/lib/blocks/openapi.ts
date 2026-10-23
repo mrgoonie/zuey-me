@@ -11,7 +11,7 @@ import { blockId, colsInt } from './definitions/schema-fragments';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
-export { CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE } from './definitions/text';
+export { CALLOUT_ICON_EXAMPLE, CODE_BLOCK_EXAMPLE, ICON_BLOCK_EXAMPLE } from './definitions/text';
 export { CARD_EXAMPLE, SECTION_EXAMPLE } from './definitions/containers';
 export { MATH_EXAMPLE } from './definitions/media';
 

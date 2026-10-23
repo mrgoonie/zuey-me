@@ -7,7 +7,9 @@
  * - One row per business fact: every row has a `dedupe_key` built from the provider transaction or event id
  *   (unique index), so a repeated webhook, a reconciliation or a recompute inserts nothing.
  * - Delivery is at-least-once with an idempotent id: the row id is the event `uuid` sent on every attempt,
- *   so PostHog de-duplicates a retried send (eventually, at merge time).
+ *   so PostHog de-duplicates a retried send (eventually, at merge time). A row counts as sent once PostHog
+ *   (the primary destination) accepted it; GA4 gets a single best-effort copy after that and never decides
+ *   whether a row is sent, retried or dead.
  * - Analytics never affects payment: enqueueing validates and inserts inside a catch-all and returns an
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
  *   with it) so a missing table or a failed insert can never roll a payment back.
@@ -18,6 +20,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import { iso, membersRuntime } from '../members/runtime';
 import type { EventProperties, ServerEventName } from './events';
 import { validateEvent } from './events';
+import { GA4_OUTBOX_ID_PATHS, purgeExpiredGa4Clients } from './ga4-attribution';
 import { isValidDistinctId } from './identity';
 import type { DestinationResult, ServerDestination } from './destinations/types';
 import { sendServerEvent } from './server';
@@ -42,7 +45,8 @@ export const DEFAULT_DRAIN_BUDGET_MS = 20 * 1000;
 /** Rows delivered concurrently per batch. */
 export const DRAIN_BATCH_SIZE = 10;
 /**
- * Most D1 statements one drain run issues (sweep, claims, grouped settles, retention purge, pending count).
+ * Most D1 statements one drain run issues (sweep, claims, grouped settles, retention purge, pending count,
+ * and the GA id purge when there is room).
  * A batch is claimed only when its worst case (one claim plus one settle per row) still fits.
  */
 export const MAX_DRAIN_QUERIES = 20;
@@ -252,16 +256,19 @@ async function settleBatch(d1: D1DatabaseLike, leaseToken: string, deliveries: D
     group.ids.push(d.row.id);
     groups.set(key, group);
   }
+  // A sent or dead row no longer needs the GA ids, so no copy of them outlives delivery (a requeued dead row
+  // falls back to the hashed client id).
+  const dropGaIds = `properties = CASE WHEN json_valid(properties) THEN json_remove(properties, ${GA4_OUTBOX_ID_PATHS}) ELSE properties END`;
   for (const g of groups.values()) {
     const ids = g.ids.map(() => '?').join(', ');
     if (g.outcome === 'sent') {
       await d1.prepare(
-        `UPDATE analytics_outbox SET status = 'sent', sent_at = ?, last_error = NULL, lease_token = NULL, lease_until = NULL, updated_at = ?
+        `UPDATE analytics_outbox SET status = 'sent', sent_at = ?, last_error = NULL, lease_token = NULL, lease_until = NULL, updated_at = ?, ${dropGaIds}
          WHERE lease_token = ? AND id IN (${ids})`
       ).bind(now, now, leaseToken, ...g.ids).run();
     } else if (g.outcome === 'dead') {
       await d1.prepare(
-        `UPDATE analytics_outbox SET status = 'dead', last_error = ?, lease_token = NULL, lease_until = NULL, updated_at = ?
+        `UPDATE analytics_outbox SET status = 'dead', last_error = ?, lease_token = NULL, lease_until = NULL, updated_at = ?, ${dropGaIds}
          WHERE lease_token = ? AND id IN (${ids})`
       ).bind(g.error, now, leaseToken, ...g.ids).run();
     } else {
@@ -322,6 +329,16 @@ async function purgeSent(d1: D1DatabaseLike): Promise<number> {
   return res.meta?.changes ?? 0;
 }
 
+/**
+ * Enforces the 30-day retention of stored GA ids on the drain's schedule, not only at the next checkout.
+ * Best-effort and only when the query budget has room; a busy run leaves it to the next one (every 5 min).
+ */
+async function purgeGa4ClientsIfBudget(d1: D1DatabaseLike, out: DrainResult): Promise<void> {
+  if (out.queries + 1 > MAX_DRAIN_QUERIES) return;
+  await purgeExpiredGa4Clients(d1);
+  out.queries += 1;
+}
+
 async function countPending(d1: D1DatabaseLike): Promise<number> {
   const row = await d1.prepare("SELECT COUNT(*) AS n FROM analytics_outbox WHERE status IN ('pending', 'sending')").first<{ n: number }>();
   return Number(row?.n ?? 0);
@@ -337,7 +354,9 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   const clock = options.clock ?? Date.now;
   const started = clock();
   const budget = options.budgetMs ?? DEFAULT_DRAIN_BUDGET_MS;
-  const limit = clampLimit(options.limit);
+  // Each row may cost one request per destination (GA4 on purchases and refunds): keep the run's worst case
+  // at MAX_DRAIN_LIMIT requests, under the Workers free plan's subrequest limit.
+  const limit = Math.min(clampLimit(options.limit), Math.max(1, Math.floor(MAX_DRAIN_LIMIT / Math.max(1, options.destinations.length))));
   const out: DrainResult = {
     status: 'ok', claimed: 0, sent: 0, retried: 0, dead: 0, expired_queued: 0, purged: 0, pending: 0, queries: 0,
     budget_exhausted: false,
@@ -347,6 +366,7 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   if (options.destinations.length === 0) {
     out.pending = await countPending(d1);
     out.queries += 1;
+    await purgeGa4ClientsIfBudget(d1, out);
     return { ...out, status: 'skipped' };
   }
 
@@ -376,5 +396,6 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   out.purged = await purgeSent(d1);
   out.pending = await countPending(d1);
   out.queries += TAIL_QUERIES;
+  await purgeGa4ClientsIfBudget(d1, out);
   return out;
 }
