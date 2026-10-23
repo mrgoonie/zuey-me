@@ -4,6 +4,8 @@ The machine-readable source of truth is `ANALYTICS_EVENTS` in [`src/lib/analytic
 
 Destinations: PostHog project **Zuey.me** (all events) and, when configured, GA4 (`begin_checkout` from the browser, `purchase`/`refund` from the server; see [GA4 destination](#ga4-destination)). Both sit behind the adapter interfaces in `src/lib/analytics/destinations/types.ts`. Env setup: [env-setup.vi.md §14](env-setup.vi.md#14-analytics-posthog).
 
+Metrics built on these events (KPI definitions and PostHog dashboard specs): [analytics-kpis.md](analytics-kpis.md). Checking PostHog and GA4 against D1: [analytics-reconciliation.md](analytics-reconciliation.md).
+
 ## Modules
 
 | File | Role |
