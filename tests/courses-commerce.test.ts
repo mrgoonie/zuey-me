@@ -169,6 +169,53 @@ describe('Dodo course payments, refunds and disputes', () => {
     expect(JSON.parse(refunds[0].properties)).toMatchObject({ provider: 'dodo', order_type: 'course', reason: 'chargeback', amount: 49, currency: 'USD' });
   });
 
+  const refundKeys = () => state.d1.raw
+    .query<{ dedupe_key: string }, []>("SELECT dedupe_key FROM analytics_outbox WHERE event = 'refund' ORDER BY created_at").all().map(r => r.dedupe_key);
+
+  for (const outcome of ['dispute.accepted', 'dispute.expired']) {
+    it(`revokes access and reports one chargeback on ${outcome}, whichever funds-lost outcome follows`, async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      const order = await getCourseOrderByCode(state.d1, code);
+      expect(await dodo('evt_lost', outcome, { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+      expect(await dodo('evt_lost_again', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+      expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:charged_back`]);
+    });
+  }
+
+  it('restores access on dispute.cancelled after dispute.opened and reports no chargeback', async () => {
+    const { course } = await publishedCourse();
+    const lan = await member('lan@example.com');
+    const code = await paidByCard(lan);
+    expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    expect(await dodo('evt_cancel', 'dispute.cancelled', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'restored' });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+    expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+    expect(refundKeys()).toEqual([]);
+  });
+
+  it('counts the money back of a course order once when it is both refunded and lost in a dispute, in either order', async () => {
+    await publishedCourse();
+    const refundedFirst = await paidByCard(await member('lan@example.com'));
+    const refundedOrder = await getCourseOrderByCode(state.d1, refundedFirst);
+    expect(await dodo('evt_r_a', 'refund.succeeded', { payment_id: `pay_${refundedFirst}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+    // A Visa RDR resolution, or a chargeback filed after the refund, is the same money.
+    expect(await dodo('evt_l_a', 'dispute.lost', { payment_id: `pay_${refundedFirst}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(refundKeys()).toEqual([`refund:dodo:course_order:${refundedOrder?.id}:refunded`]);
+
+    const lostFirst = await paidByCard(await member('mai@example.com'));
+    const lostOrder = await getCourseOrderByCode(state.d1, lostFirst);
+    expect(await dodo('evt_l_b', 'dispute.lost', { payment_id: `pay_${lostFirst}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+    expect(await dodo('evt_r_b', 'refund.succeeded', { payment_id: `pay_${lostFirst}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(refundKeys()).toEqual([
+      `refund:dodo:course_order:${refundedOrder?.id}:refunded`, `refund:dodo:course_order:${lostOrder?.id}:charged_back`,
+    ]);
+  });
+
   it('keeps the string amount of a signed Dodo dispute on the payment event and the chargeback report', async () => {
     await publishedCourse();
     const lan = await member('lan@example.com');

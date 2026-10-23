@@ -146,8 +146,9 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
     }
     if (DISPUTE_REVOKE.has(type)) {
       const reversed = await reverseCourseOrder(d1, order, 'charged_back', type);
-      // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once.
-      if (DODO_DISPUTE_FUNDS_LOST.has(type)) await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
+      // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once. An order
+      // already refunded reported its money back then (a refund after a chargeback finds the order charged back and reports nothing).
+      if (DODO_DISPUTE_FUNDS_LOST.has(type) && order.status !== 'refunded') await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
       return { outcome: reversed ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
