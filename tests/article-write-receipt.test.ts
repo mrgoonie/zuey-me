@@ -67,6 +67,9 @@ describe('toWriteReceipt', () => {
   it('lists only the publish fields a request carried', () => {
     expect(submittedPublishFields({ expected_revision: 2, confirm: true, notify: false })).toEqual(['notify']);
     expect(submittedPublishFields({ published_at: '2026-01-01', notify: true })).toEqual(['published_at', 'notify']);
+    // The parser treats an empty or null published_at as absent.
+    expect(submittedPublishFields({ published_at: null })).toEqual([]);
+    expect(submittedPublishFields({ published_at: '' })).toEqual([]);
   });
 });
 
@@ -119,7 +122,9 @@ describe('receipts on every article writer (MCP)', () => {
   });
 
   it('keeps stale revisions machine-readable', async () => {
-    const err = await call('article_tags_set', { slug: 'receipt-i18n', tags: [], expected_revision: 1 }).catch((e: unknown) => e);
+    const created = await call('article_create', { slug: 'receipt-stale', title: 'Stale', document: doc('vi') });
+    await call('article_update', { slug: 'receipt-stale', excerpt: 'newer', expected_revision: created.revision });
+    const err = await call('article_tags_set', { slug: 'receipt-stale', tags: [], expected_revision: created.revision }).catch((e: unknown) => e);
     expect(err).toMatchObject({ status: 409, code: 'revision_conflict' });
   });
 });

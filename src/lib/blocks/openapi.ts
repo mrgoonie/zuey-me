@@ -145,7 +145,7 @@ export const articlesOpenApi: OpenApiFragment = {
         operation: { type: 'string', enum: [...WRITE_OPERATIONS], description: 'The writer that produced the receipt' },
         locale: { ...localeEnum, description: 'Edition the write is about: the saved, published or deleted one; the primary edition for tags_set' },
         article_revision: { type: 'integer', description: 'Use as the next expected_revision' },
-        edition_draft_revision: { type: 'integer', description: 'Revision at which this edition last changed; lower than article_revision after a write that left it alone (tags_set, metadata-only save)' },
+        edition_draft_revision: { type: 'integer', description: 'Revision at which this edition last changed; lower than article_revision after tags_set, which leaves the edition alone' },
         published_revision: { type: ['integer', 'null'], description: 'null when the edition was never published or was just deleted' },
         has_unpublished_changes: { type: 'boolean' },
         submitted_fields: { type: 'array', items: { type: 'string' }, description: 'Fields present in the request, not a diff (publish: published_at, notify; tags_set: tags; edition_delete: none)' },

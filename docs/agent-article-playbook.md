@@ -58,12 +58,12 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
   | `operation` | `create`, `update`, `publish`, `tags_set` or `edition_delete` |
   | `locale` | Edition the write is about: the saved, published or deleted one; the primary edition for `tags_set` |
   | `article_revision` | The next `expected_revision`, unless someone else wrote in between |
-  | `edition_draft_revision` | Revision at which that edition last changed; lower than `article_revision` after `tags_set` or a metadata-only save |
+  | `edition_draft_revision` | Revision at which that edition last changed; lower than `article_revision` after `tags_set`, which leaves the edition alone |
   | `published_revision` | Revision of the public snapshot of that edition; `null` when never published or just deleted |
   | `has_unpublished_changes`, `next_action` | `next_action: "publish"` when the edition's draft differs from what readers see, else `"none"` |
   | `submitted_fields` | Fields present in the request, not a diff (`published_at`/`notify` for publish, `tags` for `tags_set`) |
 
-  After `article_edition_delete` the answer shows the primary edition, while the receipt describes the deleted locale.
+  After `article_edition_delete` the answer shows the primary edition, while the receipt describes the deleted locale. An idempotent replay of a response stored before receipts shipped on these writers (stored responses are kept for 24 hours) comes back without `receipt`; read `mode: "summary"` instead.
 - Every write needs `expected_revision`, and every successful write on the article increments it (all locales share one counter). Writes to several locales are therefore sequential: use the `revision` of the previous answer.
 - `409 revision_conflict` with `current_revision`: someone else (or your own earlier call whose answer was lost) saved first. Read `mode: "summary"` and compare `content_hash` with the document you sent: if equal, your save landed, do not repeat it; if not, re-read what changed, merge, retry with `current_revision`. `409 slug_taken` means another article uses that slug.
 - `400 invalid_field` names the field; `422 invalid_document` lists `errors: [{path, message}]` for the block tree. Fix the paths, do not retry unchanged.

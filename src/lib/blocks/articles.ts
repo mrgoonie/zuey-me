@@ -388,7 +388,7 @@ export interface WriteReceipt {
   locale: Locale;
   /** Article-wide revision read right after the write (the next expected_revision unless another writer got in first). */
   article_revision: number;
-  /** Revision at which this edition last changed; below article_revision after a write that left the edition alone (tags_set, a metadata-only save). */
+  /** Revision at which this edition last changed; below article_revision after tags_set, which leaves the edition alone. */
   edition_draft_revision: number;
   /** Revision of the edition's currently public snapshot; null when it was never published (or was just deleted). */
   published_revision: number | null;
@@ -407,7 +407,8 @@ export function submittedArticleFields(input: ArticleInput): string[] {
 
 /** Request fields of a publish that change what is stored besides the snapshot. */
 export function submittedPublishFields(body: Record<string, unknown>): string[] {
-  return (['published_at', 'notify'] as const).filter(f => body[f] !== undefined);
+  // An empty or null published_at is parsed as absent, so it is not reported as submitted.
+  return (['published_at', 'notify'] as const).filter(f => body[f] !== undefined && (f !== 'published_at' || (body[f] !== null && body[f] !== '')));
 }
 
 /**
