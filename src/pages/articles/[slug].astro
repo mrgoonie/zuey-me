@@ -14,6 +14,8 @@ import { PAYWALL_SELECTOR, articleAlternates, articleJsonLd, articlePath, articl
 import { LOCALE_LABELS, isLocale, resolveLocale } from '../../lib/i18n/locales';
 import { readingMinutes } from '../../lib/search/text';
 import { hasHighlightableCode } from '../../lib/blocks/code-syntax';
+import { hasMath } from '../../lib/blocks/math';
+import { KATEX_CSS_URL } from '../../lib/blocks/math-assets';
 import { LOCKED_TITLE_ID, RELATED_VIDEOS_ID } from '../../lib/blocks/page-ids';
 import { documentLanes } from '../../lib/blocks/schema';
 import { articleOgImage } from '../../lib/og/article-og-service';
@@ -77,6 +79,15 @@ const articleBlocks = view?.document.blocks ?? [];
 const codeHighlights = hasHighlightableCode(articleBlocks)
   ? await import('../../lib/blocks/code-highlight').then(m => m.highlightBlocks(articleBlocks)).catch(() => undefined)
   : undefined;
+// Math is typeset here too (KaTeX stays out of the island bundle); the KaTeX stylesheet is linked only for these pages.
+const articleHasMath = hasMath(articleBlocks);
+const mathRenders = articleHasMath
+  ? await import('../../lib/blocks/math-render').then(m => m.renderMathBlocks(articleBlocks)).catch((err: unknown) => {
+    // Readers still get every formula as TeX source; the log names the failure, never the document.
+    console.error('Math typesetter failed to load:', err instanceof Error ? err.message : 'unknown');
+    return undefined;
+  })
+  : undefined;
 // Wide or full sections widen the page; everything else stays in the prose column (see .zb-article-lanes).
 const articleWidth = view && documentLanes(view.document).length > 0 ? 'max-w-[1240px] zb-article-lanes' : 'max-w-[860px]';
 const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.truncated && !view.preview && canReadFull(viewer));
@@ -93,6 +104,7 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
   imageType={socialAsset?.mime}
   lang={LOCALE_LABELS[uiLocale].htmlLang}
 >
+  {articleHasMath && <link slot="head" rel="stylesheet" href={KATEX_CSS_URL} />}
   {jsonLd && <script is:inline type="application/ld+json" set:html={jsonLd} />}
   <main class="relative min-h-screen w-full flex flex-col items-center pt-3 pb-24 sm:pt-8 md:pt-12 px-2.5 sm:px-4 md:px-6">
     <article class={`w-full ${articleWidth} min-w-0 bg-[#F5EFEB] rounded-[28px] sm:rounded-[36px] border border-stone-200/90 shadow-modal px-4 py-6 sm:px-8 sm:py-9 md:px-12 md:py-12`}>
@@ -148,7 +160,7 @@ const canCopyPrivate = Boolean(view && view.access === 'knowledges' && !view.tru
 
           {/* Readable body: selections inside it get the "Ask Zuey AI" tooltip; tabindex lets the drawer return focus here. */}
           <div data-ask-ai-scope tabindex="-1" class="focus:outline-none">
-            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} eagerLeadImage={!showCover} imageTransforms={imageTransforms} />
+            <BlockRenderer client:load doc={view.document} highlights={codeHighlights} math={mathRenders} articleSlug={view.preview ? undefined : view.slug} interactive={!view.preview} eagerLeadImage={!showCover} imageTransforms={imageTransforms} />
           </div>
 
           {view.truncated && (

@@ -88,6 +88,59 @@
 .zb-tk-heading { color: var(--zb-tk-heading); font-weight: 700; }
 .zb-tk-link { color: var(--zb-tk-link); text-decoration: underline; text-underline-offset: 2px; }
 .zb-tk-meta { color: var(--zb-tk-meta); }
+/* Code options: file caption, toolbar, line gutter, emphasised and diff lines, wrap, collapse. Plain code blocks
+   keep the bare <pre class="zb-code"> above until hydration adds the toolbar around it. */
+.zb-codeblock { position: relative; margin: 0; min-width: 0; max-width: 100%; }
+.zb-code-head {
+  display: flex; align-items: baseline; gap: 0.75rem; min-width: 0; padding: 0.55rem 5.5rem 0.5rem 1rem;
+  background: #292524; color: #e7e5e4; border-radius: 1rem 1rem 0 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.78rem; line-height: 1.4;
+}
+.zb-code-file { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.zb-code-head .zb-code-lang { display: inline; margin: 0 0 0 auto; flex: none; }
+.zb-code-head + .zb-code { border-top-left-radius: 0; border-top-right-radius: 0; }
+.zb-code-tools { position: absolute; top: 0.35rem; right: 0.4rem; display: flex; gap: 0.15rem; }
+.zb-code-tools button {
+  display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; padding: 0;
+  border: 0; border-radius: 0.55rem; background: rgba(41, 37, 36, 0.92); color: #d6d3d1; cursor: pointer;
+}
+.zb-code-tools button:hover, .zb-code-tools button[aria-pressed='true'] { background: #44403c; color: #fafaf9; }
+.zb-code-tools button[data-state='copied'] { color: #86efac; }
+.zb-code-tools button[data-state='failed'] { color: #fca5a5; }
+.zb-code-tools button:focus-visible, .zb-code-expand:focus-visible, .zb-codeblock .zb-code:focus-visible { outline: 2px solid #fcd34d; outline-offset: 2px; }
+/* A block with options and no caption keeps its first line clear of the toolbar (rendered so on the server, so
+   nothing moves on hydration). Plain blocks keep their layout; the toolbar sits beside their language label. */
+.zb-code-top { padding-top: 2.6rem; }
+.zb-code-top > .zb-code-lang { position: absolute; top: 0.95rem; left: 1rem; margin: 0; }
+.zb-code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.zb-code-lines { padding-inline: 0; }
+.zb-code-lines > .zb-code-lang { padding-inline: 1rem; }
+.zb-code-lines > code { display: block; counter-reset: zb-line; width: max-content; min-width: 100%; }
+.zb-code-lines.zb-code-wrap > code { width: auto; }
+.zb-line {
+  display: block; position: relative; counter-increment: zb-line; text-decoration: none;
+  padding-left: calc(1rem + var(--zb-mark)); padding-right: 1rem;
+}
+.zb-code-numbered .zb-line { padding-left: calc(2rem + var(--zb-gutter) + var(--zb-mark)); }
+.zb-code-numbered .zb-line::before {
+  content: counter(zb-line); content: counter(zb-line) / '';
+  position: absolute; left: 0.75rem; width: var(--zb-gutter); text-align: right; color: #8a837e; user-select: none;
+}
+.zb-line-add, .zb-line-del, .zb-line-ctx { --zb-mark-left: 1rem; }
+.zb-code-numbered .zb-line-add, .zb-code-numbered .zb-line-del, .zb-code-numbered .zb-line-ctx { --zb-mark-left: calc(1.6rem + var(--zb-gutter)); }
+.zb-line-add::after, .zb-line-del::after { position: absolute; top: 0; left: var(--zb-mark-left); user-select: none; }
+.zb-line-add { background: rgba(34, 197, 94, 0.16); }
+.zb-line-add::after { content: '+'; content: '+' / ''; color: #86efac; }
+.zb-line-del { background: rgba(239, 68, 68, 0.16); }
+.zb-line-del::after { content: '-'; content: '-' / ''; color: #fca5a5; }
+.zb-line-hl { background: rgba(250, 204, 21, 0.14); box-shadow: inset 3px 0 #fcd34d; }
+.zb-code-collapsed { max-height: calc(var(--zb-code-rows) * 1.6em + 1.8rem); overflow-y: auto; }
+.zb-code-top.zb-code-collapsed { max-height: calc(var(--zb-code-rows) * 1.6em + 3.5rem); }
+.zb-code-expand {
+  display: block; width: 100%; margin-top: 0.35rem; padding: 0.45rem 0.75rem; border: 1px solid #d6d3d1; border-radius: 0.75rem;
+  background: #fafaf9; color: #1c1917; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+}
+.zb-code-expand:hover { background: #f5f5f4; }
 .zb-divider { border: 0; border-top: 1px solid #d6d3d1; margin: 0.6rem 0; width: 100%; }
 .zb-figure { margin: 0; }
 .zb-figure img { display: block; max-width: 100%; height: auto; border-radius: 1rem; }
@@ -310,7 +363,7 @@
 .zb-surface-contrast .zb-h, .zb-surface-contrast .zb-icon { color: inherit; }
 .zb-surface-contrast :is(.zb-quote footer, .zb-checklist .zb-done, figcaption) { color: #d6d3d1; }
 /* Blocks drawn as light panels keep dark text on a dark band. */
-.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math, .zb-file, .zb-bookmark, .zb-toggle,
+.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math-display, .zb-file, .zb-bookmark, .zb-toggle,
   .zb-embed-placeholder, .zb-embed-notice, .zb-embed-fallback, .zb-layout-bento > .zb-cell) { color: #1c1917; }
 .zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-file, .zb-bookmark, .zb-toggle, .zb-layout-bento > .zb-cell) :is(.zb-h, .zb-icon) { color: #0c0a09; }
 .zb-surface-contrast :is(.zb-toggle, .zb-scroll) { background: #fafaf9; }

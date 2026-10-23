@@ -13,6 +13,12 @@ export const LIMITS = {
   text: 20_000,
   shortText: 500,
   code: 50_000,
+  codeFilename: 200,
+  /** Ranges in a code block's `highlightLines`. */
+  codeLineRanges: 50,
+  /** Bounds of a code block's `collapseAfter` (lines). */
+  codeCollapseMin: 3,
+  codeCollapseMax: 500,
   mermaid: 20_000,
   url: 2_048,
   listItems: 200,
@@ -61,6 +67,9 @@ export const EMBED_PROVIDERS = [
 export type EmbedProvider = (typeof EMBED_PROVIDERS)[number];
 
 export const CALLOUT_TONES = ['info', 'warn', 'tip'] as const;
+/** Math layout: `display` (default when absent) or `inline`. */
+export const MATH_MODES = ['display', 'inline'] as const;
+export type MathMode = (typeof MATH_MODES)[number];
 export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut'] as const;
 export const LAYOUT_VARIANTS = ['columns', 'grid', 'bento'] as const;
 export const LAYOUT_GAPS = ['sm', 'md', 'lg'] as const;
@@ -95,7 +104,24 @@ export interface CalloutBlock extends BlockBase {
   /** Allowlisted icon replacing the tone's default glyph. */
   icon?: IconName;
 }
-export interface CodeBlock extends BlockBase { type: 'code'; language: string; code: string }
+/** Source code. Every option is optional, so blocks stored before they existed read and render unchanged. */
+export interface CodeBlock extends BlockBase {
+  type: 'code';
+  language: string;
+  code: string;
+  /** File name or path shown as the block's caption. */
+  filename?: string;
+  /** Line number gutter (true only; false is stored as absent). */
+  lineNumbers?: true;
+  /** Emphasised lines, 1-based: "2,4-6" (normalised without spaces). */
+  highlightLines?: string;
+  /** Each line starts with a diff marker: `+` added, `-` removed, a space for context. */
+  diff?: true;
+  /** Soft-wrap long lines by default instead of scrolling sideways (readers can switch). */
+  wrap?: true;
+  /** Code longer than this many lines starts collapsed to that height, with a button to show it all. */
+  collapseAfter?: number;
+}
 export interface DividerBlock extends BlockBase { type: 'divider' }
 /**
  * Natural pixel size of an image, recorded when the URL is entered so readers reserve its box before it loads.
@@ -148,8 +174,12 @@ export interface LayoutBlock extends BlockBase {
   children: LayoutChild[];
 }
 
-/** TeX source; rendered as accessible source text (no math engine is bundled). */
-export interface MathBlock extends BlockBase { type: 'math'; tex: string; caption?: string }
+/**
+ * TeX formula typeset with KaTeX on the server (HTML + MathML); the TeX source stays available as the
+ * fallback. `mode` is `display` (centred, own line) unless `inline` (text-sized, in the reading flow);
+ * `numbered` display formulas get an equation number in document order.
+ */
+export interface MathBlock extends BlockBase { type: 'math'; tex: string; mode?: MathMode; numbered?: boolean; caption?: string }
 export interface GalleryImage extends ImageSize { url: string; alt: string; caption?: string }
 export interface GalleryBlock extends BlockBase { type: 'gallery'; images: GalleryImage[]; caption?: string }
 /** Direct https audio file (hosted players such as SoundCloud/Spotify use `embed`). */

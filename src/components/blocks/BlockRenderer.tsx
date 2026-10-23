@@ -1,17 +1,21 @@
-import { Fragment, lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
-import type { ArticleDocument, Block, CodeBlock, LayoutBlock } from '../../lib/blocks/schema';
-import { codeRuns, codeSegments, normalizeCode, resolveHighlightLanguage } from '../../lib/blocks/code-syntax';
-import type { CodeHighlights, CodeSegment, TokenRuns } from '../../lib/blocks/code-syntax';
+import type { ArticleDocument, Block, LayoutBlock } from '../../lib/blocks/schema';
+import type { CodeHighlights } from '../../lib/blocks/code-syntax';
 import { childBlockLists, documentLanes, imageSizeAttrs, resolveSpan } from '../../lib/blocks/schema';
 import { responsiveImage } from '../../lib/media/image-transform';
 import type { ImageTransforms } from '../../lib/media/image-transform';
 import { parseInline } from '../../lib/blocks/inline';
 import type { InlineNode } from '../../lib/blocks/inline';
+import { CodeView } from './CodeBlock';
 import { EmbedView } from './EmbedView';
 import { ChartBlock } from './ChartBlock';
 import { MediaBlockView } from './MediaBlocks';
+import { MathView } from './MathBlock';
+import { mathMarkup, mathNumbers } from '../../lib/blocks/math';
+import type { MathNumber } from '../../lib/blocks/math';
+import type { MathRenders } from '../../lib/blocks/math';
 import { CardView, SectionView } from './ContainerBlocks';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
@@ -59,6 +63,11 @@ interface RenderContext {
   imageTransforms?: ImageTransforms | null;
   /** `sizes` for full-width body images (the prose column, or the wider lanes). */
   imageSizes: string;
+  /** Server-typeset KaTeX markup by math block id. */
+  math?: MathRenders;
+  /** Equation numbering of display formulas by block id. */
+  mathNumbers: Map<string, MathNumber>;
+  liveMath: boolean;
 }
 
 /** Only an image this close to the top is likely to be the LCP element. */
@@ -120,50 +129,6 @@ function LayoutView({ block, ctx }: { block: LayoutBlock; ctx: RenderContext }) 
   );
 }
 
-/** Studio previews re-highlight after typing pauses for this long. */
-const LIVE_HIGHLIGHT_DELAY_MS = 150;
-
-function renderSegments(segments: CodeSegment[]): ReactNode[] {
-  return segments.map(({ text, kind }, i) => (kind
-    ? <span key={i} className={`zb-tk-${kind}`}>{text}</span>
-    : <Fragment key={i}>{text}</Fragment>));
-}
-
-/**
- * Code block. Token runs come pre-computed from the server (`highlights`, so no-JS readers get colours and
- * hydration matches) or, in Studio previews, from the highlighter loaded lazily on the client. Runs only carry
- * lengths and kinds; the text is always sliced from the block's own code, and runs that do not cover it exactly
- * are ignored. Line endings are normalised to LF so the server HTML parses back to the same text.
- */
-function CodeView({ block, ctx }: { block: CodeBlock; ctx: RenderContext }) {
-  const text = normalizeCode(block.code);
-  const provided = codeRuns(ctx.highlights, block.id, text.length);
-  const source = `${block.language}\u0000${text}`;
-  const [live, setLive] = useState<{ source: string; runs: TokenRuns | null } | null>(null);
-  const wantsLive = ctx.liveHighlight && !provided && resolveHighlightLanguage(block.language) !== null;
-
-  useEffect(() => {
-    if (!wantsLive) return;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      import('../../lib/blocks/code-highlight')
-        .then(m => { if (!cancelled) setLive({ source, runs: m.highlightCode(block.code, block.language) }); })
-        // The highlighter chunk failed to load (offline, deploy skew): the preview keeps plain code.
-        .catch(() => { if (!cancelled) setLive({ source, runs: null }); });
-    }, LIVE_HIGHLIGHT_DELAY_MS);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [wantsLive, source, block.code, block.language]);
-
-  const runs = provided ?? (live?.source === source ? live.runs : null);
-  const segments = runs ? codeSegments(text, runs) : null;
-  return (
-    <pre className="zb-code">
-      {block.language && <span className="zb-code-lang">{block.language}</span>}
-      <code>{segments ? renderSegments(segments) : text}</code>
-    </pre>
-  );
-}
-
 function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
   switch (block.type) {
     case 'paragraph': return <p><Inline text={block.text} /></p>;
@@ -205,7 +170,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </aside>
       );
     }
-    case 'code': return <CodeView block={block} ctx={ctx} />;
+    case 'code': return <CodeView block={block} highlights={ctx.highlights} liveHighlight={ctx.liveHighlight} />;
     case 'divider': return <hr className="zb-divider" />;
     case 'image': {
       // The ratio lets the stylesheet cap a tall portrait's width so its height stays within the viewport.
@@ -247,6 +212,7 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
         </div>
       );
     case 'math':
+      return <MathView block={block} html={mathMarkup(ctx.math, block.id)} failed={ctx.math !== undefined} number={ctx.mathNumbers.get(block.id)} live={ctx.liveMath} />;
     case 'gallery':
     case 'audio':
     case 'video':
@@ -292,6 +258,12 @@ interface BlockRendererProps {
   eagerLeadImage?: boolean;
   /** Serve resized images (see `imageTransformsFor`); only the article page passes it, so fragments keep original URLs. */
   imageTransforms?: ImageTransforms | null;
+  /** Server-typeset KaTeX markup by block id (see `renderMathBlocks`); math without an entry shows its TeX source. */
+  math?: MathRenders;
+  /** Typeset math on the client by lazy-loading KaTeX (Studio previews). */
+  liveMath?: boolean;
+  /** Equation numbers when doc is one part of a longer document (lesson runs); computed from doc otherwise. */
+  mathNumbering?: Map<string, MathNumber>;
 }
 
 /** Article column width in CSS px: max-w-[860px] or the 1240px lanes, minus the card's horizontal padding. */
@@ -300,13 +272,18 @@ function bodyImageSizes(lanes: boolean): string {
 }
 
 /** SSR-safe renderer for a block document. Rich blocks enhance themselves on the client. */
-export function BlockRenderer({ doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms }: BlockRendererProps) {
+export function BlockRenderer({
+  doc, articleSlug, interactive = true, highlights, liveHighlight = false, autoLoadEmbeds = true, eagerLeadImage = false, imageTransforms,
+  math, liveMath = false, mathNumbering,
+}: BlockRendererProps) {
+  const ownNumbers = useMemo(() => (mathNumbering ? null : mathNumbers(doc.blocks, math)), [doc, math, mathNumbering]);
   // Width lanes switch on only for documents with a wide or full section, so prose-only documents keep their markup.
   const lanes = documentLanes(doc);
   const ctx: RenderContext = {
     articleSlug, interactive, highlights, liveHighlight, autoLoadEmbeds, imageTransforms,
     leadImageId: eagerLeadImage ? leadImageBlockId(doc.blocks) : undefined,
     imageSizes: bodyImageSizes(lanes.length > 0),
+    math, mathNumbers: mathNumbering ?? ownNumbers ?? new Map<string, MathNumber>(), liveMath,
   };
   return (
     <div className="zb-doc" data-lanes={lanes.length > 0 ? lanes.join(' ') : undefined}>
