@@ -4,7 +4,7 @@
  */
 import { canTrack } from '../consent';
 import { isGuestDistinctId } from '../identity';
-import { hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
+import { REDACTED, hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
 import type { ClientDestination, DestinationResult, ServerAnalyticsEvent, ServerDestination } from './types';
 
 /** Project "Zuey.me". Used only by production builds that have no PUBLIC_POSTHOG_KEY configured. */
@@ -110,6 +110,7 @@ export function getPostHog(): PostHogLike | null {
 
 /** posthog-js `before_send` payload (only the members the scrubber touches). */
 export interface CaptureResultLike {
+  event?: string;
   properties?: Record<string, unknown>;
   $set?: Record<string, unknown>;
   $set_once?: Record<string, unknown>;
@@ -117,6 +118,49 @@ export interface CaptureResultLike {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Longest exception message kept (`$exception_message`, `$exception_list[].value`), measured after scrubbing. */
+export const MAX_EXCEPTION_TEXT_LENGTH = 200;
+
+let openSensitiveSurfaces = 0;
+
+/**
+ * Marks a mounted surface where visitors type private free text (the Zuey AI panel, on any page). While one
+ * is open, exception events carry no message text. Returns the function that unmarks it (a React effect cleanup).
+ */
+export function enterSensitiveSurface(): () => void {
+  openSensitiveSurfaces++;
+  let left = false;
+  return () => {
+    if (left) return;
+    left = true;
+    openSensitiveSurfaces--;
+  };
+}
+
+function shortenText(text: string): string {
+  if (text.length <= MAX_EXCEPTION_TEXT_LENGTH) return text;
+  const last = text.charCodeAt(MAX_EXCEPTION_TEXT_LENGTH - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? MAX_EXCEPTION_TEXT_LENGTH - 1 : MAX_EXCEPTION_TEXT_LENGTH;
+  return `${text.slice(0, end)}…`;
+}
+
+/**
+ * Exception messages are free text and can echo what the visitor typed. Applied to already-scrubbed
+ * `$exception` properties: each message is cut to `MAX_EXCEPTION_TEXT_LENGTH`, or replaced by `[redacted]`
+ * when `dropText` is set (private pages and open sensitive surfaces). The error type and the scrubbed stack
+ * frames (file, line, column, function) are kept.
+ */
+export function hardenExceptionProperties(properties: Record<string, unknown>, dropText: boolean): Record<string, unknown> {
+  const text = (value: unknown): unknown => (typeof value === 'string' ? (dropText ? REDACTED : shortenText(value)) : value);
+  const out: Record<string, unknown> = { ...properties };
+  if ('$exception_message' in out) out.$exception_message = text(out.$exception_message);
+  const list = out.$exception_list;
+  if (Array.isArray(list)) {
+    out.$exception_list = list.map(item => (isRecord(item) && 'value' in item ? { ...item, value: text(item.value) } : item));
+  }
+  return out;
 }
 
 function pathOf(value: unknown): string | null {
@@ -132,7 +176,8 @@ function pathOf(value: unknown): string | null {
  * `before_send` hook: strips sensitive URL parameters (the whole query on account, billing and booking
  * pages), replaces order codes and booking ids in paths, and redacts emails, JWTs and secret tokens
  * from every property PostHog attaches automatically (current URL, referrer, `$initial_*`, autocapture
- * element chain). The page title is blanked on order and booking pages. Drops the event if scrubbing
+ * element chain). The page title is blanked on order and booking pages, and `$exception` messages are
+ * shortened or dropped (`hardenExceptionProperties`). Drops the event if scrubbing
  * itself fails, so an unexpected shape can never leak raw data.
  */
 export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null): T | null {
@@ -150,6 +195,10 @@ export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null
     const path = raw ? pathOf(raw.$current_url) ?? pathOf(raw.$pathname) : null;
     if (path && hasPrivateIdentifier(path) && scrubbed.properties) {
       scrubbed.properties = { ...scrubbed.properties, title: '' };
+    }
+    if (result.event === '$exception' && scrubbed.properties) {
+      const dropText = (path !== null && isSensitivePath(path)) || openSensitiveSurfaces > 0;
+      scrubbed.properties = hardenExceptionProperties(scrubbed.properties, dropText);
     }
     return scrubbed;
   } catch {
