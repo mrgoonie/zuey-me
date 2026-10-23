@@ -126,7 +126,7 @@ export const MAX_EXCEPTION_TEXT_LENGTH = 200;
 let openSensitiveSurfaces = 0;
 
 /**
- * Marks a mounted surface where visitors type private free text (the Zuey AI panel, on any page). While one
+ * Marks a surface where visitors type private free text (the Zuey AI panel on any page, an open lesson AI tutor). While one
  * is open, exception events carry no message text. Returns the function that unmarks it (a React effect cleanup).
  */
 export function enterSensitiveSurface(): () => void {
