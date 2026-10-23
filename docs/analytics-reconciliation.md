@@ -78,69 +78,97 @@ WHERE status = 'paid' AND COALESCE(amount_paid, amount_vnd) > 0
 
 Key: `'purchase:sepay:billing_order:' || id`. An order with `status = 'needs_attention'` that an admin later resolves becomes `paid` and is purchased then; a fully discounted order (0 VND) never emits `purchase`.
 
-### Membership, Dodo card (`order_type` = `membership`, `provider` = `dodo`, `currency` = `USD`)
+### Membership, Dodo card (`order_type` = `membership`, `provider` = `dodo`)
 
 ```sql
 SELECT CASE WHEN pe.event_id = 'charge:' || cs.first_payment_id THEN 'first' ELSE 'renewal' END AS kind,
-       COUNT(*) AS purchases, SUM(pe.amount) / 100.0 AS usd
+       UPPER(pe.currency) AS currency, COUNT(*) AS purchases,
+       SUM(CASE WHEN UPPER(pe.currency) IN ('VND', 'JPY', 'KRW') THEN pe.amount ELSE pe.amount / 100.0 END) AS amount
 FROM payment_events pe
 JOIN card_subscriptions cs ON cs.id = pe.card_subscription_id
 WHERE pe.provider = 'dodo' AND pe.raw_type = 'payment.charge' AND cs.user_id IS NOT NULL
   AND pe.received_at >= :from AND pe.received_at < :to
-GROUP BY kind;
+GROUP BY kind, UPPER(pe.currency);
 ```
 
-Key: `'purchase:dodo:' || substr(pe.event_id, 8)` (the payment id after `charge:`). PostHog `renewal` = `true` must equal the `renewal` row. `pe.amount` is in cents. The event time is Dodo's payment time while `received_at` is webhook time, so a charge near midnight can land on a different day (see tolerances).
+Key: `'purchase:dodo:' || substr(pe.event_id, 8)` (the payment id after `charge:`). PostHog `renewal` = `true` must equal the `renewal` row. `pe.amount` is in minor units of `pe.currency`; `amount` is converted to major units the way `toMajorUnits` does (VND, JPY and KRW have no minor unit). A charge in a currency other than USD is still a purchase (and also a `payment_needs_attention` with `amount_mismatch`), so it shows as its own currency row. The event time is Dodo's payment time while `received_at` is webhook time, so a charge near midnight can land on a different day (see tolerances).
 
 ### Courses (`order_type` = `course`)
 
 ```sql
-SELECT provider, COUNT(*) AS purchases,
-       SUM(CASE WHEN provider = 'sepay' THEN COALESCE(amount_paid, amount_vnd) END) AS vnd,
-       SUM(CASE WHEN provider = 'dodo' THEN amount_paid END) / 100.0 AS usd
-FROM course_orders
-WHERE paid_at IS NOT NULL AND status IN ('paid', 'refunded', 'charged_back')
-  AND paid_at >= :from AND paid_at < :to
-GROUP BY provider;
+WITH o AS (
+  SELECT provider,
+         CASE WHEN amount_paid IS NOT NULL AND COALESCE(currency_paid, '') <> '' THEN UPPER(currency_paid)
+              WHEN provider = 'sepay' THEN 'VND' ELSE 'USD' END AS currency,
+         CASE WHEN provider = 'sepay' THEN COALESCE(amount_paid, amount_vnd)
+              ELSE COALESCE(amount_paid, amount_usd_cents) END AS amount_minor
+  FROM course_orders
+  WHERE paid_at IS NOT NULL AND status IN ('paid', 'refunded', 'charged_back')
+    AND paid_at >= :from AND paid_at < :to
+)
+SELECT provider, currency, COUNT(*) AS purchases,
+       SUM(CASE WHEN currency IN ('VND', 'JPY', 'KRW') THEN amount_minor ELSE amount_minor / 100.0 END) AS amount
+FROM o GROUP BY provider, currency;
 ```
 
-Key: `'purchase:' || provider || ':course_order:' || id`. A refunded or charged-back order was still a purchase when paid, so it stays in the count.
+Key: `'purchase:' || provider || ':course_order:' || id`. A refunded or charged-back order was still a purchase when paid, so it stays in the count. The amount and currency follow `paidAmount()` in [`course-order-payments.ts`](../src/lib/courses/course-order-payments.ts): what was actually paid (`amount_paid` + `currency_paid`) when recorded, otherwise the price due on the order's rail (`amount_vnd` for SePay, `amount_usd_cents` for Dodo). So a card payment that landed on a SePay order and was granted by an admin is a `sepay` row in `USD`, and a non-USD Dodo charge is its own currency row; never add the rows of different currencies together.
 
 ### Bookings (`order_type` = `booking`)
 
 ```sql
-SELECT payment_method, currency, COUNT(*) AS purchases, SUM(amount_paid) AS amount
-FROM bookings
-WHERE status = 'confirmed' AND amount_paid > 0
-  AND updated_at >= :from AND updated_at < :to
-GROUP BY payment_method, currency;
+WITH b AS (
+  SELECT payment_method, UPPER(currency) AS currency, COALESCE(amount_paid, amount_expected) AS amount_minor
+  FROM bookings
+  WHERE (status = 'confirmed'
+         OR (status = 'cancelled' AND amount_paid IS NOT NULL
+             AND (attention_reason IS NULL OR attention_reason = 'admin')))
+    AND updated_at >= :from AND updated_at < :to
+)
+SELECT payment_method, currency, COUNT(*) AS purchases,
+       SUM(CASE WHEN currency IN ('VND', 'JPY', 'KRW') THEN amount_minor ELSE amount_minor / 100.0 END) AS amount
+FROM b GROUP BY payment_method, currency;
 ```
 
-Keys use the provider event: `purchase:<provider>:<payment_events.event_id>` for the webhook that confirmed it (join `payment_events.booking_id`), or `booking:<id>` for an admin resolve with no transaction. `updated_at` is only an approximation of payment time; use the `payment_events.received_at` of the confirming row for an exact window.
+- An admin `cancel` never refunds, so a booking confirmed with money and then cancelled keeps its `purchase`; the query counts it (cancelled with `amount_paid` set and no payment-problem reason).
+- An admin resolve with no recorded transaction emits the price due when `amount_paid` is NULL, hence the `amount_expected` fallback. An admin resolve with several transactions sums them per currency, so compare amounts with the PostHog total, not row by row.
+- `amount_paid` is in minor units (PayPal USD cents, SePay VND as is); `amount` is converted to major units like the event.
+- Keys use the provider transaction: `purchase:<provider>:<payment_events.event_id>` for the payment that confirmed it (join `payment_events.booking_id`, first row), or `purchase:<provider>:booking:<id>` for an admin resolve with no recorded transaction. `updated_at` only approximates the payment time (a later admin action moves it); use the confirming row's `payment_events.received_at` for an exact window.
 
 ### Refunds and chargebacks (`refund`)
 
 ```sql
 -- Dodo membership: money-back provider events
-SELECT raw_type, COUNT(*) AS n, SUM(amount) / 100.0 AS usd
+SELECT raw_type, UPPER(currency) AS currency, COUNT(*) AS n,
+       SUM(CASE WHEN UPPER(currency) IN ('VND', 'JPY', 'KRW') THEN amount ELSE amount / 100.0 END) AS amount
 FROM payment_events
 WHERE provider = 'dodo' AND card_subscription_id IS NOT NULL
   AND raw_type IN ('refund.succeeded', 'dispute.lost')
   AND received_at >= :from AND received_at < :to
-GROUP BY raw_type;
+GROUP BY raw_type, UPPER(currency);
 
--- Courses: orders reversed in the window
-SELECT provider, status, COUNT(*) AS n
-FROM course_orders
-WHERE status IN ('refunded', 'charged_back')
-  AND updated_at >= :from AND updated_at < :to
-GROUP BY provider, status;
+-- Courses: paid orders reversed in the window (amount = what was paid, as in the purchase query)
+WITH o AS (
+  SELECT provider, status,
+         CASE WHEN amount_paid IS NOT NULL AND COALESCE(currency_paid, '') <> '' THEN UPPER(currency_paid)
+              WHEN provider = 'sepay' THEN 'VND' ELSE 'USD' END AS currency,
+         CASE WHEN provider = 'sepay' THEN COALESCE(amount_paid, amount_vnd)
+              ELSE COALESCE(amount_paid, amount_usd_cents) END AS amount_minor
+  FROM course_orders
+  WHERE status IN ('refunded', 'charged_back') AND paid_at IS NOT NULL
+    AND updated_at >= :from AND updated_at < :to
+)
+SELECT provider, status, currency, COUNT(*) AS n,
+       SUM(CASE WHEN currency IN ('VND', 'JPY', 'KRW') THEN amount_minor ELSE amount_minor / 100.0 END) AS amount
+FROM o GROUP BY provider, status, currency;
 ```
+
+A course order that was never paid (`paid_at` NULL, for example a flagged order an admin refunded) never had a `purchase` and gets no `refund`, so it is excluded. The course amount is the paid amount; a partial refund reported by the provider sends its own smaller `amount` with `partial: true`, so compare course refund counts exactly and amounts only as an upper bound.
 
 Keys: `refund:dodo:refund:<refund id>` and `refund:dodo:dispute_lost:<dispute id>` for memberships; `refund:<provider>:course_order:<id>:refunded` or `…:charged_back` for courses; `refund:paypal:<event id>` for bookings.
 
 - A course is set to `charged_back` as soon as a dispute opens, but `refund` is sent only when the dispute is lost (`dispute.accepted`, `dispute.lost`, `dispute.expired`). Count `charged_back` rows whose `refund` is missing as open disputes, not as gaps.
 - Dodo `dispute.opened` is stored in `payment_events` but is not a refund.
+- **Membership gap ([#269](https://github.com/mrgoonie/zuey-me/issues/269)).** For memberships, Dodo `dispute.accepted` and `dispute.expired` are not handled (`DODO_REVERSAL_KINDS` in `src/lib/payments/dodo.ts` maps only `refund.succeeded`, `dispute.opened` and `dispute.lost`). Such a dispute leaves no `payment_events` row and no `refund`, so every check here reads clean. Until #269 ships, check accepted or expired membership disputes in the Dodo dashboard.
 - PayPal booking reversals (`PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED`) are not written to `payment_events`; the only D1 trace is the outbox row (30 days). Check older ones in the PayPal dashboard.
 - SePay has no refund flow, so a manual bank refund appears nowhere; record it by hand.
 
@@ -153,7 +181,7 @@ FROM subscriptions
 WHERE status = 'active' AND current_period_end > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 GROUP BY plan;
 
--- Access that ended in the window (compare with subscription_expired)
+-- Access that ended in the window and was not renewed (a lower bound for subscription_expired)
 SELECT plan, COUNT(*) AS ended
 FROM subscriptions
 WHERE current_period_end >= :from AND current_period_end < :to
@@ -167,7 +195,11 @@ WHERE event LIKE 'subscription_%' AND occurred_at >= :from AND occurred_at < :to
 GROUP BY event, plan, status;
 ```
 
-`subscriptions.status` is not flipped by the clock, so "active" always means `current_period_end` in the future. Card access keeps a 24-hour grace period after `current_period_end`, so a card plan can show in the first query's complement for up to a day while still usable. `subscription_activated` and `subscription_renewed` are derived from the change in `current_period_end`, so check them through the outbox query (and then PostHog), not against a D1 count.
+`subscriptions.status` is not flipped by the clock, so "active" always means `current_period_end` in the future. `subscriptions.current_period_end` already includes the 24-hour card renewal grace (`recomputeSubscription` adds it), so the first query counts card plans in grace as active; only `card_subscriptions.current_period_end` is the provider's period end without grace.
+
+`subscriptions` keeps one row per member and plan with the latest period end. A member whose access ended in the window and who then re-activated has moved out of the second query, but `subscription_expired` was still sent. So PostHog `subscription_expired` ≥ the second query, and the difference is re-activations; for an exact check, compare PostHog with the outbox `subscription_expired` rows (third query). `subscription_expired` never carries `provider` (neither `queueSubscriptionChange` nor the drain sweep sets it); a follow-up issue tracks that.
+
+`subscription_activated` and `subscription_renewed` are derived from the change in `current_period_end`, so check them through the outbox query (and then PostHog), not against a D1 count.
 
 ### Sign-ups and sign-ins
 
@@ -183,7 +215,7 @@ Key: `'sign_up:' || users.id`. Deleted accounts (`deleted_at` set) still count.
 
 ## Step 3: find the missing rows
 
-Aggregates tell you that something is off; these show which fact. They are valid only for facts newer than the outbox launch (first row 2026-10-11 16:20 UTC) and whose outbox row was not yet purged (30 days after `sent_at`).
+Aggregates tell you that something is off; these show which fact. They are valid only for facts newer than the first outbox row (2026-10-11 16:20 UTC) and whose outbox row was not yet purged (30 days after `sent_at`).
 
 ```sql
 -- Paid SePay membership orders with no purchase in the outbox
@@ -242,7 +274,9 @@ FROM billing_orders
 WHERE status = 'paid' AND paid_at >= :from AND paid_at < :to
 GROUP BY plan, months;
 
--- SePay prepaid still covering today (approximate: stacked renewals start at the previous end)
+-- SePay prepaid still covering today (approximate: stacked renewals start at the previous end, and
+-- SQLite '+N months' rolls past a month end, e.g. Jan 31 + 1 month = Mar 3, while the code clamps to Feb 28,
+-- so an order paid near a month end can be off by up to 3 days)
 SELECT plan, COUNT(*) AS orders, SUM(COALESCE(amount_paid, amount_vnd) * 1.0 / months) AS vnd_per_month
 FROM billing_orders
 WHERE status = 'paid'
@@ -253,7 +287,7 @@ GROUP BY plan;
 
 ## GA4 (once `GA4_API_SECRET` is set)
 
-The GA4 destination ([catalog, GA4 destination](analytics-events.md#ga4-destination)) posts the server `purchase` and `refund` through the Measurement Protocol, once PostHog has accepted the outbox row. Both carry `transaction_id` = `tx_` + a 12-character SHA-256 of `<provider>:<transaction>` (`ecommerceTransactionId` in `commerce-events.ts`); the same value is the `transaction_id` property on the PostHog event, so a GA4 transaction joins to PostHog on it. Check 48 hours after the window closes (GA4 processing delay):
+The GA4 destination ([catalog, GA4 destination](analytics-events.md#ga4-destination)) posts the server `purchase` and `refund` through the Measurement Protocol, once PostHog has accepted the outbox row. Both carry `transaction_id` = `tx_` + 24 hex characters (the first 12 bytes of a SHA-256) of `<provider>:<transaction>` (`ecommerceTransactionId` in `commerce-events.ts`); the same value is the `transaction_id` property on the PostHog event, so a GA4 transaction joins to PostHog on it. Check 48 hours after the window closes (GA4 processing delay):
 
 - Compare the GA4 report "Transactions" by day (GA4 MCP `ga4_run_report`, metrics `transactions`, `purchaseRevenue`, dimension `date`; add dimension `transactionId` for a row-level diff) with the PostHog `purchase` count for the same UTC days. GA4 reports in the property time zone; set it to UTC or shift the window.
 - GA4 converts revenue to the property currency, so compare counts exactly and revenue only roughly.
@@ -268,7 +302,8 @@ The GA4 destination ([catalog, GA4 destination](analytics-events.md#ga4-destinat
 | Outbox `sent` → PostHog `uuid` | exact | window ends at least 1 hour ago |
 | Outbox `pending` with `attempts` > 0 | allowed while PostHog is failing; dead after ~22 hours | — |
 | D1 aggregate vs PostHog aggregate, per currency | exact counts and amounts for the full window; ±1 event on each day boundary where `occurred_at` (provider time) and `received_at` differ | 1 hour |
-| `subscription_expired` vs D1 ended access | exact if the drain ran at least once every 3 days | 1 drain cycle |
+| PostHog `subscription_expired` vs outbox `subscription_expired` | exact if the drain ran at least once every 3 days | 1 drain cycle |
+| PostHog `subscription_expired` vs D1 ended access | PostHog ≥ D1; the difference is members who re-activated in or after the window | 1 drain cycle |
 | PostHog `purchase` vs GA4 transactions | ±2 % or ±1, whichever is larger; GA4 refunds ≤ PostHog refunds | 48 hours |
 | Client funnel steps vs D1 orders (for example `checkout_created` vs `billing_orders` created) | no fixed target: the ratio is the consent coverage; watch the trend, alert on a drop of more than 20 points week over week | — |
 
@@ -278,7 +313,7 @@ The GA4 destination ([catalog, GA4 destination](analytics-events.md#ga4-destinat
 2. **Outbox rows pending or dead.** Read `last_error`: `rejected:*` is a property that failed the server allowlist (code bug, open an issue); HTTP 401/403 is a wrong `PUBLIC_POSTHOG_KEY`; 5xx is a PostHog outage and retries on its own. Requeue dead rows only after the cause is fixed and a time-travel restore point is recorded.
 3. **Sent but missing in PostHog.** Check the project key belongs to project `597432`, that no ingestion filter drops the event, and that the PostHog query window uses the event timestamp (the fact's time), not ingestion time.
 4. **Counts match, amounts differ.** Look for currency mixing (a sum without `GROUP BY currency`), a USD amount read as cents, or a Dodo amount that includes tax on one side only.
-5. **A preview or local host appears.** Server events are sent only for requests to `zuey.me` / `www.zuey.me`; a preview event in production data is a host-gate bug.
+5. **A preview or local host appears.** The outbox row is written on every host, but the drain delivers only when its request host is `zuey.me` / `www.zuey.me` (catalog, "Preview gate"); elsewhere rows stay `pending`. A preview event in production data is a host-gate bug.
 6. **Expirations missing.** The drain sweep looks back 3 days; if the scheduler Worker was down longer, the gap is expected and D1 remains the record.
 7. **GA4 lower than PostHog.** Check `GA4_API_SECRET` and `PUBLIC_GA4_MEASUREMENT_ID` (catalog), and the 48-hour delay, before calling it a gap.
 
@@ -286,7 +321,9 @@ Record every confirmed gap as a GitHub issue (one issue per cause), with the que
 
 ## Known exclusions
 
-- Facts before the outbox shipped (2026-10-11 15:17 UTC) never reached PostHog.
+- Facts before the first outbox row (2026-10-11 16:20 UTC) never reached PostHog.
+- Membership Dodo disputes that end `accepted` or `expired` produce no `payment_events` row and no `refund` until [#269](https://github.com/mrgoonie/zuey-me/issues/269) ships.
+- `subscription_expired` has no `provider`, so it cannot be split by rail.
 - Fully discounted (0 VND or 0 USD) orders grant access without a `purchase`.
 - Dodo charges flagged for review are included with `flagged: true`; filter them for a settled-only figure.
 - Booking guests have no person profile; booking revenue is compared on totals only.
@@ -303,4 +340,4 @@ Record every confirmed gap as a GitHub issue (one issue per cause), with the que
 
 - Outbox: `sign_up` 47 sent, `login` 15 sent, no `pending` or `dead` rows. PostHog: `sign_up` 47, `login` 15. Exact match.
 - D1 `users` created in the window: 47, every one with its `sign_up:<id>` outbox row.
-- Three paid SePay membership orders in the window, all paid before the outbox shipped (last at 2026-10-11 06:53 UTC), so no `purchase` was expected and none exists. No Dodo charge, paid course order or paid booking in the window, and the outbox holds no `purchase`, `refund` or `subscription_*` row yet.
+- Three paid SePay membership orders in the window, all paid before the first outbox row (last at 2026-10-11 06:53 UTC), so no `purchase` was expected and none exists. No Dodo charge, paid course order or paid booking in the window, and the outbox holds no `purchase`, `refund` or `subscription_*` row yet.

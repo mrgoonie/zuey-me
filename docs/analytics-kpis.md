@@ -15,8 +15,8 @@ Business and product metrics for zuey.me, each defined on events and properties 
 |---|---|---|
 | Do Not Track, Global Privacy Control, the `/privacy#analytics` opt-out, blocked localStorage | No client event at all from that browser | Every client event and `$pageview` |
 | Server events ignore browser consent | `sign_up`, `login`, `purchase`, `refund`, `payment_*`, `subscription_*` arrive for everyone | Server events |
-| Non-production hosts | The browser captures only on `zuey.me` / `www.zuey.me`; the server sends only for requests to those hosts | Both |
-| Bots and crawlers | Counted in `$pageview` unless filtered with `$virt_is_bot` (PostHog traffic classification, present on client events) | Client events |
+| Non-production hosts | The browser captures only on `zuey.me` / `www.zuey.me`; server events are written to the outbox on every host, but the drain delivers them only when its request host is one of those (catalog, "Preview gate") | Both |
+| Bots and crawlers | Counted in `$pageview` unless filtered with `$virt_is_bot` (PostHog's virtual traffic-classification field, computed from the user agent; verified in project Zuey.me on 2026-10-23: 17 of 4 150 page views in 30 days were `true`) | Client events |
 | Anonymous ids | One anonymous `distinct_id` per browser profile until `identify(member_id)`; a visitor with two browsers counts twice | Unique-visitor KPIs |
 | Booking guests | Server booking events use a one-off `guest_…` id with `$process_person_profile: false`; join booking steps on counts, not on people | Booking KPIs |
 
@@ -39,7 +39,7 @@ Event names and properties below were checked on 2026-10-23 against `ANALYTICS_E
 
 - **Seen in PostHog:** `$pageview`, `$web_vitals`, `$exception`, `$rageclick`, `$identify`, every profile/growth event except `200lab_learning_path_click`, the sign-up and checkout funnel through `payment_initiated`, `booking_availability_viewed`, `booking_slot_selected`, the article, Reads and search events except `article_unlocked`, `app_opened`, `survey_submitted`, `feature_error`, `sign_up`, `login`.
 - **Declared in code, not yet seen** (no occurrence in the window, so their tiles start empty): `purchase`, `refund`, `payment_failed`, `payment_needs_attention`, every `subscription_*` event, every `ai_*` event, `article_unlocked`, `booking_hold_created`, `booking_checkout_started`, `community_invite_requested`, `community_joined`, `command_palette_article`, `command_palette_video`, `200lab_learning_path_click`. `$dead_click` is not collected at all (dead-click capture comes from PostHog remote config, which the site disables).
-- The three paid membership orders of that window were paid on 2026-10-09 and 2026-10-11, before the outbox shipped (2026-10-11), so no `purchase` was expected. `sign_up` (47) and `login` (15) matched the D1 outbox one for one; see the reconciliation runbook.
+- The three paid membership orders of that window were paid on 2026-10-09 and 2026-10-11, before the first outbox row (2026-10-11 16:20 UTC), so no `purchase` was expected. `sign_up` (47) and `login` (15) matched the D1 outbox one for one; see the reconciliation runbook.
 
 `session_utm_*` and `session_referrer` are added to events sent through `track()` only; `$pageview` (posthog-js automatic) does not carry them, so channel KPIs on page views use `$referring_domain`.
 
@@ -121,7 +121,7 @@ Each KPI: definition, formula, source events with property filters, and caveats.
 
 **COM-5 Refunds and chargebacks.** Money that went back.
 - Formula: total and sum of `amount` on `refund`, breakdown `currency`, `reason` (`refund` | `chargeback`), `order_type`, `partial`.
-- Caveats: an opened dispute is not a refund, only a lost one; SePay bank transfers have no refund flow in code, so a manual SePay refund is not tracked anywhere; `amount` is missing when the provider did not report it.
+- Caveats: an opened dispute is not a refund, only a lost one; for memberships only Dodo `dispute.lost` counts today, while `dispute.accepted` and `dispute.expired` send nothing ([#269](https://github.com/mrgoonie/zuey-me/issues/269)), so membership chargebacks are undercounted until that ships; SePay bank transfers have no refund flow in code, so a manual SePay refund is not tracked anywhere; `amount` is missing when the provider did not report it.
 
 **COM-6 Net revenue.** COM-4 minus COM-5, per currency.
 - Caveats: a refund lands in the period it happened, not in the period of the purchase it reverses.
@@ -154,7 +154,7 @@ Plans: `knowledges`, `ai`, `combo`, `community`. Rails: `sepay` (prepaid 1, 3, 6
 - Formula: total `subscription_cancel_scheduled` and `subscription_cancelled`, breakdown `plan` (provider is always `dodo`).
 
 **SUB-4 Expirations.** Active access that ended.
-- Formula: total `subscription_expired`, breakdown `plan`, `provider` (absent on prepaid expiries found by the drain sweep).
+- Formula: total `subscription_expired`, breakdown `plan`. No emitter sets `provider` on this event (neither `queueSubscriptionChange` nor the drain sweep), so it cannot be split by rail; a follow-up issue tracks that.
 - Caveats: prepaid expiries are found by the outbox drain looking back 3 days; a drain outage longer than that loses them in PostHog (D1 still has `subscriptions.current_period_end`).
 
 **SUB-5 Active subscribers (point in time).** Members with active access to a plan now.
@@ -183,7 +183,7 @@ Plans: `knowledges`, `ai`, `combo`, `community`. Rails: `sepay` (prepaid 1, 3, 6
 - Caveats: same consent bias as PRD-2.
 
 **PRD-4 Active members and stickiness.** DAU, WAU, MAU of identified members.
-- Formula: unique users of "Value action" with `$is_identified` = `true` (client) plus `purchase`, per day / week / month; stickiness = DAU / MAU.
+- Formula: unique users of the action "Member value action", per day / week / month; stickiness = DAU / MAU. That action has the same steps as "Value action", with `$is_identified` = `true` set on each client step and no filter on the `purchase` step (server events carry no `$is_identified`, so a filter on the whole action would drop every purchase).
 
 **PRD-5 Feature adoption.** Which surfaces are used.
 - Formula: unique users of `app_opened` breakdown `app` (ZueyOS windows; `source` = `webmcp` marks agent opens and is excluded), of `knowledge_search` breakdown `surface`, of `reads_opened`, and of `ai_chat_started` breakdown `surface`.
@@ -288,7 +288,7 @@ Conventions for every tile: last 30 days unless noted, interval day, and the Pro
 |---|---|---|---|
 | Activation (PRD-2) | Funnel | `sign_up` → action "Value action", 7 days | Conversion over time, weekly |
 | Retention (PRD-3) | Retention | Start `sign_up`, return "Value action", weekly, 8 periods | — |
-| Active members (PRD-4) | Trends | "Value action" unique users [`$is_identified` = `true`] | DAU, WAU, MAU series |
+| Active members (PRD-4) | Trends | "Member value action" unique users (per-step `$is_identified` filter, see PRD-4) | DAU, WAU, MAU series |
 | Stickiness (PRD-4) | Stickiness | "Value action", 30 days | — |
 | ZueyOS apps (PRD-5) | Trends | `app_opened` unique users [`source` is not set] | `app`, bar |
 | Search success (PRD-6) | Trends, formula `1 - B / A` | A `knowledge_search` total, B `knowledge_search` [`results` = 0] total | `surface` |
