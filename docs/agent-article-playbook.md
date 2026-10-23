@@ -17,7 +17,7 @@ Read the least that answers your question.
 | One block (a card, a section) with its children | `article_get {slug, mode: "section", block_id}` | that block only |
 | The strings a translator edits | `article_get {slug, mode: "translatables", limit, cursor}` | prose only; follow `next_cursor` |
 | The whole document | `article_get {slug}` (mode `full`, the default) | everything |
-| A write receipt instead of an echo of the saved document | add `response_mode: "summary"` to `article_create`, `article_update`, `article_publish` | `document_blocks` and `content_hash` |
+| No echo of the saved document | add `response_mode: "summary"` to `article_create`, `article_update`, `article_publish` | `document_blocks` and `content_hash` (the `receipt` is always there) |
 
 - `block_schema` without arguments still returns everything (types, limits, rules, icon allowlist, examples). `types` alone returns schemas, limits and examples for those types; add `include: ["rules","icons"]` when you need them. Valid `include` parts: `schemas`, `rules`, `limits`, `icons`, `examples`. Output is deterministic; `schema_hash` changes exactly when the contract does.
 - Every read mode goes through the same paywall as a full read. A reader without the entitlement gets `summary`, `outline` and `translatables` of the free part only, and `section` answers `404 block_not_found` for a withheld block. Admins add `draft: true` to read the draft.
@@ -51,7 +51,19 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
 
 ## Reading the answers and retrying
 
-- `status` in a write answer describes the article's public state, not the operation: a published article that you just saved still says `published` while the new draft is unpublished. Check `has_unpublished_changes`, `revision` and `published_revision`, or read `mode: "summary"`.
+- `status` in a write answer describes the article's public state, not the operation: a published article that you just saved still says `published` while the new draft is unpublished. Read the `receipt` instead. `article_create`, `article_update`, `article_publish`, `article_tags_set` and `article_edition_delete` (REST: `POST /api/v1/articles`, `PUT /api/v1/articles/{slug}`, `POST …/publish`, `PUT …/tags`, `DELETE …/editions`) all return one:
+
+  | Field | Meaning |
+  | --- | --- |
+  | `operation` | `create`, `update`, `publish`, `tags_set` or `edition_delete` |
+  | `locale` | Edition the write is about: the saved, published or deleted one; the primary edition for `tags_set` |
+  | `article_revision` | The next `expected_revision`, unless someone else wrote in between |
+  | `edition_draft_revision` | Revision at which that edition last changed; lower than `article_revision` after `tags_set`, which leaves the edition alone |
+  | `published_revision` | Revision of the public snapshot of that edition; `null` when never published or just deleted |
+  | `has_unpublished_changes`, `next_action` | `next_action: "publish"` when the edition's draft differs from what readers see, else `"none"` |
+  | `submitted_fields` | Fields present in the request, not a diff (`published_at`/`notify` for publish, `tags` for `tags_set`) |
+
+  After `article_edition_delete` the answer shows the primary edition, while the receipt describes the deleted locale. An idempotent replay of a response stored before receipts shipped on these writers (stored responses are kept for 24 hours) comes back without `receipt`; read `mode: "summary"` instead.
 - Every write needs `expected_revision`, and every successful write on the article increments it (all locales share one counter). Writes to several locales are therefore sequential: use the `revision` of the previous answer.
 - `409 revision_conflict` with `current_revision`: someone else (or your own earlier call whose answer was lost) saved first. Read `mode: "summary"` and compare `content_hash` with the document you sent: if equal, your save landed, do not repeat it; if not, re-read what changed, merge, retry with `current_revision`. `409 slug_taken` means another article uses that slug.
 - `400 invalid_field` names the field; `422 invalid_document` lists `errors: [{path, message}]` for the block tree. Fix the paths, do not retry unchanged.

@@ -2,6 +2,7 @@
  * PII guard shared by the client (`before_send`) and the server capture path. Pure functions with no
  * browser or runtime dependency so the same rules run everywhere and stay unit-testable.
  */
+import { PRODUCTION_HOSTNAMES } from './constants';
 
 export const REDACTED = '[redacted]';
 
@@ -13,6 +14,16 @@ const SENSITIVE_PARAMS = new Set([
 ]);
 /** Any parameter whose name contains one of these fragments is also removed (e.g. `reset_token`). */
 const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'email', 'session', 'signature'];
+/**
+ * Free-text search parameters read by the site's own pages (`/articles?q=`). They are removed from zuey.me
+ * addresses (root-relative or on a production hostname); other sites' URLs keep theirs. Inside free text,
+ * where the host is unknown, their value is redacted.
+ */
+const SEARCH_PARAMS = new Set(['q']);
+
+function isSearchParam(name: string): boolean {
+  return SEARCH_PARAMS.has(name.toLowerCase());
+}
 
 /**
  * Emails are `local@domain.tld` within RFC 5321 limits (64-char local part, 253-char domain, 63-char label).
@@ -24,6 +35,11 @@ const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'email', 'session', 
 const EMAIL_DOMAIN_RE = /@[\p{L}\p{M}\p{N}.-]{1,253}\.[\p{L}\p{M}]{2,63}/gu;
 const EMAIL_LOCAL_CHAR_RE = /^[\p{L}\p{M}\p{N}._%+-]$/u;
 const MAX_EMAIL_LOCAL_LENGTH = 64;
+/**
+ * A retina asset suffix (`image@2x.png`, `logo@3x.webp`) matched as a whole domain: a 1- or 2-digit scale and an image
+ * extension with no further labels. It is a file name, not an email; `a@2x.example.com` still is one.
+ */
+const RETINA_ASSET_RE = /^@\d{1,2}x\.(?:png|jpe?g|gif|webp|avif|svg)$/i;
 /** A run of base64url characters and dots: the only text a JWT (`eyJ….….…`) can span. */
 const TOKEN_RUN_RE = /[A-Za-z0-9_.-]+/g;
 
@@ -120,7 +136,7 @@ function emailRanges(value: string): Array<[number, number]> {
       if (!EMAIL_LOCAL_CHAR_RE.test(char)) break;
       start -= char.length;
     }
-    if (start === at) {
+    if (start === at || RETINA_ASSET_RE.test(match[0])) {
       EMAIL_DOMAIN_RE.lastIndex = at + 1;
     } else {
       floor = at + match[0].length;
@@ -265,10 +281,10 @@ export function containsPii(value: string): boolean {
   return looksLikeEmail(value) || looksLikeJwt(value) || test(SECRET_RE, value);
 }
 
-function scrubParams(params: URLSearchParams): boolean {
+function scrubParams(params: URLSearchParams, ownSite: boolean): boolean {
   let changed = false;
   for (const name of [...new Set(params.keys())]) {
-    if (isSensitiveParam(name)) {
+    if (isSensitiveParam(name) || (ownSite && isSearchParam(name))) {
       params.delete(name);
       changed = true;
     }
@@ -278,7 +294,8 @@ function scrubParams(params: URLSearchParams): boolean {
 
 /**
  * Removes sensitive query parameters (and fragment parameters such as `#access_token=`) from an
- * absolute or root-relative URL. Values that do not parse as a URL go through `redactString` instead.
+ * absolute or root-relative URL, plus the search words on zuey.me's own addresses. Values that do not
+ * parse as a URL go through `redactString` instead.
  */
 export function scrubUrl(raw: string): string {
   const input = capLength(raw);
@@ -291,14 +308,15 @@ export function scrubUrl(raw: string): string {
   } catch {
     return redactString(input);
   }
+  const ownSite = relative || PRODUCTION_HOSTNAMES.includes(parsed.hostname.replace(/\.$/, ''));
   if (isSensitivePath(parsed.pathname)) {
     parsed.search = '';
     parsed.hash = '';
   }
-  scrubParams(parsed.searchParams);
+  scrubParams(parsed.searchParams, ownSite);
   if (parsed.hash.includes('=')) {
     const hashParams = new URLSearchParams(parsed.hash.slice(1));
-    if (scrubParams(hashParams)) {
+    if (scrubParams(hashParams, ownSite)) {
       const rest = hashParams.toString();
       parsed.hash = rest ? `#${rest}` : '';
     }
@@ -308,17 +326,23 @@ export function scrubUrl(raw: string): string {
     parsed.password = '';
   }
   const out = relative ? `${parsed.pathname}${parsed.search}${parsed.hash}` : parsed.toString();
-  return redactString(out);
+  return redactText(out, false);
+}
+
+function redactText(value: string, redactSearch: boolean): string {
+  const params = templatePaths(capLength(value))
+    .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (
+      isSensitiveParam(name) || (redactSearch && isSearchParam(name)) ? `${lead}${name}=${REDACTED}` : match
+    ));
+  return redactEncodedEmails(redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED)));
 }
 
 /**
- * Replaces emails (literal or percent-encoded), JWTs, secret tokens, sensitive `name=value` pairs, order
- * codes and booking ids in paths inside arbitrary text.
+ * Replaces emails (literal or percent-encoded), JWTs, secret tokens, sensitive `name=value` pairs (search
+ * words included), order codes and booking ids in paths inside arbitrary text.
  */
 export function redactString(value: string): string {
-  const params = templatePaths(capLength(value))
-    .replace(INLINE_PARAM_RE, (match: string, lead: string, name: string) => (isSensitiveParam(name) ? `${lead}${name}=${REDACTED}` : match));
-  return redactEncodedEmails(redactEmails(redactJwts(params).replace(SECRET_RE, REDACTED)));
+  return redactText(value, true);
 }
 
 function scrubString(value: string): string {
