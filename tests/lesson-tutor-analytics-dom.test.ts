@@ -30,11 +30,30 @@ function sseResponse(frames: string[]): Response {
   return new NativeResponse(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
+/** An answer stream the test finishes itself, so the tutor can be closed or unmounted while it is still answering. */
+interface HeldStream { controller: ReadableStreamDefaultController<Uint8Array> | null; signal: AbortSignal | null }
+let held: HeldStream | null = null;
+
+function heldResponse(slot: HeldStream): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      slot.controller = controller;
+      controller.enqueue(new TextEncoder().encode(`event: delta\ndata: ${JSON.stringify({ text: 'Vòng lặp' })}\n\n`));
+      slot.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')));
+    },
+  });
+  return new NativeResponse(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
 function stubFetch() {
-  const fake = async (input: unknown): Promise<Response> => {
+  const fake = async (input: unknown, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.endsWith('/api/v1/chat/sessions')) {
       return new NativeResponse(JSON.stringify({ success: true, data: { id: 'ses_tutor' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (held) {
+      held.signal = init?.signal ?? null;
+      return heldResponse(held);
     }
     return sseResponse([
       `event: delta\ndata: ${JSON.stringify({ text: ANSWER })}\n\n`,
@@ -135,5 +154,66 @@ describe('lesson AI tutor is a sensitive analytics surface', () => {
     }
     const afterUnmount = posthog.scrubCaptureResult(exceptionCapture('Unexpected token in lesson.js'));
     expect(afterUnmount?.properties?.$exception_message).toBe('Unexpected token in lesson.js');
+  });
+
+  describe('while an answer is still streaming', () => {
+    const PLAIN = 'Unexpected token in lesson.js';
+    const messageOf = (text: string): unknown => posthog.scrubCaptureResult(exceptionCapture(text))?.properties?.$exception_message;
+
+    /** Mounts the tutor, opens it and sends the question; the answer stream stays open until the test ends it. */
+    async function askAndHold(): Promise<{ container: HTMLDivElement; root: Root; toggle: Element; slot: HeldStream }> {
+      const slot: HeldStream = { controller: null, signal: null };
+      held = slot;
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root: Root = client.createRoot(container);
+      React.act(() => root.render(React.createElement(tutor.LessonTutor, {
+        courseSlug: 'python-co-ban', lessonSlug: 'vong-lap', lessonTitle: 'Vòng lặp', signedIn: true,
+      })));
+      const toggle = container.querySelector('button[aria-expanded]');
+      if (!toggle) throw new Error('No tutor toggle');
+      await React.act(async () => { toggle.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+      const field = container.querySelector('textarea');
+      const form = container.querySelector('form');
+      if (!field || !form) throw new Error('No question form');
+      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      await React.act(async () => {
+        setValue?.call(field, QUESTION);
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await React.act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+      await settle();
+      if (!slot.controller || !slot.signal) throw new Error('The answer stream did not start');
+      return { container, root, toggle, slot };
+    }
+
+    afterAll(() => { held = null; });
+
+    test('closing the panel keeps exception text dropped until the answer finishes', async () => {
+      const { container, root, toggle, slot } = await askAndHold();
+      try {
+        await React.act(async () => { toggle.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        expect(toggle.getAttribute('aria-expanded')).toBe('false');
+        expect(messageOf(`Cannot read '${QUESTION}'`)).toBe(pii.REDACTED);
+
+        slot.controller?.enqueue(new TextEncoder().encode(`event: done\ndata: ${JSON.stringify({ content: ANSWER })}\n\n`));
+        slot.controller?.close();
+        await settle();
+        expect(messageOf(PLAIN)).toBe(PLAIN);
+      } finally {
+        React.act(() => root.unmount());
+        container.remove();
+      }
+    });
+
+    test('unmounting aborts the stream and leaves the sensitive surface', async () => {
+      const { container, root, slot } = await askAndHold();
+      expect(messageOf(`Cannot read '${QUESTION}'`)).toBe(pii.REDACTED);
+      React.act(() => root.unmount());
+      container.remove();
+      await settle();
+      expect(slot.signal?.aborted).toBe(true);
+      expect(messageOf(PLAIN)).toBe(PLAIN);
+    });
   });
 });

@@ -157,21 +157,29 @@ function redactEmails(value: string): string {
 }
 
 /**
- * A run of digit groups joined by one separator each (space, `.`, `-`, or a parenthesised area code), with an
- * optional leading `+`. Every group needs a digit and a separator, so the regex never backtracks over a run and
- * the scan is linear; which part of a run is a phone number is decided by `phoneRanges`.
+ * A run of digit groups joined by one separator each (a space, `.` or `-` with optional spaces around it, or a
+ * parenthesised area code), with an optional leading `+`. A space may also be a no-break space (U+00A0, U+202F).
+ * Every group needs a digit and a separator, so the regex never backtracks over a run and the scan is linear; which
+ * part of a run is a phone number is decided by `phoneRanges`.
  */
-const PHONE_RUN_RE = /\+?\(?\d+(?:(?:[ .-]|\) ?)\(?\d+)*\)?/g;
+const PHONE_RUN_RE = /\+?\(?\d+(?:(?:[   ]?[.-][   ]?|[   ]|\)[   ]?)\(?\d+)*\)?/g;
+const SPACE_RE = /[   ]/;
+const PLAIN_SPACE_RE = /^[   ]$/;
 const WORD_CHAR_RE = /^[\p{L}\p{N}_]$/u;
 const JOINER_RE = /^[-._]$/;
 /** Most digits in a phone number (E.164). A window of groups never grows past this, which bounds the scan. */
 const MAX_PHONE_DIGITS = 15;
+/** Fewest digits any accepted shape has (`+` and 9 digits), checked first to skip short windows cheaply. */
+const MIN_PHONE_DIGITS = 9;
 /** Vietnamese mobile (`03`, `05`, `07`, `08`, `09` + 8 digits) and landline (`02` + 9 digits) numbers. */
 const VN_PHONE_RE = /^(?:0[35789]\d{8}|02\d{9})$/;
+/** The same numbers with the `84` country code and no `+`, as `wa.me/84901234567` links write them (one group only). */
+const VN_INTL_PHONE_RE = /^84(?:[35789]\d{8}|2\d{9})$/;
 /** North American `NXX NXX XXXX`, accepted only when written in three groups. */
 const NANP_PHONE_RE = /^[2-9]\d{2}[2-9]\d{6}$/;
 
-interface DigitGroup { start: number; end: number; digits: string; spaceBefore: boolean }
+/** `sep` is the text between the previous group and this one (`''` for the first group of a run). */
+interface DigitGroup { start: number; end: number; digits: string; sep: string; spaceBefore: boolean }
 
 /**
  * True when a digit run touches an identifier: a letter, digit or `_` right next to it, or a joiner (`-`, `.`,
@@ -184,23 +192,45 @@ function touchesWord(value: string, index: number, step: 1 | -1): boolean {
   return JOINER_RE.test(near) && WORD_CHAR_RE.test(value.charAt(index + step));
 }
 
+interface PhoneWindow { plus: boolean; count: number; firstLength: number; secondLength: number; spacedOnly: boolean }
+
 /**
  * Whether the digits of `count` consecutive groups form a phone number. Groups after the first always have at
- * least two digits (the caller stops there); the first may have one only after a `+` (`+1 415 555 2671`).
+ * least two digits (the caller stops there); the first may have one only after a `+` (`+1 415 555 2671`). A North
+ * American number written with plain spaces only (`256 384 1024`) is too often a list of sizes or SVG coordinates,
+ * so it needs a `(`, `)`, `.` or `-` somewhere.
  */
-function isPhoneNumber(digits: string, plus: boolean, count: number, firstLength: number, secondLength: number): boolean {
-  if (plus && digits.length >= 9 && digits.charAt(0) !== '0') return true;
-  if (firstLength < 2) return false;
+function isPhoneNumber(digits: string, w: PhoneWindow): boolean {
+  if (w.plus && digits.length >= 9 && digits.charAt(0) !== '0') return true;
+  if (w.firstLength < 2) return false;
   if (VN_PHONE_RE.test(digits)) return true;
-  return count === 3 && firstLength === 3 && secondLength === 3 && NANP_PHONE_RE.test(digits);
+  if (w.count === 1 && VN_INTL_PHONE_RE.test(digits)) return true;
+  return w.count === 3 && w.firstLength === 3 && w.secondLength === 3 && !w.spacedOnly && NANP_PHONE_RE.test(digits);
+}
+
+/** The digit groups of one run, with the separator before each. */
+function digitGroups(run: string, runStart: number): DigitGroup[] {
+  const groups: DigitGroup[] = [];
+  const groupRe = /\d+/g;
+  let digitMatch = groupRe.exec(run);
+  let previousEnd = 0;
+  while (digitMatch !== null) {
+    const start = runStart + digitMatch.index;
+    const sep = groups.length === 0 ? '' : run.slice(previousEnd, digitMatch.index);
+    groups.push({ start, end: start + digitMatch[0].length, digits: digitMatch[0], sep, spaceBefore: SPACE_RE.test(sep) });
+    previousEnd = digitMatch.index + digitMatch[0].length;
+    digitMatch = groupRe.exec(run);
+  }
+  return groups;
 }
 
 /**
- * `[start, end)` of every phone number: Vietnamese `0xxxxxxxxx` and `02xxxxxxxxx`, `+` followed by 9 to 15 digits
- * (E.164, `+84 90 123 4567`), and North American `(415) 555-2671`, with spaces, dots, dashes or a parenthesised
- * area code between groups. A run of numbers is split only at spaces, so two numbers in a row are both found, while
- * ISO dates, times, timestamps, prices, versions, IP addresses and order ids never form one of these shapes.
- * Each window of groups is capped at `MAX_PHONE_DIGITS` digits, so the scan stays linear.
+ * `[start, end)` of every phone number: Vietnamese `0xxxxxxxxx` and `02xxxxxxxxx` (also `84xxxxxxxxx` written as one
+ * group), `+` followed by 9 to 15 digits (E.164, `+84 90 123 4567`, `+84 (0) 90 123 4567`), and North American
+ * `(415) 555-2671`, with spaces, dots, dashes or a parenthesised area code between groups. A `+` glued to a word is a
+ * URL-encoded space (`q=zuey+0901234567`), not a country-code prefix. A run of numbers is split only at spaces, so
+ * two numbers in a row are both found, while ISO dates, times, timestamps, prices, versions, IP addresses and order ids
+ * never form one of these shapes. Each window of groups is capped at `MAX_PHONE_DIGITS` digits, so the scan stays linear.
  */
 function phoneRanges(value: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
@@ -211,18 +241,10 @@ function phoneRanges(value: string): Array<[number, number]> {
     const run = match[0];
     const runStart = match.index;
     const runEnd = runStart + run.length;
-    const groups: DigitGroup[] = [];
-    const groupRe = /\d+/g;
-    let digitMatch = groupRe.exec(run);
-    let previousEnd = 0;
-    while (digitMatch !== null) {
-      const start = runStart + digitMatch.index;
-      groups.push({ start, end: start + digitMatch[0].length, digits: digitMatch[0], spaceBefore: run.slice(previousEnd, digitMatch.index).includes(' ') });
-      previousEnd = digitMatch.index + digitMatch[0].length;
-      digitMatch = groupRe.exec(run);
-    }
-    const plus = run.startsWith('+');
-    const gluedBefore = !plus && !run.startsWith('(') && touchesWord(value, runStart - 1, -1);
+    const groups = digitGroups(run, runStart);
+    const plusSpace = run.startsWith('+') && WORD_CHAR_RE.test(charBefore(value, runStart));
+    const plus = run.startsWith('+') && !plusSpace;
+    const gluedBefore = !run.startsWith('+') && !run.startsWith('(') && touchesWord(value, runStart - 1, -1);
     const gluedAfter = touchesWord(value, runEnd, 1);
     let i = 0;
     while (i < groups.length) {
@@ -232,16 +254,26 @@ function phoneRanges(value: string): Array<[number, number]> {
       const firstLength = first?.digits.length ?? 0;
       let best = -1;
       if (first && opensRun && (firstLength >= 2 || plusHere)) {
+        const parenthesised = i === 0 ? run.startsWith('(') : first.sep.endsWith('(');
         let digits = '';
+        let count = 0;
         let secondLength = 0;
+        let spacedOnly = !parenthesised;
         for (let j = i; j < groups.length; j++) {
           const group = groups[j];
-          if (!group || (j > i && group.digits.length < 2)) break;
-          digits += group.digits;
-          if (digits.length > MAX_PHONE_DIGITS) break;
-          if (j === i + 1) secondLength = group.digits.length;
+          if (!group) break;
+          // `+84 (0) 90 …`: the national trunk prefix written after a country code is not part of the number.
+          const trunk = plusHere && j === i + 1 && group.digits === '0' && group.sep.endsWith('(') && value.charAt(group.end) === ')';
+          if (!trunk) {
+            if (j > i && group.digits.length < 2) break;
+            digits += group.digits;
+            count++;
+            if (digits.length > MAX_PHONE_DIGITS) break;
+            if (count === 2) secondLength = group.digits.length;
+            if (j > i && !PLAIN_SPACE_RE.test(group.sep)) spacedOnly = false;
+          }
           const closesRun = j === groups.length - 1 ? !gluedAfter : groups[j + 1]?.spaceBefore === true;
-          if (closesRun && isPhoneNumber(digits, plusHere, j - i + 1, firstLength, secondLength)) best = j;
+          if (!trunk && closesRun && digits.length >= MIN_PHONE_DIGITS && isPhoneNumber(digits, { plus: plusHere, count, firstLength, secondLength, spacedOnly })) best = j;
         }
       }
       if (best < 0) {
@@ -250,7 +282,7 @@ function phoneRanges(value: string): Array<[number, number]> {
       }
       const last = groups[best];
       if (first && last) {
-        const start = i === 0 ? runStart : first.start - (value.charAt(first.start - 1) === '(' ? 1 : 0);
+        const start = i === 0 ? runStart + (plusSpace ? 1 : 0) : first.start - (value.charAt(first.start - 1) === '(' ? 1 : 0);
         const end = best === groups.length - 1 ? runEnd : last.end + (value.charAt(last.end) === ')' ? 1 : 0);
         ranges.push([start, end]);
       }
@@ -261,7 +293,6 @@ function phoneRanges(value: string): Array<[number, number]> {
   PHONE_RUN_RE.lastIndex = 0;
   return ranges;
 }
-
 function hasPhone(value: string): boolean {
   return phoneRanges(value).length > 0;
 }
@@ -477,8 +508,19 @@ export function redactString(value: string): string {
   return redactText(value, true);
 }
 
-function scrubString(value: string): string {
-  return /^(?:https?:\/\/|\/(?!\/))/i.test(value) ? scrubUrl(value) : redactString(value);
+/**
+ * Scrubbed form of each distinct string already seen while scrubbing one event. PostHog copies the same URL into
+ * many properties (`$current_url`, `$session_entry_url`, `$initial_current_url`, `$set`, ...), so a crafted link
+ * is scrubbed once per event rather than once per copy.
+ */
+export type ScrubCache = Map<string, string>;
+
+function scrubString(value: string, cache: ScrubCache): string {
+  const known = cache.get(value);
+  if (known !== undefined) return known;
+  const out = /^(?:https?:\/\/|\/(?!\/))/i.test(value) ? scrubUrl(value) : redactString(value);
+  cache.set(value, out);
+  return out;
 }
 
 const MAX_DEPTH = 6;
@@ -486,14 +528,15 @@ const MAX_DEPTH = 6;
 /**
  * Deep-scrubs an arbitrary property bag (PostHog's automatic properties, `$set`, `$elements`):
  * URLs lose sensitive parameters and every string is redacted. Objects nested deeper than `MAX_DEPTH` are
- * replaced by `[redacted]` rather than passed through. Returns a new value; input untouched.
+ * replaced by `[redacted]` rather than passed through. Returns a new value; input untouched. Pass the same `cache`
+ * for every part of one event so each distinct string is scrubbed once.
  */
-export function scrubValue(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return scrubString(value);
+export function scrubValue(value: unknown, cache: ScrubCache = new Map(), depth = 0): unknown {
+  if (typeof value === 'string') return scrubString(value, cache);
   if (value === null || typeof value !== 'object') return value;
   if (depth >= MAX_DEPTH) return REDACTED;
-  if (Array.isArray(value)) return value.map(item => scrubValue(item, depth + 1));
+  if (Array.isArray(value)) return value.map(item => scrubValue(item, cache, depth + 1));
   const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) out[key] = scrubValue(item, depth + 1);
+  for (const [key, item] of Object.entries(value)) out[key] = scrubValue(item, cache, depth + 1);
   return out;
 }
