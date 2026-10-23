@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { MAX_SCRUB_LENGTH, REDACTED, containsPii, looksLikePhone, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
 import { scrubCaptureResult } from '../src/lib/analytics/destinations/posthog';
 
@@ -25,7 +25,7 @@ describe('phone numbers are redacted', () => {
   });
 
   test('North American numbers written in three groups', () => {
-    for (const phone of ['(415) 555-2671', '415-555-2671', '415.555.2671', '415 555 2671']) {
+    for (const phone of ['(415) 555-2671', '(415) 555 2671', '415-555-2671', '415.555.2671', '415 - 555 - 2671']) {
       expect(redactString(`call ${phone} now`)).toBe(`call ${REDACTED} now`);
     }
   });
@@ -53,7 +53,7 @@ describe('phone numbers are redacted', () => {
     expect(scrubUrl('https://example.com/c?to=%2B84%20901%20234%20567&x=1')).toBe(`https://example.com/c?to=${REDACTED}&x=1`);
     expect(scrubUrl('https://example.com/c?to=call%200901234567')).toBe(`https://example.com/c?to=call%20${REDACTED}`);
     expect(scrubUrl('https://example.com/c?to=%252B84901234567')).toBe(`https://example.com/c?to=${REDACTED}`);
-    expect(scrubUrl('https://example.com/c?msg=call+0901234567')).toBe(`https://example.com/c?msg=call${REDACTED}`);
+    expect(scrubUrl('https://example.com/c?msg=call+0901234567')).toBe(`https://example.com/c?msg=call+${REDACTED}`);
     expect(looksLikePhone('%2B84%20901%20234%20567')).toBe(true);
     expect(containsPii('call%200901234567')).toBe(true);
   });
@@ -64,6 +64,57 @@ describe('phone numbers are redacted', () => {
       properties: { $current_url: 'https://zuey.me/', $exception_list: [{ type: 'Error', value: 'Bad input 0901 234 567' }] },
     });
     expect(out?.properties?.$exception_list).toEqual([{ type: 'Error', value: `Bad input ${REDACTED}` }]);
+  });
+});
+
+describe('less common phone formats are redacted', () => {
+  test('84 country code without +, as wa.me links write it', () => {
+    expect(redactString('84901234567')).toBe(REDACTED);
+    expect(redactString('Zalo 842838221234 nhé')).toBe(`Zalo ${REDACTED} nhé`);
+    expect(scrubUrl('https://wa.me/84901234567')).toBe(`https://wa.me/${REDACTED}`);
+    expect(scrubUrl('https://api.whatsapp.com/send?phone=84901234567&text=hi')).toBe(`https://api.whatsapp.com/send?phone=${REDACTED}&text=hi`);
+  });
+
+  test('a (0) trunk prefix after the country code', () => {
+    expect(redactString('Gọi +84 (0) 90 123 4567 nhé')).toBe(`Gọi ${REDACTED} nhé`);
+    expect(redactString('+44 (0)20 7183 8750')).toBe(REDACTED);
+  });
+
+  test('no-break spaces and spaced dashes between groups', () => {
+    for (const phone of ['0901\u00a0234\u00a0567', '+84\u202f90\u202f123\u202f4567', '0901 - 234 - 567', '028 - 3822 - 1234', '0901 .234. 567']) {
+      expect(redactString(`Gọi ${phone} nhé`)).toBe(`Gọi ${REDACTED} nhé`);
+      expect(containsPii(phone)).toBe(true);
+    }
+  });
+
+  test('in a raw URL query a + glued to a word is a space: the number after it is still found, the + is kept', () => {
+    expect(scrubUrl('https://www.google.com/search?q=zuey+0901234567')).toBe(`https://www.google.com/search?q=zuey+${REDACTED}`);
+    expect(scrubUrl('https://www.google.com/search?q=zuey+84901234567')).toBe(`https://www.google.com/search?q=zuey+${REDACTED}`);
+    expect(scrubUrl('https://www.google.com/search?q=zuey+123456789')).toBe('https://www.google.com/search?q=zuey+123456789');
+    expect(scrubUrl('https://zuey.me/?ref=a#x=zuey+123456789')).toBe('https://zuey.me/?ref=a#x=zuey+123456789');
+    expect(redactString('tel:+84901234567 and to=+84901234567')).toBe(`tel:${REDACTED} and to=${REDACTED}`);
+  });
+});
+
+describe('a plus outside a raw URL query is a real plus', () => {
+  test('free text: a + glued to a word still prefixes a phone number', () => {
+    expect(redactString('call+442071838750')).toBe(`call${REDACTED}`);
+    expect(redactString('SĐT+84 90 123 4567 nhé')).toBe(`SĐT${REDACTED} nhé`);
+    expect(redactString('zuey+123456789')).toBe(`zuey${REDACTED}`);
+    expect(containsPii('call+442071838750')).toBe(true);
+    expect(scrubValue({ $el_text: 'SĐT+84 90 123 4567' })).toEqual({ $el_text: `SĐT${REDACTED}` });
+  });
+
+  test('URL paths and decoded %2B keep the plus as a country-code prefix', () => {
+    expect(scrubUrl('https://zuey.me/?msg=Call%2B442071838750')).toBe(`https://zuey.me/?msg=Call${REDACTED}`);
+    expect(scrubUrl('https://example.com/u/call+442071838750')).toBe(`https://example.com/u/call${REDACTED}`);
+  });
+
+  test('a decoded plus is redacted with its number or escaped again, a raw + stays a space', () => {
+    expect(scrubUrl('https://example.com/?a=x%2B84901234567')).toBe(`https://example.com/?a=x${REDACTED}`);
+    expect(scrubUrl('https://example.com/?a=hi+x%2B84901234567')).toBe(`https://example.com/?a=hi+x${REDACTED}`);
+    expect(scrubUrl('https://example.com/?a=C%2B%2B+call%200901234567')).toBe(`https://example.com/?a=C%2B%2B+call%20${REDACTED}`);
+    expect(scrubUrl('https://example.com/?a=zuey+0901%20234%20567')).toBe(`https://example.com/?a=zuey+${REDACTED}`);
   });
 });
 
@@ -87,7 +138,13 @@ describe('numbers that are not phone numbers are kept', () => {
     '/img/0901234567.png', 'photo_0901234567.jpg', 'IMG-0901234567-WA0001.jpg', '/courses/ai-101/lessons/0123456789',
     // Short or odd digit runs
     '0123456789', '0 1 2 3 4 5 6 7 8 9', '0 3 5 7 9 1 2 3 4 5', '123-456-7890', '1234567890', '415-555-26710',
-    '012345678901234567', '0901234567890', '84901234567',
+    '012345678901234567', '0901234567890', '849012345678', '8490123456',
+    // Plain-space triples shaped like North American numbers: sizes, dimensions, SVG path data
+    '256 384 1024', '300 250 1920', '415 555 2671', '<path d="M 256 384 1024 768 L 300 250 1920 1080"/>',
+    // `84` without `+` only counts as one group (`wa.me/84…`); spaced, it reads like an amount
+    '84 901 234 567',
+    // A plus glued to a word, with too few digits after it for a phone number
+    'size+1500000',
   ];
 
   test('redactString keeps each value unchanged', () => {
@@ -133,6 +190,40 @@ describe('phone scan stays linear', () => {
       containsPii(value);
       const elapsed = performance.now() - started;
       expect(elapsed).toBeLessThan(25);
+    }
+  });
+
+  test('a crafted URL copied into 12 properties of one event is scrubbed once', () => {
+    const crafted = `https://zuey.me/?x=${'%2B84%20'.repeat(2000).slice(0, MAX_SCRUB_LENGTH - 40)}%2B84901234567`;
+    const keys = [
+      '$current_url', '$referrer', '$session_entry_url', '$session_entry_referrer', '$initial_current_url', '$initial_referrer',
+      'href', 'page', 'link', 'source', 'target', 'origin',
+    ];
+    const event = (copies: number) => ({
+      event: '$pageview',
+      properties: Object.fromEntries(keys.slice(0, copies).map(key => [key, crafted])),
+      $set: { $current_url: crafted },
+      $set_once: { $initial_current_url: crafted },
+    });
+    // Work bound: the whole event costs the percent-decoding passes of scrubbing the crafted URL once.
+    const decodes = spyOn(globalThis, 'decodeURIComponent');
+    try {
+      scrubUrl(crafted);
+      const once = decodes.mock.calls.length;
+      expect(once).toBeGreaterThan(0);
+      decodes.mockClear();
+      const started = performance.now();
+      const out = scrubCaptureResult(event(keys.length));
+      const elapsed = performance.now() - started;
+      expect(decodes.mock.calls.length).toBe(once);
+      expect(elapsed).toBeLessThan(1000);
+      const props = out?.properties ?? {};
+      const values = new Set(keys.map(key => props[key]));
+      expect(values.size).toBe(1);
+      expect(String(props.$current_url)).not.toContain('901234567');
+      expect(String(out?.$set?.$current_url)).toBe(String(props.$current_url));
+    } finally {
+      decodes.mockRestore();
     }
   });
 });

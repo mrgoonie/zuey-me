@@ -5,6 +5,7 @@
 import { canTrack } from '../consent';
 import { isGuestDistinctId } from '../identity';
 import { REDACTED, hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
+import type { ScrubCache } from '../pii';
 import type { ClientDestination, DestinationResult, ServerAnalyticsEvent, ServerDestination } from './types';
 
 /** Project "Zuey.me". Used only by production builds that have no PUBLIC_POSTHOG_KEY configured. */
@@ -193,10 +194,11 @@ export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null
   if (!result) return result;
   try {
     const scrubbed = { ...result };
+    const cache: ScrubCache = new Map();
     for (const field of ['properties', '$set', '$set_once'] as const) {
       const value = result[field];
       if (value === undefined) continue;
-      const clean = scrubValue(value);
+      const clean = scrubValue(value, cache);
       if (!isRecord(clean)) return null;
       scrubbed[field] = clean;
     }
