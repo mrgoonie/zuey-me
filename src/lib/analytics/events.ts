@@ -71,6 +71,10 @@ export const ANALYTICS_EVENTS = {
     version: 1, source: 'client', owner: 'growth', trigger: 'A 200lab course card (affiliate) is clicked',
     props: { slug: str, source: str },
   },
+  '200lab_learning_path_click': {
+    version: 1, source: 'client', owner: 'growth', trigger: 'A 200lab learning path card (affiliate) is clicked',
+    props: { slug: str, source: str },
+  },
   article_ask_ai_opened: {
     version: 1, source: 'client', owner: 'product', trigger: 'The Ask Zuey AI button of an article is pressed',
     props: { slug: str },
