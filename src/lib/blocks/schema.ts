@@ -24,6 +24,15 @@ export const LIMITS = {
   listItems: 200,
   tableColumns: 20,
   tableRows: 200,
+  /**
+   * Data tables (a table using any option: typed columns, sort, search, …) are read and filtered in the browser,
+   * so their cells are bounded more tightly than plain tables, which keep the original text limit.
+   */
+  dataTableCell: 1_000,
+  dataTableChars: 100_000,
+  tableTitle: 200,
+  /** Fixed decimals of a numeric column. */
+  tableDecimalsMax: 6,
   chartSeries: 12,
   chartLabels: 100,
   surveyOptionsMin: 2,
@@ -71,6 +80,11 @@ export const CALLOUT_TONES = ['info', 'warn', 'tip'] as const;
 export const MATH_MODES = ['display', 'inline'] as const;
 export type MathMode = (typeof MATH_MODES)[number];
 export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut'] as const;
+/** Value type of a table column; cells stay strings in a canonical form per type (see ./table-data.ts). */
+export const TABLE_COLUMN_TYPES = ['text', 'number', 'currency', 'percent', 'date', 'boolean', 'link', 'badge'] as const;
+export type TableColumnType = (typeof TABLE_COLUMN_TYPES)[number];
+/** Narrow screens: `scroll` sideways (default) or stack each row as a `cards` list. */
+export const TABLE_MOBILE_MODES = ['scroll', 'cards'] as const;
 export const LAYOUT_VARIANTS = ['columns', 'grid', 'bento'] as const;
 export const LAYOUT_GAPS = ['sm', 'md', 'lg'] as const;
 export const BREAKPOINTS = ['base', 'md', 'lg'] as const;
@@ -130,7 +144,43 @@ export interface DividerBlock extends BlockBase { type: 'divider' }
 export interface ImageSize { width?: number; height?: number }
 export interface ImageBlock extends BlockBase, ImageSize { type: 'image'; url: string; alt: string; caption?: string }
 export interface EmbedBlock extends BlockBase { type: 'embed'; url: string; provider: EmbedProvider; caption?: string }
-export interface TableBlock extends BlockBase { type: 'table'; headers: string[]; rows: string[][] }
+export interface TableColumn {
+  type: TableColumnType;
+  /** number, currency and percent: fixed decimals (0–6); the value is shown as written when absent. */
+  decimals?: number;
+  /** currency: ISO 4217 code such as VND or USD. */
+  currency?: string;
+  /** Readers get a filter control for this column. */
+  filter?: true;
+}
+/**
+ * Table. Every option is optional, so tables stored before they existed read and render unchanged. A table
+ * using any option is a data table: typed, formatted cells and, when asked, sort, search, filters, a sticky
+ * header, CSV export and a stacked layout on narrow screens.
+ */
+export interface TableBlock extends BlockBase {
+  type: 'table';
+  headers: string[];
+  rows: string[][];
+  /** One per header; absent when every column is plain text. */
+  columns?: TableColumn[];
+  /** Plain-text name shown above the table (its accessible name). */
+  title?: string;
+  /** Inline text shown under the table. */
+  caption?: string;
+  sortable?: true;
+  search?: true;
+  stickyHeader?: true;
+  /** CSV download of the rows on screen. */
+  csv?: true;
+  /** `cards` stacks rows on narrow screens; absent means sideways scrolling. */
+  mobile?: 'cards';
+}
+
+/** True when the table uses any option beyond headers and rows; plain tables keep their original markup. */
+export function isDataTable(b: TableBlock): boolean {
+  return Boolean(b.columns || b.title || b.caption || b.sortable || b.search || b.stickyHeader || b.csv || b.mobile);
+}
 export interface ChartSeries { name: string; data: number[] }
 export interface ChartBlock extends BlockBase {
   type: 'chart';
