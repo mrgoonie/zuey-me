@@ -345,6 +345,72 @@ describe('composition widget export', () => {
     expect(localeNumber(-1250.5, undefined, 'en')).toBe('-1,250.5');
   });
 
+  it('clamps explicit decimals to the precision a double holds on large values', () => {
+    expect(canonicalNumber(123456789012345.67, 1)).toBe('123456789012345.7');
+    expect(canonicalNumber(123456789012345.67, 2)).toBe('123456789012345.67');
+    expect(canonicalNumber(123456789012345.67, 3)).toBe('123456789012345.67');
+    expect(canonicalNumber(123456789012345.67, 4)).toBe('123456789012345.67');
+    expect(canonicalNumber(999999999999999.9, 1)).toBe('999999999999999.9');
+    expect(canonicalNumber(999999999999999.9, 2)).toBe('999999999999999.9');
+    expect(canonicalNumber(999999999999999.9, 3)).toBe('999999999999999.9');
+    expect(canonicalNumber(999999999999999.9, 4)).toBe('999999999999999.9');
+    // The double sits exactly between .2 and .3; toFixed(1) rounds up to .3, the typed .2 is kept.
+    expect(canonicalNumber(562949953421312.2, 1)).toBe('562949953421312.2');
+    expect(localeNumber(123456789012345.67, 4, 'vi')).toBe('123.456.789.012.345,67');
+    expect(localeNumber(999999999999999.9, 3, 'en')).toBe('999,999,999,999,999.9');
+  });
+
+  it('clamps explicit decimals on large negative values', () => {
+    expect(canonicalNumber(-123456789012345.67, 1)).toBe('-123456789012345.7');
+    expect(canonicalNumber(-123456789012345.67, 2)).toBe('-123456789012345.67');
+    expect(canonicalNumber(-123456789012345.67, 3)).toBe('-123456789012345.67');
+    expect(canonicalNumber(-123456789012345.67, 4)).toBe('-123456789012345.67');
+    expect(canonicalNumber(-999999999999999.9, 4)).toBe('-999999999999999.9');
+    expect(localeNumber(-123456789012345.67, 4, 'en')).toBe('-123,456,789,012,345.67');
+    expect(localeNumber(-999999999999999.9, 2, 'vi')).toBe('-999.999.999.999.999,9');
+  });
+
+  it('keeps all fixed places below the magnitude where float noise starts', () => {
+    // Four places stay exact while the gap between doubles is under 0.0001, that is below 2^39.
+    expect(canonicalNumber(549755813887.003, 4)).toBe('549755813887.0030');
+    expect(canonicalNumber(-549755813887.003, 4)).toBe('-549755813887.0030');
+    // From 2^39 on, toFixed(4) prints .0031; the value keeps its real .003.
+    expect((549755813888.003).toFixed(4)).toBe('549755813888.0031');
+    expect(canonicalNumber(549755813888.003, 4)).toBe('549755813888.003');
+    expect(canonicalNumber(-549755813888.003, 4)).toBe('-549755813888.003');
+    // Three places: noise starts at 2^43.
+    expect(canonicalNumber(8796093022207.03, 3)).toBe('8796093022207.030');
+    expect(canonicalNumber(8796093022208.03, 3)).toBe('8796093022208.03');
+    // Two places: noise starts at 2^46.
+    expect(canonicalNumber(70368744177663.1, 2)).toBe('70368744177663.10');
+    expect(canonicalNumber(70368744177664.1, 2)).toBe('70368744177664.1');
+    // Whole values keep their zeros at any magnitude up to the 1e15 cap.
+    expect(canonicalNumber(1e15, 4)).toBe('1000000000000000.0000');
+    expect(canonicalNumber(-1e15, 2)).toBe('-1000000000000000.00');
+  });
+
+  it('keeps the exact explicit-decimals output for normal values', () => {
+    expect(canonicalNumber(4.5, 2)).toBe('4.50');
+    expect(canonicalNumber(2.15, 4)).toBe('2.1500');
+    expect(canonicalNumber(1.005, 2)).toBe('1.00');
+    expect(canonicalNumber(0.1 + 0.2, 2)).toBe('0.30');
+    expect(canonicalNumber(-1250.5, 0)).toBe('-1251');
+    expect(canonicalNumber(-1250.5, 3)).toBe('-1250.500');
+    expect(canonicalNumber(-0.0001, 2)).toBe('0.00');
+    expect(canonicalNumber(-0.0001, 4)).toBe('-0.0001');
+    expect(canonicalNumber(-0, 3)).toBe('0.000');
+    expect(localeNumber(1234567.891, 2, 'vi')).toBe('1.234.567,89');
+    const values = [0, 1, 4.5, 72, 99.99, 1234.5678, 0.0049, 12345678.9, 98765432109.8765];
+    for (const v of values) {
+      for (const d of [0, 1, 2, 3, 4]) {
+        for (const x of [v, -v]) {
+          const expected = x.toFixed(d).replace(/^-(?=0(?:\.0+)?$)/, '');
+          expect(canonicalNumber(x, d)).toBe(expected);
+        }
+      }
+    }
+  });
+
   it('publishes the schemas in OpenAPI and the MCP block schema', async () => {
     for (const t of WIDGETS) {
       const name = `Block${t[0].toUpperCase()}${t.slice(1)}`;

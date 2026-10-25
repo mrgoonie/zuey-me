@@ -14,10 +14,17 @@ const MAX_DECIMALS = 4;
  * fixed to that many places; without, it keeps its own precision (up to four places) so 4.5 never reads as 5.
  * Rounding to four places and back to the shortest round-trip form drops the binary float digits that
  * `toFixed` would print for large fractional values (123456789012345.67 stays `.67`, not `.6719`).
+ * With `decimals` the same shortest form, padded with zeros, keeps the fixed places (4.5 → `4.50`); when the
+ * padding disagrees with `toFixed`, the double cannot hold that many places at this magnitude, so the shortest
+ * form is shown instead (`canonicalNumber(123456789012345.67, 4)` is `.67`, not `.6719`).
  */
 export function canonicalNumber(value: number, decimals?: number): string {
-  const s = decimals === undefined ? String(Number(value.toFixed(MAX_DECIMALS))) : value.toFixed(decimals);
-  return /^-0(?:\.0+)?$/.test(s) ? s.slice(1) : s;
+  const fixed = value.toFixed(decimals ?? MAX_DECIMALS).replace(/^-(?=0(?:\.0+)?$)/, '');
+  const shortest = String(Number(fixed));
+  if (decimals === undefined) return shortest;
+  const [int, frac = ''] = shortest.split('.');
+  const padded = decimals > 0 ? `${int}.${frac.padEnd(decimals, '0')}` : int;
+  return padded === fixed ? fixed : shortest;
 }
 
 /** Edition style: Vietnamese (default) groups with `.` and uses `,` for decimals; English the reverse. */
