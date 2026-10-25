@@ -77,25 +77,28 @@ export type CourseEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike
 /**
  * Flags the order for the admin and adds the money to it. The webhook's record (`gate`), the update, any `also`
  * statement, the activity log and the `payment_needs_attention` event are one D1 batch: the amount is added once, and a
- * failure or a crash before the commit leaves nothing, so the redelivery flags the order once.
+ * failure or a crash before the commit leaves nothing, so the redelivery flags the order once. The update, the log and
+ * the event apply only while the order is not paid: an order paid meanwhile (a payment racing this one) stays paid,
+ * and no flag that never took effect is logged or counted. The record is still written, so the redelivery is a duplicate.
  */
 export async function markCourseOrderAttention(
   d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string },
   gate: CourseEventGate, also: D1PreparedStatementLike[] = [],
 ): Promise<void> {
+  const unpaid: SqlCondition = { sql: "EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status <> 'paid')", params: [order.id] };
   const attention = outboxInsertStatement(d1, needsAttentionEvent({
     distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: extra.eventId ?? `course_order:${order.id}:${reason}`,
     reason, amountMinor: extra.amount, currency: extra.currency ?? (order.provider === 'sepay' ? 'VND' : null),
-  }));
+  }), undefined, unpaid);
   await d1.batch([
     gate(),
     d1.prepare(
       `UPDATE course_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
          currency_paid = COALESCE(?, currency_paid), payment_ref = COALESCE(?, payment_ref), provider_event_id = COALESCE(?, provider_event_id), updated_at = ?
-       WHERE id = ? AND status <> 'paid'`
-    ).bind(reason, extra.amount ?? 0, extra.currency ?? null, extra.ref ?? null, extra.eventId ?? null, iso(membersRuntime.now()), order.id),
+       WHERE id = ? AND ${unpaid.sql}`
+    ).bind(reason, extra.amount ?? 0, extra.currency ?? null, extra.ref ?? null, extra.eventId ?? null, iso(membersRuntime.now()), order.id, ...unpaid.params),
     ...also,
-    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null }),
+    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null }, undefined, unpaid),
     ...(attention ? [attention] : []),
   ]);
 }

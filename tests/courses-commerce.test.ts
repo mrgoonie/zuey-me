@@ -1216,6 +1216,49 @@ describe('Dodo course payments, refunds and disputes', () => {
             expect(state.emails.length).toBe(0);
           });
         }
+
+        for (const winner of ['payment', 'flag'] as const) {
+          it(`logs and counts the needs-attention flag of an underpaid ${provider} payment ${winner === 'payment' ? 'never when a racing payment pays the order first' : 'once when it commits before a racing payment'}`, async () => {
+            const p = await pendingPayment(provider, 1000);
+            const flagged = await p.deliver(racingFlag(winner === 'payment' ? 'before' : 'after', p.code));
+            expect(flagged).toMatchObject({ outcome: 'needs_attention' });
+            expect((await getCourseOrderByCode(state.d1, p.code))?.status).toBe('paid');
+            // The record is written either way, so the redelivery changes nothing.
+            expect(events(p.eventId)).toBe(1);
+            expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });
+            const flags = winner === 'payment' ? 0 : 1;
+            expect(activities('courses.order_attention')).toBe(flags);
+            expect(attentionKeys()).toEqual(flags ? [`payment_needs_attention:${provider}:${p.eventId}`] : []);
+          });
+        }
+      }
+
+      /**
+       * The test database, except that another delivery pays the order `code` right before (or right after) the batch
+       * that flags it commits, as a payment racing the flag would.
+       */
+      function racingFlag(when: 'before' | 'after', code: string): D1DatabaseLike {
+        const isFlag = sqlPoint(/^UPDATE course_orders SET status = 'needs_attention'/);
+        let raced = false;
+        const pay = () => {
+          if (raced) return;
+          raced = true;
+          state.d1.raw.query("UPDATE course_orders SET status = 'paid', paid_at = ?, updated_at = ? WHERE code = ?")
+            .run(new Date(state.now).toISOString(), new Date(state.now).toISOString(), code);
+        };
+        // The spy checks every statement of a batch before the batch runs, which is where the racing payment lands first.
+        const spy = crashingD1(sql => {
+          if (when === 'before' && isFlag(sql)) pay();
+          return false;
+        });
+        return {
+          prepare: sql => spy.d1.prepare(sql),
+          batch: async statements => {
+            const res = await spy.d1.batch(statements);
+            if (when === 'after' && spy.batches.at(-1)?.some(isFlag)) pay();
+            return res;
+          },
+        };
       }
     });
 
