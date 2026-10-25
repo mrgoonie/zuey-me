@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, spyOn } from 'bun:test';
+import katex from 'katex';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { serializeProps } from 'astro/runtime/server/serialize.js';
@@ -13,6 +14,7 @@ import type { ArticleDocument, Block, MathBlock } from '../src/lib/blocks/schema
 import { readStoredDocument, validateDocument } from '../src/lib/blocks/validate';
 import { documentText as aiDocumentText } from '../src/lib/ai/context';
 import { documentText } from '../src/lib/search/text';
+import { SMOKE_CEILING_MS } from './helpers/work-bound';
 
 const math = (id: string, tex: string, extra: Partial<MathBlock> = {}): MathBlock => ({ id, type: 'math', tex, ...extra });
 
@@ -132,20 +134,30 @@ describe('math typesetting (KaTeX)', () => {
       matrix: '\\begin{pmatrix}' + Array.from({ length: 38 }, () => Array(25).fill('a').join('&')).join('\\\\') + '\\end{pmatrix}',
       tiny: 'x', typical: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}',
     };
-    for (const [name, tex] of Object.entries(worst)) {
-      const blocks = Array.from({ length: 500 }, (_, i) => math(`${name}${i}`, tex));
-      const started = performance.now();
-      const renders = renderMathBlocks(blocks);
-      const ms = performance.now() - started;
-      // The work bound: exactly the formulas that fit the budget are typeset (none when KaTeX rejects the TeX),
-      // and every later formula falls back to source without reaching KaTeX.
-      const withinBudget = Math.floor(MAX_DOCUMENT_MATH_COST / mathCost(tex));
-      expect(withinBudget).toBeLessThan(blocks.length);
-      const typeset = renderTex(tex).ok ? withinBudget : 0;
-      expect({ name, typeset: Object.keys(renders).length }).toEqual({ name, typeset });
-      expect(blocks.slice(withinBudget).some(b => mathMarkup(renders, b.id) !== null)).toBe(false);
-      // Smoke ceiling only (shared CI runners are noisy); about 30 ms on a developer machine.
-      expect(ms).toBeLessThan(1_000);
+    const katexCalls = spyOn(katex, 'renderToString');
+    try {
+      for (const [name, tex] of Object.entries(worst)) {
+        const blocks = Array.from({ length: 500 }, (_, i) => math(`${name}${i}`, tex));
+        katexCalls.mockClear();
+        const single = renderTex(tex);
+        const perFormula = katexCalls.mock.calls.length; // 0 when the TeX is refused before reaching KaTeX.
+        katexCalls.mockClear();
+        const started = performance.now();
+        const renders = renderMathBlocks(blocks);
+        const ms = performance.now() - started;
+        // The work bound: KaTeX runs once per formula that fits the budget and never for a later one, and
+        // exactly those formulas are typeset (none when KaTeX rejects the TeX).
+        const withinBudget = Math.floor(MAX_DOCUMENT_MATH_COST / mathCost(tex));
+        expect(withinBudget).toBeLessThan(blocks.length);
+        expect({ name, katexCalls: katexCalls.mock.calls.length }).toEqual({ name, katexCalls: withinBudget * perFormula });
+        const typeset = single.ok ? withinBudget : 0;
+        expect({ name, typeset: Object.keys(renders).length }).toEqual({ name, typeset });
+        expect(blocks.slice(withinBudget).some(b => mathMarkup(renders, b.id) !== null)).toBe(false);
+        // Smoke ceiling only (shared CI runners are noisy); about 30 ms on a developer machine.
+        expect({ name, ms, fast: ms < SMOKE_CEILING_MS }).toEqual({ name, ms, fast: true });
+      }
+    } finally {
+      katexCalls.mockRestore();
     }
   });
 
