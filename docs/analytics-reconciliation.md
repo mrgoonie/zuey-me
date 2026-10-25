@@ -182,7 +182,7 @@ SELECT provider, status, currency, COUNT(*) AS n,
 FROM o GROUP BY provider, status, currency;
 ```
 
-A course order that was never paid (`paid_at` NULL, for example a flagged order an admin refunded) never had a `purchase` and gets no `refund`, so it is excluded. The course amount is the paid amount; a partial refund reported by the provider sends its own smaller `amount` with `partial: true`, so compare course refund counts exactly and amounts only as an upper bound.
+A course order that was never paid (`paid_at` NULL, for example a flagged order an admin refunded) never had a `purchase` and gets no `refund`, so it is excluded. The course amount is the paid amount; a partial refund reported by the provider sends its own smaller `amount` with `partial: true`, so compare course refund counts exactly and amounts only as an upper bound. One exception: an order refunded in part (`attention_reason` `dodo_partial_refund`), also while a dispute was open, whose dispute is then lost (`dispute.accepted`, `dispute.lost` or `dispute.expired`) is one `refunded` row here but has two `refund` rows (`…:refunded` and `…:charged_back`), and their total can exceed the amount paid. The lost outcome does not change `updated_at`, so the `…:charged_back` row can fall into a later window than the order.
 
 Keys: `refund:dodo:refund:<refund id>` and `refund:dodo:dispute_lost:<dispute id>` for memberships; `refund:<provider>:course_order:<id>:refunded` or `…:charged_back` for courses; `refund:paypal:<event id>` for bookings.
 

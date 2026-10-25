@@ -9,7 +9,10 @@ import { POST as checkoutApi } from '../src/pages/api/v1/courses/[course]/checko
 import { POST as resolveApi } from '../src/pages/api/v1/admin/course-orders/[code]/resolve';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
 import { POST as dodoWebhook } from '../src/pages/api/webhooks/dodo';
+import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
+import { findOrCreateVerifiedUser } from '../src/lib/members/users';
+import { ensureReferralProfile } from '../src/lib/referrals/codes';
 import { experienceRuntime } from '../src/lib/experience/runtime';
 import { signDodoPayload } from '../src/lib/payments/dodo';
 import type { Member } from './helpers/courses';
@@ -113,8 +116,8 @@ describe('course checkout and SePay', () => {
 });
 
 describe('Dodo course payments, refunds and disputes', () => {
-  async function paidByCard(m: Member): Promise<string> {
-    const res = await read(await checkout(m, { provider: 'dodo', accept_terms: true }));
+  async function paidByCard(m: Member, extra: Record<string, unknown> = {}): Promise<string> {
+    const res = await read(await checkout(m, { provider: 'dodo', accept_terms: true, ...extra }));
     expect(res.status).toBe(201);
     expect(field(res.data, 'checkout_url')).toBe('https://checkout.dodo.test/cks_1');
     const code = String(field(res.data, 'code'));
@@ -296,6 +299,98 @@ describe('Dodo course payments, refunds and disputes', () => {
         `refund:dodo:course_order:${fullOrder?.id}:refunded`,
         `refund:dodo:course_order:${partialOrder?.id}:refunded`, `refund:dodo:course_order:${partialOrder?.id}:charged_back`,
       ]);
+    });
+
+    it('reports no chargeback for any funds-lost outcome after a full refund during the dispute', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      const order = await getCourseOrderByCode(state.d1, code);
+      await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+      expect(await dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+      expect(await dodo('evt_accepted', 'dispute.accepted', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+      expect(await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+      expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+    });
+
+    it('reverses the referral commission once when the order is refunded during a dispute that is then won', async () => {
+      await publishedCourse();
+      const { user: ref } = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
+      const { code: referralCode } = await ensureReferralProfile(state.d1, ref.id);
+      await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.id).run();
+      const code = await paidByCard(await member('lan@example.com'), { referral_code: referralCode });
+      const order = await getCourseOrderByCode(state.d1, code);
+      const commission = () => state.d1.prepare("SELECT status FROM referral_commissions WHERE source_kind = 'course_order' AND source_id = ?")
+        .bind(order?.id ?? '').first<{ status: string }>();
+      const reversals = () => state.d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM referral_events WHERE action = 'commission.reversed'").get()?.n;
+      expect((await commission())?.status).toBe('pending');
+
+      await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+      expect(await dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+      expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+      expect((await commission())?.status).toBe('reversed');
+      expect(reversals()).toBe(1);
+    });
+
+    /** A D1 that runs `meanwhile` right after `eventId` is recorded, as a webhook landing between the order read and the update. */
+    function racing(eventId: string, meanwhile: () => Promise<unknown>): D1DatabaseLike {
+      let fired = false;
+      return {
+        prepare(sql: string) {
+          const stmt = state.d1.prepare(sql);
+          if (!sql.startsWith('INSERT INTO payment_events')) return stmt;
+          return {
+            bind(...values: unknown[]) {
+              const bound = stmt.bind(...values);
+              if (fired || values[1] !== eventId) return bound;
+              return {
+                bind: (...v: unknown[]) => bound.bind(...v),
+                first<T>() { return bound.first<T>(); },
+                all<T>() { return bound.all<T>(); },
+                async run() {
+                  const res = await bound.run();
+                  fired = true;
+                  await meanwhile();
+                  return res;
+                },
+              };
+            },
+            first<T>() { return stmt.first<T>(); },
+            all<T>() { return stmt.all<T>(); },
+            run: () => stmt.run(),
+          };
+        },
+        batch: statements => state.d1.batch(statements),
+      };
+    }
+
+    it('applies a refund that races dispute.opened, so the won dispute restores nothing', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      const order = await getCourseOrderByCode(state.d1, code);
+      const d1 = racing('evt_refund', () => dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` }));
+      expect(await applyDodoCourseWebhook(d1, env(), 'evt_refund', { type: 'refund.succeeded', data: { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' } }))
+        .toMatchObject({ outcome: 'reversed' });
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+      expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+      expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+    });
+
+    it('applies a refund that races dispute.won, so access does not stay restored', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      const order = await getCourseOrderByCode(state.d1, code);
+      await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+      const d1 = racing('evt_refund', () => dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` }));
+      expect(await applyDodoCourseWebhook(d1, env(), 'evt_refund', { type: 'refund.succeeded', data: { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' } }))
+        .toMatchObject({ outcome: 'reversed' });
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+      expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
     });
 
     it('reports no refund after an opened dispute was lost', async () => {

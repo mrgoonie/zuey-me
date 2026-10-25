@@ -147,9 +147,16 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
       // or cancelled dispute no longer restores it.
       const reason = isPartialCourseReversal(order, amount) ? 'dodo_partial_refund' : 'dodo_refund';
       const reversed = { amountMinor: amount, currency };
-      const done = order.status === 'charged_back'
-        ? await refundDisputedCourseOrder(d1, order, reason, reversed)
-        : await reverseCourseOrder(d1, order, 'refunded', reason, 'system', reversed);
+      const refund = (o: CourseOrder) => o.status === 'charged_back'
+        ? refundDisputedCourseOrder(d1, o, reason, reversed)
+        : reverseCourseOrder(d1, o, 'refunded', reason, 'system', reversed);
+      let done = await refund(order);
+      if (!done) {
+        // The order was read before this event was recorded: a dispute that opened or was won meanwhile changed its
+        // status, so the refund is applied once more on the current order instead of being dropped.
+        const current = await getCourseOrderByCode(d1, order.code);
+        if (current && current.status !== order.status) done = await refund(current);
+      }
       return { outcome: done ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DISPUTE_REVOKE.has(type)) {
