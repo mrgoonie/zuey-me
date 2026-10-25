@@ -721,6 +721,17 @@ describe('REST, OpenAPI and MCP registration', () => {
     for (const t of ['knowledge_search', 'label_proposal_decide', 'label_audit_job_run', 'article_labels_revert']) expect(tools).toContain(t);
   });
 
+  it('the MCP label_update schema lists slug and aliases as the REST label body documents them', () => {
+    const tool = taxonomyMcpModule.tools.find(t => t.name === 'label_update');
+    const props = rec(rec(tool?.inputSchema).properties);
+    const restProps = rec(rec(taxonomyOpenApi.schemas.TaxonomyLabelInput).properties);
+    for (const field of ['slug', 'aliases']) {
+      expect(props[field]).toBeDefined();
+      expect(rec(props[field]).description).toBeTruthy();
+      expect(props[field]).toEqual(restProps[field]);
+    }
+  });
+
   it('documents the 409 codes each taxonomy CRUD operation actually throws', async () => {
     const conflictDoc = (path: string, method: string): string => {
       const description = rec(rec(rec(rec(taxonomyOpenApi.paths)[path])[method]).responses)['409'];
@@ -807,6 +818,35 @@ describe('REST, OpenAPI and MCP registration', () => {
     expect(codeOf(update)).toEqual([409, 'label_conflict']);
     const create = await createLabel(racing(/INSERT INTO taxonomy_labels/, 'race-create'), { kind: 'domain', slug: 'race-create', names: { en: 'Race' } }, 'admin').catch((e: unknown) => e);
     expect(codeOf(create)).toEqual([409, 'label_conflict']);
+  });
+
+  it('only the (kind, slug) unique index maps to label_conflict; another unique violation propagates', async () => {
+    // The label write fails with the given D1 error text instead of running.
+    const failing = (pattern: RegExp, message: string): D1DatabaseLike => ({
+      prepare: (sql: string) => {
+        const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+          bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
+          first: <T = Record<string, unknown>>() => stmt.first<T>(),
+          all: <T = Record<string, unknown>>() => stmt.all<T>(),
+          run: () => Promise.reject(new Error(message)),
+        });
+        return pattern.test(sql) ? wrap(d1.prepare(sql)) : d1.prepare(sql);
+      },
+      batch: statements => d1.batch(statements),
+    });
+    const kindSlug = 'D1_ERROR: UNIQUE constraint failed: taxonomy_labels.kind, taxonomy_labels.slug: SQLITE_CONSTRAINT';
+    const idKey = 'D1_ERROR: UNIQUE constraint failed: taxonomy_labels.id: SQLITE_CONSTRAINT';
+    const UPDATE = /UPDATE taxonomy_labels SET slug/;
+    const INSERT = /INSERT INTO taxonomy_labels/;
+    const codeOf = (e: unknown) => (e instanceof AppError ? [e.status, e.code] : e instanceof Error ? e.message : e);
+    const mover = await createLabel(d1, { kind: 'domain', slug: 'unique-mover', names: { en: 'Mover' } }, 'admin');
+    const update = (message: string) => updateLabel(failing(UPDATE, message), mover.id, { slug: 'unique-renamed' }, mover.revision, 'admin').catch((e: unknown) => e);
+    const create = (message: string) => createLabel(failing(INSERT, message), { kind: 'domain', slug: 'unique-new', names: { en: 'New' } }, 'admin').catch((e: unknown) => e);
+
+    expect(codeOf(await update(kindSlug))).toEqual([409, 'label_conflict']);
+    expect(codeOf(await create(kindSlug))).toEqual([409, 'label_conflict']);
+    expect(codeOf(await update(idKey))).toBe(idKey);
+    expect(codeOf(await create(idKey))).toBe(idKey);
   });
 
   it('renaming a tag onto a live or soft-deleted tag slug is 409 tag_conflict over REST and MCP', async () => {

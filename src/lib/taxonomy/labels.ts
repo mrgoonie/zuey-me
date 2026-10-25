@@ -3,7 +3,6 @@ import { findBlock } from '../blocks/schema';
 import { readStoredDocument } from '../blocks/validate';
 import { AppError } from '../http';
 import { LOCALES, isLocale } from '../i18n/locales';
-import { isUniqueViolation } from '../members/runtime';
 import type { Locale } from '../i18n/locales';
 import type { LocalizedNames, Row } from './common';
 import {
@@ -107,6 +106,10 @@ export async function getLabel(d1: D1DatabaseLike | undefined, idOrKey: string):
   return row ? rowToLabel(row) : null;
 }
 
+/** Field docs shared by the REST label body and the MCP label tools, so both describe the same contract. */
+export const LABEL_SLUG_DOC = 'Lowercase kebab-case, unique per kind (a deleted label keeps its slug reserved); built-in labels cannot change it';
+export const LABEL_ALIASES_DOC = 'Alternative names, at most 10 strings of up to 60 characters; replaces the whole list';
+
 export interface LabelInput {
   kind?: LabelKind;
   slug?: string;
@@ -156,12 +159,17 @@ async function assertSlugFree(db: D1DatabaseLike, kind: LabelKind, slug: string,
   if (owner) throw labelConflict(kind, slug);
 }
 
+/** Only the `(kind, slug)` unique index maps to `label_conflict`; any other unique violation propagates. */
+function isKindSlugViolation(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed: taxonomy_labels\.kind, taxonomy_labels\.slug\b/i.test(err.message);
+}
+
 /** Runs a label write; a concurrent writer that took the same `(kind, slug)` first is `409 label_conflict`, not a raw 500. */
 async function runLabelWrite(stmt: D1PreparedStatementLike, kind: LabelKind, slug: string): Promise<D1RunResultLike> {
   try {
     return await stmt.run();
   } catch (err) {
-    if (isUniqueViolation(err)) throw labelConflict(kind, slug);
+    if (isKindSlugViolation(err)) throw labelConflict(kind, slug);
     throw err;
   }
 }
