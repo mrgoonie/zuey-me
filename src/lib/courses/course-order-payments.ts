@@ -176,15 +176,17 @@ const receiptKey = (orderId: string) => `course-receipt:${orderId}`;
  * A redelivered payment event (already recorded) of a paid order whose receipt was never sent: the worker died after
  * the payment batch committed. The follow-ups run again; each is idempotent (the referral commission once per order,
  * promo and invoice updates guarded on their status, the receipt once per order), and the receipt is sent last, so
- * its log marks them done.
+ * its log marks them done. An admin grant retried after its batch committed resumes them the same way. Returns false,
+ * running nothing, when the order is not paid or its receipt was already sent (or skipped).
  */
-export async function resumeCourseOrderFollowUps(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<void> {
+export async function resumeCourseOrderFollowUps(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<boolean> {
   const current = await getCourseOrderByCode(d1, order.code);
-  if (current?.status !== 'paid') return;
+  if (current?.status !== 'paid') return false;
   const mail = await d1.prepare('SELECT status FROM email_log WHERE idempotency_key = ?').bind(receiptKey(current.id)).first<Row>();
   const status = mail ? str(mail, 'status') : '';
-  if (status === 'sent' || status === 'skipped') return;
+  if (status === 'sent' || status === 'skipped') return false;
   await afterCourseOrderPaid(d1, env, current, payerText);
+  return true;
 }
 
 /** Referral capture, promo/invoice bookkeeping and the receipt of an order whose access is granted. */
@@ -368,9 +370,15 @@ export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, or
   return true;
 }
 
+/** The `attention_reason` prefix of an order an admin grant paid (`admin_grant:<note>`). */
+const ADMIN_GRANT = 'admin_grant:';
+
 /**
  * Admin decisions: `grant` pays out a flagged order (e.g. underpaid by a rounding error),
  * `dismiss` closes it without access, `refund` records a manual refund and revokes access.
+ * A `grant` retried on an order an admin grant already paid, whose receipt is still missing (the follow-ups after the
+ * payment batch failed), runs the idempotent follow-ups again; a grant of an order paid any other way, or whose
+ * follow-ups completed, answers `409 already_paid`.
  */
 export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, code: string, action: unknown, reason: unknown): Promise<CourseOrder> {
   const order = await getCourseOrderByCode(d1, code);
@@ -378,10 +386,12 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
   const note = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 200) : 'admin';
   const now = iso(membersRuntime.now());
   if (action === 'grant') {
-    const paid = order.status !== 'paid' && await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
-      set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: "o.status <> 'paid'", reason: `admin_grant:${note}`,
-    });
-    if (!paid) throw new AppError(409, 'already_paid', 'Order is already paid');
+    const done = order.status === 'paid'
+      ? (order.attention_reason ?? '').startsWith(ADMIN_GRANT) && await resumeCourseOrderFollowUps(d1, env, order)
+      : await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
+        set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: "o.status <> 'paid'", reason: `${ADMIN_GRANT}${note}`,
+      });
+    if (!done) throw new AppError(409, 'already_paid', 'Order is already paid');
   } else if (action === 'dismiss') {
     if (order.status === 'paid') throw new AppError(409, 'already_paid', 'Use refund for a paid order');
     await d1.prepare("UPDATE course_orders SET status = 'cancelled', attention_reason = ?, updated_at = ? WHERE id = ?").bind(`dismissed:${note}`, now, order.id).run();

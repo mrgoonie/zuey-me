@@ -16,6 +16,7 @@ import { POST as dodoWebhook } from '../src/pages/api/webhooks/dodo';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
+import { createPromo } from '../src/lib/promos/promo-codes';
 import { ensureReferralProfile } from '../src/lib/referrals/codes';
 import { experienceRuntime } from '../src/lib/experience/runtime';
 import { signDodoPayload } from '../src/lib/payments/dodo';
@@ -1214,6 +1215,104 @@ describe('Dodo course payments, refunds and disputes', () => {
             expect(purchaseKeys()).toEqual([]);
             expect(state.emails.length).toBe(0);
           });
+        }
+      }
+    });
+
+    describe('an admin order grant whose follow-ups fail after the payment batch', () => {
+      /** The admin order grant through REST (`POST /admin/course-orders/:code/resolve`) or MCP (`course_order_resolve`). */
+      const surfaces = {
+        REST: async (d1: D1DatabaseLike, admin: Member, code: string): Promise<unknown> => {
+          const res = await read(await resolveApi(ctx({
+            method: 'POST', body: { action: 'grant', reason: 'rounding' }, headers: admin.browser, params: { code }, env: { ...env(), DB: d1 },
+          })));
+          if (res.status !== 200) throw new Error(`${res.status} ${res.code}`);
+          return res.data;
+        },
+        MCP: (d1: D1DatabaseLike, admin: Member, code: string): Promise<unknown> => {
+          const mcp: McpContext = {
+            request: new Request('https://zuey.test/api/mcp', { headers: admin.browser }), env: env(), d1,
+            async requireAdmin() {}, async isAdmin() { return true; },
+          };
+          return coursesMcpModule.call('course_order_resolve', { code, action: 'grant', reason: 'rounding' }, mcp);
+        },
+      } as const;
+
+      /** Where the worker dies once the payment batch committed: before any follow-up, or at the first email. */
+      const followUpPoints = [
+        ['right after the payment batch', () => true],
+        ['the first follow-up email', sqlPoint(/^\s*INSERT INTO email_log/)],
+      ] as const;
+
+      /** The test database, dying at the first statement matching `at` once the batch that pays the order committed. */
+      function crashingAfterPayment(at: (sql: string) => boolean): D1DatabaseLike {
+        let committed = false;
+        const crashing = crashingD1(sql => committed && at(sql));
+        return {
+          prepare: sql => crashing.d1.prepare(sql),
+          batch: async statements => {
+            const res = await crashing.d1.batch(statements);
+            if (crashing.batches.at(-1)?.some(sqlPoint(/^UPDATE course_orders SET status = 'paid'/))) committed = true;
+            return res;
+          },
+        };
+      }
+
+      /** A SePay order with an invoice request, by referral or promo, underpaid so it waits for the admin. */
+      async function flaggedOrder(by: 'referral' | 'promo') {
+        const { course } = await publishedCourse();
+        const lan = await member('lan@example.com');
+        const extra: Record<string, unknown> = { invoice: { tax_id: '0312345678', email: 'ketoan@acme.vn' } };
+        if (by === 'referral') {
+          const ref = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
+          const { code: referralCode } = await ensureReferralProfile(state.d1, ref.user.id);
+          await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.user.id).run();
+          extra.referral_code = referralCode;
+        } else {
+          await createPromo(state.d1, { code: 'HOC30', percent: 30, products: ['course'] }, 'test');
+          extra.discount_code = 'HOC30';
+        }
+        const res = await read(await checkout(lan, { provider: 'sepay', accept_terms: true, ...extra }));
+        expect(res.status).toBe(201);
+        const code = String(field(res.data, 'code'));
+        expect(await payTransfer(code, Number(field(res.data, 'amount_vnd')) - 1000)).toMatchObject({ outcome: 'needs_attention' });
+        const order = await getCourseOrderByCode(state.d1, code);
+        if (!order) throw new Error('order missing');
+        return { course, lan, code, id: order.id };
+      }
+
+      const commissions = (id: string) => count("SELECT COUNT(*) AS n FROM referral_commissions WHERE source_kind = 'course_order' AND source_id = ?", id);
+      const redeemed = (id: string) => count("SELECT COUNT(*) AS n FROM promo_redemptions WHERE source_kind = 'course_order' AND source_id = ? AND status = 'redeemed'", id);
+      const invoices = (id: string) => count("SELECT COUNT(*) AS n FROM invoice_requests WHERE source_kind = 'course_order' AND source_id = ? AND status = 'requested'", id);
+      const receipts = (id: string) => count("SELECT COUNT(*) AS n FROM email_log WHERE idempotency_key = ? AND status = 'sent'", `course-receipt:${id}`);
+
+      for (const [surface, grant] of Object.entries(surfaces)) {
+        for (const by of ['referral', 'promo'] as const) {
+          for (const [point, at] of followUpPoints) {
+            it(`through ${surface} resumes the follow-ups of a ${by} order once when the worker died at ${point}, then answers 409`, async () => {
+              const p = await flaggedOrder(by);
+              const boss = await member('boss@example.com');
+
+              const failed = await grant(crashingAfterPayment(at), boss, p.code).then(() => 'ok', () => 'failed');
+              expect(failed).toBe('failed');
+              expect(await getCourseOrderByCode(state.d1, p.code)).toMatchObject({ status: 'paid', attention_reason: 'admin_grant:rounding' });
+              expect(await ownsCourse(state.d1, p.lan.userId, p.course.id)).toBe(true);
+              expect(receipts(p.id)).toBe(0);
+
+              expect(await grant(state.d1, boss, p.code)).toMatchObject({ code: p.code, status: 'paid' });
+              const done = { commissions: by === 'referral' ? 1 : 0, redeemed: by === 'promo' ? 1 : 0, invoices: 1, receipts: 1 };
+              const counts = () => ({ commissions: commissions(p.id), redeemed: redeemed(p.id), invoices: invoices(p.id), receipts: receipts(p.id) });
+              expect(counts()).toEqual(done);
+
+              const again = await grant(state.d1, boss, p.code).then(() => 'ok', (err: unknown) => (err instanceof Error ? err.message : 'failed'));
+              expect(again).toMatch(surface === 'REST' ? /^409 already_paid$/ : /already paid/);
+              expect(counts()).toEqual(done);
+              expect(await getCourseOrderByCode(state.d1, p.code)).toMatchObject({ status: 'paid', attention_reason: 'admin_grant:rounding' });
+              expect(activities('courses.granted')).toBe(1);
+              expect(activities('courses.order_paid')).toBe(1);
+              expect(purchaseKeys()).toHaveLength(1);
+            });
+          }
         }
       }
     });
