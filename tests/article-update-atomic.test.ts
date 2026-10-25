@@ -704,8 +704,8 @@ describe('the read-back fallback reports the same exact fields as a normal read 
   });
 });
 /**
- * Like `failReadBackAfterCommit`, but armed by the first write of any kind (run or batch): article creation
- * commits row by row, not in one batch.
+ * Like `failReadBackAfterCommit`, but armed by the first write of any kind (run or batch): article creation may
+ * create missing tags (single statements) before its batch.
  */
 function failReadBackAfterFirstWrite(inner: D1DatabaseLike): D1DatabaseLike {
   let committed = false;

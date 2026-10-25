@@ -13,7 +13,7 @@ import { DEFAULT_LOCALE, LOCALES, isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import { documentText, readingMinutes, wordCount } from '../search/text';
-import { mirrorLegacyTags, resolveTagRefs, setArticleTags, tagsForArticles, toPublicTag } from '../taxonomy/tags';
+import { mirrorLegacyTags, resolveTagRefs, tagsForArticles, toPublicTag } from '../taxonomy/tags';
 import type { PublicTag } from '../taxonomy/tags';
 import { listCategories, resolveCategoryRef, toPublicCategory } from '../taxonomy/categories';
 import type { PublicCategory } from '../taxonomy/categories';
@@ -768,17 +768,6 @@ async function managedCoverUrl(db: D1DatabaseLike, art: ArticleRowData): Promise
   return art.coverAssetId ? (await getMediaAsset(db, art.coverAssetId))?.url ?? null : null;
 }
 
-async function recordRevision(
-  db: D1DatabaseLike, articleId: string, locale: Locale, revision: number,
-  action: 'create' | 'save' | 'publish' | 'delete_edition', title: string, excerpt: string, docJson: string, actor: string,
-): Promise<void> {
-  // The snapshot is the stored JSON itself, so a read-side recovery is never baked into history.
-  await db.prepare(`
-    INSERT INTO article_revisions (id, article_id, locale, revision, action, title, excerpt, document_json, actor, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(newId('rev_'), articleId, locale, revision, action, title, excerpt, docJson, actor, nowIso()).run();
-}
-
 /**
  * Condition appended to every write of a revisioned save (bind: article id, expected revision), so inside
  * the save's batch nothing applies unless the revision bump at the end applies too.
@@ -797,7 +786,7 @@ function guardedRevisionStatement(
   `).bind(newId('rev_'), articleId, locale, expected + 1, action, title, excerpt, docJson, actor, now, articleId, expected);
 }
 
-/** Replaces the article's tag rows (same order and semantics as `setArticleTags`) while it is still at `expected`. */
+/** Replaces the article's tag rows (in the given order, duplicates ignored) while it is still at `expected`. */
 function guardedTagStatements(db: D1DatabaseLike, articleId: string, expected: number, tagIds: string[], now: string): D1PreparedStatementLike[] {
   return [
     db.prepare(`DELETE FROM article_tags WHERE article_id = ? AND ${AT_EXPECTED}`).bind(articleId, articleId, expected),
@@ -852,7 +841,8 @@ function isSlugUniqueViolation(err: unknown): boolean {
 
 /**
  * Runs a derived-cache rebuild after a write has committed. A failure is logged, not thrown: the write
- * landed (a retry would only get 409), and the cache is rebuilt by the next write or an admin reindex.
+ * landed (a retry would only get 409). The search index is rebuilt by the next write or an admin reindex; the
+ * legacy tag mirror only by a later tags write, tag rename or tag delete (a reindex does not touch it).
  */
 async function afterCommit(what: string, task: () => Promise<unknown>): Promise<void> {
   try {
@@ -882,23 +872,41 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
   const id = newId('art_');
   const doc = input.document ?? emptyDocument();
   const docJson = JSON.stringify(doc);
-  await db.prepare(`
-    INSERT INTO articles (id, slug, locale, title, excerpt, tags, access, status, draft_json, revision, category_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, '[]', ?, 'draft', ?, 1, ?, ?, ?)
-  `).bind(id, input.slug, locale, input.title, input.excerpt ?? '', input.access ?? 'free', docJson, categoryId, now, now).run();
-  await db.prepare(`
-    INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, revision, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?)
-  `).bind(newId('ed_'), id, locale, input.title, input.excerpt ?? '', docJson, now, now).run();
-  await recordRevision(db, id, locale, 1, 'create', input.title, input.excerpt ?? '', docJson, actor);
-  await setArticleTags(db, id, tagIds);
   const access = input.access ?? 'free';
+  const excerpt = input.excerpt ?? '';
+  // One D1 batch (one transaction): the article, its edition, its first history row and its tags exist
+  // together or not at all, so a failure leaves nothing behind and a retry can succeed.
+  try {
+    await db.batch([
+      db.prepare(`
+        INSERT INTO articles (id, slug, locale, title, excerpt, tags, access, status, draft_json, revision, category_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, '[]', ?, 'draft', ?, 1, ?, ?, ?)
+      `).bind(id, input.slug, locale, input.title, excerpt, access, docJson, categoryId, now, now),
+      db.prepare(`
+        INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, revision, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?)
+      `).bind(newId('ed_'), id, locale, input.title, excerpt, docJson, now, now),
+      // The snapshot is the stored JSON itself, so a read-side recovery is never baked into history.
+      db.prepare(`
+        INSERT INTO article_revisions (id, article_id, locale, revision, action, title, excerpt, document_json, actor, created_at)
+        VALUES (?, ?, ?, 1, 'create', ?, ?, ?, ?, ?)
+      `).bind(newId('rev_'), id, locale, input.title, excerpt, docJson, actor, now),
+      ...tagIds.map((tagId, i) => db.prepare('INSERT OR IGNORE INTO article_tags (article_id, tag_id, position, created_at) VALUES (?, ?, ?, ?)')
+        .bind(id, tagId, i, now)),
+    ]);
+  } catch (err) {
+    // A concurrent create took the slug after the check above; the batch rolled back as a whole.
+    if (isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${input.slug}" is already used`);
+    throw err;
+  }
+  // The legacy tag names column is a cache derived from the committed tag rows, as in update and tags set.
+  if (tagIds.length) await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, id));
   return readBackAfterCommit(db, id, {
     art: {
       id, slug: input.slug, primary: locale, access, categoryId, revision: 1, labelRevision: 0, createdAt: now, updatedAt: now,
       coverAssetId: null, socialPreviewMode: 'generated_card', socialPreviewAssetId: null,
     },
-    edition: draftEditionRow(id, locale, input.title, input.excerpt ?? '', docJson, 1, now),
+    edition: draftEditionRow(id, locale, input.title, excerpt, docJson, 1, now),
   }, locale);
 }
 

@@ -214,16 +214,6 @@ export async function mirrorLegacyTags(db: D1DatabaseLike, articleId: string): P
   await db.prepare('UPDATE articles SET tags = ? WHERE id = ?').bind(JSON.stringify(names), articleId).run();
 }
 
-export async function setArticleTags(db: D1DatabaseLike, articleId: string, tagIds: string[]): Promise<void> {
-  await db.prepare('DELETE FROM article_tags WHERE article_id = ?').bind(articleId).run();
-  const now = nowIso();
-  for (let i = 0; i < tagIds.length; i++) {
-    await db.prepare('INSERT OR IGNORE INTO article_tags (article_id, tag_id, position, created_at) VALUES (?, ?, ?, ?)')
-      .bind(articleId, tagIds[i], i, now).run();
-  }
-  await mirrorLegacyTags(db, articleId);
-}
-
 /** Tags per article in display order (deleted tags excluded). */
 export async function tagsForArticles(db: D1DatabaseLike, articleIds: string[]): Promise<Map<string, TopicTag[]>> {
   const out = new Map<string, TopicTag[]>();
