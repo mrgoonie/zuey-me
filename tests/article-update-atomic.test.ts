@@ -1000,6 +1000,11 @@ describe('a category deleted between an article write\'s read and its commit is 
     expect(storedCategory('fresh-2')).toEqual({ category_id: null });
   });
 
+  it('an update with category null stores NULL through the live-category check', async () => {
+    expect((await updateArticle(d1, 'post', { category: null }, 1)).category_id).toBeNull();
+    expect(storedCategory('post')).toEqual({ category_id: null });
+  });
+
   it('a request naming a category deleted before it is read is still 400 unknown_category', async () => {
     await deleteCategory(d1, category.id, category.revision, 'admin');
     for (const write of [() => updateArticle(d1, 'post', { category: 'guides' }, 1), () => createArticle(d1, { slug: 'late', title: 'Muộn', category: 'guides' })]) {

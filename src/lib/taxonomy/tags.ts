@@ -6,8 +6,8 @@ import { LOCALES, isLocale } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import type { LocalizedNames, Row } from './common';
 import {
-  bad, localizedName, newId, normalizeKey, nowIso, num, parseNames, parseNamesInput, parseSlug, parseStringArray,
-  requireDb, requireRevision, safeText, slugify, str, writeAuditLog,
+  auditLogStatement, bad, localizedName, newId, normalizeKey, nowIso, num, parseNames, parseNamesInput, parseSlug, parseStringArray,
+  requireDb, requireRevision, safeText, slugify, softDeletedAt, str, writeAuditLog,
 } from './common';
 
 export const TAG_LIMITS = { perArticle: 20, slugLength: 60, nameLength: 40, aliases: 10 } as const;
@@ -213,16 +213,22 @@ export async function deleteTag(d1: D1DatabaseLike | undefined, idOrSlug: string
   const expected = requireRevision(expectedRevision);
   const tag = await getTag(db, idOrSlug);
   if (!tag) throw new AppError(404, 'not_found', 'Tag not found');
-  const res = await db.prepare('UPDATE topic_tags SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
-    .bind(nowIso(), nowIso(), tag.id, expected).run();
-  if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
-  const { results } = await db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tag.id).all<Row>();
-  await db.prepare('DELETE FROM article_tags WHERE tag_id = ?').bind(tag.id).run();
-  for (const r of results ?? []) {
+  const now = nowIso();
+  // One batch (one transaction): the tag is deleted, unassigned from its articles and audited together; the
+  // unassign and the audit row apply only when this batch's own delete did.
+  const deleted = softDeletedAt('topic_tags', tag.id, expected, now);
+  const [mark, assigned] = await db.batch([
+    db.prepare('UPDATE topic_tags SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
+      .bind(now, now, tag.id, expected),
+    db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tag.id),
+    db.prepare(`DELETE FROM article_tags WHERE tag_id = ? AND ${deleted.sql}`).bind(tag.id, ...deleted.params),
+    auditLogStatement(db, { actor, action: 'tag.delete', targetType: 'tag', targetId: tag.id, before: tag }, deleted),
+  ]);
+  if (!mark?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
+  for (const r of assigned?.results ?? []) {
     await mirrorLegacyTags(db, str(r, 'article_id'));
     await reindexArticle(db, str(r, 'article_id'), env);
   }
-  await writeAuditLog(db, { actor, action: 'tag.delete', targetType: 'tag', targetId: tag.id, before: tag });
 }
 
 /**
