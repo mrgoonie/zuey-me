@@ -80,10 +80,11 @@ export interface ArticleSummary {
   /** Admin draft views and publish responses only: the new-article email to members (`failed` only in publish responses). */
   email_notification?: PublishEmailNotification | null;
   /**
-   * Update and publish responses only, set when the write committed but reading the article back failed. The
-   * record is then built from the rows as written: the edition, revisions, document and receipt are exact, while
-   * tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty; `editions`
-   * lists only the written one). Re-read the article for those.
+   * Write responses only (create, update, publish, edition delete, tags set), set when the write committed but
+   * reading the article back failed. The record is then built from the rows as written: the edition shown,
+   * revisions, document and receipt are exact, while tags, topic_tags, category, labels, available_locales and
+   * other editions are not loaded (empty, also after a tags write; `editions` lists only the edition shown).
+   * Re-read the article for those.
    */
   read_back?: 'failed';
 }
@@ -558,12 +559,14 @@ async function getArticleById(db: D1DatabaseLike, id: string, missing: string, o
  * and reporting it as an error would make a retry fail with 409.
  */
 async function readBackAfterCommit(
-  db: D1DatabaseLike, id: string, locale: Locale, written: { art: ArticleRowData; edition: EditionRow },
+  db: D1DatabaseLike, id: string, written: { art: ArticleRowData; edition: EditionRow } | null, locale?: Locale,
 ): Promise<ArticleRecord> {
   try {
     return await getArticleById(db, id, 'Article disappeared after commit', { locale });
   } catch (err) {
     console.error('Article read-back failed after commit:', err instanceof Error ? err.message : 'unknown');
+    // No edition to show (an article without editions cannot be read normally either).
+    if (!written) throw err;
     const { art, edition } = written;
     // Only the written rows are known: tags, category, labels and the other editions are reported as not loaded
     // (empty), never derived from the one edition in hand, so nothing here reads as "not public" by mistake.
@@ -578,6 +581,16 @@ async function readBackAfterCommit(
       read_back: 'failed',
     };
   }
+}
+
+/** An edition as a fresh draft is stored: never published, no cover, no words. */
+function draftEditionRow(
+  articleId: string, locale: Locale, title: string, excerpt: string, draftJson: string, revision: number, now: string, coverAlt = '',
+): EditionRow {
+  return {
+    articleId, locale, title, excerpt, draftJson, publishedJson: null, revision, publishedRevision: null, status: 'draft',
+    publishedWords: 0, coverUrl: null, coverAlt, publishedAt: null, updatedAt: now,
+  };
 }
 
 async function articleRecord(
@@ -879,7 +892,14 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
   `).bind(newId('ed_'), id, locale, input.title, input.excerpt ?? '', docJson, now, now).run();
   await recordRevision(db, id, locale, 1, 'create', input.title, input.excerpt ?? '', docJson, actor);
   await setArticleTags(db, id, tagIds);
-  return getArticleById(db, id, 'Article was not persisted', { locale });
+  const access = input.access ?? 'free';
+  return readBackAfterCommit(db, id, {
+    art: {
+      id, slug: input.slug, primary: locale, access, categoryId, revision: 1, labelRevision: 0, createdAt: now, updatedAt: now,
+      coverAssetId: null, socialPreviewMode: 'generated_card', socialPreviewAssetId: null,
+    },
+    edition: draftEditionRow(id, locale, input.title, input.excerpt ?? '', docJson, 1, now),
+  }, locale);
 }
 
 /**
@@ -960,14 +980,11 @@ export async function updateArticle(
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
   const writtenEdition: EditionRow = edition
     ? { ...edition, title, excerpt, draftJson: docJson, revision, updatedAt: now }
-    : {
-      articleId: art.id, locale, title, excerpt, draftJson: docJson, publishedJson: null, revision, publishedRevision: null, status: 'draft',
-      publishedWords: 0, coverUrl: null, coverAlt: editionRow ? toEditionRow(editionRow).coverAlt : '', publishedAt: null, updatedAt: now,
-    };
-  return readBackAfterCommit(db, art.id, locale, {
+    : draftEditionRow(art.id, locale, title, excerpt, docJson, revision, now, editionRow ? toEditionRow(editionRow).coverAlt : '');
+  return readBackAfterCommit(db, art.id, {
     art: { ...art, slug: nextSlug, primary, access: input.access ?? art.access, categoryId, revision, updatedAt: now },
     edition: writtenEdition,
-  });
+  }, locale);
 }
 
 /**
@@ -1040,13 +1057,13 @@ export async function publishArticle(
     console.error('Email notification failed after commit:', err instanceof Error ? err.message : 'unknown');
     emailNotification = await notificationAfterFailure(db, art.id, nowMs);
   }
-  const rec = await readBackAfterCommit(db, art.id, locale, {
+  const rec = await readBackAfterCommit(db, art.id, {
     art: { ...art, revision, updatedAt: now },
     edition: {
       ...edition, publishedJson: edition.draftJson, status: 'published', publishedRevision: revision, revision,
       publishedAt: publishedAt ?? edition.publishedAt ?? now, publishedWords, coverUrl, updatedAt: now,
     },
-  });
+  }, locale);
   return { ...rec, email_notification: emailNotification };
 }
 
@@ -1059,10 +1076,10 @@ export async function deleteEdition(
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
   if (locale === art.primary) throw new AppError(409, 'primary_edition', 'Change primary_locale before deleting the primary edition');
-  const row = await db.prepare('SELECT * FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL').bind(art.id, locale).first<Row>();
-  if (!row) throw new AppError(404, 'not_found', `No ${locale} edition`);
+  const editions = (await loadEditions(db, [art.id])).get(art.id) ?? [];
+  const edition = editions.find(e => e.locale === locale);
+  if (!edition) throw new AppError(404, 'not_found', `No ${locale} edition`);
   const now = nowIso();
-  const edition = toEditionRow(row);
   await commitAtRevision(db, art.id, [
     db.prepare(`UPDATE article_editions SET deleted_at = ?, updated_at = ?, revision = ? WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}`)
       .bind(now, now, expected + 1, art.id, locale, art.id, expected),
@@ -1070,7 +1087,19 @@ export async function deleteEdition(
   ], bumpRevisionStatement(db, art.id, expected, now));
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
-  return getArticleById(db, art.id, 'Article disappeared after edition delete');
+  return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions.filter(e => e !== edition), expected + 1, now));
+}
+
+/**
+ * Written state of a write that only moves the article revision (edition delete, tags set): the edition a
+ * read without locale shows (the primary one), as read before the commit. The revision-guarded commit means
+ * nothing else changed it in between.
+ */
+function unchangedEditionShown(
+  art: ArticleRowData, editions: EditionRow[], revision: number, now: string,
+): { art: ArticleRowData; edition: EditionRow } | null {
+  const pick = pickEdition(editions, undefined, art.primary);
+  return pick ? { art: { ...art, revision, updatedAt: now }, edition: pick.edition } : null;
 }
 
 /** Soft delete; the slug stays reserved. Search rows are removed immediately. */
@@ -1096,13 +1125,15 @@ export async function setTagsForArticle(
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
   const tagIds = await resolveTagRefs(db, refs, { createMissing: false, locale: art.primary, actor: ctx.actor ?? 'admin' });
+  // Read before the commit so the answer can still be built if the read-back after it fails.
+  const editions = (await loadEditions(db, [art.id])).get(art.id) ?? [];
   const now = nowIso();
   await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
   // Derived caches rebuilt from the committed rows (legacy tag names column, search index); idempotent.
   await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
-  return getArticleById(db, art.id, 'Article disappeared after tag update');
+  return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions, expected + 1, now));
 }
 
 export interface RevisionEntry {
