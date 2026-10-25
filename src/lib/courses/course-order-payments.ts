@@ -411,14 +411,32 @@ export async function restoreCourseOrder(
   return 'restored';
 }
 
+/** True when a funds-lost outcome of a dispute was received for the order: its chargeback already returned the money. */
+export async function courseDisputeLost(d1: D1DatabaseLike, orderId: string): Promise<boolean> {
+  const lost = [...DODO_DISPUTE_FUNDS_LOST];
+  return (await d1.prepare(`SELECT 1 AS found FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND raw_type IN (${lost.map(() => '?').join(', ')}) LIMIT 1`)
+    .bind(orderId, ...lost).first<Row>()) !== null;
+}
+
 /** The `attention_reason` prefix of an order an admin grant paid (`admin_grant:<note>`). */
 const ADMIN_GRANT = 'admin_grant:';
+
+/** A grant or dismiss of a charged-back order: the dispute's outcome decides its access, an admin can only refund it. */
+function disputedOrder(verb: 'granted' | 'dismissed'): AppError {
+  return new AppError(409, 'order_disputed', `A disputed (charged back) order cannot be ${verb}: the dispute outcome decides its access; record a refund instead while the dispute is open`);
+}
+
+/** Neither paid nor charged back: what an admin grant or dismiss may change. */
+const SETTLEABLE = "o.status NOT IN ('paid', 'charged_back')";
 
 /**
  * Admin decisions: `grant` pays out a flagged order (e.g. underpaid by a rounding error),
  * `dismiss` closes it without access, `refund` records a manual refund and revokes access. A refund of an order with
  * an open dispute (`charged_back`) takes the same path as Dodo's refund during a dispute (`refundCourseOrder`); after a
  * lost dispute it answers `409 not_refundable`, as the chargeback already returned the money.
+ * A `grant` or `dismiss` of a charged-back order answers `409 order_disputed` and changes nothing: a grant would give
+ * access back while the dispute is open, and a dismissed order could no longer be restored by a won dispute. Both
+ * apply only while the order is still neither paid nor charged back, so a dispute opened meanwhile is refused the same way.
  * A `grant` retried on an order an admin grant already paid, whose receipt is still missing (the follow-ups after the
  * payment batch failed), runs the idempotent follow-ups again; a grant of an order paid any other way, or whose
  * follow-ups completed, answers `409 already_paid`.
@@ -428,21 +446,35 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
   if (!order) throw new AppError(404, 'not_found', 'Order not found');
   const note = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 200) : 'admin';
   const now = iso(membersRuntime.now());
+  /** The order as it is now, after an attempt that changed nothing. */
+  const current = async () => (await getCourseOrderByCode(d1, order.code)) ?? order;
   if (action === 'grant') {
+    if (order.status === 'charged_back') throw disputedOrder('granted');
     const done = order.status === 'paid'
       ? (order.attention_reason ?? '').startsWith(ADMIN_GRANT) && await resumeCourseOrderFollowUps(d1, env, order)
       : await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
-        set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: "o.status <> 'paid'", reason: `${ADMIN_GRANT}${note}`,
+        set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: SETTLEABLE, reason: `${ADMIN_GRANT}${note}`,
       });
-    if (!done) throw new AppError(409, 'already_paid', 'Order is already paid');
+    if (!done) {
+      if ((await current()).status === 'charged_back') throw disputedOrder('granted');
+      throw new AppError(409, 'already_paid', 'Order is already paid');
+    }
   } else if (action === 'dismiss') {
     if (order.status === 'paid') throw new AppError(409, 'already_paid', 'Use refund for a paid order');
-    await d1.prepare("UPDATE course_orders SET status = 'cancelled', attention_reason = ?, updated_at = ? WHERE id = ?").bind(`dismissed:${note}`, now, order.id).run();
+    if (order.status === 'charged_back') throw disputedOrder('dismissed');
+    const res = await d1.prepare(`UPDATE course_orders SET status = 'cancelled', attention_reason = ?, updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND ${SETTLEABLE})`)
+      .bind(`dismissed:${note}`, now, order.id, order.id).run();
+    if (!res.meta?.changes) {
+      if ((await current()).status === 'charged_back') throw disputedOrder('dismissed');
+      throw new AppError(409, 'already_paid', 'Use refund for a paid order');
+    }
   } else if (action === 'refund') {
     if (!(await refundCourseOrder(d1, order, note, 'admin'))) {
-      throw new AppError(409, 'not_refundable', order.status === 'charged_back'
+      // The status the attempt found, not the one read before it: a Dodo refund may have landed in between.
+      const found = await current();
+      throw new AppError(409, 'not_refundable', found.status === 'charged_back'
         ? 'The dispute on this order was lost: the chargeback already returned the money'
-        : 'Only paid, flagged or disputed (charged back) orders can be refunded');
+        : found.status === 'refunded' ? 'Order is already refunded' : 'Only paid, flagged or disputed (charged back) orders can be refunded');
     }
   } else {
     throw new AppError(400, 'invalid_field', "action must be 'grant', 'dismiss' or 'refund'", { field: 'action' });
