@@ -8,6 +8,7 @@ import type { CourseRecord } from '../src/lib/courses/course-types';
 import { GET as catalogApi } from '../src/pages/api/v1/courses/index';
 import { POST as checkoutApi } from '../src/pages/api/v1/courses/[course]/checkout';
 import { POST as resolveApi } from '../src/pages/api/v1/admin/course-orders/[code]/resolve';
+import { GET as listOrdersApi } from '../src/pages/api/v1/admin/course-orders/index';
 import { DELETE as revokeOwnerApi, POST as grantOwnerApi } from '../src/pages/api/v1/admin/courses/[course]/owners';
 import { coursesMcpModule } from '../src/lib/courses/course-mcp';
 import type { McpContext } from '../src/lib/mcp/types';
@@ -436,6 +437,200 @@ describe('Dodo course payments, refunds and disputes', () => {
         await expect(resolveCourseOrder(state.d1, env(), pending, 'refund', 'never paid')).rejects.toMatchObject({ status: 409, code: 'not_refundable' });
         expect((await getCourseOrderByCode(state.d1, pending))?.status).toBe('pending');
         expect(adminRefunds()).toHaveLength(1);
+      });
+
+      it('reports the money back of an admin refund with the amount and currency paid, for a paid and a disputed order', async () => {
+        await publishedCourse();
+        const paid = await paidByCard(await member('lan@example.com'));
+        const disputed = await paidByCard(await member('mai@example.com'));
+        await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${disputed}` });
+        for (const code of [paid, disputed]) expect((await resolveCourseOrder(state.d1, env(), code, 'refund', 'goodwill')).status).toBe('refunded');
+
+        const rows = refundRows();
+        expect(rows.map(r => r.dedupe_key)).toEqual([
+          `refund:dodo:course_order:${(await getCourseOrderByCode(state.d1, paid))?.id}:refunded`,
+          `refund:dodo:course_order:${(await getCourseOrderByCode(state.d1, disputed))?.id}:refunded`,
+        ]);
+        for (const row of rows) {
+          expect(JSON.parse(row.properties)).toMatchObject({ provider: 'dodo', order_type: 'course', reason: 'refund', amount: 49, currency: 'USD', partial: false });
+        }
+      });
+
+      it('keeps a disputed order it refunded revoked when the dispute is then cancelled', async () => {
+        const { course } = await publishedCourse();
+        const { user: ref } = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
+        const { code: referralCode } = await ensureReferralProfile(state.d1, ref.id);
+        await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.id).run();
+        const lan = await member('lan@example.com');
+        const code = await paidByCard(lan, { referral_code: referralCode });
+        const order = await getCourseOrderByCode(state.d1, code);
+        const reversals = () => state.d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM referral_events WHERE action = 'commission.reversed'").get()?.n;
+        await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+        expect((await resolveCourseOrder(state.d1, env(), code, 'refund', 'goodwill')).status).toBe('refunded');
+
+        expect(await dodo('evt_cancel', 'dispute.cancelled', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+        expect(await dodo('evt_cancel', 'dispute.cancelled', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'duplicate_event' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'refunded', attention_reason: 'goodwill' });
+        expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+        expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+        expect(purchases()).toBe(1);
+        expect(reversals()).toBe(1);
+      });
+    });
+
+    describe('a grant or dismiss of a disputed order', () => {
+      /** The admin resolve through REST (`POST /admin/course-orders/:code/resolve`) or MCP (`course_order_resolve`). */
+      const surfaces = {
+        REST: async (d1: D1DatabaseLike, code: string, action: string): Promise<{ status: number; code?: string; message?: string }> => {
+          const boss = await member('boss@example.com');
+          const res = await resolveApi(ctx({ method: 'POST', body: { action, reason: 'admin note' }, headers: boss.browser, params: { code }, env: { ...env(), DB: d1 } }));
+          const body: unknown = await res.json();
+          return res.ok ? { status: res.status } : { status: res.status, code: String(field(body, 'error', 'code')), message: String(field(body, 'error', 'message')) };
+        },
+        MCP: async (d1: D1DatabaseLike, code: string, action: string): Promise<{ status: number; code?: string; message?: string }> => {
+          const boss = await member('boss@example.com');
+          const mcp: McpContext = {
+            request: new Request('https://zuey.test/api/mcp', { headers: boss.browser }), env: env(), d1, async requireAdmin() {}, async isAdmin() { return true; },
+          };
+          return coursesMcpModule.call('course_order_resolve', { code, action, reason: 'admin note' }, mcp).then(
+            () => ({ status: 200 }),
+            (err: unknown) => ({ status: Number(field(err, 'status')), code: String(field(err, 'code')), message: err instanceof Error ? err.message : '' }),
+          );
+        },
+      } as const;
+
+      /** Everything a grant or dismiss could change: the order row, access, analytics, logs and the referral commission. */
+      const snapshot = (code: string) => ({
+        order: state.d1.raw.query<Record<string, unknown>, [string]>('SELECT * FROM course_orders WHERE code = ?').get(code),
+        purchases: state.d1.raw.query<Record<string, unknown>, []>('SELECT * FROM course_purchases ORDER BY id').all(),
+        outbox: state.d1.raw.query<{ dedupe_key: string }, []>('SELECT dedupe_key FROM analytics_outbox ORDER BY dedupe_key').all(),
+        // The buyer's log: the admin's own sign-in is not part of the order.
+        activity: state.d1.raw.query<{ action: string }, [string]>('SELECT action FROM user_activity WHERE user_id = (SELECT user_id FROM course_orders WHERE code = ?) ORDER BY id').all(code),
+        commissions: state.d1.raw.query<Record<string, unknown>, []>('SELECT * FROM referral_commissions ORDER BY id').all(),
+        referralEvents: state.d1.raw.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM referral_events').get()?.n,
+        invites: state.d1.raw.query<Record<string, unknown>, []>('SELECT * FROM github_invites ORDER BY repo').all(),
+      });
+
+      async function referredDisputedOrder(): Promise<{ code: string; userId: string; courseId: string }> {
+        const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const { user: ref } = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
+        const { code: referralCode } = await ensureReferralProfile(state.d1, ref.id);
+        await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.id).run();
+        const lan = await member('lan@example.com');
+        const code = await paidByCard(lan, { referral_code: referralCode });
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        return { code, userId: lan.userId, courseId: course.id };
+      }
+
+      for (const [surface, resolve] of Object.entries(surfaces)) {
+        it(`through ${surface} refuses both with 409 while the dispute is open and changes nothing, so a won dispute still restores it`, async () => {
+          const { code, userId, courseId } = await referredDisputedOrder();
+          const before = snapshot(code);
+          expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_disputed', message: expect.stringMatching(/cannot be granted/) });
+          expect(await resolve(state.d1, code, 'dismiss')).toMatchObject({ status: 409, code: 'order_disputed', message: expect.stringMatching(/cannot be dismissed/) });
+          expect(snapshot(code)).toEqual(before);
+          expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+
+          expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'restored' });
+          expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'paid', attention_reason: 'dispute.won' });
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
+        });
+
+        it(`through ${surface} refuses grant, dismiss and refund after a lost dispute and changes nothing`, async () => {
+          const { code } = await referredDisputedOrder();
+          expect(await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+          const before = snapshot(code);
+          for (const action of ['grant', 'dismiss']) expect(await resolve(state.d1, code, action)).toMatchObject({ status: 409, code: 'order_disputed' });
+          expect(await resolve(state.d1, code, 'refund')).toMatchObject({ status: 409, code: 'not_refundable' });
+          expect(snapshot(code)).toEqual(before);
+        });
+      }
+
+      /** A D1 that runs `meanwhile` once just before the first write matching `sql` (alone or in its batch). */
+      function landingBefore(sql: RegExp, meanwhile: () => Promise<unknown>): D1DatabaseLike {
+        let fired = false;
+        const fire = async () => {
+          if (fired) return;
+          fired = true;
+          await meanwhile();
+        };
+        const inner = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
+        const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => {
+          const statement: D1PreparedStatementLike = {
+            bind: (...v: unknown[]) => wrap(stmt.bind(...v)),
+            first: <T,>() => stmt.first<T>(),
+            all: <T,>() => stmt.all<T>(),
+            run: async () => {
+              await fire();
+              return stmt.run();
+            },
+          };
+          inner.set(statement, stmt);
+          return statement;
+        };
+        return {
+          prepare: (s: string) => (sql.test(s) ? wrap(state.d1.prepare(s)) : state.d1.prepare(s)),
+          batch: async statements => {
+            if (statements.some(s => inner.has(s))) await fire();
+            return state.d1.batch(statements.map(s => inner.get(s) ?? s));
+          },
+        };
+      }
+
+      async function flaggedCardOrder(): Promise<{ code: string; userId: string; courseId: string }> {
+        const { course } = await publishedCourse();
+        const lan = await member('lan@example.com');
+        const res = await read(await checkout(lan, { provider: 'dodo', accept_terms: true }));
+        const code = String(field(res.data, 'code'));
+        expect(await dodo(`evt_pay_${code}`, 'payment.succeeded', {
+          payment_id: `pay_${code}`, total_amount: 1000, currency: 'USD', metadata: { course_order: code, user_id: lan.userId },
+        })).toMatchObject({ outcome: 'needs_attention' });
+        return { code, userId: lan.userId, courseId: course.id };
+      }
+
+      for (const [action, write] of [['grant', /^UPDATE course_orders SET status = 'paid'/], ['dismiss', /^UPDATE course_orders SET status = 'cancelled'/]] as const) {
+        it(`refuses a ${action} of a flagged order that a dispute charged back meanwhile`, async () => {
+          const { code, userId, courseId } = await flaggedCardOrder();
+          const d1 = landingBefore(write, () => dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` }));
+          expect(await surfaces.REST(d1, code, action)).toMatchObject({ status: 409, code: 'order_disputed' });
+          expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+          expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'restored' });
+        });
+      }
+
+      it('still grants and dismisses the orders it can settle', async () => {
+        const granted = await flaggedCardOrder();
+        expect(await surfaces.MCP(state.d1, granted.code, 'grant')).toEqual({ status: 200 });
+        expect((await getCourseOrderByCode(state.d1, granted.code))?.status).toBe('paid');
+        expect(await ownsCourse(state.d1, granted.userId, granted.courseId)).toBe(true);
+        expect(await surfaces.REST(state.d1, granted.code, 'dismiss')).toMatchObject({ status: 409, code: 'already_paid' });
+
+        const pending = String(field((await read(await checkout(await member('mai@example.com'), { provider: 'dodo', accept_terms: true }))).data, 'code'));
+        expect(await surfaces.REST(state.d1, pending, 'dismiss')).toEqual({ status: 200 });
+        expect(await getCourseOrderByCode(state.d1, pending)).toMatchObject({ status: 'cancelled', attention_reason: 'dismissed:admin note' });
+      });
+
+      it('reports the refund 409 from the status the refund found, not the one read before it', async () => {
+        const { code } = await referredDisputedOrder();
+        const d1 = landingBefore(/^UPDATE course_orders SET status = 'refunded'/, () => dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' }));
+        await expect(resolveCourseOrder(d1, env(), code, 'refund', 'late')).rejects.toMatchObject({ status: 409, code: 'not_refundable', message: 'Order is already refunded' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'refunded', attention_reason: 'dodo_refund' });
+        expect(refundKeys()).toHaveLength(1);
+      });
+
+      it('marks a charged-back order whose dispute was lost in the admin order list', async () => {
+        const { code } = await referredDisputedOrder();
+        const boss = await member('boss@example.com');
+        const listed = async () => {
+          const res = await read(await listOrdersApi(ctx({ headers: boss.browser, path: '/api/v1/admin/course-orders?status=charged_back' })));
+          expect(res.status).toBe(200);
+          return Array.isArray(res.data) ? res.data.map(o => [field(o, 'code'), field(o, 'dispute_lost')]) : null;
+        };
+        expect(await listed()).toEqual([[code, false]]);
+        await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' });
+        expect(await listed()).toEqual([[code, true]]);
       });
     });
 
