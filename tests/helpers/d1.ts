@@ -65,3 +65,48 @@ export function createTestD1(opts: { beforeMigration?: (file: string, db: Databa
     },
   };
 }
+
+/**
+ * `base`, except that the worker dies at the first statement matching `at` (a read, a write alone or a write in a
+ * batch): that write never commits, and every later call fails too, so no cleanup runs. It also records each batch's
+ * SQL and each write run alone.
+ */
+export function crashingD1(base: D1DatabaseLike, at: (sql: string) => boolean = () => false) {
+  let dead = false;
+  const batches: string[][] = [];
+  const runs: string[] = [];
+  const alive = () => { if (dead) throw new Error('worker crashed'); };
+  const crash = (): never => { dead = true; throw new Error('worker crashed'); };
+  const read = (sql: string) => { alive(); if (at(sql)) crash(); };
+  const sources = new WeakMap<D1PreparedStatementLike, { sql: string; inner: D1PreparedStatementLike }>();
+  const wrap = (sql: string, inner: D1PreparedStatementLike): D1PreparedStatementLike => {
+    const statement: D1PreparedStatementLike = {
+      bind: (...v: unknown[]) => wrap(sql, inner.bind(...v)),
+      first: async <T,>() => { read(sql); return inner.first<T>(); },
+      all: async <T,>() => { read(sql); return inner.all<T>(); },
+      run: async () => {
+        alive();
+        runs.push(sql);
+        if (at(sql)) crash();
+        return inner.run();
+      },
+    };
+    sources.set(statement, { sql, inner });
+    return statement;
+  };
+  const d1: D1DatabaseLike = {
+    prepare: (sql: string) => wrap(sql, base.prepare(sql)),
+    batch: async (statements: D1PreparedStatementLike[]) => {
+      alive();
+      const list = statements.map(s => {
+        const source = sources.get(s);
+        if (!source) throw new Error('foreign statement');
+        return source;
+      });
+      batches.push(list.map(s => s.sql));
+      if (list.some(s => at(s.sql))) crash();
+      return base.batch(list.map(s => s.inner));
+    },
+  };
+  return { d1, batches, runs };
+}
