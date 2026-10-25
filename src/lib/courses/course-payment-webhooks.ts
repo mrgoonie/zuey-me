@@ -6,14 +6,14 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { queuePaymentFailed } from '../analytics/commerce-events';
 import type { Row } from '../members/runtime';
-import { iso, membersRuntime } from '../members/runtime';
+import { iso, isUniqueViolation, membersRuntime } from '../members/runtime';
 import { DODO_DISPUTE_FUNDS_KEPT, DODO_DISPUTE_FUNDS_LOST, minorUnitsOrNull } from '../payments/dodo';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
-import type { CoursePaymentOutcome } from './course-order-payments';
+import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from './course-order-payments';
 import {
-  courseMoneyBackStatement, fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention, recordCoursePaymentEvent, refundDisputedCourseOrder,
-  releaseCoursePaymentEvent, restoreCourseOrder, reverseCourseOrder,
+  chargeBackLostCourseOrder, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention,
+  recordCoursePaymentEvent, refundDisputedCourseOrder, releaseCoursePaymentEvent, restoreCourseOrder, reverseCourseOrder,
 } from './course-order-payments';
 
 export interface CourseTransferNotice {
@@ -129,6 +129,9 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
 
   const amount = typeof d.total_amount === 'number' ? d.total_amount : minorUnitsOrNull(d.amount);
   const currency = text(d, 'currency')?.toUpperCase() ?? null;
+  if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type))) {
+    return applyDodoCourseReversal(d1, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type });
+  }
   if (!(await recordCoursePaymentEvent(d1, 'dodo', eventId, order?.id ?? null, amount, currency, type))) {
     return { outcome: 'duplicate_event', order_code: order?.code ?? null };
   }
@@ -141,47 +144,62 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
       return { outcome: 'ignored', order_code: order.code };
     }
     if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch });
-    if (type === 'refund.succeeded') {
-      // Any refund, even a partial one, revokes access for good; the reason records whether it was partial, so a later
-      // chargeback is still counted. A refund while a dispute is open moves the charged-back order to refunded, so a won
-      // or cancelled dispute no longer restores it.
-      const reason = isPartialCourseReversal(order, amount) ? 'dodo_partial_refund' : 'dodo_refund';
-      const reversed = { amountMinor: amount, currency };
-      const refund = (o: CourseOrder) => o.status === 'charged_back'
-        ? refundDisputedCourseOrder(d1, o, reason, reversed)
-        : reverseCourseOrder(d1, o, 'refunded', reason, 'system', reversed);
-      let done = await refund(order);
-      if (!done) {
-        // The order was read before this event was recorded: a dispute that opened or was won meanwhile changed its
-        // status, so the refund is applied once more on the current order instead of being dropped.
-        const current = await getCourseOrderByCode(d1, order.code);
-        if (current && current.status !== order.status) done = await refund(current);
-      }
-      return { outcome: done ? 'reversed' : 'ignored', order_code: order.code };
-    }
-    if (DISPUTE_REVOKE.has(type)) {
-      const lost = DODO_DISPUTE_FUNDS_LOST.has(type);
-      const moneyBack = { amountMinor: amount, currency };
-      // A funds-lost outcome on a paid order reports the chargeback in the same batch as the reversal.
-      const reversed = await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost);
-      if (lost && !reversed) {
-        // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once. An
-        // order already fully refunded reported its money back then, also when the refund came while the dispute was
-        // open (a refund after a funds-lost outcome reports nothing). After a partial refund the chargeback is still
-        // counted. The order is read again after this event was recorded, so a refund racing this outcome is seen or
-        // suppressed. The insert throws on failure, so the event is released and Dodo redelivers it.
-        const current = await getCourseOrderByCode(d1, order.code);
-        const fullyRefunded = current?.status === 'refunded' && current.attention_reason !== 'dodo_partial_refund';
-        if (!fullyRefunded) await (await courseMoneyBackStatement(d1, order, 'charged_back', moneyBack))?.run();
-      }
-      return { outcome: reversed ? 'reversed' : 'ignored', order_code: order.code };
-    }
     if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
       return { outcome: (await restoreCourseOrder(d1, env, order, type)) ? 'restored' : 'ignored', order_code: order.code };
     }
     return { outcome: 'ignored', order_code: order.code };
   } catch (err) {
     await releaseCoursePaymentEvent(d1, 'dodo', eventId);
+    throw err;
+  }
+}
+
+/**
+ * A refund or a dispute that takes access away. Its `payment_events` record is not written up front: it is the first
+ * statement of the batch that applies the reversal (`gate`), so a failure or a worker crash before that batch commits
+ * leaves no record and Dodo's redelivery applies the reversal once. A redelivery after the commit is found by the
+ * read below, or, when it races the first delivery, fails on the record's unique key and writes nothing. When no batch
+ * applies, the record is written alone, so a later redelivery is still a duplicate.
+ */
+async function applyDodoCourseReversal(d1: D1DatabaseLike, order: CourseOrder, event: CoursePaymentEvent): Promise<CoursePaymentResult> {
+  const result = (outcome: CoursePaymentOutcome): CoursePaymentResult => ({ outcome, order_code: order.code });
+  if (await coursePaymentEventRecorded(d1, 'dodo', event.eventId)) return result('duplicate_event');
+  const gate: CourseEventGate = onlyIf => coursePaymentEventStatement(d1, event, onlyIf);
+  const { rawType: type, amount, currency } = event;
+  const moneyBack = { amountMinor: amount, currency };
+  try {
+    if (type === 'refund.succeeded') {
+      // Any refund, even a partial one, revokes access for good; the reason records whether it was partial, so a later
+      // chargeback is still counted. A refund while a dispute is open moves the charged-back order to refunded, so a won
+      // or cancelled dispute no longer restores it.
+      const reason = isPartialCourseReversal(order, amount) ? 'dodo_partial_refund' : 'dodo_refund';
+      const refund = (o: CourseOrder) => o.status === 'charged_back'
+        ? refundDisputedCourseOrder(d1, o, reason, moneyBack, gate)
+        : reverseCourseOrder(d1, o, 'refunded', reason, 'system', moneyBack, true, gate);
+      let done = await refund(order);
+      if (!done) {
+        // The order was read before this batch ran: a dispute that opened or was won meanwhile changed its status, so the
+        // refund is applied once more on the current order instead of being dropped. Only the batch that applies
+        // writes the record.
+        const current = await getCourseOrderByCode(d1, order.code);
+        if (current && current.status !== order.status) done = await refund(current);
+      }
+      if (done) return result('reversed');
+    } else {
+      const lost = DODO_DISPUTE_FUNDS_LOST.has(type);
+      // A funds-lost outcome on a paid order reports the chargeback in the same batch as the reversal.
+      if (await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost, gate)) return result('reversed');
+      if (lost) {
+        // Usually already charged back by `dispute.opened`: the record and the chargeback report are one batch.
+        await chargeBackLostCourseOrder(d1, order, moneyBack, gate);
+        return result('ignored');
+      }
+    }
+    // Nothing applied: the event is still recorded as handled.
+    return result((await recordCoursePaymentEvent(d1, 'dodo', event.eventId, event.orderId, amount, currency, type)) ? 'ignored' : 'duplicate_event');
+  } catch (err) {
+    // A delivery racing this one committed the record first; this batch rolled back, so nothing was written twice.
+    if (isUniqueViolation(err) && await coursePaymentEventRecorded(d1, 'dodo', event.eventId)) return result('duplicate_event');
     throw err;
   }
 }

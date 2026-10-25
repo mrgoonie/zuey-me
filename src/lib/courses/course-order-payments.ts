@@ -1,7 +1,8 @@
 /**
  * Turning money into ownership and back. SePay transfers (ZSC codes) and Dodo card payments both
  * end in `fulfilCourseOrder`; refunds, chargebacks and admin revokes end in `reverseCourseOrder`.
- * Every provider event is recorded in payment_events first, which makes retries idempotent.
+ * Every provider event is recorded in payment_events, which makes retries idempotent: first for a payment, and in the
+ * reversal's own batch for a refund or dispute that takes access away.
  */
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
@@ -9,6 +10,7 @@ import { queueNeedsAttention, queuePurchase, refundEvent } from '../analytics/co
 import { outboxInsertStatement } from '../analytics/outbox';
 import { AppError } from '../http';
 import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
+import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, siteUrl } from '../members/runtime';
 import { activityStatement, getUserById, logActivity } from '../members/users';
 import { DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
@@ -24,20 +26,43 @@ import { onCourseOrderPaid, onCourseOrderReversed } from './referral-bridge';
 
 export type CoursePaymentOutcome = 'duplicate_event' | 'unmatched' | 'paid' | 'already_paid' | 'needs_attention' | 'reversed' | 'restored' | 'ignored';
 
+export type CoursePaymentEvent = {
+  provider: 'sepay' | 'dodo'; eventId: string; orderId: string | null; amount: number | null; currency: string | null; rawType: string;
+};
+
+/**
+ * The idempotency record of a provider event as a statement (with `onlyIf`, inserted only while it holds). It throws a
+ * unique violation when the event was already recorded.
+ */
+export function coursePaymentEventStatement(d1: D1DatabaseLike, e: CoursePaymentEvent, onlyIf?: SqlCondition): D1PreparedStatementLike {
+  const source = onlyIf ? `SELECT ?, ?, NULL, ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, NULL, ?, ?, ?, ?, ?)';
+  return d1.prepare(`INSERT INTO payment_events (provider, event_id, booking_id, course_order_id, amount, currency, raw_type, received_at) ${source}`)
+    .bind(e.provider, e.eventId, e.orderId, e.amount, e.currency, e.rawType, iso(membersRuntime.now()), ...(onlyIf?.params ?? []));
+}
+
 /** Inserts the idempotency record; false when this provider event was already processed. */
 export async function recordCoursePaymentEvent(
   d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string, orderId: string | null, amount: number | null, currency: string | null, rawType: string,
 ): Promise<boolean> {
   try {
-    await d1.prepare(
-      'INSERT INTO payment_events (provider, event_id, booking_id, course_order_id, amount, currency, raw_type, received_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)'
-    ).bind(provider, eventId, orderId, amount, currency, rawType, iso(membersRuntime.now())).run();
+    await coursePaymentEventStatement(d1, { provider, eventId, orderId, amount, currency, rawType }).run();
     return true;
   } catch (err) {
     if (isUniqueViolation(err)) return false;
     throw err;
   }
 }
+
+/** True when this provider event is already recorded. */
+export async function coursePaymentEventRecorded(d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string): Promise<boolean> {
+  return (await d1.prepare('SELECT 1 AS found FROM payment_events WHERE provider = ? AND event_id = ?').bind(provider, eventId).first<Row>()) !== null;
+}
+
+/**
+ * The idempotency record of a webhook, built for the reversal batch it gates: written as the batch's first statement,
+ * only while the batch's own guard holds, so the record and the reversal commit together or not at all.
+ */
+export type CourseEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike;
 
 /** Lets the provider retry an event whose processing failed half-way. */
 export async function releaseCoursePaymentEvent(d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string): Promise<void> {
@@ -146,17 +171,18 @@ const REVERSIBLE = ['paid', 'needs_attention'] as const;
  * Marks a paid order refunded or charged back, revokes access and reverses referral commission. The status update,
  * the revoke (when this order granted the access), the activity log and the analytics event (`countMoneyBack`: a
  * refund, or the chargeback of a lost dispute) are one D1 batch, each applied only while the order is still
- * reversible, so a failed write leaves none of them and, once the webhook has released its event, the retry writes
- * them all once. (The webhook's `payment_events` row is a separate insert before the batch, so a worker that dies
- * after that insert leaves the event recorded and its redelivery is dropped as a duplicate.) The commission
- * reversal cannot join the batch and runs first for an order read as reversible: it is idempotent, so running it
- * again on the retry is safe.
+ * reversible. A webhook passes its `payment_events` record as `gate`: it is the batch's first statement under the same
+ * guard, so a failure or a crash before the commit leaves neither the reversal nor the record, and the redelivery
+ * applies it once; a redelivery after the commit fails on the record's unique key and writes nothing. The commission
+ * reversal cannot join the batch (it reads and appends to the shared referral ledger) and runs first for an order
+ * read as reversible: it is idempotent, so running it again on the redelivery is safe.
  */
 export async function reverseCourseOrder(
   d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reason: string, actor = 'system',
   /** Amount the provider reports taken back; defaults to the amount paid. */
   reversed: MoneyBack | null = null,
   countMoneyBack = kind === 'refunded',
+  gate?: CourseEventGate,
 ): Promise<boolean> {
   const commissionFirst = (REVERSIBLE as readonly string[]).includes(order.status);
   if (commissionFirst) await reverseReferral(d1, order, kind);
@@ -164,6 +190,7 @@ export async function reverseCourseOrder(
   const course = await getCourseById(d1, order.course_id);
   const moneyBack = countMoneyBack ? await courseMoneyBackStatement(d1, order, kind, reversed, reversible) : null;
   const results = await d1.batch([
+    ...(gate ? [gate(reversible)] : []),
     // Only revoke when this order is the one that granted access (a duplicate purchase leaves the original intact).
     ...revokeCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, reason: `${kind}:${reason}`, actor, orderId: order.id }, reversible),
     activityStatement(d1, order.user_id, `courses.order_${kind}`, { code: order.code, reason, actor }, undefined, reversible),
@@ -193,21 +220,38 @@ async function reverseReferral(d1: D1DatabaseLike, order: CourseOrder, kind: Rev
  * commission reversed, so the order only becomes `refunded` and its money back is counted; a later won or cancelled
  * dispute then finds no `charged_back` order to restore. The refund is dropped once a funds-lost outcome was received
  * for the order (that chargeback is the same money). The check runs in the same batch as the update, so a racing
- * funds-lost outcome either finds the order refunded or suppresses the refund. The update, the log and the `refund`
- * event land together or not at all.
+ * funds-lost outcome either finds the order refunded or suppresses the refund. The webhook's record (`gate`), the
+ * update, the log and the `refund` event land together or not at all.
  */
-export async function refundDisputedCourseOrder(d1: D1DatabaseLike, order: CourseOrder, reason: string, reversed: MoneyBack): Promise<boolean> {
+export async function refundDisputedCourseOrder(d1: D1DatabaseLike, order: CourseOrder, reason: string, reversed: MoneyBack, gate?: CourseEventGate): Promise<boolean> {
   const lost = [...DODO_DISPUTE_FUNDS_LOST];
   const disputed = orderIn(order.id, ['charged_back'], ` AND NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = o.id AND raw_type IN (${lost.map(() => '?').join(', ')}))`);
   disputed.params.push(...lost);
   const moneyBack = await courseMoneyBackStatement(d1, order, 'refunded', reversed, disputed);
   const results = await d1.batch([
+    ...(gate ? [gate(disputed)] : []),
     activityStatement(d1, order.user_id, 'courses.order_refunded', { code: order.code, reason, actor: 'system' }, undefined, disputed),
     ...(moneyBack ? [moneyBack] : []),
     d1.prepare(`UPDATE course_orders SET status = 'refunded', attention_reason = ?, updated_at = ? WHERE id = ? AND ${disputed.sql}`)
       .bind(reason, iso(membersRuntime.now()), order.id, ...disputed.params),
   ]);
   return Boolean(results.at(-1)?.meta?.changes);
+}
+
+/**
+ * A funds-lost dispute outcome for an order that is no longer reversible, usually charged back by `dispute.opened`:
+ * the lost money is reported now, once. An order already refunded in full reported its money back then (also when the
+ * refund came while the dispute was open); after a partial refund the chargeback is still counted. The webhook's record
+ * comes first in the same batch, and the refund check reads the order after it: a refund racing this outcome either
+ * committed first and is seen here, or sees the record and is suppressed (`refundDisputedCourseOrder`).
+ */
+export async function chargeBackLostCourseOrder(d1: D1DatabaseLike, order: CourseOrder, reversed: MoneyBack, gate: CourseEventGate): Promise<void> {
+  const notFullyRefunded: SqlCondition = {
+    sql: "NOT EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status = 'refunded' AND COALESCE(o.attention_reason, '') <> 'dodo_partial_refund')",
+    params: [order.id],
+  };
+  const moneyBack = await courseMoneyBackStatement(d1, order, 'charged_back', reversed, notFullyRefunded);
+  await d1.batch([gate(), ...(moneyBack ? [moneyBack] : [])]);
 }
 
 /**
