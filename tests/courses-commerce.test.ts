@@ -206,6 +206,39 @@ describe('Dodo course payments, refunds and disputes', () => {
     expect(refundKeys()).toEqual([]);
   });
 
+  for (const outcome of ['dispute.won', 'dispute.cancelled']) {
+    it(`keeps access when ${outcome} arrives before its dispute.opened`, async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      expect(await dodo('evt_end', outcome, { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+      expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+      expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'duplicate_event' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+      expect(refundKeys()).toEqual([]);
+
+      // A later dispute of the same payment still takes access away.
+      expect(await dodo('evt_open_2', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    });
+  }
+
+  it('flags a won dispute of a deleted course for the admin without granting access', async () => {
+    const { course } = await publishedCourse();
+    const lan = await member('lan@example.com');
+    const code = await paidByCard(lan);
+    expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+    await state.d1.prepare('UPDATE courses SET deleted_at = ? WHERE id = ?').bind(new Date(state.now).toISOString(), course.id).run();
+
+    expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'needs_attention' });
+    expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'needs_attention', attention_reason: 'course_missing', amount_paid: 4900 });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    const attention = state.d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM analytics_outbox WHERE event = 'payment_needs_attention'").get()?.n;
+    expect(attention).toBe(1);
+  });
+
   it('counts the money back of a course order once when it is both refunded and lost in a dispute, in either order', async () => {
     await publishedCourse();
     const refundedFirst = await paidByCard(await member('lan@example.com'));

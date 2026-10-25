@@ -14,7 +14,7 @@ import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime, siteUrl, str } from '../members/runtime';
 import { activityStatement, getUserById } from '../members/users';
-import { DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
+import { DODO_DISPUTE_FUNDS_KEPT, DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
 import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
@@ -78,29 +78,35 @@ export type CourseEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike
  * Flags the order for the admin and adds the money to it. The webhook's record (`gate`), the update, any `also`
  * statement, the activity log and the `payment_needs_attention` event are one D1 batch: the amount is added once, and a
  * failure or a crash before the commit leaves nothing, so the redelivery flags the order once. The update, the log and
- * the event apply only while the order is not paid: an order paid meanwhile (a payment racing this one) stays paid,
- * and no flag that never took effect is logged or counted. The record is still written, so the redelivery is a duplicate.
+ * the event apply only while the order is not paid (and while `onlyIf` holds): an order paid meanwhile (a payment
+ * racing this one) stays paid, and no flag that never took effect is logged or counted. The record is still written,
+ * so the redelivery is a duplicate; with `onlyIf` it is written only while that holds. The update runs last, so the
+ * statements before it still see the order it read. Returns whether the order was flagged.
  */
 export async function markCourseOrderAttention(
   d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string },
-  gate: CourseEventGate, also: D1PreparedStatementLike[] = [],
-): Promise<void> {
-  const unpaid: SqlCondition = { sql: "EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status <> 'paid')", params: [order.id] };
+  gate: CourseEventGate, also: D1PreparedStatementLike[] = [], onlyIf?: SqlCondition,
+): Promise<boolean> {
+  const unpaidSql = "EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status <> 'paid')";
+  const unpaid: SqlCondition = onlyIf
+    ? { sql: `${unpaidSql} AND ${onlyIf.sql}`, params: [order.id, ...onlyIf.params] }
+    : { sql: unpaidSql, params: [order.id] };
   const attention = outboxInsertStatement(d1, needsAttentionEvent({
     distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: extra.eventId ?? `course_order:${order.id}:${reason}`,
     reason, amountMinor: extra.amount, currency: extra.currency ?? (order.provider === 'sepay' ? 'VND' : null),
   }), undefined, unpaid);
-  await d1.batch([
-    gate(),
+  const results = await d1.batch([
+    gate(onlyIf),
+    ...also,
+    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null }, undefined, unpaid),
+    ...(attention ? [attention] : []),
     d1.prepare(
       `UPDATE course_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
          currency_paid = COALESCE(?, currency_paid), payment_ref = COALESCE(?, payment_ref), provider_event_id = COALESCE(?, provider_event_id), updated_at = ?
        WHERE id = ? AND ${unpaid.sql}`
     ).bind(reason, extra.amount ?? 0, extra.currency ?? null, extra.ref ?? null, extra.eventId ?? null, iso(membersRuntime.now()), order.id, ...unpaid.params),
-    ...also,
-    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null }, undefined, unpaid),
-    ...(attention ? [attention] : []),
   ]);
+  return Boolean(results.at(-1)?.meta?.changes);
 }
 
 /** Amount and currency actually paid for an order (falls back to the amount due on its rail). */
@@ -249,7 +255,8 @@ const REVERSIBLE = ['paid', 'needs_attention'] as const;
  * guard, so a failure or a crash before the commit leaves neither the reversal nor the record, and the redelivery
  * applies it once; a redelivery after the commit fails on the record's unique key and writes nothing. The commission
  * reversal cannot join the batch (it reads and appends to the shared referral ledger) and runs first for an order
- * read as reversible: it is idempotent, so running it again on the redelivery is safe.
+ * read as reversible: it is idempotent, so running it again on the redelivery is safe. `onlyIf` narrows the guard
+ * (an opened dispute already resolved for the merchant reverses nothing).
  */
 export async function reverseCourseOrder(
   d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reason: string, actor = 'system',
@@ -257,10 +264,12 @@ export async function reverseCourseOrder(
   reversed: MoneyBack | null = null,
   countMoneyBack = kind === 'refunded',
   gate?: CourseEventGate,
+  onlyIf?: SqlCondition,
 ): Promise<boolean> {
   const commissionFirst = (REVERSIBLE as readonly string[]).includes(order.status);
   if (commissionFirst) await reverseReferral(d1, order, kind);
-  const reversible = orderIn(order.id, REVERSIBLE);
+  const base = orderIn(order.id, REVERSIBLE);
+  const reversible: SqlCondition = onlyIf ? { sql: `${base.sql} AND ${onlyIf.sql}`, params: [...base.params, ...onlyIf.params] } : base;
   const course = await getCourseById(d1, order.course_id);
   const moneyBack = countMoneyBack ? await courseMoneyBackStatement(d1, order, kind, reversed, reversible) : null;
   const results = await d1.batch([
@@ -347,6 +356,28 @@ export async function courseMoneyBackStatement(
   }), undefined, onlyIf);
 }
 
+const DISPUTE_KEPT = [...DODO_DISPUTE_FUNDS_KEPT];
+
+/**
+ * Every won or cancelled dispute outcome recorded for the order has its `dispute.opened` recorded too (a dispute opens
+ * once and ends once). Dodo may deliver an outcome before the opened event it ends (that delivery retried later); while
+ * an outcome waits for its opened event, the late `dispute.opened` must not take access away. Recording an opened
+ * event only keeps this true, so it holds for every statement of the batch that records it.
+ */
+export function courseDisputesPaired(orderId: string): SqlCondition {
+  const count = (types: string) => `(SELECT COUNT(*) FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND raw_type IN (${types}))`;
+  return {
+    sql: `${count(DISPUTE_KEPT.map(() => '?').join(', '))} <= ${count('?')}`,
+    params: [orderId, ...DISPUTE_KEPT, orderId, 'dispute.opened'],
+  };
+}
+
+/** True when a won or cancelled outcome of the order's dispute arrived before its `dispute.opened`. */
+export async function courseDisputeResolvedEarly(d1: D1DatabaseLike, orderId: string): Promise<boolean> {
+  const paired = courseDisputesPaired(orderId);
+  return (await d1.prepare(`SELECT 1 AS found WHERE NOT (${paired.sql})`).bind(...paired.params).first<Row>()) !== null;
+}
+
 /**
  * A dispute the merchant won: the order is paid again and access returns. No purchase event is queued: the
  * original one still stands, because an opened dispute never queued a refund. An order refunded while the dispute was
@@ -355,22 +386,26 @@ export async function courseMoneyBackStatement(
  * applied only while the order is still `charged_back`, with the status update last: a refund that commits first
  * makes the whole batch a no-op, and a refund that comes after it finds the order paid and the access granted, and
  * revokes it. The webhook's record (`gate`) is the batch's first statement under the same guard, so a failure or a
- * crash before the commit leaves no record and the redelivery restores the order once.
+ * crash before the commit leaves no record and the redelivery restores the order once. A course deleted meanwhile
+ * grants nothing: the order is flagged `course_missing` under the same guard, for the admin to refund or settle.
+ * Returns the outcome, or null when the order was no longer charged back.
  */
-export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string, gate?: CourseEventGate): Promise<boolean> {
-  const course = await getCourseById(d1, order.course_id);
-  if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
+export async function restoreCourseOrder(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string, gate: CourseEventGate,
+): Promise<'restored' | 'needs_attention' | null> {
   const disputed = orderIn(order.id, ['charged_back']);
+  const course = await getCourseById(d1, order.course_id);
+  if (!course) return (await markCourseOrderAttention(d1, order, 'course_missing', {}, gate, [], disputed)) ? 'needs_attention' : null;
   const results = await d1.batch([
-    ...(gate ? [gate(disputed)] : []),
+    gate(disputed),
     ...grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, disputed),
     activityStatement(d1, order.user_id, 'courses.order_paid', orderPaidDetail(order), undefined, disputed),
     d1.prepare(`UPDATE course_orders SET status = 'paid', attention_reason = ?, updated_at = ? WHERE id = ? AND ${disputed.sql}`)
       .bind(reason, iso(membersRuntime.now()), order.id, ...disputed.params),
   ]);
-  if (!results.at(-1)?.meta?.changes) return false;
+  if (!results.at(-1)?.meta?.changes) return null;
   await afterCourseOrderPaid(d1, env, { ...order, status: 'paid' }, null);
-  return true;
+  return 'restored';
 }
 
 /** The `attention_reason` prefix of an order an admin grant paid (`admin_grant:<note>`). */
