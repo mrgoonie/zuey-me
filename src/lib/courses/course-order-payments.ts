@@ -2,7 +2,7 @@
  * Turning money into ownership and back. SePay transfers (ZSC codes) and Dodo card payments both
  * end in `fulfilCourseOrder`; refunds, chargebacks and admin revokes end in `reverseCourseOrder`.
  * Every provider event is recorded in payment_events, which makes retries idempotent: first for a payment, and in the
- * reversal's own batch for a refund or dispute that takes access away.
+ * own batch of the reversal or restore for a refund or a dispute.
  */
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
@@ -285,13 +285,15 @@ export async function courseMoneyBackStatement(
  * The access grant (with its GitHub invite rows and log), the order log and the status update are one D1 batch, each
  * applied only while the order is still `charged_back`, with the status update last: a refund that commits first
  * makes the whole batch a no-op, and a refund that comes after it finds the order paid and the access granted, and
- * revokes it.
+ * revokes it. The webhook's record (`gate`) is the batch's first statement under the same guard, so a failure or a
+ * crash before the commit leaves no record and the redelivery restores the order once.
  */
-export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string): Promise<boolean> {
+export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string, gate?: CourseEventGate): Promise<boolean> {
   const course = await getCourseById(d1, order.course_id);
   if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
   const disputed = orderIn(order.id, ['charged_back']);
   const results = await d1.batch([
+    ...(gate ? [gate(disputed)] : []),
     ...grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, disputed),
     activityStatement(d1, order.user_id, 'courses.order_paid', orderPaidDetail(order), undefined, disputed),
     d1.prepare(`UPDATE course_orders SET status = 'paid', attention_reason = ?, updated_at = ? WHERE id = ? AND ${disputed.sql}`)
