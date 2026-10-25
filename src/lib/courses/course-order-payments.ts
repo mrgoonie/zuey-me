@@ -63,6 +63,12 @@ function paidAmount(order: CourseOrder): { amountMinor: number | null; currency:
     : { amountMinor: order.amount_paid ?? order.amount_usd_cents, currency: 'USD' };
 }
 
+/** True when the provider reports less money taken back than the order paid. */
+export function isPartialCourseReversal(order: CourseOrder, amountMinor: number | null): boolean {
+  const paid = paidAmount(order).amountMinor;
+  return amountMinor !== null && paid !== null && amountMinor < paid;
+}
+
 /**
  * Grants the course for a paid order, notifies the referral program and emails a receipt.
  * Referral and email failures are logged and never undo the purchase.
@@ -163,7 +169,7 @@ export async function queueCourseMoneyBack(
   await queueRefund(d1, {
     distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:${kind}`,
     reason: kind === 'refunded' ? 'refund' : 'chargeback', amountMinor, currency: reversed?.currency ?? paid.currency,
-    partial: amountMinor !== null && paid.amountMinor !== null ? amountMinor < paid.amountMinor : undefined,
+    partial: amountMinor !== null && paid.amountMinor !== null ? isPartialCourseReversal(order, amountMinor) : undefined,
     purchaseTransactionId: `course_order:${order.id}`,
   });
 }

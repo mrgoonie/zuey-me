@@ -85,6 +85,13 @@ const articleSummary = {
     },
     snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
     editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
+    read_back: {
+      type: 'string', enum: ['failed'],
+      description: 'Write responses only (create, update, publish, edition delete, tags set), present when the write committed but reading the article back failed (D1 error or a concurrent delete). '
+        + 'The write landed: do not retry it (a retry gets 409, `slug_taken` for a create). The fields of the edition shown, revisions, document and `receipt` are built from the rows as written; '
+        + '`tags`, `topic_tags`, `category`, `labels`, `available_locales` and other editions are not loaded (empty, also after a tags write; `editions` lists only the edition shown), so re-read the article for them. '
+        + 'An idempotent replay of such an answer repeats the flag.',
+    },
     email_notification: {
       description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish). '
         + 'A publish response reports reason `notification_update_failed` when the email step failed after the publish committed; '

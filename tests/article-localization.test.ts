@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createTestD1 } from './helpers/d1';
-import type { D1DatabaseLike } from '../src/db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument, Block } from '../src/lib/blocks/schema';
 import { walkBlocks } from '../src/lib/blocks/schema';
 import { createArticle, getArticle, publishArticle, updateArticle } from '../src/lib/blocks/articles';
@@ -344,6 +344,37 @@ describe('apply', () => {
     await seed('broken');
     raw.raw.run("UPDATE article_editions SET draft_json = ? WHERE locale = 'vi'", [JSON.stringify({ version: 1, blocks: [{ id: 'x', type: 'bogus' }, ...sourceDocument().blocks] })]);
     await expectError(prepareLocalization(d1, 'broken', {}), 409, 'source_document_recovered');
+  });
+
+  it('a failed article read after the translation committed still answers committed, with provenance recorded', async () => {
+    await seed();
+    const prep = await prepare();
+    const inner = d1;
+    let committed = false;
+    const failing = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+      bind: (...values: unknown[]) => failing(stmt.bind(...values)),
+      first: async () => { throw new Error('D1_ERROR: read-back storage unavailable'); },
+      all: () => stmt.all(),
+      run: () => stmt.run(),
+    });
+    // Every article read (by id or slug) fails like a D1 storage error once the save's batch has committed.
+    const broken: D1DatabaseLike = {
+      prepare: (sql: string) => {
+        const stmt = inner.prepare(sql);
+        return committed && sql.startsWith('SELECT * FROM articles WHERE') ? failing(stmt) : stmt;
+      },
+      batch: async (statements: D1PreparedStatementLike[]) => {
+        const res = await inner.batch(statements);
+        committed = true;
+        return res;
+      },
+    };
+    const res = await applyLocalization(broken, 'multi', { locale: 'en', source_hash: prep.source_hash, translations: allPlaceholdersKept(prep.entries) }, { actor: 'test' });
+    expect(res).toMatchObject({ valid: true, committed: true, provenance_recorded: true, article_revision: 2 });
+    expect(JSON.stringify(res)).not.toContain('read-back storage unavailable');
+    expect((await getArticle(d1, 'multi', { locale: 'en' }))?.title).toBe('EN Bài viết gốc');
+    // The recorded result hash is the one of the saved edition: the translation reads as current, not hand-edited.
+    expect((await prepare()).locales.find(l => l.locale === 'en')).toMatchObject({ state: 'current', edited_since_apply: false });
   });
 });
 
