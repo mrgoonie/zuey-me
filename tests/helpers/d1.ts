@@ -29,7 +29,13 @@ class Statement implements D1PreparedStatementLike {
     return this.runSync();
   }
   runSync(): D1RunResultLike {
-    const res = this.db.query(this.sql).run(...this.params);
+    const query = this.db.query(this.sql);
+    // Like D1 in a batch: a SELECT answers with its rows.
+    if (/^\s*SELECT\b/i.test(this.sql)) {
+      const rows: unknown[] = query.all(...this.params);
+      return { meta: { changes: 0 }, results: rows as Record<string, unknown>[] };
+    }
+    const res = query.run(...this.params);
     return { meta: { changes: res.changes, last_row_id: Number(res.lastInsertRowid) } };
   }
 }

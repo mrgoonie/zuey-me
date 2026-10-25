@@ -5,7 +5,9 @@ import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
 import type { ArticleRecord, WriteOperation } from '../src/lib/blocks/articles';
 import type { Locale } from '../src/lib/i18n/locales';
-import { createArticle, deleteEdition, getArticle, publishArticle, setTagsForArticle, toWriteReceipt, updateArticle } from '../src/lib/blocks/articles';
+import { createArticle, deleteEdition, getArticle, publishArticle, requireArticleId, setTagsForArticle, toWriteReceipt, updateArticle } from '../src/lib/blocks/articles';
+import { createCategory, deleteCategory } from '../src/lib/taxonomy/categories';
+import { applyLabelSet, getLabelState } from '../src/lib/taxonomy/labels';
 import { AppError } from '../src/lib/http';
 import { createSession } from '../src/db/store';
 import { getArticleNotification } from '../src/lib/notifications/article-notification-schedule';
@@ -868,5 +870,78 @@ describe('a failed read-back after commit never turns a committed create, editio
     expect(res).toMatchObject({ read_back: 'failed', revision: 3, receipt: { operation: 'tags_set', article_revision: 3 } });
     expect(JSON.stringify(res)).not.toContain(RAW_ERROR);
     expect((await getArticle(d1, 'post'))?.tags).toEqual(['fresh']);
+  });
+});
+
+describe('revisioned writes on an article with three editions: stale revisions and writes that skip the revision (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+  let category: { id: string; revision: number };
+  // Revision after the seed below: vi (primary, published), en (published) and zh (draft).
+  const CURRENT = 5;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    category = await createCategory(d1, { slug: 'guides', names: { vi: 'Hướng dẫn' } }, 'admin');
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original'), tags: ['kept'], category: 'guides' });
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 1);
+    await updateArticle(d1, 'post', { locale: 'zh', title: '文章', document: doc('chinese') }, 2);
+    await publishArticle(d1, 'post', 3, true, { notify: false });
+    await publishArticle(d1, 'post', 4, true, { locale: 'en', notify: false });
+    // Owns the tag that article_tags_set assigns below (tags_set only accepts existing tags).
+    await createArticle(d1, { slug: 'other', title: 'Khác', tags: ['fresh'] });
+  });
+
+  type Writer = { name: string; operation: WriteOperation; deletedLocale?: Locale; run: (db: D1DatabaseLike, expected: number) => Promise<ArticleRecord> };
+  const writers: Writer[] = [
+    { name: 'update of the primary edition', operation: 'update', run: (db, e) => updateArticle(db, 'post', { title: 'Đổi tên', document: doc('changed') }, e) },
+    { name: 'update of a second edition', operation: 'update', run: (db, e) => updateArticle(db, 'post', { locale: 'en', document: doc('english 2') }, e) },
+    { name: 'publish of the third edition', operation: 'publish', run: (db, e) => publishArticle(db, 'post', e, true, { locale: 'zh', notify: false }) },
+    { name: 'edition delete', operation: 'edition_delete', deletedLocale: 'zh', run: (db, e) => deleteEdition(db, 'post', 'zh', e) },
+    { name: 'tags set', operation: 'tags_set', run: (db, e) => setTagsForArticle(db, 'post', ['fresh'], e) },
+  ];
+
+  const storedArticle = () => d1.raw.query("SELECT revision, title, label_revision, category_id FROM articles WHERE slug = 'post'").get();
+
+  /** A label write and a category delete: both change the article row without moving its revision. */
+  async function unrevisionedWrites(): Promise<void> {
+    const id = await requireArticleId(d1, 'post');
+    const labels = await getLabelState(d1, id);
+    await applyLabelSet(d1, id, [], { expectedLabelRevision: labels.label_revision, source: 'manual', actor: 'admin', reason: 'concurrent label write' });
+    await deleteCategory(d1, category.id, category.revision, 'admin');
+  }
+
+  for (const writer of writers) {
+    it(`${writer.name}: an expected revision ahead of the one read is a 409 before anything is written`, async () => {
+      const before = storedArticle();
+      // A pipelining client sends the revision its previous save will produce, and that save lands between this
+      // write's read and its commit: without the early check the commit applies on top of a save it never read.
+      let concurrent = false;
+      const pipelined = interleaveAtFirstWrite(d1, 'before', async () => {
+        concurrent = true;
+        await updateArticle(d1, 'post', { title: 'Concurrent title', document: doc('concurrent') }, CURRENT);
+      });
+      expect(conflictRevision(await settle(writer.run(pipelined, CURRENT + 1)))).toBe(CURRENT);
+      expect(concurrent).toBe(false);
+      expect(storedArticle()).toEqual(before);
+    });
+
+    it(`${writer.name}: the read-back fallback matches a normal read of the committed state`, async () => {
+      const rec = await writer.run(failReadBackAfterCommit(d1), CURRENT);
+      expect(rec.revision).toBe(CURRENT + 1);
+      await expectFallbackMatchesStored(d1, rec, writer.operation, writer.deletedLocale);
+    });
+
+    it(`${writer.name}: the fallback reports label_revision and category_id as committed after a label write and a category delete in between`, async () => {
+      const rec = await writer.run(interleaveAtFirstWrite(failReadBackAfterCommit(d1), 'before', unrevisionedWrites), CURRENT);
+      expect(rec).toMatchObject({ read_back: 'failed', revision: CURRENT + 1, label_revision: 1 });
+      expect(storedArticle()).toMatchObject({ revision: CURRENT + 1, label_revision: 1 });
+      await expectFallbackMatchesStored(d1, rec, writer.operation, writer.deletedLocale);
+    });
+  }
+
+  it('the stored state keeps three editions until one is deleted', async () => {
+    expect((await getArticle(d1, 'post'))?.editions.map(e => e.locale).sort()).toEqual(['en', 'vi', 'zh']);
+    await deleteEdition(d1, 'post', 'zh', CURRENT);
+    expect((await getArticle(d1, 'post'))?.editions.map(e => e.locale).sort()).toEqual(['en', 'vi']);
   });
 });

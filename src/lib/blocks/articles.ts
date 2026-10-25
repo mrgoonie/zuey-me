@@ -802,15 +802,39 @@ function bumpRevisionStatement(db: D1DatabaseLike, articleId: string, expected: 
     .bind(now, articleId, expected);
 }
 
+/** Article fields that change without a revision bump (label writes, category deletes). */
+type UnrevisionedFields = Pick<ArticleRowData, 'labelRevision' | 'categoryId'>;
+
 /**
  * Runs a save's guarded writes, then its revision bump, then derived rebuilds, in one D1 batch (one
  * transaction): the save applies fully at expected + 1 or not at all. A lost bump is a revision conflict.
+ * The batch ends by reading the fields the revision guard does not cover, so a read-back fallback reports
+ * them as committed rather than as read before the commit (empty only from a driver that returns no rows).
  */
 async function commitAtRevision(
   db: D1DatabaseLike, articleId: string, writes: D1PreparedStatementLike[], bump: D1PreparedStatementLike, derived: D1PreparedStatementLike[] = [],
-): Promise<void> {
-  const results = await db.batch([...writes, bump, ...derived]);
+): Promise<Partial<UnrevisionedFields>> {
+  const results = await db.batch([
+    ...writes, bump, ...derived,
+    db.prepare('SELECT label_revision, category_id FROM articles WHERE id = ?').bind(articleId),
+  ]);
   if (!results[writes.length]?.meta?.changes) return conflict(db, articleId);
+  const row = results[results.length - 1]?.results?.[0];
+  if (!row) return {};
+  return { labelRevision: n(row, 'label_revision'), categoryId: typeof row.category_id === 'string' ? row.category_id : null };
+}
+
+/**
+ * Rejects a revisioned write whose expected revision is not the one just read: the commit is guarded by
+ * `expected` only, so without this a client sending a revision it has not received yet could commit on top
+ * of a save that landed after the read, and a read-back fallback would show the rows read before that save.
+ */
+function requireReadAtExpected(art: ArticleRowData, expected: number): void {
+  if (art.revision !== expected) throw revisionConflict(art.revision);
+}
+
+function revisionConflict(current: number): AppError {
+  return new AppError(409, 'revision_conflict', 'Article was changed by someone else; reload and retry', { current_revision: current });
 }
 
 /** Keeps the legacy single-locale columns of `articles` equal to the primary edition (older builds read them). */
@@ -831,7 +855,7 @@ function mirrorPrimaryStatement(db: D1DatabaseLike, articleId: string): D1Prepar
 async function conflict(db: D1DatabaseLike, articleId: string): Promise<never> {
   const current = await db.prepare('SELECT revision FROM articles WHERE id = ? AND deleted_at IS NULL').bind(articleId).first<Row>();
   if (!current) throw new AppError(404, 'not_found', 'Article not found');
-  throw new AppError(409, 'revision_conflict', 'Article was changed by someone else; reload and retry', { current_revision: n(current, 'revision') });
+  throw revisionConflict(n(current, 'revision'));
 }
 
 /** Whether a write was rejected by the unique index on `articles.slug` (D1 and SQLite report it the same way). */
@@ -921,6 +945,7 @@ export async function updateArticle(
   const expected = requireRevision(expectedRevision);
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
+  requireReadAtExpected(art, expected);
   const actor = ctx.actor ?? 'admin';
   const locale = input.locale ?? art.primary;
   const editionRow = await db.prepare('SELECT * FROM article_editions WHERE article_id = ? AND locale = ?').bind(art.id, locale).first<Row>();
@@ -972,8 +997,9 @@ export async function updateArticle(
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(nextSlug, primary, input.access ?? art.access, categoryId, now, art.id, expected);
   // The primary mirror is derived from the editions, so it is correct to run whether or not this save won.
+  let committed: Partial<UnrevisionedFields>;
   try {
-    await commitAtRevision(db, art.id, writes, bump, [mirrorPrimaryStatement(db, art.id)]);
+    committed = await commitAtRevision(db, art.id, writes, bump, [mirrorPrimaryStatement(db, art.id)]);
   } catch (err) {
     // Another article took the slug after the check above; the batch rolled back as a whole.
     if (nextSlug !== art.slug && isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${nextSlug}" is already used`);
@@ -990,7 +1016,7 @@ export async function updateArticle(
     ? { ...edition, title, excerpt, draftJson: docJson, revision, updatedAt: now }
     : draftEditionRow(art.id, locale, title, excerpt, docJson, revision, now, editionRow ? toEditionRow(editionRow).coverAlt : '');
   return readBackAfterCommit(db, art.id, {
-    art: { ...art, slug: nextSlug, primary, access: input.access ?? art.access, categoryId, revision, updatedAt: now },
+    art: { ...art, slug: nextSlug, primary, access: input.access ?? art.access, categoryId, revision, updatedAt: now, ...committed },
     edition: writtenEdition,
   }, locale);
 }
@@ -1026,6 +1052,7 @@ export async function publishArticle(
   const notify = parseNotifyFlag(ctx.notify);
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
+  requireReadAtExpected(art, expected);
   const locale = ctx.locale ?? art.primary;
   const row = await db.prepare('SELECT * FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL').bind(art.id, locale).first<Row>();
   if (!row) throw new AppError(404, 'not_found', `No ${locale} edition to publish`);
@@ -1044,7 +1071,7 @@ export async function publishArticle(
   const publishedWords = wordCount(documentText(doc));
   // Guarded by the revision, so the draft copied here is the one read above: a save landing in between
   // bumps the revision and turns this publish into a conflict instead of publishing an unseen draft.
-  await commitAtRevision(db, art.id, [
+  const committed = await commitAtRevision(db, art.id, [
     db.prepare(`
       UPDATE article_editions SET published_json = draft_json, status = 'published', published_revision = ?, revision = ?,
         published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?,
@@ -1066,7 +1093,7 @@ export async function publishArticle(
     emailNotification = await notificationAfterFailure(db, art.id, nowMs);
   }
   const rec = await readBackAfterCommit(db, art.id, {
-    art: { ...art, revision, updatedAt: now },
+    art: { ...art, revision, updatedAt: now, ...committed },
     edition: {
       ...edition, publishedJson: edition.draftJson, status: 'published', publishedRevision: revision, revision,
       publishedAt: publishedAt ?? edition.publishedAt ?? now, publishedWords, coverUrl, updatedAt: now,
@@ -1083,31 +1110,33 @@ export async function deleteEdition(
   const expected = requireRevision(expectedRevision);
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
+  requireReadAtExpected(art, expected);
   if (locale === art.primary) throw new AppError(409, 'primary_edition', 'Change primary_locale before deleting the primary edition');
   const editions = (await loadEditions(db, [art.id])).get(art.id) ?? [];
   const edition = editions.find(e => e.locale === locale);
   if (!edition) throw new AppError(404, 'not_found', `No ${locale} edition`);
   const now = nowIso();
-  await commitAtRevision(db, art.id, [
+  const committed = await commitAtRevision(db, art.id, [
     db.prepare(`UPDATE article_editions SET deleted_at = ?, updated_at = ?, revision = ? WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}`)
       .bind(now, now, expected + 1, art.id, locale, art.id, expected),
     guardedRevisionStatement(db, art.id, expected, locale, 'delete_edition', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
   ], bumpRevisionStatement(db, art.id, expected, now));
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
-  return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions.filter(e => e !== edition), expected + 1, now));
+  return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions.filter(e => e.locale !== locale), expected + 1, now, committed));
 }
 
 /**
  * Written state of a write that only moves the article revision (edition delete, tags set): the edition a
- * read without locale shows (the primary one), as read before the commit. The revision-guarded commit means
- * nothing else changed it in between.
+ * read without locale shows (the primary one), as read before the commit. The article was read at `expected`
+ * and the commit is guarded by `expected`, so no revisioned write changed it in between; the fields that
+ * move without a revision bump come from the commit itself.
  */
 function unchangedEditionShown(
-  art: ArticleRowData, editions: EditionRow[], revision: number, now: string,
+  art: ArticleRowData, editions: EditionRow[], revision: number, now: string, committed: Partial<UnrevisionedFields>,
 ): { art: ArticleRowData; edition: EditionRow } | null {
   const pick = pickEdition(editions, undefined, art.primary);
-  return pick ? { art: { ...art, revision, updatedAt: now }, edition: pick.edition } : null;
+  return pick ? { art: { ...art, revision, updatedAt: now, ...committed }, edition: pick.edition } : null;
 }
 
 /** Soft delete; the slug stays reserved. Search rows are removed immediately. */
@@ -1132,16 +1161,17 @@ export async function setTagsForArticle(
   const expected = requireRevision(expectedRevision);
   const art = await loadArticleRow(db, slug);
   if (!art) throw new AppError(404, 'not_found', 'Article not found');
+  requireReadAtExpected(art, expected);
   const tagIds = await resolveTagRefs(db, refs, { createMissing: false, locale: art.primary, actor: ctx.actor ?? 'admin' });
   // Read before the commit so the answer can still be built if the read-back after it fails.
   const editions = (await loadEditions(db, [art.id])).get(art.id) ?? [];
   const now = nowIso();
-  await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
+  const committed = await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
   // Derived caches rebuilt from the committed rows (legacy tag names column, search index); idempotent.
   await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
-  return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions, expected + 1, now));
+  return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions, expected + 1, now, committed));
 }
 
 export interface RevisionEntry {

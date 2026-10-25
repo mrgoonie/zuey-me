@@ -10,6 +10,8 @@ export interface D1PreparedStatementLike {
 
 export interface D1RunResultLike {
   meta?: { changes?: number; last_row_id?: number };
+  /** Rows of a reading statement run in a batch (D1 returns them for each SELECT in the batch). */
+  results?: Record<string, unknown>[];
 }
 
 export interface D1DatabaseLike {
