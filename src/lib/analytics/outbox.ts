@@ -117,15 +117,15 @@ export function outboxInsertStatement<E extends ServerEventName>(
     crypto.randomUUID(), input.dedupeKey, input.event, input.distinctId, JSON.stringify(checked.properties),
     resolveOccurredAt(input.occurredAt, nowMs), now, now, now,
   ];
-  const columns = 'INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)';
-  if (!unlessPaymentEvent) {
-    return d1.prepare(`${columns} VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?) ON CONFLICT (dedupe_key) DO NOTHING`).bind(...values);
-  }
+  const row = "?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?";
+  const source = unlessPaymentEvent
+    ? `SELECT ${row} WHERE NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = ? AND event_id = ?)`
+    : `VALUES (${row})`;
+  const guard = unlessPaymentEvent ? [unlessPaymentEvent.provider, unlessPaymentEvent.eventId] : [];
   return d1.prepare(
-    `${columns} SELECT ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?
-     WHERE NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = ? AND event_id = ?)
-     ON CONFLICT (dedupe_key) DO NOTHING`
-  ).bind(...values, unlessPaymentEvent.provider, unlessPaymentEvent.eventId);
+    `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
+     ${source} ON CONFLICT (dedupe_key) DO NOTHING`
+  ).bind(...values, ...guard);
 }
 
 /**

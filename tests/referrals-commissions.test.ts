@@ -429,6 +429,22 @@ describe('Dodo commission and refunds', () => {
     ]);
   });
 
+  it('adds a partial refund to a later chargeback, and counts no partial refund after a chargeback', async () => {
+    await paidCard();
+    const partial = { payload_type: 'Refund', refund_id: 'rfd_part', payment_id: 'pay_first', amount: 500, currency: 'USD', is_partial: true };
+    expect(await sendDodo('refund.succeeded', partial)).toBe('reversed');
+    expect(await sendDodo('dispute.lost', disputeData('dispute_lost'))).toBe('already_reversed');
+    expect(chargebacks().map(r => r.dedupe_key).sort()).toEqual(['refund:dodo:dispute_lost:dsp_1', 'refund:dodo:refund:rfd_part']);
+
+    const lostRenewal = { ...disputeData('dispute_lost'), dispute_id: 'dsp_renewal', payment_id: 'pay_renewal', amount: '2090' };
+    expect(await sendDodo('dispute.lost', lostRenewal)).toBe('renewal');
+    expect(await sendDodo('refund.succeeded', { ...partial, refund_id: 'rfd_part_renewal', payment_id: 'pay_renewal' })).toBe('renewal');
+    expect(chargebacks().map(r => r.dedupe_key).sort()).toEqual([
+      'refund:dodo:dispute_lost:dsp_1', 'refund:dodo:dispute_lost:dsp_renewal', 'refund:dodo:refund:rfd_part',
+    ]);
+    expect(reversalLogs()).toHaveLength(4);
+  });
+
   /**
    * The test database as a worker that dies on the first write matching `failOn`: that write and every later
    * statement throw (so a cleanup after the failure never runs), and a batch containing it applies nothing.
@@ -461,7 +477,7 @@ describe('Dodo commission and refunds', () => {
     };
   }
 
-  for (const [point, failOn] of [['the gate insert', /INSERT INTO payment_events/], ['the activity log', /INSERT INTO user_activity/]] as const) {
+  for (const [point, failOn] of [['the analytics outbox insert', /INSERT INTO analytics_outbox/], ['the activity log', /INSERT INTO user_activity/]] as const) {
     it(`leaves a dispute retryable when the worker dies at ${point}: the redelivery logs and reports it once`, async () => {
       const { cardId } = await paidCard();
       envOverrides.DB = dyingD1(failOn);

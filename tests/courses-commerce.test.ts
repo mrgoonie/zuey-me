@@ -216,6 +216,30 @@ describe('Dodo course payments, refunds and disputes', () => {
     ]);
   });
 
+  it('counts a chargeback after a partial refund of a course order, and no partial refund after a chargeback', async () => {
+    const { course } = await publishedCourse();
+    const lan = await member('lan@example.com');
+    const partlyRefunded = await paidByCard(lan);
+    const partlyOrder = await getCourseOrderByCode(state.d1, partlyRefunded);
+    expect(await dodo('evt_pr_a', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+    // Any refund still revokes access.
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    expect((await getCourseOrderByCode(state.d1, partlyRefunded))?.attention_reason).toBe('dodo_partial_refund');
+    expect(await dodo('evt_pl_a', 'dispute.lost', { payment_id: `pay_${partlyRefunded}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(refundKeys()).toEqual([
+      `refund:dodo:course_order:${partlyOrder?.id}:refunded`, `refund:dodo:course_order:${partlyOrder?.id}:charged_back`,
+    ]);
+
+    const lostFirst = await paidByCard(await member('mai@example.com'));
+    const lostOrder = await getCourseOrderByCode(state.d1, lostFirst);
+    expect(await dodo('evt_pl_b', 'dispute.lost', { payment_id: `pay_${lostFirst}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+    expect(await dodo('evt_pr_b', 'refund.succeeded', { payment_id: `pay_${lostFirst}`, amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(refundKeys()).toEqual([
+      `refund:dodo:course_order:${partlyOrder?.id}:refunded`, `refund:dodo:course_order:${partlyOrder?.id}:charged_back`,
+      `refund:dodo:course_order:${lostOrder?.id}:charged_back`,
+    ]);
+  });
+
   it('keeps the string amount of a signed Dodo dispute on the payment event and the chargeback report', async () => {
     await publishedCourse();
     const lan = await member('lan@example.com');

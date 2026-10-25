@@ -12,7 +12,7 @@ import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import type { CoursePaymentOutcome } from './course-order-payments';
 import {
-  fulfilCourseOrder, markCourseOrderAttention, queueCourseMoneyBack, recordCoursePaymentEvent, releaseCoursePaymentEvent, restoreCourseOrder,
+  fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention, queueCourseMoneyBack, recordCoursePaymentEvent, releaseCoursePaymentEvent, restoreCourseOrder,
   reverseCourseOrder,
 } from './course-order-payments';
 
@@ -142,13 +142,17 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
     }
     if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch });
     if (type === 'refund.succeeded') {
-      return { outcome: (await reverseCourseOrder(d1, order, 'refunded', 'dodo_refund', 'system', { amountMinor: amount, currency })) ? 'reversed' : 'ignored', order_code: order.code };
+      // Any refund revokes access; the reason records whether it was partial, so a later chargeback is still counted.
+      const reason = isPartialCourseReversal(order, amount) ? 'dodo_partial_refund' : 'dodo_refund';
+      return { outcome: (await reverseCourseOrder(d1, order, 'refunded', reason, 'system', { amountMinor: amount, currency })) ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DISPUTE_REVOKE.has(type)) {
       const reversed = await reverseCourseOrder(d1, order, 'charged_back', type);
       // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once. An order
-      // already refunded reported its money back then (a refund after a chargeback finds the order charged back and reports nothing).
-      if (DODO_DISPUTE_FUNDS_LOST.has(type) && order.status !== 'refunded') await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
+      // already fully refunded reported its money back then (a refund after a chargeback finds the order charged back and
+      // reports nothing). After a partial refund the chargeback is still counted.
+      const fullyRefunded = order.status === 'refunded' && order.attention_reason !== 'dodo_partial_refund';
+      if (DODO_DISPUTE_FUNDS_LOST.has(type) && !fullyRefunded) await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
       return { outcome: reversed ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
