@@ -51,8 +51,9 @@ export interface DataTableProps {
 
 function CellView({ col, raw, renderInline, locale }: { col: TableColumn; raw: string; renderInline: DataTableProps['renderInline']; locale: TableLocale }) {
   if (raw === '') return null;
+  // Every case renders one node: in cards mode the cell is a label/value grid, and a second node would start a new grid row.
   switch (col.type) {
-    case 'text': return <>{renderInline(raw)}</>;
+    case 'text': return <span>{renderInline(raw)}</span>;
     case 'badge': return <span className={`zb-dt-badge zb-dt-tone-${badgeTone(raw)}`}>{raw}</span>;
     case 'link': {
       const link = linkCell(raw);
