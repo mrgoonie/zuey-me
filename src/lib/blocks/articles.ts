@@ -79,6 +79,13 @@ export interface ArticleSummary {
   editions?: EditionSummary[];
   /** Admin draft views and publish responses only: the new-article email to members (`failed` only in publish responses). */
   email_notification?: PublishEmailNotification | null;
+  /**
+   * Update and publish responses only, set when the write committed but reading the article back failed. The
+   * record is then built from the rows as written: the edition, revisions, document and receipt are exact, while
+   * tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty; `editions`
+   * lists only the written one). Re-read the article for those.
+   */
+  read_back?: 'failed';
 }
 
 export interface ArticleRecord extends ArticleSummary {
@@ -545,6 +552,34 @@ async function getArticleById(db: D1DatabaseLike, id: string, missing: string, o
   return rec;
 }
 
+/**
+ * Read-back of a write that has already committed. A failure (D1 error, or a concurrent delete) is logged and
+ * answered with the record built from the rows as written, flagged `read_back: "failed"`: the write landed,
+ * and reporting it as an error would make a retry fail with 409.
+ */
+async function readBackAfterCommit(
+  db: D1DatabaseLike, id: string, locale: Locale, written: { art: ArticleRowData; edition: EditionRow },
+): Promise<ArticleRecord> {
+  try {
+    return await getArticleById(db, id, 'Article disappeared after commit', { locale });
+  } catch (err) {
+    console.error('Article read-back failed after commit:', err instanceof Error ? err.message : 'unknown');
+    const { art, edition } = written;
+    // Only the written rows are known: tags, category, labels and the other editions are reported as not loaded
+    // (empty), never derived from the one edition in hand, so nothing here reads as "not public" by mistake.
+    const noDecorations: Decorations = { tags: new Map(), categories: new Map(), labels: new Map() };
+    const summary = buildSummary(art, edition, [edition], noDecorations, { includeEditions: true });
+    // Documents are read from the written JSON exactly as `articleRecord` reads stored rows.
+    const draft = readStoredDocWithRecovery(edition.draftJson, art.slug);
+    return {
+      ...summary, available_locales: [], editions: summary.editions ?? [], category_id: art.categoryId, tag_ids: [],
+      draft: draft.doc ?? emptyDocument(), draft_recovery: draft.recovery,
+      published: edition.publishedJson ? parseStoredDoc(edition.publishedJson, art.slug) : null,
+      read_back: 'failed',
+    };
+  }
+}
+
 async function articleRecord(
   d1: D1DatabaseLike, art: ArticleRowData, opts: RecordOptions,
 ): Promise<(ArticleRecord & { locale_fallback: boolean }) | null> {
@@ -923,7 +958,16 @@ export async function updateArticle(
   // Access, tags and category affect what each search tier may contain: always rebuild.
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
-  return getArticleById(db, art.id, 'Article disappeared after update', { locale });
+  const writtenEdition: EditionRow = edition
+    ? { ...edition, title, excerpt, draftJson: docJson, revision, updatedAt: now }
+    : {
+      articleId: art.id, locale, title, excerpt, draftJson: docJson, publishedJson: null, revision, publishedRevision: null, status: 'draft',
+      publishedWords: 0, coverUrl: null, coverAlt: editionRow ? toEditionRow(editionRow).coverAlt : '', publishedAt: null, updatedAt: now,
+    };
+  return readBackAfterCommit(db, art.id, locale, {
+    art: { ...art, slug: nextSlug, primary, access: input.access ?? art.access, categoryId, revision, updatedAt: now },
+    edition: writtenEdition,
+  });
 }
 
 /**
@@ -972,6 +1016,7 @@ export async function publishArticle(
   const revision = expected + 1;
   const publicPart = applyPaywall(doc, art.access, { isAdmin: false, entitlements: [] }).doc;
   const coverUrl = await managedCoverUrl(db, art) ?? firstImage(publicPart.blocks);
+  const publishedWords = wordCount(documentText(doc));
   // Guarded by the revision, so the draft copied here is the one read above: a save landing in between
   // bumps the revision and turns this publish into a conflict instead of publishing an unseen draft.
   await commitAtRevision(db, art.id, [
@@ -980,7 +1025,7 @@ export async function publishArticle(
         published_at = COALESCE(?, published_at, ?), published_words = ?, cover_url = ?, updated_at = ?,
         published_title = title, published_excerpt = excerpt, published_modified_at = ?
       WHERE article_id = ? AND locale = ? AND ${AT_EXPECTED}
-    `).bind(revision, revision, publishedAt, now, wordCount(documentText(doc)), coverUrl, now, now, art.id, locale, art.id, expected),
+    `).bind(revision, revision, publishedAt, now, publishedWords, coverUrl, now, now, art.id, locale, art.id, expected),
     guardedRevisionStatement(db, art.id, expected, locale, 'publish', edition.title, edition.excerpt, edition.draftJson, ctx.actor ?? 'admin', now),
   ], bumpRevisionStatement(db, art.id, expected, now), [mirrorPrimaryStatement(db, art.id)]);
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
@@ -995,7 +1040,13 @@ export async function publishArticle(
     console.error('Email notification failed after commit:', err instanceof Error ? err.message : 'unknown');
     emailNotification = await notificationAfterFailure(db, art.id, nowMs);
   }
-  const rec = await getArticleById(db, art.id, 'Article disappeared after publish', { locale });
+  const rec = await readBackAfterCommit(db, art.id, locale, {
+    art: { ...art, revision, updatedAt: now },
+    edition: {
+      ...edition, publishedJson: edition.draftJson, status: 'published', publishedRevision: revision, revision,
+      publishedAt: publishedAt ?? edition.publishedAt ?? now, publishedWords, coverUrl, updatedAt: now,
+    },
+  });
   return { ...rec, email_notification: emailNotification };
 }
 

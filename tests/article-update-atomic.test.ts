@@ -4,11 +4,12 @@ import { createTestD1 } from './helpers/d1';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
 import type { ArticleRecord } from '../src/lib/blocks/articles';
-import { createArticle, deleteEdition, getArticle, publishArticle, setTagsForArticle, updateArticle } from '../src/lib/blocks/articles';
+import { createArticle, deleteEdition, getArticle, publishArticle, setTagsForArticle, toWriteReceipt, updateArticle } from '../src/lib/blocks/articles';
 import { AppError } from '../src/lib/http';
 import { createSession } from '../src/db/store';
 import { getArticleNotification } from '../src/lib/notifications/article-notification-schedule';
 import { POST as publishApi } from '../src/pages/api/v1/articles/[slug]/publish';
+import { PUT as updateApi } from '../src/pages/api/v1/articles/[slug]';
 import { articlesMcpModule } from '../src/lib/blocks/mcp';
 import type { McpContext } from '../src/lib/mcp/types';
 
@@ -500,5 +501,196 @@ describe('publishArticle: a failed email update reports the email state that is 
     expect(res).toMatchObject({ email_notification: { status: 'scheduled', reason: 'notification_update_failed' } });
     expect(JSON.stringify(res)).not.toContain('email provider down');
     expect((await getArticleNotification(d1, first.id))?.status).toBe('scheduled');
+  });
+});
+/**
+ * Wraps a database so that, once the first batch (the commit) has run, every read of the article row by id fails
+ * like a D1 storage error: exactly the read-back a writer does after its commit.
+ */
+function failReadBackAfterCommit(inner: D1DatabaseLike): D1DatabaseLike {
+  let committed = false;
+  const failing = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+    bind: (...values: unknown[]) => failing(stmt.bind(...values)),
+    first: async () => { throw new Error('D1_ERROR: read-back storage unavailable'); },
+    all: () => stmt.all(),
+    run: () => stmt.run(),
+  });
+  return {
+    prepare: (sql: string) => {
+      const stmt = inner.prepare(sql);
+      return committed && sql.startsWith('SELECT * FROM articles WHERE id = ?') ? failing(stmt) : stmt;
+    },
+    batch: async (statements: D1PreparedStatementLike[]) => {
+      const res = await inner.batch(statements);
+      committed = true;
+      return res;
+    },
+  };
+}
+
+describe('a failed read-back after commit never turns a committed update or publish into an error (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+  const RAW_ERROR = 'read-back storage unavailable';
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original'), tags: ['kept'] });
+  });
+
+  const storedEdition = () => d1.raw.query("SELECT draft_json, published_json, published_revision, revision FROM article_editions WHERE locale = 'vi'").get();
+  // A concurrent delete between the commit and the read-back.
+  const deleteAfterCommit = () => interleaveAtFirstWrite(d1, 'after', async () => {
+    d1.raw.run("UPDATE articles SET deleted_at = '2026-01-01T00:00:00.000Z'");
+  });
+  const breakings: Array<[string, () => D1DatabaseLike]> = [
+    ['a D1 error', () => failReadBackAfterCommit(d1)],
+    ['a concurrent delete', deleteAfterCommit],
+  ];
+
+  for (const [cause, broken] of breakings) {
+    it(`publishArticle: ${cause} on read-back returns the published edition flagged read_back failed`, async () => {
+      const rec = await publishArticle(broken(), 'post', 1, true, { notify: false });
+      expect(rec).toMatchObject({ read_back: 'failed', status: 'published', revision: 2, published_revision: 2, has_unpublished_changes: false, slug: 'post', locale: 'vi' });
+      expect(paragraphText(rec)).toBe('original');
+      expect(rec.published).toEqual(doc('original'));
+      expect(toWriteReceipt(rec, 'publish', [])).toMatchObject({ operation: 'publish', article_revision: 2, edition_draft_revision: 2, published_revision: 2, next_action: 'none' });
+      expect(storedEdition()).toEqual({ draft_json: JSON.stringify(doc('original')), published_json: JSON.stringify(doc('original')), published_revision: 2, revision: 2 });
+    });
+
+    it(`updateArticle: ${cause} on read-back returns the saved draft flagged read_back failed`, async () => {
+      const rec = await updateArticle(broken(), 'post', { document: doc('saved'), title: 'Mới' }, 1);
+      expect(rec).toMatchObject({ read_back: 'failed', status: 'draft', revision: 2, published_revision: null, has_unpublished_changes: true, title: 'Mới' });
+      expect(paragraphText(rec)).toBe('saved');
+      expect(toWriteReceipt(rec, 'update', ['title', 'document'])).toMatchObject({ operation: 'update', article_revision: 2, edition_draft_revision: 2, next_action: 'publish' });
+      expect(storedEdition()).toMatchObject({ draft_json: JSON.stringify(doc('saved')), revision: 2 });
+    });
+  }
+
+  it('a working read-back carries no read_back flag', async () => {
+    const saved = await updateArticle(d1, 'post', { document: doc('saved') }, 1);
+    const published = await publishArticle(d1, 'post', 2, true, { notify: false });
+    expect(saved.read_back).toBeUndefined();
+    expect(published.read_back).toBeUndefined();
+    expect(published.tags).toEqual(['kept']);
+  });
+
+  async function callRest(handler: APIRoute, method: 'POST' | 'PUT', path: string, body: unknown): Promise<{ status: number; text: string; data: Record<string, unknown> }> {
+    const cookie = `zuey_session=${await createSession('admin@zuey.me', d1)}`;
+    const request = new Request(`https://zuey.test${path}`, { method, headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const ctx = { request, params: { slug: 'post' }, url: new URL(request.url), locals: { runtime: { env: { DB: failReadBackAfterCommit(d1) } } } };
+    // The handlers only read request/params/locals; a full APIContext is not constructible in tests.
+    const res = await handler(ctx as unknown as Parameters<APIRoute>[0]);
+    const text = await res.text();
+    const json: unknown = JSON.parse(text);
+    if (!json || typeof json !== 'object' || !('data' in json) || !json.data || typeof json.data !== 'object') throw new Error(`unexpected body (${res.status})`);
+    return { status: res.status, text, data: { ...json.data } };
+  }
+
+  it('REST publish returns 200 with the edition published and read_back failed', async () => {
+    const res = await callRest(publishApi, 'POST', '/api/v1/articles/post/publish', { expected_revision: 1, confirm: true, notify: false });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({ read_back: 'failed', status: 'published', published_revision: 2, document: doc('original') });
+    expect(res.data.receipt).toMatchObject({ operation_success: true, operation: 'publish', article_revision: 2, published_revision: 2 });
+    expect(res.text).not.toContain(RAW_ERROR);
+    expect((await getArticle(d1, 'post'))?.published_revision).toBe(2);
+  });
+
+  it('REST update returns 200 with the draft saved and read_back failed', async () => {
+    const res = await callRest(updateApi, 'PUT', '/api/v1/articles/post', { expected_revision: 1, document: doc('saved'), response_mode: 'summary' });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({ read_back: 'failed', revision: 2, document_blocks: 1 });
+    expect(res.data.receipt).toMatchObject({ operation: 'update', article_revision: 2, next_action: 'publish' });
+    expect(res.text).not.toContain(RAW_ERROR);
+    expect(paragraphText(await getArticle(d1, 'post'))).toBe('saved');
+  });
+
+  const mcpCtx = (): McpContext => ({ request: new Request('https://zuey.test/api/mcp'), env: {}, d1: failReadBackAfterCommit(d1), async requireAdmin() {}, async isAdmin() { return true; } });
+
+  it('MCP article_publish answers with the edition published and read_back failed', async () => {
+    const res = await articlesMcpModule.call('article_publish', { slug: 'post', expected_revision: 1, confirm: true, notify: false, response_mode: 'summary' }, mcpCtx());
+    expect(res).toMatchObject({ read_back: 'failed', status: 'published', receipt: { operation: 'publish', article_revision: 2, published_revision: 2 } });
+    expect(JSON.stringify(res)).not.toContain(RAW_ERROR);
+    expect((await getArticle(d1, 'post'))?.status).toBe('published');
+  });
+
+  it('MCP article_update answers with the draft saved and read_back failed', async () => {
+    const res = await articlesMcpModule.call('article_update', { slug: 'post', expected_revision: 1, document: doc('saved'), response_mode: 'summary' }, mcpCtx());
+    expect(res).toMatchObject({ read_back: 'failed', revision: 2, receipt: { operation: 'update', article_revision: 2 } });
+    expect(JSON.stringify(res)).not.toContain(RAW_ERROR);
+    expect(paragraphText(await getArticle(d1, 'post'))).toBe('saved');
+  });
+});
+
+describe('the read-back fallback reports the same exact fields as a normal read of the committed state (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original'), tags: ['kept'] });
+  });
+
+  // Fields documented as exact in a read_back "failed" answer.
+  const EXACT = [
+    'id', 'slug', 'locale', 'primary_locale', 'title', 'excerpt', 'access', 'status', 'revision', 'label_revision', 'published_revision',
+    'created_at', 'updated_at', 'published_at', 'has_unpublished_changes', 'reading_minutes', 'cover_url', 'cover_asset_id', 'cover_alt',
+    'social_preview', 'category_id', 'draft', 'draft_recovery', 'published',
+  ] as const;
+
+  async function expectMatchesStored(fallback: ArticleRecord, operation: 'update' | 'publish'): Promise<void> {
+    const real = await getArticle(d1, 'post', { locale: fallback.locale });
+    if (!real) throw new Error('article missing');
+    for (const key of EXACT) expect({ [key]: fallback[key] }).toEqual({ [key]: real[key] });
+    expect(fallback.editions).toEqual(real.editions.filter(e => e.locale === fallback.locale));
+    expect(toWriteReceipt(fallback, operation, [])).toEqual(toWriteReceipt(real, operation, []));
+    // Not loaded: reported empty rather than derived from the one written edition.
+    expect(fallback).toMatchObject({ read_back: 'failed', tags: [], topic_tags: [], category: null, labels: [], available_locales: [], tag_ids: [] });
+  }
+
+  it('update of a draft edition while another edition is live', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 2);
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { locale: 'en', document: doc('english 2') }, 3);
+    expect(rec.status).toBe('draft');
+    await expectMatchesStored(rec, 'update');
+    // The live vi edition is not reported as missing: available_locales is "not loaded", not "nothing public".
+    expect((await getArticle(d1, 'post', { locale: 'en' }))?.available_locales).toEqual(['vi']);
+  });
+
+  it('update that creates a missing edition', async () => {
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { locale: 'en', title: 'Post', excerpt: 'New', document: doc('english') }, 1);
+    expect(rec).toMatchObject({ locale: 'en', status: 'draft', published_revision: null, has_unpublished_changes: true });
+    await expectMatchesStored(rec, 'update');
+  });
+
+  it('update that re-creates a deleted edition', async () => {
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 1);
+    await publishArticle(d1, 'post', 2, true, { locale: 'en', notify: false });
+    await deleteEdition(d1, 'post', 'en', 3);
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { locale: 'en', title: 'Again', document: doc('again') }, 4);
+    expect(rec).toMatchObject({ locale: 'en', status: 'draft', published_revision: null, published_at: null });
+    await expectMatchesStored(rec, 'update');
+  });
+
+  it('update of an edition that is already published keeps its public snapshot', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { title: 'Đổi tên', document: doc('changed') }, 2);
+    expect(rec).toMatchObject({ status: 'published', published_revision: 2, has_unpublished_changes: true });
+    expect(rec.published).toEqual(doc('original'));
+    await expectMatchesStored(rec, 'update');
+  });
+
+  it('publish of a second edition, with a backdated publish time', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 2);
+    const rec = await publishArticle(failReadBackAfterCommit(d1), 'post', 3, true, { locale: 'en', publishedAt: '2020-05-01T00:00:00.000Z', notify: false });
+    expect(rec).toMatchObject({ locale: 'en', status: 'published', published_revision: 4, published_at: '2020-05-01T00:00:00.000Z' });
+    await expectMatchesStored(rec, 'publish');
+  });
+
+  it('republish keeps the first publish time', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    await updateArticle(d1, 'post', { document: doc('changed') }, 2);
+    const rec = await publishArticle(failReadBackAfterCommit(d1), 'post', 3, true, { notify: false });
+    await expectMatchesStored(rec, 'publish');
   });
 });
