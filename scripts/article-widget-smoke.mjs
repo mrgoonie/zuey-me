@@ -80,6 +80,7 @@ async function startEveryWidget(page) {
       capped: figures.filter(f => f.dataset.state === 'capped').length,
       idle: figures.filter(f => !f.dataset.state).map(f => f.querySelector('.zif-title')?.textContent ?? ''),
       unresponsive: figures.filter(f => f.dataset.state === 'unresponsive').map(f => f.querySelector('.zif-title')?.textContent ?? ''),
+      navigated: figures.filter(f => f.dataset.state === 'navigated').map(f => f.querySelector('.zif-title')?.textContent ?? ''),
       embeds: document.querySelectorAll('.zb-embed iframe').length,
     };
   });
@@ -100,10 +101,11 @@ for (const locale of locales) {
     if (response && response.status() !== 200) problems.push(`HTTP ${response.status()}`);
     if (response) {
       const counts = await startEveryWidget(page);
-      const { widgets, running, capped, idle, unresponsive, embeds } = counts;
+      const { widgets, running, capped, idle, unresponsive, navigated, embeds } = counts;
       if (widgets < expectWidgets) problems.push(`expected ${expectWidgets} interactive widgets, found ${widgets}`);
       if (idle.length) problems.push(`widgets that did not start after scrolling: ${idle.join(', ')}`);
       if (unresponsive.length) problems.push(`widgets halted by the watchdog: ${unresponsive.join(', ')}`);
+      if (navigated.length) problems.push(`widgets halted for navigating their own frame: ${navigated.join(', ')}`);
       if (running + capped < widgets) problems.push(`only ${running} of ${widgets} widgets running (${capped} past the auto-start cap)`);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
       if (overflow) problems.push('page scrolls horizontally');
