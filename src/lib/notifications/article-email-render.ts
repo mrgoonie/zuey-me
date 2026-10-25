@@ -271,8 +271,9 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
       const rows = block.items.map(i => {
         const state = progressState(block, i);
         const pct = Math.round(progressRatio(block, i) * 100);
+        // Email clients cannot clip a glyph, so a partial star shows empty rather than overstating the rating.
         const mark = block.variant === 'rating'
-          ? `<span style="font-size:18px;color:#d97706">${'★'.repeat(Math.round(i.value))}${'☆'.repeat(Math.max(0, progressScale(block).max - Math.round(i.value)))}</span>`
+          ? `<span style="font-size:18px;color:#d97706">${'★'.repeat(Math.floor(i.value))}${'☆'.repeat(Math.max(0, progressScale(block).max - Math.floor(i.value)))}</span>`
           : `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:4px 0 0"><tr><td width="${pct}%" style="height:8px;background:${color[state]};border-radius:4px"></td><td style="height:8px;background:#e7e0d8"></td></tr></table>`;
         const stateText = words.progressState[state];
         return `<p style="${P};margin-bottom:12px">${escapeHtml(i.label)}: <strong>${escapeHtml(progressText(block, i, fmt))}</strong>${stateText ? ` <span style="font-size:13px;color:${color[state]}">${escapeHtml(stateText)}</span>` : ''}${mark}${i.note ? `<br><span style="font-size:13px;color:#78716c">${inlineHtml(i.note)}</span>` : ''}</p>`;

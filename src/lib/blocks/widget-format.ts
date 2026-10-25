@@ -6,14 +6,20 @@
 import type { ProgressBlock, ProgressItem, ProgressState, StatItem, StatState, StatTrend } from './schema';
 import { DEFAULT_PROGRESS_SEGMENTS, DEFAULT_RATING_MAX } from './schema';
 
-/** Canonical value for Markdown, AI text and search: fixed decimals, `.` separator, no grouping. */
-export function canonicalNumber(value: number, decimals = 0): string {
-  const s = value.toFixed(decimals);
+/** Most decimals a widget number may carry (the `decimals` limit in validation). */
+const MAX_DECIMALS = 4;
+
+/**
+ * Canonical value for Markdown, AI text and search: `.` separator, no grouping. With `decimals` the value is
+ * fixed to that many places; without, it keeps its own precision (up to four places) so 4.5 never reads as 5.
+ */
+export function canonicalNumber(value: number, decimals?: number): string {
+  const s = decimals === undefined ? value.toFixed(MAX_DECIMALS).replace(/\.?0+$/, '') : value.toFixed(decimals);
   return /^-0(?:\.0+)?$/.test(s) ? s.slice(1) : s;
 }
 
 /** Edition style: Vietnamese (default) groups with `.` and uses `,` for decimals; English the reverse. */
-export function localeNumber(value: number, decimals = 0, locale?: string): string {
+export function localeNumber(value: number, decimals?: number, locale?: string): string {
   const en = locale !== undefined && locale !== 'vi';
   const s = canonicalNumber(value, decimals);
   const negative = s.startsWith('-');

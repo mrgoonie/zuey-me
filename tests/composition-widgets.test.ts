@@ -295,6 +295,34 @@ describe('composition widget export', () => {
     for (const s of ['npm', 'Doanh thu', 'Thiết kế', 'Knowledges', 'Backend']) expect(email.text).toContain(s);
   });
 
+  it('keeps a fractional value exact in every output when decimals is not set', () => {
+    expect(canonicalNumber(4.5)).toBe('4.5');
+    expect(canonicalNumber(2)).toBe('2');
+    expect(canonicalNumber(1.23456)).toBe('1.2346');
+    expect(canonicalNumber(-0.00001)).toBe('0');
+    expect(localeNumber(1250.5, undefined, 'vi')).toBe('1.250,5');
+    const rated = valid({ version: 1, blocks: [{ id: 'b_r', type: 'progress', variant: 'rating', items: [{ label: 'Điểm', value: 4.5 }] }] });
+    const page = html(rated);
+    expect(page).toContain('aria-valuetext="4,5 trên 5 sao"');
+    expect(page).toContain('<span class="zb-progress-value">4,5 / 5</span>');
+    expect(html(rated, 'en')).toContain('aria-valuetext="4.5 out of 5 stars"');
+    expect(documentToMarkdown(rated, { articleUrl: 'https://zuey.me/articles/demo' })).toContain('- **Điểm:** 4.5 / 5 ★');
+    expect(documentText(rated)).toContain('4.5 / 5');
+    expect(aiDocumentText(rated)).toContain('Điểm 4.5 / 5');
+    const email = renderArticleEmail({
+      locale: 'vi', title: 'Demo', excerpt: 'Tóm tắt', access: 'free', coverUrl: null, document: rated,
+      articleUrl: 'https://zuey.me/articles/demo', pricingUrl: 'https://zuey.me/pricing', siteUrl: 'https://zuey.me', mode: 'full',
+    });
+    expect(email.html).toContain('<strong>4,5 / 5</strong>');
+    // A partial star cannot be clipped in email, so it shows empty instead of rounding the rating up.
+    expect(email.html).toContain('★★★★☆<');
+    expect(email.text).toContain('Điểm: 4,5 / 5');
+    // A stat without decimals keeps its own precision too.
+    const stat = valid({ version: 1, blocks: [{ id: 'b_s', type: 'stat', items: [{ label: 'Churn', value: 2.15, suffix: '%' }] }] });
+    expect(html(stat, 'en')).toContain('2.15%');
+    expect(aiDocumentText(stat)).toContain('Churn: 2.15%');
+  });
+
   it('publishes the schemas in OpenAPI and the MCP block schema', async () => {
     for (const t of WIDGETS) {
       const name = `Block${t[0].toUpperCase()}${t.slice(1)}`;
