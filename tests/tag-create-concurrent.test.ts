@@ -6,7 +6,7 @@ import type { ArticleDocument } from '../src/lib/blocks/schema';
 import { createArticle, getArticle } from '../src/lib/blocks/articles';
 import { AppError } from '../src/lib/http';
 import { createSession } from '../src/db/store';
-import { createTag } from '../src/lib/taxonomy/tags';
+import { createTag, updateTag } from '../src/lib/taxonomy/tags';
 import { POST as createArticleApi } from '../src/pages/api/v1/articles/index';
 import { POST as createTagApi } from '../src/pages/api/v1/taxonomy/tags/index';
 
@@ -191,5 +191,48 @@ describe('explicit admin tag creates keep 409 tag_conflict (real SQLite)', () =>
     expect(results.map(r => r.status).sort()).toEqual([201, 409]);
     expect(results.find(r => r.status === 409)?.json).toMatchObject({ success: false, error: { code: 'tag_conflict' } });
     expect(tagRows(d1)).toHaveLength(1);
+  });
+});
+
+describe('a tag rename that loses the slug race (real SQLite)', () => {
+  let d1: TestD1;
+
+  beforeEach(() => {
+    d1 = createTestD1();
+  });
+
+  const TAG_RENAME = /UPDATE topic_tags SET slug/;
+
+  it('a concurrent write taking the slug after the pre-checks is 409 tag_conflict naming the owner, not a raw 500', async () => {
+    const mover = await createTag(d1, { slug: 'mover', names: { vi: 'Mover' }, aliases: [] }, 'admin');
+    // Another writer inserts (and soft-deletes) a tag with the target slug right before this rename runs.
+    const racing = intercept(d1, {
+      beforeRun: async sql => {
+        if (TAG_RENAME.test(sql)) d1.raw.run("INSERT INTO topic_tags (id, slug, created_at, updated_at, deleted_at) VALUES ('tag_race', 'taken', '2026-10-25', '2026-10-25', '2026-10-25')");
+      },
+    });
+    const err = await updateTag(racing, mover.id, { slug: 'taken' }, mover.revision, 'admin').catch((e: unknown) => e);
+    expect(err instanceof AppError ? [err.status, err.code, err.extra.tag_id] : err).toEqual([409, 'tag_conflict', 'tag_race']);
+  });
+
+  it('a unique violation on another index is not reported as tag_conflict', async () => {
+    const mover = await createTag(d1, { slug: 'mover', names: { vi: 'Mover' }, aliases: [] }, 'admin');
+    const failing: D1DatabaseLike = {
+      prepare: sql => {
+        const stmt = d1.prepare(sql);
+        if (!TAG_RENAME.test(sql)) return stmt;
+        const wrap = (inner: D1PreparedStatementLike): D1PreparedStatementLike => ({
+          bind: (...values: unknown[]) => wrap(inner.bind(...values)),
+          first: <T = Record<string, unknown>>() => inner.first<T>(),
+          all: <T = Record<string, unknown>>() => inner.all<T>(),
+          run: () => Promise.reject(new Error('D1_ERROR: UNIQUE constraint failed: topic_tags.id: SQLITE_CONSTRAINT')),
+        });
+        return wrap(stmt);
+      },
+      batch: statements => d1.batch(statements),
+    };
+    const err = await updateTag(failing, mover.id, { slug: 'renamed' }, mover.revision, 'admin').catch((e: unknown) => e);
+    expect(err instanceof AppError).toBe(false);
+    expect(err instanceof Error ? err.message : err).toContain('topic_tags.id');
   });
 });

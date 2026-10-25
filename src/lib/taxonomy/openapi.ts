@@ -19,7 +19,11 @@ const tagConflict = '`tag_conflict`: the slug, an alias or a localized name is a
 const slugTaken = '`slug_taken`: another category already uses this slug';
 const labelConflict = '`label_conflict`: another label of this kind already uses this slug (a deleted label keeps its slug reserved)';
 const conflicts = {
-  tag: { create: err(tagConflict), update: err(`${tagConflict}, or ${revisionConflict}`), delete: err(revisionConflict) },
+  tag: {
+    create: err(tagConflict),
+    update: err(`${tagConflict} (a deleted tag keeps its slug reserved, so renaming onto it conflicts too), or ${revisionConflict}`),
+    delete: err(revisionConflict),
+  },
   category: { create: err(slugTaken), update: err(`${slugTaken}, or ${revisionConflict}`), delete: err(revisionConflict) },
   label: {
     create: err(labelConflict),
