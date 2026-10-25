@@ -282,26 +282,46 @@ export async function reverseCourseOrder(
 }
 
 /**
- * A Dodo refund of an order that an opened dispute already charged back. Access is already revoked and the referral
- * commission reversed, so the order only becomes `refunded` and its money back is counted; a later won or cancelled
- * dispute then finds no `charged_back` order to restore. The refund is dropped once a funds-lost outcome was received
- * for the order (that chargeback is the same money). The check runs in the same batch as the update, so a racing
- * funds-lost outcome either finds the order refunded or suppresses the refund. The webhook's record (`gate`), the
- * update, the log and the `refund` event land together or not at all.
+ * A refund (Dodo's, or a manual one an admin records) of an order that an opened dispute already charged back. Access
+ * is already revoked and the referral commission reversed, so the order only becomes `refunded` and its money back is
+ * counted; a later won or cancelled dispute then finds no `charged_back` order to restore. The refund is dropped once a
+ * funds-lost outcome was received for the order (that chargeback is the same money). The check runs in the same batch
+ * as the update, so a racing funds-lost outcome either finds the order refunded or suppresses the refund. The webhook's
+ * record (`gate`), the update, the log and the `refund` event land together or not at all.
  */
-export async function refundDisputedCourseOrder(d1: D1DatabaseLike, order: CourseOrder, reason: string, reversed: MoneyBack, gate?: CourseEventGate): Promise<boolean> {
+export async function refundDisputedCourseOrder(
+  d1: D1DatabaseLike, order: CourseOrder, reason: string, reversed: MoneyBack | null, gate?: CourseEventGate, actor = 'system',
+): Promise<boolean> {
   const lost = [...DODO_DISPUTE_FUNDS_LOST];
   const disputed = orderIn(order.id, ['charged_back'], ` AND NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = o.id AND raw_type IN (${lost.map(() => '?').join(', ')}))`);
   disputed.params.push(...lost);
   const moneyBack = await courseMoneyBackStatement(d1, order, 'refunded', reversed, disputed);
   const results = await d1.batch([
     ...(gate ? [gate(disputed)] : []),
-    activityStatement(d1, order.user_id, 'courses.order_refunded', { code: order.code, reason, actor: 'system' }, undefined, disputed),
+    activityStatement(d1, order.user_id, 'courses.order_refunded', { code: order.code, reason, actor }, undefined, disputed),
     ...(moneyBack ? [moneyBack] : []),
     d1.prepare(`UPDATE course_orders SET status = 'refunded', attention_reason = ?, updated_at = ? WHERE id = ? AND ${disputed.sql}`)
       .bind(reason, iso(membersRuntime.now()), order.id, ...disputed.params),
   ]);
   return Boolean(results.at(-1)?.meta?.changes);
+}
+
+/**
+ * A refund of a course order, by Dodo or recorded by an admin: a paid or flagged order is reversed
+ * (`reverseCourseOrder`), and one an opened dispute charged back only becomes refunded (`refundDisputedCourseOrder`),
+ * so its commission, reversed when the dispute opened, is not reversed twice. The order was read before the batch ran:
+ * when a dispute opened or was won meanwhile, the refund is applied once more on the current order instead of being
+ * dropped. Only the batch that applies writes the webhook's record (`gate`). Returns whether the order was refunded.
+ */
+export async function refundCourseOrder(
+  d1: D1DatabaseLike, order: CourseOrder, reason: string, actor: string, reversed: MoneyBack | null = null, gate?: CourseEventGate,
+): Promise<boolean> {
+  const refund = (o: CourseOrder) => o.status === 'charged_back'
+    ? refundDisputedCourseOrder(d1, o, reason, reversed, gate, actor)
+    : reverseCourseOrder(d1, o, 'refunded', reason, actor, reversed, true, gate);
+  if (await refund(order)) return true;
+  const current = await getCourseOrderByCode(d1, order.code);
+  return current !== null && current.status !== order.status && refund(current);
 }
 
 /**
@@ -396,7 +416,9 @@ const ADMIN_GRANT = 'admin_grant:';
 
 /**
  * Admin decisions: `grant` pays out a flagged order (e.g. underpaid by a rounding error),
- * `dismiss` closes it without access, `refund` records a manual refund and revokes access.
+ * `dismiss` closes it without access, `refund` records a manual refund and revokes access. A refund of an order with
+ * an open dispute (`charged_back`) takes the same path as Dodo's refund during a dispute (`refundCourseOrder`); after a
+ * lost dispute it answers `409 not_refundable`, as the chargeback already returned the money.
  * A `grant` retried on an order an admin grant already paid, whose receipt is still missing (the follow-ups after the
  * payment batch failed), runs the idempotent follow-ups again; a grant of an order paid any other way, or whose
  * follow-ups completed, answers `409 already_paid`.
@@ -417,7 +439,11 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
     if (order.status === 'paid') throw new AppError(409, 'already_paid', 'Use refund for a paid order');
     await d1.prepare("UPDATE course_orders SET status = 'cancelled', attention_reason = ?, updated_at = ? WHERE id = ?").bind(`dismissed:${note}`, now, order.id).run();
   } else if (action === 'refund') {
-    if (!(await reverseCourseOrder(d1, order, 'refunded', note, 'admin'))) throw new AppError(409, 'not_refundable', 'Only paid or flagged orders can be refunded');
+    if (!(await refundCourseOrder(d1, order, note, 'admin'))) {
+      throw new AppError(409, 'not_refundable', order.status === 'charged_back'
+        ? 'The dispute on this order was lost: the chargeback already returned the money'
+        : 'Only paid, flagged or disputed (charged back) orders can be refunded');
+    }
   } else {
     throw new AppError(400, 'invalid_field', "action must be 'grant', 'dismiss' or 'refund'", { field: 'action' });
   }
