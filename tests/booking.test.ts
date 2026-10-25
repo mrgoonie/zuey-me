@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import type { APIContext } from 'astro';
-import { createTestD1 } from './helpers/d1';
+import { createTestD1, crashingD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
-import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
+import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { generateSlots } from '../src/lib/booking/availability';
 import { zonedTimeToUtc } from '../src/lib/booking/timezone';
-import { bookingRuntime, getBookingRow } from '../src/lib/booking/store';
+import { applyPayment, bookingRuntime, getBookingRow } from '../src/lib/booking/store';
 import type { BookingRow } from '../src/lib/booking/store';
 import { resetPaypalTokenCache } from '../src/lib/payments/paypal';
 import { GET as slotsApi } from '../src/pages/api/v1/booking/slots';
@@ -584,31 +584,26 @@ describe('reschedule and admin', () => {
       expect(purchases()).toHaveLength(0);
     });
 
-    it('resolve while the webhook is in flight (transfer recorded, confirm not yet applied): one purchase', async () => {
+    it('resolve while the webhook is in flight (booking read, confirm batch not yet applied): one purchase', async () => {
       const b = await holdOk(fullEnv(), SLOT_OCT8, 'sepay');
       await checkoutApi(ctx({ env: fullEnv(), method: 'POST', body: { token: b.token }, params: { id: b.id } }));
       let resolved: Response | null = null;
-      const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
-        bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
-        first: () => stmt.first(),
-        all: () => stmt.all(),
-        run: async () => {
-          resolved = await admin(fullEnv(), b.id, 'resolve');
-          return stmt.run();
-        },
-      });
-      // The admin resolves the held booking between the webhook's payment_events INSERT and its confirm UPDATE.
+      // The admin resolves the held booking after the webhook read it and before its confirm batch runs.
       const interleaved: D1DatabaseLike = {
-        prepare: (query: string) => query.includes("SET status = 'confirmed', amount_paid") ? wrap(d1.prepare(query)) : d1.prepare(query),
-        batch: statements => d1.batch(statements),
+        prepare: (query: string) => d1.prepare(query),
+        batch: async statements => {
+          if (!resolved) resolved = await admin(fullEnv(), b.id, 'resolve');
+          return d1.batch(statements);
+        },
       };
       const res = await sepay({ ...fullEnv(), DB: interleaved }, b.code, 52000000, 7301);
       expect((await read(res)).data?.outcome).toBe('already_confirmed');
       expect(resolved).not.toBeNull();
       expect((await row(b.id)).status).toBe('confirmed');
+      expect(d1.raw.query("SELECT COUNT(*) AS n FROM payment_events WHERE event_id = '7301'").get()).toEqual({ n: 1 });
       const outbox = purchases();
       expect(outbox).toHaveLength(1);
-      expect(outbox[0].dedupe_key).toBe('purchase:sepay:7301');
+      expect(outbox[0].dedupe_key).toBe(`purchase:sepay:booking:${b.id}`);
       expect(JSON.parse(outbox[0].properties)).toEqual({ provider: 'sepay', order_type: 'booking', amount: 52000000, currency: 'VND', renewal: false, transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/) });
     });
 
@@ -675,5 +670,118 @@ describe('reschedule and admin', () => {
     expect(Object.keys(bookingOpenApi.paths)).toContain('/api/webhooks/paypal');
     expect(Object.keys(bookingOpenApi.paths)).not.toContain('/api/webhooks/polar');
     expect(Object.keys(bookingOpenApi.paths)).toContain('/api/v1/booking/{id}/reschedule');
+  });
+});
+
+describe('a booking payment the worker dies on', () => {
+  const sqlPoint = (re: RegExp) => (sql: string) => re.test(sql);
+  const isGate = (sql: string) => sql.startsWith('INSERT INTO payment_events');
+  const count = (sql: string, ...params: string[]) => Number(d1.raw.query<{ n: number }, string[]>(sql).get(...params)?.n ?? 0);
+  const events = (eventId: string) => count('SELECT COUNT(*) AS n FROM payment_events WHERE event_id = ?', eventId);
+  const purchaseKeys = () => d1.raw.query<{ dedupe_key: string }, []>("SELECT dedupe_key FROM analytics_outbox WHERE event = 'purchase'").all().map(r => r.dedupe_key);
+  const meetEvents = () => calls.filter(c => c.url.startsWith('https://www.googleapis.com/calendar/v3/')).length;
+  const invites = () => calls.filter(c => c.url === 'https://api.resend.com/emails').length;
+
+  /** A held booking on `provider` and its full payment notice, delivered through any database. */
+  async function heldPayment(provider: 'sepay' | 'paypal') {
+    const env = fullEnv();
+    const b = provider === 'sepay' ? await holdOk(env, SLOT_OCT8, 'sepay') : await holdOk(env, SLOT_OCT7);
+    const notice = provider === 'sepay'
+      ? { provider, eventId: 'pay_crash', rawType: 'transfer_in', amount: 52000000, currency: 'VND', paymentRef: 'FT1', bookingId: null, bookingCode: b.code }
+      : { provider, eventId: 'pay_crash', rawType: 'webhook', amount: 199900, currency: 'USD', paymentRef: 'pay_crash', bookingId: b.id };
+    return { id: b.id, deliver: (db: D1DatabaseLike) => applyPayment(db, env, notice) };
+  }
+
+  const crashPoints = [
+    ['the record check before the confirm batch', sqlPoint(/^SELECT 1 AS found FROM payment_events/)],
+    ['the purchase event in the confirm batch', sqlPoint(/INSERT INTO analytics_outbox/)],
+    ['the confirmation in the confirm batch', sqlPoint(/^UPDATE bookings SET status = 'confirmed'/)],
+  ] as const;
+
+  for (const provider of ['sepay', 'paypal'] as const) {
+    for (const [point, at] of crashPoints) {
+      it(`confirms a ${provider} booking once on the redelivery after the worker dies at ${point}`, async () => {
+        const p = await heldPayment(provider);
+        await expect(p.deliver(crashingD1(d1, at).d1)).rejects.toThrow(/crashed/);
+        expect(events('pay_crash')).toBe(0);
+        expect((await row(p.id)).status).toBe('held');
+        expect(purchaseKeys()).toEqual([]);
+
+        expect(await p.deliver(d1)).toMatchObject({ outcome: 'confirmed' });
+        expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: 'sent', email_status: 'sent' });
+        expect(events('pay_crash')).toBe(1);
+        expect(purchaseKeys()).toEqual([`purchase:${provider}:pay_crash`]);
+        expect(meetEvents()).toBe(1);
+        expect(invites()).toBe(1);
+      });
+    }
+
+    it(`fulfils a ${provider} booking once on the redelivery after the worker dies past the confirm batch`, async () => {
+      const p = await heldPayment(provider);
+      let confirmed = false;
+      const pastBatch = (sql: string) => {
+        if (/^UPDATE bookings SET status = 'confirmed'/.test(sql)) confirmed = true;
+        else if (confirmed && /^SELECT \* FROM bookings WHERE id/.test(sql)) return true;
+        return false;
+      };
+      await expect(p.deliver(crashingD1(d1, pastBatch).d1)).rejects.toThrow(/crashed/);
+      expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: null, email_status: null });
+      expect(meetEvents()).toBe(0);
+
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: 'sent', email_status: 'sent' });
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(meetEvents()).toBe(1);
+      expect(invites()).toBe(1);
+      expect(events('pay_crash')).toBe(1);
+      expect(purchaseKeys()).toHaveLength(1);
+    });
+  }
+
+  it('flags an underpaid booking once on the redelivery after the worker dies in the flag batch', async () => {
+    const env = fullEnv();
+    const b = await holdOk(env, SLOT_OCT8, 'sepay');
+    const deliver = (db: D1DatabaseLike) => applyPayment(db, env, {
+      provider: 'sepay', eventId: 'pay_short', rawType: 'transfer_in', amount: 1000000, currency: 'VND', paymentRef: 'FT2', bookingId: null, bookingCode: b.code,
+    });
+    await expect(deliver(crashingD1(d1, sqlPoint(/^\s*UPDATE bookings SET status = 'needs_attention'/)).d1)).rejects.toThrow(/crashed/);
+    expect(events('pay_short')).toBe(0);
+    expect((await row(b.id)).status).toBe('held');
+
+    expect(await deliver(d1)).toMatchObject({ outcome: 'needs_attention' });
+    expect(await deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await row(b.id)).toMatchObject({ status: 'needs_attention', attention_reason: 'amount_mismatch' });
+    expect(events('pay_short')).toBe(1);
+  });
+
+  it('writes the record only as the first statement of the confirm batch, and a redelivery writes nothing', async () => {
+    const p = await heldPayment('sepay');
+    const spy = crashingD1(d1);
+    expect(await p.deliver(spy.d1)).toMatchObject({ outcome: 'confirmed' });
+    expect(spy.runs.filter(isGate)).toEqual([]);
+    expect(spy.batches).toHaveLength(1);
+    expect(isGate(spy.batches[0][0])).toBe(true);
+    expect(spy.batches[0].at(-1)).toMatch(/^UPDATE bookings SET status = 'confirmed'/);
+
+    const again = crashingD1(d1);
+    expect(await p.deliver(again.d1)).toMatchObject({ outcome: 'duplicate_event' });
+    expect(again.batches).toEqual([]);
+    expect(again.runs).toEqual([]);
+  });
+
+  it('rolls the confirmation back when its record is already taken, and answers duplicate_event', async () => {
+    const p = await heldPayment('sepay');
+    await d1.prepare("INSERT INTO payment_events (provider, event_id, raw_type, received_at) VALUES ('sepay', 'pay_crash', 'race', ?)").bind(new Date(now).toISOString()).run();
+    // The first record check misses it, as for a delivery that checked just before another one committed.
+    let checks = 0;
+    const blind: D1DatabaseLike = {
+      prepare: (sql: string) => d1.prepare(sql.startsWith('SELECT 1 AS found FROM payment_events') && checks++ === 0 ? 'SELECT 1 AS found WHERE 0 AND ? AND ?' : sql),
+      batch: statements => d1.batch(statements),
+    };
+    expect(await p.deliver(blind)).toMatchObject({ outcome: 'duplicate_event' });
+    expect((await row(p.id)).status).toBe('held');
+    expect(purchaseKeys()).toEqual([]);
+    expect(meetEvents()).toBe(0);
   });
 });

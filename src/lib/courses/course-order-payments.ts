@@ -15,6 +15,7 @@ import type { Row } from '../members/runtime';
 import { iso, membersRuntime, siteUrl, str } from '../members/runtime';
 import { activityStatement, getUserById } from '../members/users';
 import { DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
+import { isPaymentEventConflict, paymentEventRecorded } from '../payments/payment-events';
 import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
@@ -41,13 +42,7 @@ export function coursePaymentEventStatement(d1: D1DatabaseLike, e: CoursePayment
     .bind(e.provider, e.eventId, e.orderId, e.amount, e.currency, e.rawType, iso(membersRuntime.now()), ...(onlyIf?.params ?? []));
 }
 
-/**
- * True when `err` is the unique key of `payment_events` (provider, event_id): another delivery of the same event
- * recorded it first. Any other constraint failure is a real error.
- */
-export function isPaymentEventConflict(err: unknown): boolean {
-  return err instanceof Error && /UNIQUE constraint failed: payment_events\.provider, payment_events\.event_id\b/i.test(err.message);
-}
+export { isPaymentEventConflict };
 
 /** Inserts the idempotency record; false when this provider event was already processed. */
 export async function recordCoursePaymentEvent(
@@ -64,7 +59,7 @@ export async function recordCoursePaymentEvent(
 
 /** True when this provider event is already recorded. */
 export async function coursePaymentEventRecorded(d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string): Promise<boolean> {
-  return (await d1.prepare('SELECT 1 AS found FROM payment_events WHERE provider = ? AND event_id = ?').bind(provider, eventId).first<Row>()) !== null;
+  return paymentEventRecorded(d1, provider, eventId);
 }
 
 /**

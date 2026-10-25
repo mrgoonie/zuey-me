@@ -21,6 +21,7 @@ import { ensureReferralProfile } from '../src/lib/referrals/codes';
 import { experienceRuntime } from '../src/lib/experience/runtime';
 import { signDodoPayload } from '../src/lib/payments/dodo';
 import type { Member } from './helpers/courses';
+import { crashingD1 as crashingTestD1 } from './helpers/d1';
 import { ctx, env, field, member, publishedCourse, read, resetCourseState, sepayTime, state } from './helpers/courses';
 
 let txId = 7000;
@@ -893,51 +894,8 @@ describe('Dodo course payments, refunds and disputes', () => {
       });
     });
 
-    /**
-     * The test database, except that the worker dies at the first statement matching `at` (a read, a write alone or a
-     * write in a batch): that write never commits, and every later call fails too, so no cleanup runs. It also records
-     * each batch's SQL and each write run alone.
-     */
-    function crashingD1(at: (sql: string) => boolean = () => false) {
-      const base = state.d1;
-      let dead = false;
-      const batches: string[][] = [];
-      const runs: string[] = [];
-      const alive = () => { if (dead) throw new Error('worker crashed'); };
-      const crash = (): never => { dead = true; throw new Error('worker crashed'); };
-      const read = (sql: string) => { alive(); if (at(sql)) crash(); };
-      const sources = new WeakMap<D1PreparedStatementLike, { sql: string; inner: D1PreparedStatementLike }>();
-      const wrap = (sql: string, inner: D1PreparedStatementLike): D1PreparedStatementLike => {
-        const statement: D1PreparedStatementLike = {
-          bind: (...v: unknown[]) => wrap(sql, inner.bind(...v)),
-          first: async <T,>() => { read(sql); return inner.first<T>(); },
-          all: async <T,>() => { read(sql); return inner.all<T>(); },
-          run: async () => {
-            alive();
-            runs.push(sql);
-            if (at(sql)) crash();
-            return inner.run();
-          },
-        };
-        sources.set(statement, { sql, inner });
-        return statement;
-      };
-      const d1: D1DatabaseLike = {
-        prepare: (sql: string) => wrap(sql, base.prepare(sql)),
-        batch: async (statements: D1PreparedStatementLike[]) => {
-          alive();
-          const list = statements.map(s => {
-            const source = sources.get(s);
-            if (!source) throw new Error('foreign statement');
-            return source;
-          });
-          batches.push(list.map(s => s.sql));
-          if (list.some(s => at(s.sql))) crash();
-          return base.batch(list.map(s => s.inner));
-        },
-      };
-      return { d1, batches, runs };
-    }
+    /** The test database, except that the worker dies at the first statement matching `at` (see `crashingD1`). */
+    const crashingD1 = (at?: (sql: string) => boolean) => crashingTestD1(state.d1, at);
 
     const isGate = (sql: string) => sql.startsWith('INSERT INTO payment_events');
     const crashes = [
