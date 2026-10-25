@@ -138,6 +138,11 @@ export const CODE_BLOCK_EXAMPLE = {
 
 /** One line, no backticks or double quotes: the name also goes into the Markdown fence's info string. */
 const FILENAME_RE = /^[^\u0000-\u001f\u007f`"]+$/;
+/**
+ * Bidirectional formatting characters can make a shown path read differently from the real one. They are
+ * removed rather than rejected, so a stored block that has them keeps rendering (stored reads drop invalid blocks).
+ */
+const BIDI_CONTROLS_RE = /[؜‎‏‪-‮⁦-⁩]/g;
 
 
 /** Markdown fence info string: the language, then `title="…"`, `{lines}` and `showLineNumbers` metadata. */
@@ -155,7 +160,7 @@ export const code: BlockDefinition<CodeBlock> = {
     const language = v.str(raw, 'language', path, 40, { optional: true }) ?? '';
     if (language && !/^[\w+#.-]+$/.test(language)) { v.err(`${path}.language`, 'contains invalid characters'); return undefined; }
     const source = v.str(raw, 'code', path, LIMITS.code);
-    const filename = v.str(raw, 'filename', path, LIMITS.codeFilename, { optional: true })?.trim();
+    const filename = v.str(raw, 'filename', path, LIMITS.codeFilename, { optional: true })?.replace(BIDI_CONTROLS_RE, '').trim();
     if (filename && !FILENAME_RE.test(filename)) { v.err(`${path}.filename`, 'must be one line without backticks or double quotes'); return undefined; }
     const lineNumbers = flag(v, raw, 'lineNumbers', path);
     const diff = flag(v, raw, 'diff', path);

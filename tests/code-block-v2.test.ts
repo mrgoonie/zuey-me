@@ -34,10 +34,10 @@ function render(blocks: Block[], highlights = highlightBlocks(blocks)): string {
   return renderToStaticMarkup(createElement(BlockRenderer, { doc: { version: 1, blocks }, highlights, interactive: false }));
 }
 
-/** Text inside <code> as a browser would read it (tags removed, entities decoded). */
+/** Visible text inside <code> as a browser would read it (screen-reader labels and tags removed, entities decoded). */
 function codeText(markup: string): string {
   const inner = /<code>([\s\S]*)<\/code>/.exec(markup)?.[1] ?? '';
-  return inner.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+  return inner.replace(/<span class="zb-sr-only[^"]*">[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
 }
 
 describe('code block options: validation', () => {
@@ -62,6 +62,9 @@ describe('code block options: validation', () => {
   it('rejects malformed options with a path', () => {
     expect(errorsOf({ filename: 'a`b' })).toEqual(['$.blocks[0].filename: must be one line without backticks or double quotes']);
     expect(errorsOf({ filename: 'a\nb' })).toHaveLength(1);
+    // Bidi controls could make the shown path read differently: they are dropped, never stored.
+    expect(valid([{ id: 'b', type: 'code', code: 'x', filename: 'evil‮txt.exe⁦' }])[0]).toMatchObject({ filename: 'eviltxt.exe' });
+    expect(valid([{ id: 'b', type: 'code', code: 'x', filename: '‏' }])[0]).not.toHaveProperty('filename');
     expect(errorsOf({ filename: 'x'.repeat(201) })).toHaveLength(1);
     expect(errorsOf({ lineNumbers: 'yes' })).toEqual(['$.blocks[0].lineNumbers: must be a boolean']);
     expect(errorsOf({ diff: 1 })).toHaveLength(1);
@@ -90,6 +93,37 @@ describe('code block options: shared helpers', () => {
     expect(copyText({ code: DIFF, language: 'ts', diff: true })).toBe('export const config = {\n  retries: 3,\n};');
     // Lines without a marker are context and keep their first character.
     expect(copyText({ code: '+a\nb', language: '', diff: true })).toBe('a\nb');
+  });
+
+  it('keeps pasted git diff headers whole and out of the copied code', () => {
+    const patch = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      'index 3b18e51..a2c4f0d 100644',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1,2 +1,2 @@ export const config',
+      ' const a = 1;',
+      '-const b = 2;',
+      '+const b = 3;',
+    ].join('\n');
+    const view = codeDisplay({ code: patch, language: 'ts', diff: true });
+    expect(view.marks).toEqual(['head', 'head', 'head', 'head', 'head', 'ctx', 'del', 'add']);
+    expect(view.text.split('\n').slice(0, 5)).toEqual(patch.split('\n').slice(0, 5));
+    expect(copyText({ code: patch, language: 'ts', diff: true })).toBe('const a = 1;\nconst b = 3;');
+  });
+
+  it('reads ---/+++ as a header only as the file pair, so removed and added code that looks like one stays code', () => {
+    // A removed SQL comment and an added `++ i` line are code, not a file header.
+    const view = codeDisplay({ code: '--- note\n ok\n+++ i', language: 'sql', diff: true });
+    expect(view.marks).toEqual(['del', 'ctx', 'add']);
+    expect(view.text).toBe('-- note\nok\n++ i');
+    // A hunk line needs its ranges.
+    expect(codeDisplay({ code: '@@ not a hunk', language: '', diff: true }).marks).toEqual(['ctx']);
+  });
+
+  it('copies nothing from an all-removed diff', () => {
+    expect(copyText({ code: '-a\n-b\n', language: 'ts', diff: true })).toBe('');
+    expect(copyText({ code: '--- a/x\n+++ b/x\n@@ -1 +0,0 @@\n-a', language: '', diff: true })).toBe('');
   });
 
   it('copies plain code as written, with line endings normalised', () => {
@@ -147,6 +181,16 @@ describe('code block options: rendering', () => {
     expect(html).toContain('zb-code-top');
     expect(codeText(html)).toBe(codeDisplay({ code: DIFF, language: 'ts', diff: true }).text);
     expect(html).toContain('zb-tk-');
+    // Changed lines carry a spoken label; context lines do not.
+    expect(html).toContain('<del class="zb-line zb-line-del"><span class="zb-sr-only zb-diff-sr">Đã xoá: </span>');
+    expect(html).toContain('<ins class="zb-line zb-line-add"><span class="zb-sr-only zb-diff-sr">Đã thêm: </span>');
+    expect((html.match(/zb-diff-sr/g) ?? []).length).toBe(2);
+  });
+
+  it('renders patch headers as unmarked header lines', () => {
+    const html = render(valid([{ id: 'h', type: 'code', language: '', diff: true, code: '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b' }]));
+    expect((html.match(/<span class="zb-line zb-line-head">/g) ?? []).length).toBe(3);
+    expect(codeText(html)).toBe('--- a/x\n+++ b/x\n@@ -1 +1 @@\na\nb');
   });
 
   it('starts long code collapsed to the requested height and wraps when asked', () => {
@@ -158,6 +202,18 @@ describe('code block options: rendering', () => {
     expect(codeText(html)).toBe(code);
     // Short code never collapses.
     expect(render(valid([{ id: 's', type: 'code', language: '', code: 'a\nb', collapseAfter: 5 }]))).not.toContain('zb-code-collapsed');
+  });
+
+  it('reserves a first line clear of the toolbar on plain blocks without a language label', async () => {
+    // happy-dom has no layout, so this checks the stylesheet's arithmetic: the toolbar box ends above the code.
+    const css = await Bun.file(new URL('../src/styles/blocks.css', import.meta.url)).text();
+    const rem = (re: RegExp) => Number(re.exec(css)?.[1] ?? Number.NaN);
+    const toolbarBottom = rem(/\.zb-code-tools \{[^}]*\btop: ([\d.]+)rem/) + rem(/\.zb-code-tools button \{[^}]*\bheight: ([\d.]+)rem/);
+    const reserved = rem(/\.zb-code:not\(:has\(> \.zb-code-lang\)\):not\(\.zb-code-head \+ \.zb-code\) \{ padding-top: ([\d.]+)rem; \}/);
+    expect(toolbarBottom).toBeCloseTo(2.35);
+    expect(reserved).toBeGreaterThan(toolbarBottom);
+    // The rule matches the plain server markup itself, so hydration does not move the code.
+    expect(render(valid([{ id: 'p', type: 'code', language: '', code: 'echo hi' }]))).toStartWith('<div class="zb-doc"><pre class="zb-code"><code>');
   });
 
   it('escapes file names and code', () => {

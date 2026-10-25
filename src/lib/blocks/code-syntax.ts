@@ -130,11 +130,14 @@ export interface CodeSource {
   diff?: boolean;
 }
 
-/** How one line of a diff block reads: added (`+`), removed (`-`) or context (a space, or no marker). */
-export type DiffMark = 'add' | 'del' | 'ctx';
+/**
+ * How one line of a diff block reads: added (`+`), removed (`-`), context (a space, or no marker) or a patch
+ * header pasted from `git diff` (`diff --git`, `index`, the `---`/`+++` file pair, `@@` hunk lines).
+ */
+export type DiffMark = 'add' | 'del' | 'ctx' | 'head';
 
 export interface CodeDisplay {
-  /** Text shown and highlighted: the normalised code, with diff markers removed. */
+  /** Text shown and highlighted: the normalised code, with diff markers removed (header lines are kept whole). */
   text: string;
   /** Diff mark of every line of `text` (trailing empty line included); null unless the block is a diff. */
   marks: DiffMark[] | null;
@@ -142,12 +145,30 @@ export interface CodeDisplay {
 
 const DIFF_MARKS: Record<string, DiffMark> = { '+': 'add', '-': 'del', ' ': 'ctx' };
 
+/** Header lines that can never be code: context lines start with a space, so these prefixes are unambiguous. */
+const PATCH_HEAD_RE = /^(?:@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@|diff --git |index [0-9a-f]+\.\.[0-9a-f]+)/;
+const FILE_OLD_RE = /^--- \S/;
+const FILE_NEW_RE = /^\+\+\+ \S/;
+
+/**
+ * True when line `i` is a patch header. A `---`/`+++` line only counts as one of the file pair (`--- a/x` right
+ * above `+++ b/x`), so a removed `-- comment` or an added `++ i` stays a code line.
+ */
+function isPatchHead(lines: string[], i: number): boolean {
+  const line = lines[i] ?? '';
+  if (PATCH_HEAD_RE.test(line)) return true;
+  if (FILE_OLD_RE.test(line)) return FILE_NEW_RE.test(lines[i + 1] ?? '');
+  return FILE_NEW_RE.test(line) && FILE_OLD_RE.test(lines[i - 1] ?? '');
+}
+
 /** Text and diff marks of a code block. A diff line's first character is its marker and is not part of the code. */
 export function codeDisplay(block: CodeSource): CodeDisplay {
   const text = normalizeCode(block.code);
   if (!block.diff) return { text, marks: null };
   const marks: DiffMark[] = [];
-  const lines = text.split('\n').map(line => {
+  const source = text.split('\n');
+  const lines = source.map((line, i) => {
+    if (isPatchHead(source, i)) { marks.push('head'); return line; }
     const mark = Object.hasOwn(DIFF_MARKS, line.charAt(0)) ? DIFF_MARKS[line.charAt(0)] : undefined;
     marks.push(mark ?? 'ctx');
     return mark ? line.slice(1) : line;
@@ -172,12 +193,12 @@ export function highlightSource(block: CodeSource): { text: string; language: Hi
 
 /**
  * What the copy button puts on the clipboard: the code itself, never the diff markers. A diff copies the code
- * after the change (added and context lines without their marker; removed lines are left out).
+ * after the change (added and context lines without their marker; removed lines and patch headers are left out).
  */
 export function copyText(block: CodeSource): string {
   const { text, marks } = codeDisplay(block);
   if (!marks) return text;
-  return text.split('\n').filter((_, i) => marks[i] !== 'del').join('\n');
+  return text.split('\n').filter((_, i) => marks[i] !== 'del' && marks[i] !== 'head').join('\n');
 }
 
 /** `highlightLines` syntax: 1-based line numbers and inclusive ranges, comma separated ("2,4-6"). */
