@@ -18,7 +18,7 @@ import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode } from './course-orders';
-import { grantCourse, revokeCourseStatements } from './course-purchases';
+import { grantCourse, grantCourseStatements, revokeCourseStatements } from './course-purchases';
 import { getCourseById } from './course-store';
 import { POLICY_PATH } from './course-terms';
 import { formatUsd } from './course-types';
@@ -100,26 +100,31 @@ export function isPartialCourseReversal(order: CourseOrder, amountMinor: number 
  * Grants the course for a paid order, notifies the referral program and emails a receipt.
  * Referral and email failures are logged and never undo the purchase.
  */
-export async function fulfilCourseOrder(
-  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null,
-  /** `countPurchase: false` when access returns for money that was already counted (a won dispute). */
-  opts: { countPurchase?: boolean } = {},
-): Promise<void> {
+export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<void> {
   const granted = await grantCourse(d1, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' });
   if (!granted) {
     // Bought twice (two open checkouts paid): keep the money traceable for a manual refund.
     await d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'already_owned'), updated_at = ? WHERE id = ?")
       .bind(iso(membersRuntime.now()), order.id).run();
   }
-  await logActivity(d1, order.user_id, 'courses.order_paid', { code: order.code, course_id: order.course_id, provider: order.provider });
+  await logActivity(d1, order.user_id, 'courses.order_paid', orderPaidDetail(order));
   // A course order is paid by one verified payment, so the order id is the transaction.
   const paid = paidAmount(order);
-  if (opts.countPurchase !== false && paid.amountMinor !== null) {
+  if (paid.amountMinor !== null) {
     await queuePurchase(d1, {
       distinctId: order.user_id, provider: order.provider, orderType: 'course', transactionId: `course_order:${order.id}`,
       amountMinor: paid.amountMinor, currency: paid.currency, occurredAt: order.paid_at,
     });
   }
+  await afterCourseOrderPaid(d1, env, order, payerText);
+}
+
+function orderPaidDetail(order: CourseOrder): Record<string, unknown> {
+  return { code: order.code, course_id: order.course_id, provider: order.provider };
+}
+
+/** Referral capture, promo/invoice bookkeeping and the receipt of an order whose access is granted. */
+async function afterCourseOrderPaid(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null): Promise<void> {
   try {
     await onCourseOrderPaid(d1, env, order, payerText);
   } catch (err) {
@@ -277,12 +282,23 @@ export async function courseMoneyBackStatement(
  * A dispute the merchant won: the order is paid again and access returns. No purchase event is queued: the
  * original one still stands, because an opened dispute never queued a refund. An order refunded while the dispute was
  * open is `refunded`, not `charged_back`, so it stays revoked (after a partial refund too: any refund revokes access).
+ * The access grant (with its GitHub invite rows and log), the order log and the status update are one D1 batch, each
+ * applied only while the order is still `charged_back`, with the status update last: a refund that commits first
+ * makes the whole batch a no-op, and a refund that comes after it finds the order paid and the access granted, and
+ * revokes it.
  */
 export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string): Promise<boolean> {
-  const res = await d1.prepare("UPDATE course_orders SET status = 'paid', attention_reason = ?, updated_at = ? WHERE id = ? AND status = 'charged_back'")
-    .bind(reason, iso(membersRuntime.now()), order.id).run();
-  if (!res.meta?.changes) return false;
-  await fulfilCourseOrder(d1, env, { ...order, status: 'paid' }, null, { countPurchase: false });
+  const course = await getCourseById(d1, order.course_id);
+  if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
+  const disputed = orderIn(order.id, ['charged_back']);
+  const results = await d1.batch([
+    ...grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, disputed),
+    activityStatement(d1, order.user_id, 'courses.order_paid', orderPaidDetail(order), undefined, disputed),
+    d1.prepare(`UPDATE course_orders SET status = 'paid', attention_reason = ?, updated_at = ? WHERE id = ? AND ${disputed.sql}`)
+      .bind(reason, iso(membersRuntime.now()), order.id, ...disputed.params),
+  ]);
+  if (!results.at(-1)?.meta?.changes) return false;
+  await afterCourseOrderPaid(d1, env, { ...order, status: 'paid' }, null);
   return true;
 }
 
