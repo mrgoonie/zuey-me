@@ -120,13 +120,9 @@ function isSlugViolation(err: unknown): boolean {
 }
 
 /** Reindexes every article carrying the tag so search and public metadata follow renames immediately. */
-async function refreshTagged(db: D1DatabaseLike, tagId: string, env?: RuntimeEnv): Promise<void> {
+async function reindexTagged(db: D1DatabaseLike, tagId: string, env?: RuntimeEnv): Promise<void> {
   const { results } = await db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tagId).all<Row>();
-  for (const r of results ?? []) {
-    const articleId = str(r, 'article_id');
-    await mirrorLegacyTags(db, articleId);
-    await reindexArticle(db, articleId, env);
-  }
+  for (const r of results ?? []) await reindexArticle(db, str(r, 'article_id'), env);
 }
 
 /**
@@ -194,17 +190,22 @@ export async function updateTag(
     if (owner) throw slugConflict(next.slug, owner);
   }
   await assertNoCollision(db, next, tag.id);
-  const stmt = db.prepare(`
-    UPDATE topic_tags SET slug = ?, names = ?, aliases = ?, revision = revision + 1, updated_at = ?
-    WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected);
+  // One batch (one transaction): the rename and the legacy tag names of its articles commit together, so a crash
+  // cannot leave the old name in `articles.tags`. When the rename does not apply, the rebuild leaves the column as it was.
+  const batch = db.batch([
+    db.prepare(`
+      UPDATE topic_tags SET slug = ?, names = ?, aliases = ?, revision = revision + 1, updated_at = ?
+      WHERE id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected),
+    legacyTagsStatement(db, 'id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)', tag.id),
+  ]);
   // A concurrent write can take the slug after the checks above; that is a conflict, not a raw 500.
-  const res = await stmt.run().catch(async (err: unknown) => { throw isSlugViolation(err) ? slugConflict(next.slug, await slugOwner(db, next.slug, tag.id)) : err; });
-  if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
+  const [res] = await batch.catch(async (err: unknown) => { throw isSlugViolation(err) ? slugConflict(next.slug, await slugOwner(db, next.slug, tag.id)) : err; });
+  if (!res?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
   const updated = await getTag(db, tag.id);
   if (!updated) throw new AppError(500, 'internal_error', 'Tag disappeared after update');
   await writeAuditLog(db, { actor, action: 'tag.update', targetType: 'tag', targetId: tag.id, before: tag, after: updated });
-  await refreshTagged(db, tag.id, env);
+  await reindexTagged(db, tag.id, env);
   return updated;
 }
 
@@ -262,13 +263,24 @@ export async function resolveTagRefs(
   return ids;
 }
 
-/** `t.names` at a JSON path when it holds a non-blank string (as `parseNames` keeps it), else NULL. */
-const tagNameAt = (path: string) => `CASE WHEN json_type(t.names, ${path}) = 'text' AND trim(json_extract(t.names, ${path})) <> '' THEN json_extract(t.names, ${path}) END`;
+/** Every code point `String.prototype.trim` strips (ECMAScript WhiteSpace and LineTerminator), as SQL `char(...)` arguments. */
+const JS_TRIM_CODE_POINTS = [
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
+  0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+].join(', ');
 
-/** SQL twin of `localizedName` for an article's live tags: its locale (unknown means vi), en, vi, any locale, the slug. */
-const LEGACY_TAG_NAME_SQL = `COALESCE(CASE WHEN json_valid(t.names) THEN COALESCE(${[
-  `'$.' || CASE WHEN articles.locale IN (${LOCALES.map(l => `'${l}'`).join(', ')}) THEN articles.locale ELSE 'vi' END`,
-  "'$.en'", "'$.vi'", ...LOCALES.map(l => `'$.${l}'`),
+/**
+ * The value of `t.names` under `key` when it is a non-blank string, else NULL; the same check `parseNames` applies.
+ * Like `JSON.parse`, the last occurrence of a duplicated key wins (`json_each` ids follow document order), and blank
+ * means empty after stripping the characters JS `trim` strips.
+ */
+const tagNameAt = (key: string) => `(SELECT CASE WHEN j.type = 'text' AND trim(j.value, char(${JS_TRIM_CODE_POINTS})) <> '' THEN j.value END
+  FROM json_each(t.names) j WHERE j.key = ${key} ORDER BY j.id DESC LIMIT 1)`;
+
+/** SQL twin of `localizedName(parseNames(...))` for an article's live tags: its locale (unknown means vi), en, vi, any locale, the slug. */
+const LEGACY_TAG_NAME_SQL = `COALESCE(CASE WHEN json_valid(t.names) AND json_type(t.names) = 'object' THEN COALESCE(${[
+  `CASE WHEN articles.locale IN (${LOCALES.map(l => `'${l}'`).join(', ')}) THEN articles.locale ELSE 'vi' END`,
+  "'en'", "'vi'", ...LOCALES.map(l => `'${l}'`),
 ].map(tagNameAt).join(', ')}) END, t.slug)`;
 
 /**
