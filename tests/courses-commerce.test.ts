@@ -603,6 +603,7 @@ describe('Dodo course payments, refunds and disputes', () => {
     }
 
     const restorePoints = [
+      ['the record', sqlPoint(/^INSERT INTO payment_events/)],
       ['the GitHub invite', sqlPoint(/^\s*INSERT INTO github_invites/)],
       ['the grant log', activity('courses.granted')],
       ['the access grant', sqlPoint(/^\s*INSERT INTO course_purchases/)],
@@ -752,6 +753,77 @@ describe('Dodo course payments, refunds and disputes', () => {
         expect(await applyDodoCourseWebhook(again.d1, env(), 'evt_x', payload)).toMatchObject({ outcome: 'duplicate_event' });
         expect(again.batches).toEqual([]);
         expect(again.runs).toEqual([]);
+      });
+    }
+
+    for (const type of ['dispute.won', 'dispute.cancelled']) {
+      it(`keeps no record of a ${type} when the worker dies before the restore commits, so the redelivery restores it once`, async () => {
+        await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        const invites = () => count("SELECT COUNT(*) AS n FROM github_invites WHERE action = 'invite'");
+        const before = { granted: activities('courses.granted'), paid: activities('courses.order_paid') };
+        const payload = { type, data: { payment_id: `pay_${code}` } };
+
+        await expect(applyDodoCourseWebhook(crashingD1(sqlPoint(/^UPDATE course_orders SET status = 'paid'/)).d1, env(), 'evt_x', payload)).rejects.toThrow(/crashed/);
+        expect(gate('evt_x')).toBe(0);
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+
+        expect(await dodo('evt_x', type, payload.data)).toMatchObject({ outcome: 'restored' });
+        expect(await dodo('evt_x', type, payload.data)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(gate('evt_x')).toBe(1);
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'paid', attention_reason: type });
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
+        expect(invites()).toBe(1);
+        expect(activities('courses.granted')).toBe(before.granted + 1);
+        expect(activities('courses.order_paid')).toBe(before.paid + 1);
+        expect(refundKeys()).toEqual([]);
+      });
+
+      it(`writes the record of a ${type} only as the first statement of its restore batch`, async () => {
+        await publishedCourse();
+        const { code } = await paidWithCertificate('lan@example.com');
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        const spy = crashingD1();
+        const payload = { type, data: { payment_id: `pay_${code}` } };
+        expect(await applyDodoCourseWebhook(spy.d1, env(), 'evt_x', payload)).toMatchObject({ outcome: 'restored' });
+        expect(spy.runs.filter(isGate)).toEqual([]);
+        expect(spy.batches.length).toBe(1);
+        expect(isGate(spy.batches[0][0])).toBe(true);
+        expect(spy.batches[0].some(sqlPoint(/^UPDATE course_orders SET status = 'paid'/))).toBe(true);
+        expect(gate('evt_x')).toBe(1);
+
+        const again = crashingD1();
+        expect(await applyDodoCourseWebhook(again.d1, env(), 'evt_x', payload)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(again.batches).toEqual([]);
+        expect(again.runs).toEqual([]);
+      });
+
+      it(`records a ${type} for an order refunded meanwhile once, without restoring it, even after a crash`, async () => {
+        await publishedCourse();
+        const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        expect(await dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+        const payload = { type, data: { payment_id: `pay_${code}` } };
+
+        // The worker dies when the record is written alone, after the restore batch found nothing to restore.
+        let batches = 0;
+        const crashing = crashingD1(sql => isGate(sql) && batches > 0);
+        const counted: D1DatabaseLike = {
+          prepare: sql => crashing.d1.prepare(sql),
+          batch: async statements => { const res = await crashing.d1.batch(statements); batches++; return res; },
+        };
+        await expect(applyDodoCourseWebhook(counted, env(), 'evt_x', payload)).rejects.toThrow(/crashed/);
+        expect(crashing.batches.length).toBe(1);
+        expect(gate('evt_x')).toBe(0);
+
+        expect(await dodo('evt_x', type, payload.data)).toMatchObject({ outcome: 'ignored' });
+        expect(await dodo('evt_x', type, payload.data)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(gate('evt_x')).toBe(1);
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        expect(activities('courses.order_paid')).toBe(1);
       });
     }
 
