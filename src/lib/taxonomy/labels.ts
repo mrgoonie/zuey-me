@@ -1,8 +1,9 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, D1RunResultLike } from '../../db/store';
 import { findBlock } from '../blocks/schema';
 import { readStoredDocument } from '../blocks/validate';
 import { AppError } from '../http';
 import { LOCALES, isLocale } from '../i18n/locales';
+import { isUniqueViolation } from '../members/runtime';
 import type { Locale } from '../i18n/locales';
 import type { LocalizedNames, Row } from './common';
 import {
@@ -142,23 +143,45 @@ export function parseLabelInput(body: Record<string, unknown>, mode: 'create' | 
   return out;
 }
 
+function labelConflict(kind: LabelKind, slug: string): AppError {
+  return new AppError(409, 'label_conflict', `Label ${kind}:${slug} already exists`);
+}
+
+/**
+ * `(kind, slug)` is unique across every row, soft-deleted ones included, so a deleted label keeps its slug reserved.
+ * `selfId` excludes the label being renamed.
+ */
+async function assertSlugFree(db: D1DatabaseLike, kind: LabelKind, slug: string, selfId: string | null): Promise<void> {
+  const owner = await db.prepare('SELECT id FROM taxonomy_labels WHERE kind = ? AND slug = ? AND id <> ?').bind(kind, slug, selfId ?? '').first<Row>();
+  if (owner) throw labelConflict(kind, slug);
+}
+
+/** Runs a label write; a concurrent writer that took the same `(kind, slug)` first is `409 label_conflict`, not a raw 500. */
+async function runLabelWrite(stmt: D1PreparedStatementLike, kind: LabelKind, slug: string): Promise<D1RunResultLike> {
+  try {
+    return await stmt.run();
+  } catch (err) {
+    if (isUniqueViolation(err)) throw labelConflict(kind, slug);
+    throw err;
+  }
+}
+
 /** Admin-created labels are approved; `extension` labels suggested elsewhere stay unapproved until approved here. */
 export async function createLabel(d1: D1DatabaseLike | undefined, input: LabelInput, actor: string): Promise<TaxonomyLabel> {
   const db = requireDb(d1);
   if (!input.kind || !input.slug || !input.names) throw new AppError(400, 'invalid_field', 'kind, slug and names are required');
   if (BUILTIN_KINDS.includes(input.kind)) throw new AppError(400, 'builtin_kind', `The ${input.kind} vocabulary is built in and cannot be extended`);
-  const exists = await db.prepare('SELECT id FROM taxonomy_labels WHERE kind = ? AND slug = ?').bind(input.kind, input.slug).first<Row>();
-  if (exists) throw new AppError(409, 'label_conflict', `Label ${input.kind}:${input.slug} already exists`);
+  await assertSlugFree(db, input.kind, input.slug, null);
   const now = nowIso();
   const id = newId('lbl_');
   const approved = input.kind !== 'extension' || input.approve === true;
-  await db.prepare(`
+  await runLabelWrite(db.prepare(`
     INSERT INTO taxonomy_labels (id, kind, slug, names, aliases, description, version, builtin, approved_at, approved_by, revision, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, ?, ?)
   `).bind(
     id, input.kind, input.slug, JSON.stringify(input.names), JSON.stringify(input.aliases ?? []), input.description ?? '',
     input.version ?? null, approved ? now : null, approved ? actor : null, now, now,
-  ).run();
+  ), input.kind, input.slug);
   const label = await getLabel(db, id);
   if (!label) throw new AppError(500, 'internal_error', 'Label was not persisted');
   await writeAuditLog(db, { actor, action: 'label.create', targetType: 'label', targetId: id, after: label });
@@ -174,17 +197,19 @@ export async function updateLabel(d1: D1DatabaseLike | undefined, idOrKey: strin
     throw new AppError(400, 'builtin_label', 'Built-in labels keep their kind and slug; only names and description may change');
   }
   if (input.kind !== undefined && input.kind !== label.kind) throw new AppError(400, 'invalid_field', 'kind cannot be changed', { field: 'kind' });
+  const slug = input.slug ?? label.slug;
+  if (slug !== label.slug) await assertSlugFree(db, label.kind, slug, label.id);
   const now = nowIso();
   const approve = input.approve === true && !label.approved;
-  const res = await db.prepare(`
+  const res = await runLabelWrite(db.prepare(`
     UPDATE taxonomy_labels SET slug = ?, names = ?, aliases = ?, description = ?, version = ?,
       approved_at = COALESCE(approved_at, ?), approved_by = COALESCE(approved_by, ?), revision = revision + 1, updated_at = ?
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(
-    input.slug ?? label.slug, JSON.stringify(input.names ?? label.names), JSON.stringify(input.aliases ?? label.aliases),
+    slug, JSON.stringify(input.names ?? label.names), JSON.stringify(input.aliases ?? label.aliases),
     input.description ?? label.description, input.version === undefined ? label.version : input.version,
     approve ? now : null, approve ? actor : null, now, label.id, expected,
-  ).run();
+  ), label.kind, slug);
   if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Label was changed by someone else; reload and retry', { current_revision: label.revision });
   const updated = await getLabel(db, label.id);
   if (!updated) throw new AppError(500, 'internal_error', 'Label disappeared after update');

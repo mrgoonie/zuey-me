@@ -4,6 +4,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createTestD1 } from './helpers/d1';
 import { createSession } from '../src/db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
+import { AppError } from '../src/lib/http';
 import type { RuntimeEnv, WorkersAiLike } from '../src/env';
 import { BlockRenderer } from '../src/components/blocks/BlockRenderer';
 import { getArticleView, resolveViewer } from '../src/lib/blocks/articles';
@@ -27,6 +29,8 @@ import { jevRuntime } from '../src/lib/search/jev';
 import { parseAiSuggestion } from '../src/lib/taxonomy/audit';
 import { taxonomyMcpModule } from '../src/lib/taxonomy/mcp';
 import { taxonomyOpenApi } from '../src/lib/taxonomy/openapi';
+import { createLabel, deleteLabel, updateLabel } from '../src/lib/taxonomy/labels';
+import type { LabelKind } from '../src/lib/taxonomy/labels';
 import { GET as listApi, POST as createApi } from '../src/pages/api/v1/articles/index';
 import { GET as getApi, PUT as putApi } from '../src/pages/api/v1/articles/[slug]';
 import { POST as publishApi } from '../src/pages/api/v1/articles/[slug]/publish';
@@ -39,6 +43,7 @@ import { GET as searchApi } from '../src/pages/api/v1/search';
 import { GET as facetsApi } from '../src/pages/api/v1/taxonomy/index';
 import { POST as createTagApi } from '../src/pages/api/v1/taxonomy/tags/index';
 import { PUT as updateTagApi } from '../src/pages/api/v1/taxonomy/tags/[id]';
+import { PUT as updateLabelApi } from '../src/pages/api/v1/taxonomy/labels/[id]';
 import { GET as proposalsApi, POST as createProposalApi } from '../src/pages/api/v1/taxonomy/proposals/index';
 import { GET as proposalApi } from '../src/pages/api/v1/taxonomy/proposals/[id]';
 import { POST as decisionApi } from '../src/pages/api/v1/taxonomy/proposals/[id]/decision';
@@ -730,7 +735,7 @@ describe('REST, OpenAPI and MCP registration', () => {
       ['/api/v1/taxonomy/categories/{id}', 'put', ['slug_taken', 'revision_conflict']],
       ['/api/v1/taxonomy/categories/{id}', 'delete', ['revision_conflict']],
       ['/api/v1/taxonomy/labels', 'post', ['label_conflict']],
-      ['/api/v1/taxonomy/labels/{id}', 'put', ['revision_conflict']],
+      ['/api/v1/taxonomy/labels/{id}', 'put', ['label_conflict', 'revision_conflict']],
       ['/api/v1/taxonomy/labels/{id}', 'delete', ['label_in_use', 'revision_conflict']],
     ];
     for (const [path, method, codes] of expected) {
@@ -745,6 +750,63 @@ describe('REST, OpenAPI and MCP registration', () => {
     expect(dup.status).toBe(409);
     expect(dup.code).toBe('tag_conflict');
     expect(dup.error.tag_id).toBe(owner.id);
+  });
+
+  it('renaming a label to a slug its kind already uses is 409 label_conflict over REST and MCP', async () => {
+    const make = (kind: LabelKind, slug: string) => createLabel(d1, { kind, slug, names: { en: slug } }, 'admin');
+    const taken = await make('domain', 'rename-taken');
+    const mover = await make('domain', 'rename-mover');
+    const put = async (id: string, body: Record<string, unknown>) => payload(await call(updateLabelApi, { method: 'PUT', headers: admin(), params: { id }, body }));
+    const viaMcp = (id: string, args: Record<string, unknown>) => taxonomyMcpModule.call('label_update', { id, ...args }, mcpCtx(admin())).then(() => null, (e: unknown) => e);
+    const codeOf = (e: unknown) => (e instanceof AppError ? [e.status, e.code] : e);
+
+    const rest = await put(mover.id, { slug: taken.slug, expected_revision: mover.revision });
+    expect([rest.status, rest.code]).toEqual([409, 'label_conflict']);
+    expect(codeOf(await viaMcp(mover.id, { slug: taken.slug, expected_revision: mover.revision }))).toEqual([409, 'label_conflict']);
+
+    // A soft-deleted label keeps its (kind, slug) row, so its slug stays reserved.
+    const gone = await make('domain', 'rename-gone');
+    await deleteLabel(d1, gone.id, gone.revision, 'admin');
+    const deleted = await put(mover.id, { slug: gone.slug, expected_revision: mover.revision });
+    expect([deleted.status, deleted.code]).toEqual([409, 'label_conflict']);
+    expect(codeOf(await viaMcp(mover.id, { slug: gone.slug, expected_revision: mover.revision }))).toEqual([409, 'label_conflict']);
+
+    // Keeping its own slug is not a conflict.
+    const same = await put(mover.id, { slug: mover.slug, names: { en: 'Mover' }, expected_revision: mover.revision });
+    expect(same.status).toBe(200);
+    expect(rec(same.data).slug).toBe(mover.slug);
+
+    // Uniqueness is per kind: a tool label may take a slug a domain label uses.
+    const tool = await make('tool', 'rename-tool');
+    const other = await put(tool.id, { slug: taken.slug, expected_revision: tool.revision });
+    expect(other.status).toBe(200);
+    expect(rec(other.data).slug).toBe(taken.slug);
+  });
+
+  it('a label write that loses the (kind, slug) race is 409 label_conflict, not a raw 500', async () => {
+    // A concurrent writer takes the slug after the pre-check, right before this request's write runs.
+    const racing = (pattern: RegExp, slug: string): D1DatabaseLike => ({
+      prepare: (sql: string) => {
+        const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+          bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
+          first: <T = Record<string, unknown>>() => stmt.first<T>(),
+          all: <T = Record<string, unknown>>() => stmt.all<T>(),
+          run: () => {
+            d1.raw.run("INSERT INTO taxonomy_labels (id, kind, slug, created_at, updated_at) VALUES (?, 'domain', ?, '2026-10-25', '2026-10-25')", [`lbl_race_${slug}`, slug]);
+            return stmt.run();
+          },
+        });
+        return pattern.test(sql) ? wrap(d1.prepare(sql)) : d1.prepare(sql);
+      },
+      batch: statements => d1.batch(statements),
+    });
+    const codeOf = (e: unknown) => (e instanceof AppError ? [e.status, e.code] : e);
+
+    const mover = await createLabel(d1, { kind: 'domain', slug: 'race-mover', names: { en: 'Mover' } }, 'admin');
+    const update = await updateLabel(racing(/UPDATE taxonomy_labels SET slug/, 'race-update'), mover.id, { slug: 'race-update' }, mover.revision, 'admin').catch((e: unknown) => e);
+    expect(codeOf(update)).toEqual([409, 'label_conflict']);
+    const create = await createLabel(racing(/INSERT INTO taxonomy_labels/, 'race-create'), { kind: 'domain', slug: 'race-create', names: { en: 'Race' } }, 'admin').catch((e: unknown) => e);
+    expect(codeOf(create)).toEqual([409, 'label_conflict']);
   });
 
   it('enforces admin on taxonomy MCP writes', async () => {

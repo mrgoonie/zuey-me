@@ -17,12 +17,13 @@ const notFound = err('Not found');
 const revisionConflict = '`revision_conflict`: stale expected_revision; `error.current_revision` carries the stored revision';
 const tagConflict = '`tag_conflict`: the slug, an alias or a localized name is already used by another tag; `error.tag_id` names that tag';
 const slugTaken = '`slug_taken`: another category already uses this slug';
+const labelConflict = '`label_conflict`: another label of this kind already uses this slug (a deleted label keeps its slug reserved)';
 const conflicts = {
   tag: { create: err(tagConflict), update: err(`${tagConflict}, or ${revisionConflict}`), delete: err(revisionConflict) },
   category: { create: err(slugTaken), update: err(`${slugTaken}, or ${revisionConflict}`), delete: err(revisionConflict) },
   label: {
-    create: err('`label_conflict`: a label with this kind and slug already exists'),
-    update: err(revisionConflict),
+    create: err(labelConflict),
+    update: err(`${labelConflict}, or ${revisionConflict}`),
     delete: err(`\`label_in_use\`: articles still carry the label (\`error.articles\` is the count), or ${revisionConflict}`),
   },
 };
