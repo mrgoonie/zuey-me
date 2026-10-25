@@ -9,7 +9,7 @@ import { cancelAuditJob, createAuditJob, getAuditJob, listAuditJobs, parseJobInp
 import { createCategory, deleteCategory, listCategories, parseCategoryInput, updateCategory } from './categories';
 import { listAuditLog, requireDb } from './common';
 import {
-  LABEL_KINDS, LABEL_SCOPES, createLabel, deleteLabel, getLabelState, listLabelHistory, listLabels, parseLabelInput, revertLabels,
+  LABEL_ALIASES_DOC, LABEL_KINDS, LABEL_SCOPES, LABEL_SLUG_DOC, createLabel, deleteLabel, getLabelState, listLabelHistory, listLabels, parseLabelInput, revertLabels,
   setArticleLabels, updateLabel,
 } from './labels';
 import { DECISIONS, PROPOSAL_STATUSES, createProposal, decideProposal, getProposal, listProposals, parseStatusFilter } from './proposals';
@@ -60,7 +60,7 @@ export const taxonomyMcpModule: McpToolModule = {
       name: 'label_create', description: 'Admin: add a label to an admin-managed vocabulary; extension labels stay unapproved unless approve: true. claim/freshness are closed built-ins.',
       inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: [...LABEL_KINDS] }, slug: { type: 'string' }, ...namesProp, aliases: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, version: { type: 'string' }, approve: { type: 'boolean' } }, required: ['kind', 'slug', 'names'] },
     },
-    { name: 'label_update', description: 'Admin: edit or approve a label (id or <kind>:<slug>); requires expected_revision.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, ...revProp, ...namesProp, description: { type: 'string' }, version: { type: ['string', 'null'] }, approve: { type: 'boolean' } }, required: ['id', 'expected_revision'] } },
+    { name: 'label_update', description: 'Admin: edit or approve a label (id or <kind>:<slug>); requires expected_revision.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, ...revProp, slug: { type: 'string', description: LABEL_SLUG_DOC }, ...namesProp, aliases: { type: 'array', items: { type: 'string' }, description: LABEL_ALIASES_DOC }, description: { type: 'string' }, version: { type: ['string', 'null'] }, approve: { type: 'boolean' } }, required: ['id', 'expected_revision'] } },
     { name: 'label_delete', description: 'Admin: delete an unused non-built-in label; requires expected_revision.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, ...revProp }, required: ['id', 'expected_revision'] } },
     { name: 'article_labels_get', description: 'Admin: current label assignments (with evidence) and label revision history of an article.', inputSchema: { type: 'object', properties: { article_slug: { type: 'string' } }, required: ['article_slug'] } },
     {

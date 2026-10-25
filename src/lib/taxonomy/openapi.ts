@@ -3,7 +3,7 @@ import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
 import { SEARCH_TIERS } from '../search/indexer';
 import { JOB_STATUSES } from './audit';
-import { LABEL_KINDS, LABEL_SCOPES } from './labels';
+import { LABEL_ALIASES_DOC, LABEL_KINDS, LABEL_SCOPES, LABEL_SLUG_DOC } from './labels';
 import { DECISIONS, PROPOSAL_STATUSES } from './proposals';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -149,8 +149,8 @@ export const taxonomyOpenApi: OpenApiFragment = {
     TaxonomyLabelInput: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: LABEL_KINDS.filter(k => k !== 'claim' && k !== 'freshness') }, slug: { type: 'string' }, names,
-        aliases: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, version: { type: ['string', 'null'] },
+        kind: { type: 'string', enum: LABEL_KINDS.filter(k => k !== 'claim' && k !== 'freshness') }, slug: { type: 'string', description: LABEL_SLUG_DOC }, names,
+        aliases: { type: 'array', items: { type: 'string' }, description: LABEL_ALIASES_DOC }, description: { type: 'string' }, version: { type: ['string', 'null'] },
         approve: { type: 'boolean', description: 'Approve an extension label' },
       },
     },
