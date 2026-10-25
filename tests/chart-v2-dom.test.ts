@@ -244,6 +244,41 @@ describe('chart v2 client', () => {
     expect(select('Vẽ dạng')).toBeUndefined();
   });
 
+  test('the Studio editor shows the right numbers after removing a series and flags a note whose label is gone', async () => {
+    const { ChartFields } = await import('../src/components/studio/ChartFields');
+    let current: ChartBlock = {
+      id: 'ed', type: 'chart', kind: 'bar', labels: ['a', 'b', 'c'],
+      series: [{ name: 'S1', data: [1, 1, 1] }, { name: 'S2', data: [2, 2, 2] }, { name: 'S3', data: [3, 3, 3] }],
+      annotations: [{ index: 2, text: 'Cuối' }],
+    };
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = client.createRoot(container);
+    mounted.push({ root, container });
+    const draw = () => React.act(() => root.render(React.createElement(ChartFields, {
+      block: current,
+      onChange: (b: Block) => { if (b.type === 'chart') current = b; draw(); },
+    })));
+    draw();
+    const inputsOf = (prefix: string) => [...container.querySelectorAll('label')]
+      .filter(l => l.textContent?.startsWith(prefix)).map(l => l.querySelector('input')?.value);
+
+    await click([...container.querySelectorAll('button')].filter(b => b.textContent === 'Xoá')[1]);
+    expect(current.series.map(s => s.name)).toEqual(['S1', 'S3']);
+    expect(inputsOf('Số liệu')).toEqual(['1, 1, 1', '3, 3, 3']);
+
+    const labels = [...container.querySelectorAll('label')].find(l => l.textContent?.startsWith('Nhãn ('))?.querySelector('input');
+    if (!(labels instanceof HTMLInputElement)) throw new Error('missing labels input');
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(labels, 'a, b');
+      labels.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // The note is kept with its text and flagged, rather than silently dropped or moved.
+    expect(current.annotations).toEqual([{ index: 2, text: 'Cuối' }]);
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Nhãn #3 không còn: chọn nhãn khác hoặc xoá ghi chú này.');
+    expect(container.querySelector('select[aria-invalid="true"]')).not.toBeNull();
+  });
+
   test('destroys the chart on unmount', async () => {
     await mount([COMBO]);
     const chart = charts[0];

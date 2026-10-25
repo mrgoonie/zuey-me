@@ -111,7 +111,8 @@ export function ChartFields({ block, onChange }: { block: ChartBlock; onChange: 
       </div>
       <RawInput label="Nhãn (phân cách bằng dấu phẩy)" initial={block.labels.join(', ')} onCommit={raw => onChange({ ...block, labels: raw.split(',').map(s => s.trim()) })} />
       {block.series.map((s, i) => (
-        <div key={i} className="rounded-lg border border-stone-800 p-2 space-y-2">
+        // Keyed with the count so removing a series remounts the rows: their number inputs keep local text.
+        <div key={`${i}-${block.series.length}`} className="rounded-lg border border-stone-800 p-2 space-y-2">
           <div className="grid grid-cols-[1fr_2fr_auto] gap-2 items-end">
             <Text label={`Series ${i + 1}`} value={s.name} onChange={name => setOne(i, { ...s, name })} />
             <RawInput label={block.kind === 'scatter' ? `Giá trị y (${block.labels.length} điểm)` : `Số liệu (${block.labels.length} giá trị)`} initial={s.data.join(', ')}
@@ -193,18 +194,27 @@ export function ChartFields({ block, onChange }: { block: ChartBlock; onChange: 
           {category && (
             <div className="space-y-2">
               <p className="text-[11px] text-stone-300">Ghi chú tại một nhãn (đường dọc kèm chữ)</p>
-              {annotations.map((a, i) => (
-                <div key={i} className="grid grid-cols-[10rem_1fr_auto] gap-2 items-end">
-                  <Field label="Tại nhãn">
-                    <select className={inputCls} value={String(a.index)}
-                      onChange={e => setAnnotations(annotations.map((x, j) => (j === i ? { ...x, index: Number(e.target.value) } : x)))}>
-                      {block.labels.map((l, j) => <option key={j} value={j}>{l || `#${j + 1}`}</option>)}
-                    </select>
-                  </Field>
-                  <Text label="Nội dung" value={a.text} onChange={text => setAnnotations(annotations.map((x, j) => (j === i ? { ...x, text } : x)))} />
-                  <button type="button" className={btnCls} onClick={() => setAnnotations(annotations.filter((_, j) => j !== i))}>Xoá</button>
-                </div>
-              ))}
+              {annotations.map((a, i) => {
+                // Shortening the labels can leave a note on a label that no longer exists: it is kept (with its
+                // text) and flagged until the author picks a label or removes it, since saving would fail.
+                const missing = a.index >= block.labels.length;
+                return (
+                  <div key={`${i}-${annotations.length}`} className="space-y-1">
+                    <div className="grid grid-cols-[10rem_1fr_auto] gap-2 items-end">
+                      <Field label="Tại nhãn">
+                        <select className={inputCls} value={String(a.index)} aria-invalid={missing || undefined}
+                          onChange={e => setAnnotations(annotations.map((x, j) => (j === i ? { ...x, index: Number(e.target.value) } : x)))}>
+                          {block.labels.map((l, j) => <option key={j} value={j}>{l || `#${j + 1}`}</option>)}
+                          {missing && <option value={a.index}>{`#${a.index + 1} (không còn)`}</option>}
+                        </select>
+                      </Field>
+                      <Text label="Nội dung" value={a.text} onChange={text => setAnnotations(annotations.map((x, j) => (j === i ? { ...x, text } : x)))} />
+                      <button type="button" className={btnCls} onClick={() => setAnnotations(annotations.filter((_, j) => j !== i))}>Xoá</button>
+                    </div>
+                    {missing && <p role="alert" className="text-[11px] text-red-400">Nhãn #{a.index + 1} không còn: chọn nhãn khác hoặc xoá ghi chú này.</p>}
+                  </div>
+                );
+              })}
               <button type="button" className={btnCls} disabled={annotations.length >= LIMITS.chartAnnotations || block.labels.length === 0}
                 onClick={() => setAnnotations([...annotations, { index: 0, text: '' }])}>+ Ghi chú</button>
             </div>

@@ -17,9 +17,10 @@ import { documentText } from '../src/lib/search/text';
 // `import.meta.env.SSR` is the live process.env in Bun: the renderer takes the static (server) chart path only when it is set.
 const previousSsr = process.env.SSR;
 let BlockRenderer: typeof import('../src/components/blocks/BlockRenderer').BlockRenderer;
+let ChartV2Fallback: typeof import('../src/components/blocks/BlockRenderer').ChartV2Fallback;
 beforeAll(async () => {
   process.env.SSR = 'true';
-  ({ BlockRenderer } = await import('../src/components/blocks/BlockRenderer'));
+  ({ BlockRenderer, ChartV2Fallback } = await import('../src/components/blocks/BlockRenderer'));
 });
 afterAll(() => {
   if (previousSsr === undefined) delete process.env.SSR;
@@ -129,6 +130,10 @@ describe('chart v2 formatting and data', () => {
     expect(formatChartValue(1234.5, { unit: 'kg' }, 'en')).toBe('1,234.5 kg');
     expect(formatChartValue(0.1 + 0.2, undefined, 'vi')).toBe('0,3');
     expect(formatChartValue(1e21, undefined, 'vi')).toBe('1e+21');
+    // Tiny values: at most 10 decimals, in the edition style rather than as written.
+    expect(formatChartValue(0.000123456789012, undefined, 'vi')).toBe('0,0001234568');
+    expect(formatChartValue(-1e-7, { unit: 'mm' }, 'vi')).toBe('-0,0000001 mm');
+    expect(formatChartValue(1e-12, undefined, 'en')).toBe('0');
     const b = chart();
     expect(formatChartLabel(b, '2026-01', 'en')).not.toBe('2026-01');
     expect(formatChartLabel(LEGACY, 'A', 'vi')).toBe('A');
@@ -140,6 +145,9 @@ describe('chart v2 formatting and data', () => {
     expect(csv.startsWith('﻿Tháng,')).toBe(true);
     expect(csv).toContain("'=cmd");
     expect(csv).toContain('2026-02,-2\r\n');
+    // Long and exponent-form negatives are numbers too: no formula guard.
+    const tiny = chartCsv(chart({}, { type: 'chart', kind: 'bar', labels: ['a', 'b'], series: [{ name: 'S', data: [0.1 - 0.4, -1e-7] }] }), 'L');
+    expect(tiny).toBe('﻿L,S\r\na,-0.30000000000000004\r\nb,-1e-7\r\n');
     expect(chartGrid(chart({}, SCATTER), 'Căn', n => String(n), l => l)).toEqual({
       headers: ['Căn', 'Căn hộ (x)', 'Căn hộ (y)'],
       rows: [['Căn A', '45', '2.1'], ['Căn B', '70.5', '3.4']],
@@ -194,6 +202,22 @@ describe('chart v2 formatting and data', () => {
     const sx = scatter.options?.scales?.x;
     expect(sx && 'type' in sx ? sx.type : undefined).toBe('linear');
   });
+
+  it('widens the automatic value range to include reference lines unless the author set it', () => {
+    const range = (b: ChartBlock, axis: 'y' | 'y2') => {
+      const s = chartConfig(b, { locale: 'vi', reducedMotion: true }).options?.scales?.[axis];
+      return s ? Object.fromEntries(Object.entries(s).filter(([k]) => /^(suggested)?(min|max)$/i.test(k))) : undefined;
+    };
+    // Data peaks at 1700 and the target sits above it; the right-axis line at 13 is within its data.
+    const b = chart({ references: [{ value: 2500, label: 'Mục tiêu' }, { value: -100 }, { value: 13, axis: 'right' }] });
+    expect(range(b, 'y')).toEqual({ suggestedMin: -100, suggestedMax: 2500 });
+    expect(range(b, 'y2')).toEqual({ suggestedMin: 13, suggestedMax: 13 });
+    expect(range(chart({ references: [{ value: 2500 }], y: { min: 0, max: 2000 } }), 'y')).toEqual({ min: 0, max: 2000 });
+    expect(range(chart({ references: [{ value: 2500 }], y: { max: 2000 } }), 'y')).toEqual({ suggestedMin: 2500, max: 2000 });
+    expect(range(chart({ references: undefined }), 'y')).toEqual({});
+    const scatter = chartConfig(chart({ references: [{ value: 9 }] }, SCATTER), { locale: 'en', reducedMotion: false }).options?.scales?.y;
+    expect(scatter && 'suggestedMax' in scatter ? scatter.suggestedMax : undefined).toBe(9);
+  });
 });
 
 describe('chart v2 surfaces', () => {
@@ -211,6 +235,33 @@ describe('chart v2 surfaces', () => {
     expect(html).toContain('<canvas aria-hidden="true" style="display:none"></canvas>');
     expect(html).not.toContain('zb-chart-legend');
     expect(render(doc.blocks, 'en')).toContain('1,200.5 ₫');
+  });
+
+  it('gives table readers the reference lines and notes the canvas draws', () => {
+    const marks = (html: string) => html.match(/<ul class="zb-chart-marks">(.*?)<\/ul>/)?.[1]?.split(/<\/?li>/).filter(Boolean);
+    // Inside the table's wrapper: visible without script, screen-reader-only (with the table) once drawn.
+    expect(render(doc.blocks, 'vi')).toMatch(/<div class="zb-scroll"><table[\s\S]*?<\/table><ul class="zb-chart-marks">/);
+    const vi = marks(render(doc.blocks, 'vi'));
+    expect(vi?.slice(0, 2)).toEqual(['Đường mốc: Mục tiêu · 1.600 ₫', 'Đường mốc: 13,0%']);
+    expect(vi?.[2]).toMatch(/^Ghi chú tại .+: Ra mắt Pro$/);
+    expect(vi?.[2]).not.toContain('2026-03');
+    expect(marks(render(doc.blocks, 'en'))?.[0]).toBe('Reference line: Mục tiêu · 1,600 ₫');
+    expect(render([chart({ references: undefined, annotations: undefined })])).not.toContain('zb-chart-marks');
+  });
+
+  it('shows labelled, formatted values and the marks while the chart chunk loads on the client', () => {
+    const fallback = (b: ChartBlock, locale: string) =>
+      renderToStaticMarkup(createElement(ChartV2Fallback, { block: b, locale, renderInline: (t: string) => createElement('span', null, t) }));
+    let html = fallback(chart({ caption: 'Nguồn' }), 'en');
+    expect(html).not.toContain('<canvas');
+    expect(html).toContain('<th scope="col">Tháng</th>');
+    expect(html).toContain('<th scope="row">2026-01</th><td class="zb-num">1,200.5 VND</td><td class="zb-num">12.5%</td>');
+    expect(html).toContain('<li>Reference line: Mục tiêu · 1,600 VND</li>');
+    expect(html).toContain('<li>Note at 2026-03: Ra mắt Pro</li>');
+    expect(html).toContain('<figcaption><span>Nguồn</span></figcaption>');
+    html = fallback(chart({ x: undefined, labels: ['a', 'b', 'c'] }), 'vi');
+    expect(html).toContain('<th scope="col">Nhãn</th>');
+    expect(html).toContain('1.200,5 VND');
   });
 
   it('renders legacy charts with the original component', () => {

@@ -20,6 +20,8 @@ const LABELS = {
     legend: 'Chú giải: bấm để ẩn hoặc hiện',
     showAll: 'Hiện tất cả',
     label: 'Nhãn',
+    reference: 'Đường mốc',
+    note: (label: string) => `Ghi chú tại ${label}`,
     failed: 'Không tải được biểu đồ; dữ liệu hiển thị dạng bảng.',
     chart: (kind: ChartKind) => `Biểu đồ ${KIND_NAMES.vi[kind]}`,
     frame: {} satisfies Partial<BlockFrameLabels>,
@@ -30,6 +32,8 @@ const LABELS = {
     legend: 'Legend: press to hide or show',
     showAll: 'Show all',
     label: 'Label',
+    reference: 'Reference line',
+    note: (label: string) => `Note at ${label}`,
     failed: 'The chart could not load; the data is shown as a table.',
     chart: (kind: ChartKind) => `${KIND_NAMES.en[kind].charAt(0).toUpperCase()}${KIND_NAMES.en[kind].slice(1)} chart`,
     frame: { fullscreen: 'Full screen', exitFullscreen: 'Exit full screen', download: 'Download' } satisfies Partial<BlockFrameLabels>,
@@ -147,6 +151,11 @@ export function ChartV2({ block, renderInline, locale: editionLocale }: ChartV2P
   const grid = chartGrid(block, labelHeader, (n, axis) => formatChartValue(n, axis, locale), l => formatChartLabel(block, l, locale));
   const downloads: BlockFrameDownload[] = [];
   if (block.csv) downloads.push({ label: text.csv, file: () => ({ filename: chartFilename(block, 'csv'), data: chartCsv(block, labelHeader), type: 'text/csv;charset=utf-8' }) });
+  // Reference lines and notes are drawn on the canvas; readers of the table get them as text.
+  const marks = [
+    ...(block.references ?? []).map(r => `${text.reference}: ${r.label ? `${r.label} · ` : ''}${formatChartValue(r.value, r.axis === 'right' ? block.y2 : block.y, locale)}`),
+    ...(block.annotations ?? []).map(a => `${text.note(formatChartLabel(block, block.labels[a.index] ?? '', locale))}: ${a.text}`),
+  ];
   const canvas = canvasRef.current;
   if (block.png && ready && canvas) downloads.push({ label: text.png, file: () => pngDownload(canvas, chartFilename(block, 'png')) });
 
@@ -178,6 +187,7 @@ export function ChartV2({ block, renderInline, locale: editionLocale }: ChartV2P
             ))}
           </tbody>
         </table>
+        {marks.length > 0 && <ul className="zb-chart-marks">{marks.map((m, i) => <li key={i}>{m}</li>)}</ul>}
       </div>
       {failed && <p className="zb-note">{text.failed}</p>}
     </BlockFrame>

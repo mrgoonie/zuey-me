@@ -37,7 +37,9 @@ export function seriesAxis(b: ChartBlock, s: ChartSeries): ChartAxis | undefined
  */
 export function formatChartValue(n: number, axis: ChartAxis | undefined, locale: TableLocale): string {
   if (!Number.isFinite(n)) return String(n);
-  const raw = axis?.decimals !== undefined ? n.toFixed(axis.decimals) : String(Number(n.toPrecision(12)));
+  let raw = axis?.decimals !== undefined ? n.toFixed(axis.decimals) : String(Number(n.toPrecision(12)));
+  // Tiny values print with more than 10 decimals or as exponents (1e-7): round them to 10 decimals instead.
+  if (!NUMBER_RE.test(raw) && Math.abs(n) < 1) raw = n.toFixed(10).replace(/\.?0+$/, '').replace(/^-0$/, '0');
   const format = axis?.format === 'percent' || axis?.format === 'currency' ? axis.format : 'number';
   // Exponent forms (1e+21) do not fit the grouping rules and are shown as written.
   const shown = NUMBER_RE.test(raw) ? formatCell({ type: format, ...(axis?.currency ? { currency: axis.currency } : {}) }, raw, locale).trim() : raw;
@@ -80,10 +82,15 @@ export function canonicalGrid(b: ChartBlock, labelHeader: string): ChartGrid {
   return chartGrid(b, labelHeader, n => String(n), l => l);
 }
 
-/** RFC 4180 CSV of the canonical data (CRLF, UTF-8 BOM for spreadsheets); labels and names are formula-guarded. */
+/**
+ * RFC 4180 CSV of the canonical data (CRLF, UTF-8 BOM for spreadsheets); labels and names are formula-guarded.
+ * Values are validated finite numbers printed by String(), so they stay numeric even when negative, long
+ * (-0.30000000000000004) or in exponent form (-1e-7).
+ */
 export function chartCsv(b: ChartBlock, labelHeader: string): string {
   const grid = canonicalGrid(b, labelHeader);
-  const lines = [grid.headers.map(h => csvField(h)), ...grid.rows.map(([l = '', ...values]) => [csvField(l), ...values.map(v => csvField(v, true))])];
+  const value = (v: string) => (Number.isFinite(Number(v)) ? v : csvField(v));
+  const lines = [grid.headers.map(h => csvField(h)), ...grid.rows.map(([l = '', ...values]) => [csvField(l), ...values.map(value)])];
   return `﻿${lines.map(l => l.join(',')).join('\r\n')}\r\n`;
 }
 

@@ -510,7 +510,10 @@ th[aria-sort='ascending'] .zb-dt-sort-icon, th[aria-sort='descending'] .zb-dt-so
 .zb-chart-legend-reset { font-weight: 700; }
 .zb-chart-legend :is(button):focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
 .zb-chart-swatch { width: 0.75rem; height: 0.75rem; border-radius: 0.2rem; flex: none; }
+/* Chart.js reads the canvas max-height and lowers the drawing height to it (no stretching), so a full-screen
+   chart gets wider rather than taller than the screen. */
 .zb-chart-v2:fullscreen canvas { max-height: calc(100vh - 9rem); }
+.zb-chart-marks { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: 0.8rem; color: #57534e; }
 @media (prefers-reduced-motion: reduce) {
   .zb-frame-loading { animation: none; }
   .zb-frame-btn { transition: none; }

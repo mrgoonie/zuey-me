@@ -58,13 +58,18 @@ function axisTitle(axis: ChartAxis | undefined) {
   return axis?.title ? { display: true, text: axis.title } : { display: false };
 }
 
-function valueScale(axis: ChartAxis | undefined, locale: TableLocale, stacked: boolean, beginAtZero = false) {
+/**
+ * A value axis. `marks` are the reference values drawn against it: the automatic range is widened to include
+ * them (a target above the data would otherwise fall outside the plot and not be drawn), unless the author set
+ * that end of the range.
+ */
+function valueScale(axis: ChartAxis | undefined, locale: TableLocale, stacked: boolean, beginAtZero = false, marks: readonly number[] = []) {
   return {
     stacked,
     ...(beginAtZero ? { beginAtZero } : {}),
     title: axisTitle(axis),
-    ...(axis?.min !== undefined ? { min: axis.min } : {}),
-    ...(axis?.max !== undefined ? { max: axis.max } : {}),
+    ...(axis?.min !== undefined ? { min: axis.min } : marks.length ? { suggestedMin: Math.min(...marks) } : {}),
+    ...(axis?.max !== undefined ? { max: axis.max } : marks.length ? { suggestedMax: Math.max(...marks) } : {}),
     ticks: { callback: (value: number | string) => formatChartValue(Number(value), axis, locale) },
   };
 }
@@ -192,14 +197,15 @@ export function chartConfig(b: ChartBlock, { locale, reducedMotion }: ChartConfi
   const right = category && b.series.some(s => s.axis === 'right');
   // Filled areas and stacks are read from zero.
   const zero = stacked || b.series.some(s => drawnAs(b, s) === 'area');
+  const marks = (side: 'left' | 'right') => (b.references ?? []).filter(r => (r.axis === 'right') === (side === 'right')).map(r => r.value);
   const scales = category
     ? {
       x: { stacked, title: axisTitle(b.x) },
-      y: valueScale(b.y, locale, stacked, zero),
-      ...(right ? { y2: { ...valueScale(b.y2, locale, stacked, zero), position: 'right' as const, grid: { drawOnChartArea: false } } } : {}),
+      y: valueScale(b.y, locale, stacked, zero, marks('left')),
+      ...(right ? { y2: { ...valueScale(b.y2, locale, stacked, zero, marks('right')), position: 'right' as const, grid: { drawOnChartArea: false } } } : {}),
     }
     : b.kind === 'scatter'
-      ? { x: { type: 'linear' as const, ...valueScale(b.x, locale, false) }, y: valueScale(b.y, locale, false) }
+      ? { x: { type: 'linear' as const, ...valueScale(b.x, locale, false) }, y: valueScale(b.y, locale, false, false, marks('left')) }
       : b.kind === 'radar'
         ? {
           r: {
