@@ -14,7 +14,7 @@ import type {
   ResponsiveSpan, SectionBlock, SurveyBlock, TableBlock, TableColumn, TableColumnType, ToggleBlock,
 } from '../../lib/blocks/schema';
 import { canContain, childContext } from '../../lib/blocks/nesting';
-import type { NestContext } from '../../lib/blocks/nesting';
+import type { ContainerKind, NestContext } from '../../lib/blocks/nesting';
 import { embedFromPastedText, embedSrc, recognizeEmbed } from '../../lib/blocks/embed';
 import { formatBytes } from '../../lib/blocks/markdown';
 import { validateDocument } from '../../lib/blocks/validate';
@@ -32,6 +32,7 @@ import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
 import { ChartFields } from './ChartFields';
+import { CompositionFields } from './CompositionFields';
 import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
 import { latestDraftFrom, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage } from './recovered-draft';
 import type { DraftRecovery, LatestDraft, RestoredRevision } from './recovered-draft';
@@ -50,6 +51,7 @@ const TYPE_LABELS: Partial<Record<BlockType, string>> = {
   math: 'Công thức (TeX)', gallery: 'Bộ sưu tập ảnh', audio: 'Âm thanh (file)', video: 'Video (file)', file: 'Tệp đính kèm',
   bookmark: 'Thẻ liên kết', toggle: 'Mục thu gọn', icon: 'Biểu tượng (icon)',
   interactive: 'Tương tác (HTML/JS)', section: 'Khu vực (section)', card: 'Thẻ (card)',
+  tabs: 'Tab (nhiều thẻ)', stat: 'Chỉ số (stat)', steps: 'Các bước / dòng thời gian', comparison: 'So sánh', progress: 'Tiến độ / thang đo',
 };
 
 /** Extra search words for the slash menu (unaccented). */
@@ -61,6 +63,8 @@ const TYPE_HINTS: Partial<Record<BlockType, string>> = {
   gallery: 'images album', audio: 'mp3 podcast sound', video: 'mp4', file: 'pdf download attachment', bookmark: 'link card url',
   toggle: 'details collapse accordion', icon: 'icon symbol lucide bieu tuong',
   section: 'section band wide full width lane khu vuc', card: 'card box panel the',
+  tabs: 'tabs tab panels', stat: 'metric kpi number figure chi so', steps: 'steps timeline process roadmap buoc dong thoi gian',
+  comparison: 'compare versus vs pricing plans pros cons so sanh', progress: 'progress meter gauge rating score bar tien do thang do sao',
 };
 
 const typeLabel = (t: BlockType): string => TYPE_LABELS[t] ?? t;
@@ -100,6 +104,11 @@ function newBlock(type: BlockType): Block | null {
     case 'icon': return { id, type, name: 'sparkles', size: 'lg', tone: 'accent' };
     case 'section': return { id, type, width: 'wide', surface: 'none', blocks: [] };
     case 'card': return { id, type, title: 'Tiêu đề thẻ', variant: 'outline', blocks: [] };
+    case 'tabs': return { id, type, tabs: [{ label: 'Tab 1', blocks: [] }, { label: 'Tab 2', blocks: [] }] };
+    case 'stat': return { id, type, items: [{ label: 'Chỉ số', value: 0 }] };
+    case 'steps': return { id, type, variant: 'steps', items: [{ title: 'Bước 1', blocks: [] }, { title: 'Bước 2', blocks: [] }] };
+    case 'comparison': return { id, type, options: [{ name: 'Lựa chọn A', blocks: [] }, { name: 'Lựa chọn B', blocks: [] }] };
+    case 'progress': return { id, type, variant: 'bar', items: [{ label: 'Tiến độ', value: 50 }] };
     default: return null;
   }
 }
@@ -112,15 +121,15 @@ function embedBlockFrom(text: string, id: string = newId()): Block | null {
 
 const CREATABLE: BlockType[] = BLOCK_TYPES.filter(t => TYPE_LABELS[t] !== undefined);
 
-/** Where a block list sits; `inCard` and `nested` default to false (the document's own top-level list). */
-interface ListCtx { layoutDepth: number; inToggle: boolean; inCard?: boolean; nested?: boolean; slug: string }
+/** Where a block list sits; `inCard`, `inWidget` and `nested` default to false (the document's own top-level list). */
+interface ListCtx { layoutDepth: number; inToggle: boolean; inCard?: boolean; inWidget?: boolean; nested?: boolean; slug: string }
 
 const nestOf = (ctx: ListCtx): NestContext => ({
-  layoutDepth: ctx.layoutDepth, inToggle: ctx.inToggle, inCard: ctx.inCard ?? false, nested: ctx.nested ?? false,
+  layoutDepth: ctx.layoutDepth, inToggle: ctx.inToggle, inCard: ctx.inCard ?? false, inWidget: ctx.inWidget ?? false, nested: ctx.nested ?? false,
 });
 
-/** Context for the body of a container block, following the validator's nesting rules. */
-const bodyCtx = (ctx: ListCtx, type: 'layout' | 'toggle' | 'section' | 'card'): ListCtx => ({ ...ctx, ...childContext(nestOf(ctx), type) });
+/** Context for the body of a container block (or a widget item), following the validator's nesting rules. */
+const bodyCtx = (ctx: ListCtx, type: ContainerKind): ListCtx => ({ ...ctx, ...childContext(nestOf(ctx), type) });
 
 function allowedTypes(ctx: ListCtx): BlockType[] {
   const nest = nestOf(ctx);
@@ -808,6 +817,15 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
       return <SectionFields block={block} onChange={onChange} ctx={ctx} />;
     case 'card':
       return <CardFields block={block} onChange={onChange} ctx={ctx} />;
+    case 'tabs':
+    case 'stat':
+    case 'steps':
+    case 'comparison':
+    case 'progress':
+      return (
+        <CompositionFields block={block} onChange={onChange}
+          renderBody={(blocks, change) => <BlockListEditor blocks={blocks} onChange={change} ctx={bodyCtx(ctx, 'widget')} />} />
+      );
     default:
       return <p className="text-[11px] text-stone-400">Block này được chỉnh trong tab JSON.</p>;
   }

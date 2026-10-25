@@ -137,6 +137,24 @@ A `chart` block needs `kind`, `labels` and `series` (`[{name, data}]`, each `dat
 - Markdown and Zuey AI get the canonical data table plus lines for axes, reference lines and notes. Emails link to the web page for charts.
 - `translatables` lists the title, series names, axis titles and units, reference labels, notes and the caption. It lists labels too, except ISO date labels (`x.format: "date"`). Notes point at labels by index, so they survive translation.
 
+## Composition widgets
+
+`block_schema {types: ["tabs","stat","steps","comparison","progress"], compact: true}` returns the five schemas, the rules and an example of each.
+
+| Block | Use it for | Key fields |
+| --- | --- | --- |
+| `tabs` | Alternatives the reader picks one of (install commands, plans per region) | `tabs: [{label, anchor?, blocks}]` (2–8), `defaultTab` (index), `level` (2–4, heading level of each label when all panels show, default 3) |
+| `stat` | A row of key figures | `items: [{label, value, decimals?, prefix?, suffix?, unit?, delta?: {value, decimals?, suffix?, label?}, trend?, state?, sparkline?, note?}]` (1–8) |
+| `steps` | A numbered process (`variant: "steps"`, default) or a dated sequence (`"timeline"`) | `items: [{title, date?, icon?, status?: done/current/upcoming, blocks}]` (1–20), `orientation: "horizontal"` (vertical below 768 px), `connector: "none"` |
+| `comparison` | Two to four options side by side | `options: [{name, badge?, highlight?, description?, pros?, cons?, blocks}]`, `features: [{label, values}]` with one value per option: `true`/`false` (yes/no marks) or one line of text |
+| `progress` | Bars, segmented bars, gauges or star ratings on one scale | `variant` (`bar` default, `segments`, `gauge`, `rating`), `min`/`max` (default 0–100; a rating's `max` is its star count, 1–10, default 5), `segments` (2–20, segments only), `decimals`, `suffix`, `thresholds: [{at, state}]` (strictly ascending), `items: [{label, value, note?}]` (1–12) |
+
+- Numbers are finite, at most 10^15 in absolute value, with 0–4 `decimals`. A `prefix`/`suffix` is printed verbatim, so start it with a space to separate it (`" pts"`). A delta always shows its sign. `trend` defaults to the sign of the delta and `state` to positive for up and negative for down; set `state: "positive"` for a falling churn rate. A progress value outside the scale fails with `422`.
+- Tab, step and option bodies take any block except `section`, `tabs`, `steps` and `comparison` (no widget with items inside another). A `toggle` cannot hold `tabs`. Tab anchors share one namespace with section anchors; `#anchor` in the URL opens that tab, and choosing a tab updates the fragment.
+- Without JavaScript every tab panel shows in order under its label as a heading, which is also what Markdown, Zuey AI and email get. Once the page has loaded the labels become a WAI-ARIA tab list: Left/Right move and wrap, Home/End jump, and the tab list scrolls sideways on phones. The other widgets are plain server-rendered markup with no script. Readers see numbers in the style of the edition (`vi`: `1.250.000`, `12,5%`; others: `1,250,000`, `12.5%`); Markdown and Zuey AI get canonical numbers (`1250000`, `12.5%`). Every state colour also has text (status chips, "Good"/"Poor" after a value, yes/no for screen readers), and progress items are `role="meter"` with the value in `aria-valuetext`. Animations run only when the reader has not asked for reduced motion.
+- The paywall splits tabs, steps and comparisons item by item: a non-member sees the first items (a comparison keeps the matrix columns of those options only), never the rest. `stat` and `progress` count as one unit.
+- `translatables` lists widget titles, tab labels, stat and progress labels and notes, units, delta labels, step titles and dates, option names, badges, descriptions, pros and cons, and the feature labels and text cells of the matrix. Numbers, anchors, prefixes and suffixes stay as in the source.
+
 ## Math blocks
 
 - `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.

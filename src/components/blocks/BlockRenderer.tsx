@@ -19,6 +19,9 @@ import { mathMarkup, mathNumbers } from '../../lib/blocks/math';
 import type { MathNumber } from '../../lib/blocks/math';
 import type { MathRenders } from '../../lib/blocks/math';
 import { CardView, SectionView } from './ContainerBlocks';
+import { ComparisonView, ProgressView, StatView, StepsView, TabsStatic } from './CompositionBlocks';
+import { Tabs as StaticTabs } from './TabsBlock';
+import type { TabsProps } from './TabsBlock';
 import { DiagramBlock } from './DiagramBlock';
 import { SurveyBlock } from './SurveyBlock';
 import { IconGlyph as StaticIconGlyph } from './block-icons';
@@ -168,6 +171,23 @@ function ChartV2Slot(props: ChartV2Props) {
     <LazyBoundary fallback={fallback}>
       <Suspense fallback={fallback}>
         {import.meta.env.SSR ? <StaticChartV2 {...props} /> : <LazyChartV2 {...props} />}
+      </Suspense>
+    </LazyBoundary>
+  );
+}
+
+/**
+ * Tabs load their keyboard and hash behaviour only on pages that have tabs. The server renders every panel under its
+ * label, and the client keeps that form while the chunk loads, or for good if it fails.
+ */
+const LazyTabs = lazy(() => import('./TabsBlock'));
+
+function TabsSlot(props: TabsProps) {
+  const fallback = <TabsStatic {...props} />;
+  return (
+    <LazyBoundary fallback={fallback}>
+      <Suspense fallback={fallback}>
+        {import.meta.env.SSR ? <StaticTabs {...props} /> : <LazyTabs {...props} />}
       </Suspense>
     </LazyBoundary>
   );
@@ -357,6 +377,28 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
           renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
         />
       );
+    case 'tabs': return <TabsSlot block={block} renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)} />;
+    case 'stat': return <StatView block={block} locale={ctx.locale} renderInline={text => <Inline text={text} />} />;
+    case 'steps':
+      return (
+        <StepsView
+          block={block}
+          locale={ctx.locale}
+          renderInline={text => <Inline text={text} />}
+          renderIcon={name => <IconSlot name={name} size={18} />}
+          renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
+        />
+      );
+    case 'comparison':
+      return (
+        <ComparisonView
+          block={block}
+          locale={ctx.locale}
+          renderInline={text => <Inline text={text} />}
+          renderBlocks={blocks => blocks.map(b => <BlockView key={b.id} block={b} ctx={ctx} />)}
+        />
+      );
+    case 'progress': return <ProgressView block={block} locale={ctx.locale} renderInline={text => <Inline text={text} />} />;
   }
 }
 

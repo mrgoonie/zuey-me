@@ -76,6 +76,8 @@ function outlineLabel(block: Block): string | undefined {
     case 'chart': return block.title ? trimLabel(block.title) : undefined;
     case 'survey': return trimLabel(block.question);
     case 'file': return trimLabel(block.name);
+    case 'tabs': return trimLabel(block.tabs.map(t => t.label).join(' | '));
+    case 'stat': case 'comparison': case 'progress': return block.title ? trimLabel(block.title) : undefined;
     default: return undefined;
   }
 }
@@ -145,6 +147,28 @@ function blockTexts(block: Block): TextField[] {
     case 'toggle': return text('summary', block.summary);
     case 'icon': return text('label', block.label);
     case 'card': return [...text('title', block.title), ...text('image.alt', block.image?.alt), ...text('footer', block.footer)];
+    case 'tabs': return block.tabs.flatMap((t, i) => text(`tabs.${i}.label`, t.label));
+    case 'stat': return [
+      ...text('title', block.title),
+      ...block.items.flatMap((s, i) => [
+        ...text(`items.${i}.label`, s.label), ...text(`items.${i}.unit`, s.unit), ...text(`items.${i}.delta.label`, s.delta?.label), ...text(`items.${i}.note`, s.note),
+      ]),
+    ];
+    case 'steps': return block.items.flatMap((s, i) => [...text(`items.${i}.title`, s.title), ...text(`items.${i}.date`, s.date)]);
+    case 'comparison': return [
+      ...text('title', block.title),
+      ...block.options.flatMap((o, i) => [
+        ...text(`options.${i}.name`, o.name), ...text(`options.${i}.badge`, o.badge), ...text(`options.${i}.description`, o.description),
+        ...(o.pros ?? []).flatMap((s, j) => text(`options.${i}.pros.${j}`, s)), ...(o.cons ?? []).flatMap((s, j) => text(`options.${i}.cons.${j}`, s)),
+      ]),
+      ...(block.features ?? []).flatMap((f, i) => [
+        ...text(`features.${i}.label`, f.label), ...f.values.flatMap((x, j) => (typeof x === 'string' ? text(`features.${i}.values.${j}`, x) : [])),
+      ]),
+    ];
+    case 'progress': return [
+      ...text('title', block.title),
+      ...block.items.flatMap((s, i) => [...text(`items.${i}.label`, s.label), ...text(`items.${i}.note`, s.note)]),
+    ];
     case 'code': case 'divider': case 'layout': case 'section': return [];
   }
 }
