@@ -10,6 +10,7 @@ import { AppError } from '../http';
 import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
 import { iso, isUniqueViolation, membersRuntime, siteUrl } from '../members/runtime';
 import { getUserById, logActivity } from '../members/users';
+import { DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
 import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
@@ -156,6 +157,28 @@ export async function reverseCourseOrder(
 }
 
 /**
+ * A Dodo refund of an order that an opened dispute already charged back. Access is already revoked and the referral
+ * commission reversed, so the order only becomes `refunded` and its money back is counted; a later won or cancelled
+ * dispute then finds no `charged_back` order to restore. The refund is dropped once a funds-lost outcome was received
+ * for the order (that chargeback is the same money). The check runs in the same statement as the update, so a racing
+ * funds-lost outcome either finds the order refunded or suppresses the refund.
+ */
+export async function refundDisputedCourseOrder(
+  d1: D1DatabaseLike, order: CourseOrder, reason: string,
+  reversed: { amountMinor: number | null; currency: string | null },
+): Promise<boolean> {
+  const lost = [...DODO_DISPUTE_FUNDS_LOST];
+  const res = await d1.prepare(
+    `UPDATE course_orders SET status = 'refunded', attention_reason = ?, updated_at = ? WHERE id = ? AND status = 'charged_back'
+       AND NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = course_orders.id AND raw_type IN (${lost.map(() => '?').join(', ')}))`
+  ).bind(reason, iso(membersRuntime.now()), order.id, ...lost).run();
+  if (!res.meta?.changes) return false;
+  await logActivity(d1, order.user_id, 'courses.order_refunded', { code: order.code, reason, actor: 'system' });
+  await queueCourseMoneyBack(d1, order, 'refunded', reversed);
+  return true;
+}
+
+/**
  * Queues the `refund` event of money that went back for a course order, once per order and kind. A flagged order
  * that was never paid (`paid_at` is null) never produced a purchase event, so it is not lost revenue either.
  */
@@ -176,7 +199,8 @@ export async function queueCourseMoneyBack(
 
 /**
  * A dispute the merchant won: the order is paid again and access returns. No purchase event is queued: the
- * original one still stands, because an opened dispute never queued a refund.
+ * original one still stands, because an opened dispute never queued a refund. An order refunded while the dispute was
+ * open is `refunded`, not `charged_back`, so it stays revoked (after a partial refund too: any refund revokes access).
  */
 export async function restoreCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string): Promise<boolean> {
   const res = await d1.prepare("UPDATE course_orders SET status = 'paid', attention_reason = ?, updated_at = ? WHERE id = ? AND status = 'charged_back'")
