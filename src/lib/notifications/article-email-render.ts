@@ -1,9 +1,11 @@
-import type { ArticleAccess, ArticleDocument, Block, CardBlock, ImageSize } from '../blocks/schema';
+import type { ArticleAccess, ArticleDocument, Block, CardBlock, ImageSize, TableBlock } from '../blocks/schema';
 import { DEFAULT_CARD_LEVEL } from '../blocks/schema';
 import { parseInline } from '../blocks/inline';
 import type { InlineNode } from '../blocks/inline';
 import { inlineToPlain } from '../blocks/inline';
 import { applyPaywall } from '../blocks/paywall';
+import { columnOf, formatCell, isDataTable, isNumericColumn, linkCell, tableLocale } from '../blocks/table-data';
+import type { TableLocale } from '../blocks/table-data';
 import { escapeHtml } from '../members/runtime';
 
 /**
@@ -148,6 +150,21 @@ function webLink(what: string, input: ArticleEmailInput, block: Block): string {
   return `<p style="${P}"><a href="${escapeHtml(href)}" style="${LINK}">▶ ${escapeHtml(copyFor(input.locale).viewOnWeb(what))}</a></p>`;
 }
 
+/** A table cell in email HTML: inline text for text columns, the formatted value (or a link) for typed ones. */
+function tableCellHtml(block: TableBlock, column: number, raw: string, locale: TableLocale): string {
+  const col = columnOf(block, column);
+  if (col.type === 'text') return inlineHtml(raw);
+  const link = col.type === 'link' ? linkCell(raw) : null;
+  if (link) return `<a href="${escapeHtml(link.href)}" style="${LINK}">${escapeHtml(link.label)}</a>`;
+  return escapeHtml(formatCell(col, raw, locale));
+}
+
+function tableCellText(block: TableBlock, column: number, raw: string, locale: TableLocale): string {
+  const col = columnOf(block, column);
+  if (col.type === 'link') return linkCell(raw)?.href ?? raw;
+  return formatCell(col, raw, locale);
+}
+
 function blockHtml(block: Block, input: ArticleEmailInput): string {
   const labels = labelsFor(input.locale);
   switch (block.type) {
@@ -176,7 +193,11 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
         + (block.caption ? `<p style="font-size:13px;color:#78716c;margin:-8px 0 16px;text-align:center">${inlineHtml(block.caption)}</p>` : '');
     case 'table': {
       const cell = 'padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top';
-      return `<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px"><tr>${block.headers.map(h => `<th style="${cell};background:#f5f0eb">${inlineHtml(h)}</th>`).join('')}</tr>${block.rows.map(r => `<tr>${r.map(c => `<td style="${cell}">${inlineHtml(c)}</td>`).join('')}</tr>`).join('')}</table>`;
+      const table = `<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px"><tr>${block.headers.map(h => `<th style="${cell};background:#f5f0eb">${inlineHtml(h)}</th>`).join('')}</tr>${block.rows.map(r => `<tr>${r.map((c, i) => `<td style="${cell}${isNumericColumn(columnOf(block, i)) ? ';text-align:right' : ''}">${tableCellHtml(block, i, c, tableLocale(input.locale))}</td>`).join('')}</tr>`).join('')}</table>`;
+      if (!isDataTable(block)) return table;
+      return (block.title ? `<p style="${P};margin-bottom:8px"><strong>${escapeHtml(block.title)}</strong></p>` : '')
+        + table
+        + (block.caption ? `<p style="font-size:13px;color:#78716c;margin:-8px 0 16px">${inlineHtml(block.caption)}</p>` : '');
     }
     case 'bookmark':
       return `<p style="${P}"><a href="${escapeHtml(block.url)}" style="${LINK}"><strong>${escapeHtml(block.title || block.url)}</strong></a>${block.description ? `<br><span style="font-size:14px;color:#57534e">${escapeHtml(block.description)}</span>` : ''}</p>`;
@@ -217,7 +238,7 @@ function blockText(block: Block, input: ArticleEmailInput): string {
     case 'quote': return `“${inlineToPlain(block.text)}”${block.cite ? ` — ${inlineToPlain(block.cite)}` : ''}`;
     case 'code': return block.filename ? `${block.filename}\n${block.code}` : block.code;
     case 'divider': return '---';
-    case 'table': return [block.headers, ...block.rows].map(r => r.map(inlineToPlain).join(' | ')).join('\n');
+    case 'table': return [...(block.title ? [block.title] : []), block.headers.map(inlineToPlain).join(' | '), ...block.rows.map(r => r.map((c, i) => tableCellText(block, i, c, tableLocale(input.locale))).join(' | ')), ...(block.caption ? [inlineToPlain(block.caption)] : [])].join('\n');
     case 'bookmark': return `${block.title || ''} ${block.url}`.trim();
     case 'toggle': return [inlineToPlain(block.summary), ...block.blocks.map(b => blockText(b, input))].join('\n\n');
     case 'layout': return block.children.flatMap(c => c.blocks.map(b => blockText(b, input))).filter(Boolean).join('\n\n');

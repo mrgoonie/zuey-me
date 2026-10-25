@@ -64,6 +64,7 @@ curl -s "${H[@]}" "https://zuey.me/api/v1/articles/$SLUG/verify"
   | `submitted_fields` | Fields present in the request, not a diff (`published_at`/`notify` for publish, `tags` for `tags_set`) |
 
   After `article_edition_delete` the answer shows the primary edition, while the receipt describes the deleted locale. An idempotent replay of a response stored before receipts shipped on these writers (stored responses are kept for 24 hours) comes back without `receipt`; read `mode: "summary"` instead.
+- `read_back: "failed"` on an `article_update` or `article_publish` answer (still `200`) means the write committed but the article could not be read back afterwards (a database error or a concurrent delete). Do not repeat the write; it landed and a retry gets `409`. The edition fields, `revision`, the document and the `receipt` are built from the rows as written; `tags`, `topic_tags`, `category`, `labels`, `available_locales` and other editions are not loaded and come back empty (`editions` lists only the written one), so call `article_get` when you need them. An idempotent replay of that answer repeats the flag; `article_get` shows the current state.
 - Every write needs `expected_revision`, and every successful write on the article increments it (all locales share one counter). Writes to several locales are therefore sequential: use the `revision` of the previous answer.
 - `409 revision_conflict` with `current_revision`: someone else (or your own earlier call whose answer was lost) saved first. Read `mode: "summary"` and compare `content_hash` with the document you sent: if equal, your save landed, do not repeat it; if not, re-read what changed, merge, retry with `current_revision`. `409 slug_taken` means another article uses that slug.
 - `400 invalid_field` names the field; `422 invalid_document` lists `errors: [{path, message}]` for the block tree. Fix the paths, do not retry unchanged.
@@ -86,6 +87,33 @@ A `code` block needs only `code` (and usually `language`). Every other field is 
 - Readers get a copy button and a wrap toggle on every code block once the page has loaded. Copy puts the code on the clipboard without line numbers or diff markers; for a diff it is the code after the change (added and context lines, removed lines left out).
 - Markdown, search and Zuey AI see the file name and the code as written (diff markers included). The `.md` fence carries the options as metadata: ```` ```diff lang="ts" title="src/config.ts" {2} showLineNumbers ````.
 - Options are presentation only: `filename` is never listed in `translatables`, and a translation must keep every code field as in the source.
+
+## Data tables
+
+A `table` block needs only `headers` and `rows` (one string per header, at most 20 columns and 200 rows). A table that uses any field below becomes a data table. A table without them renders exactly as before. `block_schema {types: ["table"]}` returns the schema and a `data_table` example.
+
+| Field | Effect |
+| --- | --- |
+| `columns: [{type, currency?, decimals?, filter?}]` | One entry per header. `type` is `text` (default, inline Markdown), `number`, `currency` (needs a 3-letter `currency` such as `VND`), `percent`, `date`, `boolean`, `link` or `badge`. `decimals` (0–6) applies to the numeric types. `filter: true` adds a column filter: a from/to range for numbers and dates, otherwise a value list |
+| `title`, `caption` | One-line plain title above the table (also its accessible name and the CSV file name); inline caption below |
+| `sortable: true` | Header buttons sort by value (asc → desc → off) and set `aria-sort`. Empty cells always sort last |
+| `search: true` | Search box over every cell. It ignores accents, so `ha noi` finds `Hà Nội` |
+| `stickyHeader: true` | The table scrolls inside a box and its header row stays visible |
+| `csv: true` | Download button that exports the rows currently shown, in their current order |
+| `mobile: "cards"` | On narrow screens each row becomes a card of label/value pairs once the page has loaded (without script it scrolls sideways). The default scrolls sideways |
+
+- Typed cells hold a canonical value, or `""` for empty. A cell with the wrong form fails with `422` at its `rows[i][j]` path:
+  - numbers: `1234.5` or `-3`, stored without leading zeros (`00012` is saved as `12`, `-0` as `0`);
+  - dates: `2026-01-15`, `2026-01` or `2026`;
+  - booleans: `true` or `false`;
+  - links: `https://…` or `[label](https://…)`, without a user name or password in the URL;
+  - badges: plain text of at most 100 characters.
+- Readers see formatted values in the style of the edition. A `vi` edition shows `490.000 ₫`, `12,5%`, `15/01/2026` and `Có`/`Không`. Other editions show `490,000 ₫`, `12.5%`, `Jan 15, 2026` and `Yes`/`No`, with English control labels. Emails follow the same rule.
+- Markdown and Zuey AI get the canonical values (`490000`, `2026-01-15`, `true`), with the unit added to the header (`Giá (VND)`). Site search indexes both forms, so `490000` and `490.000` both find the row.
+- Data table cells are capped at 1,000 characters each and 100,000 in total.
+- The server renders every row, so readers without script and search engines see the full table. The controls appear once the page loads and are fetched only for pages that have a data table.
+- The CSV holds plain text for text cells, the URL for links and the canonical value for other cells. It is UTF-8 with a BOM, so spreadsheets open it correctly. A cell starting with `=`, `+`, `-`, `@`, a tab or a carriage return (also their full-width forms, or after zero-width characters) gets a leading `'`, so a spreadsheet will not run it as a formula. Numbers in numeric columns are exempt, so `-12.5` stays a number.
+- `translatables` lists the title, the caption and the text and badge cells. Typed cells are data and must stay as in the source.
 
 ## Math blocks
 
