@@ -145,7 +145,7 @@ function discoveryFromArgs(args: Record<string, unknown>) {
 /** Shared wording of the write receipt in tool descriptions. */
 const RECEIPT_NOTE = 'The response carries a receipt (operation_success, operation, locale, article_revision, edition_draft_revision, published_revision, has_unpublished_changes, submitted_fields, next_action); status still describes the public edition, not this write.';
 /** Update and publish answers when the write committed but the article could not be read back. */
-const READ_BACK_NOTE = 'read_back "failed" means the write committed but the article could not be read back: do not retry (a retry gets 409); the edition, revisions, document and receipt are exact, while tags, topic_tags, category, labels and other editions are not loaded, so call article_get for them.';
+const READ_BACK_NOTE = 'read_back "failed" means the write committed but the article could not be read back: do not retry (a retry gets 409); the edition, revisions, document and receipt are exact, while tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty), so call article_get for them; an idempotent replay repeats the flag.';
 
 /** Write tools that accept an idempotency_key. */
 const IDEMPOTENT_TOOLS = new Set(['article_create', 'article_update', 'article_publish', 'article_delete', 'article_edition_delete', 'article_tags_set']);

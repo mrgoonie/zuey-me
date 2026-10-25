@@ -620,3 +620,77 @@ describe('a failed read-back after commit never turns a committed update or publ
     expect(paragraphText(await getArticle(d1, 'post'))).toBe('saved');
   });
 });
+
+describe('the read-back fallback reports the same exact fields as a normal read of the committed state (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original'), tags: ['kept'] });
+  });
+
+  // Fields documented as exact in a read_back "failed" answer.
+  const EXACT = [
+    'id', 'slug', 'locale', 'primary_locale', 'title', 'excerpt', 'access', 'status', 'revision', 'label_revision', 'published_revision',
+    'created_at', 'updated_at', 'published_at', 'has_unpublished_changes', 'reading_minutes', 'cover_url', 'cover_asset_id', 'cover_alt',
+    'social_preview', 'category_id', 'draft', 'draft_recovery', 'published',
+  ] as const;
+
+  async function expectMatchesStored(fallback: ArticleRecord, operation: 'update' | 'publish'): Promise<void> {
+    const real = await getArticle(d1, 'post', { locale: fallback.locale });
+    if (!real) throw new Error('article missing');
+    for (const key of EXACT) expect({ [key]: fallback[key] }).toEqual({ [key]: real[key] });
+    expect(fallback.editions).toEqual(real.editions.filter(e => e.locale === fallback.locale));
+    expect(toWriteReceipt(fallback, operation, [])).toEqual(toWriteReceipt(real, operation, []));
+    // Not loaded: reported empty rather than derived from the one written edition.
+    expect(fallback).toMatchObject({ read_back: 'failed', tags: [], topic_tags: [], category: null, labels: [], available_locales: [], tag_ids: [] });
+  }
+
+  it('update of a draft edition while another edition is live', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 2);
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { locale: 'en', document: doc('english 2') }, 3);
+    expect(rec.status).toBe('draft');
+    await expectMatchesStored(rec, 'update');
+    // The live vi edition is not reported as missing: available_locales is "not loaded", not "nothing public".
+    expect((await getArticle(d1, 'post', { locale: 'en' }))?.available_locales).toEqual(['vi']);
+  });
+
+  it('update that creates a missing edition', async () => {
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { locale: 'en', title: 'Post', excerpt: 'New', document: doc('english') }, 1);
+    expect(rec).toMatchObject({ locale: 'en', status: 'draft', published_revision: null, has_unpublished_changes: true });
+    await expectMatchesStored(rec, 'update');
+  });
+
+  it('update that re-creates a deleted edition', async () => {
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 1);
+    await publishArticle(d1, 'post', 2, true, { locale: 'en', notify: false });
+    await deleteEdition(d1, 'post', 'en', 3);
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { locale: 'en', title: 'Again', document: doc('again') }, 4);
+    expect(rec).toMatchObject({ locale: 'en', status: 'draft', published_revision: null, published_at: null });
+    await expectMatchesStored(rec, 'update');
+  });
+
+  it('update of an edition that is already published keeps its public snapshot', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    const rec = await updateArticle(failReadBackAfterCommit(d1), 'post', { title: 'Đổi tên', document: doc('changed') }, 2);
+    expect(rec).toMatchObject({ status: 'published', published_revision: 2, has_unpublished_changes: true });
+    expect(rec.published).toEqual(doc('original'));
+    await expectMatchesStored(rec, 'update');
+  });
+
+  it('publish of a second edition, with a backdated publish time', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post', document: doc('english') }, 2);
+    const rec = await publishArticle(failReadBackAfterCommit(d1), 'post', 3, true, { locale: 'en', publishedAt: '2020-05-01T00:00:00.000Z', notify: false });
+    expect(rec).toMatchObject({ locale: 'en', status: 'published', published_revision: 4, published_at: '2020-05-01T00:00:00.000Z' });
+    await expectMatchesStored(rec, 'publish');
+  });
+
+  it('republish keeps the first publish time', async () => {
+    await publishArticle(d1, 'post', 1, true, { notify: false });
+    await updateArticle(d1, 'post', { document: doc('changed') }, 2);
+    const rec = await publishArticle(failReadBackAfterCommit(d1), 'post', 3, true, { notify: false });
+    await expectMatchesStored(rec, 'publish');
+  });
+});

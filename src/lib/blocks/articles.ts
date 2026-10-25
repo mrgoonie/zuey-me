@@ -82,7 +82,8 @@ export interface ArticleSummary {
   /**
    * Update and publish responses only, set when the write committed but reading the article back failed. The
    * record is then built from the rows as written: the edition, revisions, document and receipt are exact, while
-   * tags, topic_tags, category, labels and other editions are not loaded (empty). Re-read the article for those.
+   * tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty; `editions`
+   * lists only the written one). Re-read the article for those.
    */
   read_back?: 'failed';
 }
@@ -557,18 +558,23 @@ async function getArticleById(db: D1DatabaseLike, id: string, missing: string, o
  * and reporting it as an error would make a retry fail with 409.
  */
 async function readBackAfterCommit(
-  db: D1DatabaseLike, id: string, locale: Locale, written: { art: ArticleRowData; edition: EditionRow; draft: ArticleDocument; tagIds: string[] },
+  db: D1DatabaseLike, id: string, locale: Locale, written: { art: ArticleRowData; edition: EditionRow },
 ): Promise<ArticleRecord> {
   try {
     return await getArticleById(db, id, 'Article disappeared after commit', { locale });
   } catch (err) {
     console.error('Article read-back failed after commit:', err instanceof Error ? err.message : 'unknown');
-    const { art, edition, draft, tagIds } = written;
+    const { art, edition } = written;
+    // Only the written rows are known: tags, category, labels and the other editions are reported as not loaded
+    // (empty), never derived from the one edition in hand, so nothing here reads as "not public" by mistake.
     const noDecorations: Decorations = { tags: new Map(), categories: new Map(), labels: new Map() };
     const summary = buildSummary(art, edition, [edition], noDecorations, { includeEditions: true });
+    // Documents are read from the written JSON exactly as `articleRecord` reads stored rows.
+    const draft = readStoredDocWithRecovery(edition.draftJson, art.slug);
     return {
-      ...summary, editions: summary.editions ?? [], category_id: art.categoryId, tag_ids: tagIds, draft, draft_recovery: null,
-      published: edition.publishedJson === null ? null : edition.publishedJson === edition.draftJson ? draft : parseStoredDoc(edition.publishedJson, art.slug),
+      ...summary, available_locales: [], editions: summary.editions ?? [], category_id: art.categoryId, tag_ids: [],
+      draft: draft.doc ?? emptyDocument(), draft_recovery: draft.recovery,
+      published: edition.publishedJson ? parseStoredDoc(edition.publishedJson, art.slug) : null,
       read_back: 'failed',
     };
   }
@@ -960,7 +966,7 @@ export async function updateArticle(
     };
   return readBackAfterCommit(db, art.id, locale, {
     art: { ...art, slug: nextSlug, primary, access: input.access ?? art.access, categoryId, revision, updatedAt: now },
-    edition: writtenEdition, draft: input.document ?? parseStoredDoc(docJson, slug), tagIds: tagIds ?? [],
+    edition: writtenEdition,
   });
 }
 
@@ -1040,7 +1046,6 @@ export async function publishArticle(
       ...edition, publishedJson: edition.draftJson, status: 'published', publishedRevision: revision, revision,
       publishedAt: publishedAt ?? edition.publishedAt ?? now, publishedWords, coverUrl, updatedAt: now,
     },
-    draft: doc, tagIds: [],
   });
   return { ...rec, email_notification: emailNotification };
 }
