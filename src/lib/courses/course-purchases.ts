@@ -90,27 +90,23 @@ export function grantCourseStatements(
   ];
 }
 
-/** Ends ownership, removes GitHub access and revokes the certificate. Returns false when nothing was active. */
+/**
+ * Ends ownership, revokes the certificate, queues the GitHub removal and logs it, as one D1 batch: a failed write
+ * (the activity log included) fails the whole revoke and leaves nothing written. Returns false when nothing was active.
+ */
 export async function revokeCourse(
   d1: D1DatabaseLike, input: { userId: string; courseId: string; reason: string; actor?: string },
 ): Promise<boolean> {
-  const now = iso(membersRuntime.now());
-  const res = await d1.prepare(
-    "UPDATE course_purchases SET status = 'revoked', revoked_at = ?, revoked_reason = ? WHERE user_id = ? AND course_id = ? AND status = 'active'"
-  ).bind(now, input.reason.slice(0, 200), input.userId, input.courseId).run();
-  if (!res.meta?.changes) return false;
-  await d1.prepare('UPDATE course_certificates SET revoked_at = ? WHERE user_id = ? AND course_id = ? AND revoked_at IS NULL').bind(now, input.userId, input.courseId).run();
   const course = await getCourseById(d1, input.courseId);
-  if (course) await enqueueGithubSync(d1, input.userId, course, 'remove');
-  await logActivity(d1, input.userId, 'courses.revoked', { course_id: input.courseId, reason: input.reason, actor: input.actor ?? 'system' });
-  return true;
+  const results = await d1.batch(revokeCourseStatements(d1, course, input));
+  return Boolean(results.at(-1)?.meta?.changes);
 }
 
 /**
  * The writes of `revokeCourse` for a caller that makes them part of one D1 batch: they apply only while the
  * course is active for the user (granted by `orderId` when given) and `onlyIf` holds when the batch runs. The
  * purchase update is the last statement, so the conditions hold for every earlier one and its result says
- * whether access was revoked. Unlike `revokeCourse`, a failed activity insert fails the batch.
+ * whether access was revoked. A failed activity insert fails the batch.
  */
 export function revokeCourseStatements(
   d1: D1DatabaseLike, course: Pick<CourseRecord, 'id' | 'github_repos'> | null,
