@@ -99,6 +99,21 @@ async function assertNoCollision(db: D1DatabaseLike, candidate: Pick<TopicTag, '
   }
 }
 
+/** Id of the tag other than `selfId` whose row holds `slug`; soft-deleted rows count, since they keep their slug. */
+async function slugOwner(db: D1DatabaseLike, slug: string, selfId: string | null): Promise<string | null> {
+  const row = await db.prepare('SELECT id FROM topic_tags WHERE slug = ? AND id <> ?').bind(slug, selfId ?? '').first<Row>();
+  return row ? str(row, 'id') : null;
+}
+
+function slugConflict(slug: string, ownerId: string | null): AppError {
+  return new AppError(409, 'tag_conflict', `Slug "${slug}" is already used by another tag`, ownerId ? { tag_id: ownerId } : {});
+}
+
+/** The unique index on `topic_tags.slug` covers soft-deleted rows too; only that index maps to `tag_conflict`. */
+function isSlugViolation(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed: topic_tags\.slug\b/i.test(err.message);
+}
+
 /** Reindexes every article carrying the tag so search and public metadata follow renames immediately. */
 async function refreshTagged(db: D1DatabaseLike, tagId: string, env?: RuntimeEnv): Promise<void> {
   const { results } = await db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tagId).all<Row>();
@@ -135,10 +150,7 @@ export async function createTag(d1: D1DatabaseLike | undefined, input: TagInput,
   if (!input.slug || !input.names) throw new AppError(400, 'invalid_field', 'names are required');
   const candidate = { slug: input.slug, names: input.names, aliases: input.aliases ?? [] };
   await assertNoCollision(db, candidate, null);
-  if (!await writeTagRow(db, candidate)) {
-    const owner = await getTag(db, candidate.slug);
-    throw new AppError(409, 'tag_conflict', `Slug "${candidate.slug}" is already used by another tag`, owner ? { tag_id: owner.id } : {});
-  }
+  if (!await writeTagRow(db, candidate)) throw slugConflict(candidate.slug, await slugOwner(db, candidate.slug, null));
   const tag = await getTag(db, input.slug);
   if (!tag) throw new AppError(500, 'internal_error', 'Tag was not persisted');
   await writeAuditLog(db, { actor, action: 'tag.create', targetType: 'tag', targetId: tag.id, after: tag });
@@ -171,11 +183,18 @@ export async function updateTag(
   const tag = await getTag(db, idOrSlug);
   if (!tag) throw new AppError(404, 'not_found', 'Tag not found');
   const next = { slug: input.slug ?? tag.slug, names: input.names ?? tag.names, aliases: input.aliases ?? tag.aliases };
+  if (next.slug !== tag.slug) {
+    // A soft-deleted tag keeps its slug reserved, so a rename onto it conflicts like a rename onto a live tag.
+    const owner = await slugOwner(db, next.slug, tag.id);
+    if (owner) throw slugConflict(next.slug, owner);
+  }
   await assertNoCollision(db, next, tag.id);
-  const res = await db.prepare(`
+  const stmt = db.prepare(`
     UPDATE topic_tags SET slug = ?, names = ?, aliases = ?, revision = revision + 1, updated_at = ?
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected).run();
+  `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected);
+  // A concurrent write can take the slug after the checks above; that is a conflict, not a raw 500.
+  const res = await stmt.run().catch(async (err: unknown) => { throw isSlugViolation(err) ? slugConflict(next.slug, await slugOwner(db, next.slug, tag.id)) : err; });
   if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
   const updated = await getTag(db, tag.id);
   if (!updated) throw new AppError(500, 'internal_error', 'Tag disappeared after update');

@@ -809,6 +809,34 @@ describe('REST, OpenAPI and MCP registration', () => {
     expect(codeOf(create)).toEqual([409, 'label_conflict']);
   });
 
+  it('renaming a tag onto a live or soft-deleted tag slug is 409 tag_conflict over REST and MCP', async () => {
+    const make = async (name: string) => rec(await taxonomyMcpModule.call('tag_create', { names: { en: name } }, mcpCtx(admin())));
+    const put = async (id: unknown, body: Record<string, unknown>) => payload(await call(updateTagApi, { method: 'PUT', headers: admin(), params: { id: String(id) }, body }));
+    const viaMcp = (id: unknown, args: Record<string, unknown>) => taxonomyMcpModule.call('tag_update', { id, ...args }, mcpCtx(admin())).then(() => null, (e: unknown) => e);
+    const codeOf = (e: unknown) => (e instanceof AppError ? [e.status, e.code, e.extra.tag_id] : e);
+    const mover = await make('Rename mover');
+    const live = await make('Rename live');
+    const gone = await make('Rename gone');
+    await taxonomyMcpModule.call('tag_delete', { id: gone.id, expected_revision: gone.revision }, mcpCtx(admin()));
+
+    for (const owner of [live, gone]) {
+      const rest = await put(mover.id, { slug: owner.slug, expected_revision: mover.revision });
+      expect([rest.status, rest.code, rest.error.tag_id]).toEqual([409, 'tag_conflict', owner.id]);
+      expect(codeOf(await viaMcp(mover.id, { slug: owner.slug, expected_revision: mover.revision }))).toEqual([409, 'tag_conflict', owner.id]);
+    }
+
+    // Keeping its own slug is not a conflict.
+    const same = await put(mover.id, { slug: mover.slug, names: { en: 'Rename mover' }, expected_revision: mover.revision });
+    expect(same.status).toBe(200);
+    expect(rec(same.data).slug).toBe(mover.slug);
+
+    // A stale revision is still a revision conflict, with or without a rename.
+    for (const body of [{ slug: 'rename-free' }, { names: { en: 'Rename mover' } }]) {
+      const stale = await put(mover.id, { ...body, expected_revision: mover.revision });
+      expect([stale.status, stale.code, stale.error.current_revision]).toEqual([409, 'revision_conflict', rec(same.data).revision]);
+    }
+  });
+
   it('enforces admin on taxonomy MCP writes', async () => {
     const denied = await taxonomyMcpModule.call('tag_create', { names: { en: 'Nope' } }, mcpCtx({})).then(() => null, (e: unknown) => e);
     expect(denied).not.toBeNull();
