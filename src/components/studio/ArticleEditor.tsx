@@ -5,7 +5,7 @@ import { MathView } from '../blocks/MathBlock';
 import { mathNumbers } from '../../lib/blocks/math';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
-  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
+  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
   SECTION_SURFACES, SECTION_WIDTHS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES, emptyDocument,
 } from '../../lib/blocks/schema';
 import { NUMERIC_COLUMN_TYPES, headerSources } from '../../lib/blocks/table-data';
@@ -31,6 +31,7 @@ import { ArticleLabelsPanel } from './ArticleLabelsPanel';
 import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
+import { ChartFields } from './ChartFields';
 import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
 import { latestDraftFrom, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage } from './recovered-draft';
 import type { DraftRecovery, LatestDraft, RestoredRevision } from './recovered-draft';
@@ -682,26 +683,7 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
     case 'table':
       return <TableFields block={block} onChange={onChange} />;
     case 'chart':
-      return (
-        <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
-            <Select label="Loại" value={block.kind} options={CHART_KINDS} onChange={kind => onChange({ ...block, kind })} />
-            <Text label="Tiêu đề" value={block.title ?? ''} onChange={title => onChange({ ...block, title: opt(title) })} />
-          </div>
-          <CsvInput label="Nhãn (phân cách bằng dấu phẩy)" initial={block.labels.join(', ')} onCommit={raw => onChange({ ...block, labels: splitCsv(raw) })} />
-          {block.series.map((s, i) => (
-            <div key={i} className="grid grid-cols-[1fr_2fr_auto] gap-2 items-end">
-              <Text label={`Series ${i + 1}`} value={s.name} onChange={name => onChange({ ...block, series: block.series.map((x, j) => (j === i ? { ...x, name } : x)) })} />
-              <CsvInput label={`Số liệu (${block.labels.length} giá trị)`} initial={s.data.join(', ')}
-                onCommit={raw => onChange({ ...block, series: block.series.map((x, j) => (j === i ? { ...x, data: splitCsv(raw).map(Number) } : x)) })} />
-              <button type="button" className={btnCls} disabled={block.series.length <= 1}
-                onClick={() => onChange({ ...block, series: block.series.filter((_, j) => j !== i) })}>Xoá</button>
-            </div>
-          ))}
-          <button type="button" className={btnCls} disabled={block.series.length >= LIMITS.chartSeries}
-            onClick={() => onChange({ ...block, series: [...block.series, { name: `Series ${block.series.length + 1}`, data: block.labels.map(() => 0) }] })}>+ Series</button>
-        </div>
-      );
+      return <ChartFields block={block} onChange={onChange} />;
     case 'diagram':
       return (
         <div className="space-y-2">

@@ -3,19 +3,20 @@
  * end in `fulfilCourseOrder`; refunds, chargebacks and admin revokes end in `reverseCourseOrder`.
  * Every provider event is recorded in payment_events first, which makes retries idempotent.
  */
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
-import { queueNeedsAttention, queuePurchase, queueRefund } from '../analytics/commerce-events';
+import { queueNeedsAttention, queuePurchase, refundEvent } from '../analytics/commerce-events';
+import { outboxInsertStatement } from '../analytics/outbox';
 import { AppError } from '../http';
 import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
 import { iso, isUniqueViolation, membersRuntime, siteUrl } from '../members/runtime';
-import { getUserById, logActivity } from '../members/users';
+import { activityStatement, getUserById, logActivity } from '../members/users';
 import { DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
 import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode } from './course-orders';
-import { grantCourse, revokeCourse } from './course-purchases';
+import { grantCourse, revokeCourseStatements } from './course-purchases';
 import { getCourseById } from './course-store';
 import { POLICY_PATH } from './course-terms';
 import { formatUsd } from './course-types';
@@ -129,72 +130,103 @@ export async function fulfilCourseOrder(
 
 export type ReversalKind = 'refunded' | 'charged_back';
 
-/** Marks a paid order refunded or charged back, revokes access and reverses referral commission. */
+type MoneyBack = { amountMinor: number | null; currency: string | null };
+
+/** The order still has one of `statuses` when the statement runs. */
+function orderIn(orderId: string, statuses: readonly string[], also = ''): SqlCondition {
+  return {
+    sql: `EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status IN (${statuses.map(() => '?').join(', ')})${also})`,
+    params: [orderId, ...statuses],
+  };
+}
+
+const REVERSIBLE = ['paid', 'needs_attention'] as const;
+
+/**
+ * Marks a paid order refunded or charged back, revokes access and reverses referral commission. The status update,
+ * the revoke (when this order granted the access), the activity log and the analytics event (`countMoneyBack`: a
+ * refund, or the chargeback of a lost dispute) are one D1 batch, each applied only while the order is still
+ * reversible, so a failed write leaves none of them and, once the webhook has released its event, the retry writes
+ * them all once. (The webhook's `payment_events` row is a separate insert before the batch, so a worker that dies
+ * after that insert leaves the event recorded and its redelivery is dropped as a duplicate.) The commission
+ * reversal cannot join the batch and runs first for an order read as reversible: it is idempotent, so running it
+ * again on the retry is safe.
+ */
 export async function reverseCourseOrder(
   d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reason: string, actor = 'system',
   /** Amount the provider reports taken back; defaults to the amount paid. */
-  reversed: { amountMinor: number | null; currency: string | null } | null = null,
+  reversed: MoneyBack | null = null,
+  countMoneyBack = kind === 'refunded',
 ): Promise<boolean> {
-  const res = await d1.prepare(`UPDATE course_orders SET status = ?, attention_reason = ?, updated_at = ? WHERE id = ? AND status IN ('paid', 'needs_attention')`)
-    .bind(kind, reason.slice(0, 200), iso(membersRuntime.now()), order.id).run();
-  if (!res.meta?.changes) return false;
-  // Only revoke when this order is the one that granted access (a duplicate purchase leaves the original intact).
-  const purchase = await d1.prepare("SELECT order_id FROM course_purchases WHERE user_id = ? AND course_id = ? AND status = 'active'")
-    .bind(order.user_id, order.course_id).first<{ order_id: string | null }>();
-  if (purchase && purchase.order_id === order.id) {
-    await revokeCourse(d1, { userId: order.user_id, courseId: order.course_id, reason: `${kind}:${reason}`, actor });
-  }
+  const commissionFirst = (REVERSIBLE as readonly string[]).includes(order.status);
+  if (commissionFirst) await reverseReferral(d1, order, kind);
+  const reversible = orderIn(order.id, REVERSIBLE);
+  const course = await getCourseById(d1, order.course_id);
+  const moneyBack = countMoneyBack ? await courseMoneyBackStatement(d1, order, kind, reversed, reversible) : null;
+  const results = await d1.batch([
+    // Only revoke when this order is the one that granted access (a duplicate purchase leaves the original intact).
+    ...revokeCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, reason: `${kind}:${reason}`, actor, orderId: order.id }, reversible),
+    activityStatement(d1, order.user_id, `courses.order_${kind}`, { code: order.code, reason, actor }, undefined, reversible),
+    // A refund always took the money back. A chargeback is reported only once the dispute is lost: an opened dispute
+    // revokes access but may still be won.
+    ...(moneyBack ? [moneyBack] : []),
+    d1.prepare(`UPDATE course_orders SET status = ?, attention_reason = ?, updated_at = ? WHERE id = ? AND ${reversible.sql}`)
+      .bind(kind, reason.slice(0, 200), iso(membersRuntime.now()), order.id, ...reversible.params),
+  ]);
+  const applied = Boolean(results.at(-1)?.meta?.changes);
+  // The order was read in another status and became reversible since: the commission was not reversed above.
+  if (applied && !commissionFirst) await reverseReferral(d1, order, kind);
+  return applied;
+}
+
+/** Referral failures are logged and never block the reversal. */
+async function reverseReferral(d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind): Promise<void> {
   try {
     await onCourseOrderReversed(d1, order, kind);
   } catch (err) {
     console.error(`referral reversal for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
   }
-  await logActivity(d1, order.user_id, `courses.order_${kind}`, { code: order.code, reason, actor });
-  // A refund always took the money back. A chargeback is reported by the dispute handler only once the dispute is
-  // lost: an opened dispute revokes access but may still be won.
-  if (kind === 'refunded') await queueCourseMoneyBack(d1, order, kind, reversed);
-  return true;
 }
 
 /**
  * A Dodo refund of an order that an opened dispute already charged back. Access is already revoked and the referral
  * commission reversed, so the order only becomes `refunded` and its money back is counted; a later won or cancelled
  * dispute then finds no `charged_back` order to restore. The refund is dropped once a funds-lost outcome was received
- * for the order (that chargeback is the same money). The check runs in the same statement as the update, so a racing
- * funds-lost outcome either finds the order refunded or suppresses the refund.
+ * for the order (that chargeback is the same money). The check runs in the same batch as the update, so a racing
+ * funds-lost outcome either finds the order refunded or suppresses the refund. The update, the log and the `refund`
+ * event land together or not at all.
  */
-export async function refundDisputedCourseOrder(
-  d1: D1DatabaseLike, order: CourseOrder, reason: string,
-  reversed: { amountMinor: number | null; currency: string | null },
-): Promise<boolean> {
+export async function refundDisputedCourseOrder(d1: D1DatabaseLike, order: CourseOrder, reason: string, reversed: MoneyBack): Promise<boolean> {
   const lost = [...DODO_DISPUTE_FUNDS_LOST];
-  const res = await d1.prepare(
-    `UPDATE course_orders SET status = 'refunded', attention_reason = ?, updated_at = ? WHERE id = ? AND status = 'charged_back'
-       AND NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = course_orders.id AND raw_type IN (${lost.map(() => '?').join(', ')}))`
-  ).bind(reason, iso(membersRuntime.now()), order.id, ...lost).run();
-  if (!res.meta?.changes) return false;
-  await logActivity(d1, order.user_id, 'courses.order_refunded', { code: order.code, reason, actor: 'system' });
-  await queueCourseMoneyBack(d1, order, 'refunded', reversed);
-  return true;
+  const disputed = orderIn(order.id, ['charged_back'], ` AND NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = o.id AND raw_type IN (${lost.map(() => '?').join(', ')}))`);
+  disputed.params.push(...lost);
+  const moneyBack = await courseMoneyBackStatement(d1, order, 'refunded', reversed, disputed);
+  const results = await d1.batch([
+    activityStatement(d1, order.user_id, 'courses.order_refunded', { code: order.code, reason, actor: 'system' }, undefined, disputed),
+    ...(moneyBack ? [moneyBack] : []),
+    d1.prepare(`UPDATE course_orders SET status = 'refunded', attention_reason = ?, updated_at = ? WHERE id = ? AND ${disputed.sql}`)
+      .bind(reason, iso(membersRuntime.now()), order.id, ...disputed.params),
+  ]);
+  return Boolean(results.at(-1)?.meta?.changes);
 }
 
 /**
- * Queues the `refund` event of money that went back for a course order, once per order and kind. A flagged order
- * that was never paid (`paid_at` is null) never produced a purchase event, so it is not lost revenue either.
+ * The `refund` event of money that went back for a course order, once per order and kind, as a statement for a D1
+ * batch (with `onlyIf`, inserted only while it holds). Null for a flagged order that was never paid (`paid_at` is
+ * null): it never produced a purchase event, so it is not lost revenue either.
  */
-export async function queueCourseMoneyBack(
-  d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind,
-  reversed: { amountMinor: number | null; currency: string | null } | null = null,
-): Promise<void> {
-  if (order.paid_at === null) return;
+export async function courseMoneyBackStatement(
+  d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reversed: MoneyBack | null = null, onlyIf?: SqlCondition,
+): Promise<D1PreparedStatementLike | null> {
+  if (order.paid_at === null) return null;
   const paid = paidAmount(order);
   const amountMinor = reversed?.amountMinor ?? paid.amountMinor;
-  await queueRefund(d1, {
+  return outboxInsertStatement(d1, await refundEvent(d1, {
     distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:${kind}`,
     reason: kind === 'refunded' ? 'refund' : 'chargeback', amountMinor, currency: reversed?.currency ?? paid.currency,
     partial: amountMinor !== null && paid.amountMinor !== null ? isPartialCourseReversal(order, amountMinor) : undefined,
     purchaseTransactionId: `course_order:${order.id}`,
-  });
+  }), undefined, onlyIf);
 }
 
 /**

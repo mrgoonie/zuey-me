@@ -1,4 +1,4 @@
-import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { forgetGa4Client } from '../analytics/ga4-attribution';
 import { deferChannelAccessPush, invalidateSenders } from '../channel-access/invalidate';
@@ -163,16 +163,21 @@ export async function insertActivity(
   await activityStatement(d1, userId, action, detail, request).run();
 }
 
-/** The activity insert of `insertActivity` without running it, for a caller that writes it in a D1 batch. */
+/**
+ * The activity insert of `insertActivity` without running it, for a caller that writes it in a D1 batch. With
+ * `onlyIf`, nothing is inserted unless it holds when the statement runs.
+ */
 export function activityStatement(
   d1: D1DatabaseLike,
   userId: string,
   action: string,
   detail: Record<string, unknown> | null = null,
   request?: Request,
+  onlyIf?: SqlCondition,
 ): D1PreparedStatementLike {
-  return d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso());
+  const source = onlyIf ? `SELECT ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, ?, ?, ?)';
+  return d1.prepare(`INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) ${source}`)
+    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso(), ...(onlyIf?.params ?? []));
 }
 
 export async function logActivity(

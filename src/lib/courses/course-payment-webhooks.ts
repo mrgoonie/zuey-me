@@ -12,7 +12,7 @@ import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import type { CoursePaymentOutcome } from './course-order-payments';
 import {
-  fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention, queueCourseMoneyBack, recordCoursePaymentEvent, refundDisputedCourseOrder,
+  courseMoneyBackStatement, fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention, recordCoursePaymentEvent, refundDisputedCourseOrder,
   releaseCoursePaymentEvent, restoreCourseOrder, reverseCourseOrder,
 } from './course-order-payments';
 
@@ -160,14 +160,20 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
       return { outcome: done ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DISPUTE_REVOKE.has(type)) {
-      const reversed = await reverseCourseOrder(d1, order, 'charged_back', type);
-      // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once. An order
-      // already fully refunded reported its money back then, also when the refund came while the dispute was open (a
-      // refund after a funds-lost outcome reports nothing). After a partial refund the chargeback is still counted. The
-      // order is read again after this event was recorded, so a refund racing this outcome is seen or suppressed.
-      const current = DODO_DISPUTE_FUNDS_LOST.has(type) ? await getCourseOrderByCode(d1, order.code) : null;
-      const fullyRefunded = current?.status === 'refunded' && current.attention_reason !== 'dodo_partial_refund';
-      if (DODO_DISPUTE_FUNDS_LOST.has(type) && !fullyRefunded) await queueCourseMoneyBack(d1, order, 'charged_back', { amountMinor: amount, currency });
+      const lost = DODO_DISPUTE_FUNDS_LOST.has(type);
+      const moneyBack = { amountMinor: amount, currency };
+      // A funds-lost outcome on a paid order reports the chargeback in the same batch as the reversal.
+      const reversed = await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost);
+      if (lost && !reversed) {
+        // The order is usually already charged back from `dispute.opened`; the lost money is reported now, once. An
+        // order already fully refunded reported its money back then, also when the refund came while the dispute was
+        // open (a refund after a funds-lost outcome reports nothing). After a partial refund the chargeback is still
+        // counted. The order is read again after this event was recorded, so a refund racing this outcome is seen or
+        // suppressed. The insert throws on failure, so the event is released and Dodo redelivers it.
+        const current = await getCourseOrderByCode(d1, order.code);
+        const fullyRefunded = current?.status === 'refunded' && current.attention_reason !== 'dodo_partial_refund';
+        if (!fullyRefunded) await (await courseMoneyBackStatement(d1, order, 'charged_back', moneyBack))?.run();
+      }
       return { outcome: reversed ? 'reversed' : 'ignored', order_code: order.code };
     }
     if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { ownsCourse } from '../src/lib/courses/course-access';
 import { getCourseOrderByCode } from '../src/lib/courses/course-orders';
+import { resolveCourseOrder } from '../src/lib/courses/course-order-payments';
 import { applyDodoCourseWebhook } from '../src/lib/courses/course-payment-webhooks';
 import { DEFAULT_PLAN_DISCOUNTS, quoteCoursePrice } from '../src/lib/courses/course-pricing';
 import type { CourseRecord } from '../src/lib/courses/course-types';
@@ -9,7 +10,7 @@ import { POST as checkoutApi } from '../src/pages/api/v1/courses/[course]/checko
 import { POST as resolveApi } from '../src/pages/api/v1/admin/course-orders/[code]/resolve';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
 import { POST as dodoWebhook } from '../src/pages/api/webhooks/dodo';
-import type { D1DatabaseLike } from '../src/db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import { ensureReferralProfile } from '../src/lib/referrals/codes';
@@ -408,6 +409,132 @@ describe('Dodo course payments, refunds and disputes', () => {
     });
   });
 
+  describe('a reversal that fails part-way', () => {
+    /**
+     * The test database, except that the write matching `fails` throws, whether it runs alone or in a batch (the
+     * batch then rolls back, as on D1). The webhook handler releases its event, so the retry is a fresh delivery.
+     */
+    function failingD1(fails: (sql: string, values: unknown[]) => boolean): D1DatabaseLike {
+      const base = state.d1;
+      const sources = new WeakMap<D1PreparedStatementLike, { sql: string; values: unknown[]; inner: D1PreparedStatementLike }>();
+      const wrap = (sql: string, inner: D1PreparedStatementLike, values: unknown[]): D1PreparedStatementLike => {
+        const statement: D1PreparedStatementLike = {
+          bind: (...v: unknown[]) => wrap(sql, inner.bind(...v), v),
+          first: <T,>() => inner.first<T>(),
+          all: <T,>() => inner.all<T>(),
+          run: async () => {
+            if (fails(sql, values)) throw new Error('injected failure');
+            return inner.run();
+          },
+        };
+        sources.set(statement, { sql, values, inner });
+        return statement;
+      };
+      return {
+        prepare: (sql: string) => wrap(sql, base.prepare(sql), []),
+        batch: (statements: D1PreparedStatementLike[]) => base.batch(statements.map(s => {
+          const source = sources.get(s);
+          if (!source) throw new Error('foreign statement');
+          return fails(source.sql, source.values) ? base.prepare('INSERT INTO injected_failure DEFAULT VALUES') : source.inner;
+        })),
+      };
+    }
+
+    const count = (sql: string, ...params: string[]) => state.d1.raw.query<{ n: number }, string[]>(sql).get(...params)?.n ?? 0;
+    const activities = (action: string) => count('SELECT COUNT(*) AS n FROM user_activity WHERE action = ?', action);
+    const removals = () => count("SELECT COUNT(*) AS n FROM github_invites WHERE action = 'remove'");
+    const certRevoked = () => count('SELECT COUNT(*) AS n FROM course_certificates WHERE revoked_at IS NOT NULL');
+    const gate = (eventId: string) => count("SELECT COUNT(*) AS n FROM payment_events WHERE provider = 'dodo' AND event_id = ?", eventId);
+
+    const activity = (action: string) => (sql: string, values: unknown[]) => sql.startsWith('INSERT INTO user_activity') && values.includes(action);
+    const sqlPoint = (re: RegExp) => (sql: string) => re.test(sql);
+    const revokePoints = [
+      ['the certificate revoke', sqlPoint(/^UPDATE course_certificates/)],
+      ['the GitHub removal', sqlPoint(/^\s*INSERT INTO github_invites/)],
+      ['the revoke log', activity('courses.revoked')],
+      ['the access revoke', sqlPoint(/^UPDATE course_purchases/)],
+    ] as const;
+
+    async function paidWithCertificate(email: string): Promise<{ code: string; userId: string; courseId: string }> {
+      const lan = await member(email);
+      const code = await paidByCard(lan);
+      const order = await getCourseOrderByCode(state.d1, code);
+      if (!order) throw new Error('order missing');
+      await state.d1.prepare('INSERT INTO course_certificates (id, code, user_id, course_id, holder_name, course_title, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(`cert_${code}`, `C-${code}`, lan.userId, order.course_id, 'Lan', 'Course', new Date(state.now).toISOString()).run();
+      return { code, userId: lan.userId, courseId: order.course_id };
+    }
+
+    const scenarios = [
+      {
+        name: 'a refund of a paid order', type: 'refund.succeeded', kind: 'refunded', amount: 4900, opened: false,
+        points: [...revokePoints, ['the order log', activity('courses.order_refunded')], ['the refund event', sqlPoint(/INSERT INTO analytics_outbox/)], ['the status update', sqlPoint(/^UPDATE course_orders/)]],
+      },
+      {
+        name: 'a lost dispute of a paid order', type: 'dispute.lost', kind: 'charged_back', amount: 4900, opened: false,
+        points: [...revokePoints, ['the order log', activity('courses.order_charged_back')], ['the chargeback event', sqlPoint(/INSERT INTO analytics_outbox/)], ['the status update', sqlPoint(/^UPDATE course_orders/)]],
+      },
+      {
+        name: 'a refund during an open dispute', type: 'refund.succeeded', kind: 'refunded', amount: 4900, opened: true,
+        points: [['the order log', activity('courses.order_refunded')], ['the refund event', sqlPoint(/INSERT INTO analytics_outbox/)], ['the status update', sqlPoint(/^UPDATE course_orders/)]],
+      },
+      {
+        name: 'a lost dispute after an opened one', type: 'dispute.lost', kind: 'charged_back', amount: 4900, opened: true,
+        points: [['the chargeback event', sqlPoint(/INSERT INTO analytics_outbox/)]],
+      },
+    ] as const;
+
+    for (const s of scenarios) {
+      for (const [point, fails] of s.points) {
+        it(`writes nothing when ${s.name} fails at ${point}, and the retry writes it all once`, async () => {
+          await publishedCourse({ github_repos: ['zuey/course-repo'] });
+          const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+          const order = await getCourseOrderByCode(state.d1, code);
+          if (s.opened) expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+          const before = {
+            status: (await getCourseOrderByCode(state.d1, code))?.status, owns: await ownsCourse(state.d1, userId, courseId),
+            revoked: activities('courses.revoked'), removals: removals(), certRevoked: certRevoked(),
+          };
+          const payload = { type: s.type, data: { payment_id: `pay_${code}`, amount: s.amount, currency: 'USD' } };
+
+          await expect(applyDodoCourseWebhook(failingD1(fails), env(), 'evt_x', payload)).rejects.toThrow(/injected/);
+          expect((await getCourseOrderByCode(state.d1, code))?.status).toBe(before.status);
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(before.owns);
+          expect(activities('courses.revoked')).toBe(before.revoked);
+          expect(activities(`courses.order_${s.kind}`)).toBe(s.opened && s.kind === 'charged_back' ? 1 : 0);
+          expect(removals()).toBe(before.removals);
+          expect(certRevoked()).toBe(before.certRevoked);
+          expect(refundKeys()).toEqual([]);
+          expect(gate('evt_x')).toBe(0);
+
+          expect(await dodo('evt_x', s.type, payload.data)).toMatchObject({ outcome: s.opened && s.kind === 'charged_back' ? 'ignored' : 'reversed' });
+          expect(await dodo('evt_x', s.type, payload.data)).toMatchObject({ outcome: 'duplicate_event' });
+          expect((await getCourseOrderByCode(state.d1, code))?.status).toBe(s.kind);
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+          expect(activities('courses.revoked')).toBe(1);
+          expect(activities(`courses.order_${s.kind}`)).toBe(1);
+          expect(removals()).toBe(1);
+          expect(certRevoked()).toBe(1);
+          expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:${s.kind}`]);
+        });
+      }
+    }
+
+    it('writes nothing when an admin refund fails at the refund event, and the admin can retry it', async () => {
+      await publishedCourse();
+      const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+      const order = await getCourseOrderByCode(state.d1, code);
+      await expect(resolveCourseOrder(failingD1(sqlPoint(/INSERT INTO analytics_outbox/)), env(), code, 'refund', 'goodwill')).rejects.toThrow(/injected/);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+      expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
+      expect(activities('courses.order_refunded')).toBe(0);
+
+      expect((await resolveCourseOrder(state.d1, env(), code, 'refund', 'goodwill')).status).toBe('refunded');
+      expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      expect(activities('courses.order_refunded')).toBe(1);
+      expect(refundKeys()).toEqual([`refund:${order?.provider}:course_order:${order?.id}:refunded`]);
+    });
+  });
   it('keeps the string amount of a signed Dodo dispute on the payment event and the chargeback report', async () => {
     await publishedCourse();
     const lan = await member('lan@example.com');

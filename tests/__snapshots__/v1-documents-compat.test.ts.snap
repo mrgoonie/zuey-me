@@ -1173,22 +1173,131 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
     "type": "object",
   },
   "BlockChart": {
+    "examples": [
+      {
+        "annotations": [
+          {
+            "index": 3,
+            "text": "Ra mắt gói Pro",
+          },
+        ],
+        "caption": "Nguồn: báo cáo quý.",
+        "csv": true,
+        "kind": "combo",
+        "labels": [
+          "2026-01",
+          "2026-02",
+          "2026-03",
+          "2026-04",
+        ],
+        "legend": "bottom",
+        "png": true,
+        "references": [
+          {
+            "label": "Mục tiêu",
+            "value": 160,
+          },
+        ],
+        "series": [
+          {
+            "data": [
+              120,
+              150,
+              170,
+              210,
+            ],
+            "name": "Doanh thu",
+          },
+          {
+            "axis": "right",
+            "data": [
+              12.5,
+              14,
+              13.2,
+              16.8,
+            ],
+            "name": "Biên lợi nhuận",
+            "type": "line",
+          },
+        ],
+        "title": "Doanh thu và biên lợi nhuận",
+        "type": "chart",
+        "x": {
+          "format": "date",
+          "title": "Tháng",
+        },
+        "y": {
+          "title": "Doanh thu",
+          "unit": "triệu ₫",
+        },
+        "y2": {
+          "decimals": 1,
+          "format": "percent",
+          "min": 0,
+          "title": "Biên",
+        },
+      },
+    ],
     "properties": {
+      "annotations": {
+        "description": "Bar, line, area and combo: a marker and note at one category",
+        "items": {
+          "properties": {
+            "index": {
+              "description": "Index of the label it marks",
+              "minimum": 0,
+              "type": "integer",
+            },
+            "text": {
+              "maxLength": 120,
+              "type": "string",
+            },
+          },
+          "required": [
+            "index",
+            "text",
+          ],
+          "type": "object",
+        },
+        "maxItems": 10,
+        "type": "array",
+      },
+      "caption": {
+        "description": "Inline text under the chart (source, notes)",
+        "maxLength": 500,
+        "type": "string",
+      },
+      "csv": {
+        "default": false,
+        "description": "A button downloads the data as CSV (UTF-8, formula-safe)",
+        "type": "boolean",
+      },
+      "dataLabels": {
+        "default": false,
+        "description": "Write the formatted values on bars, points and slices",
+        "type": "boolean",
+      },
       "id": {
         "description": "Unique within the document; generated when omitted",
         "pattern": "^[A-Za-z0-9_-]{1,64}$",
         "type": "string",
       },
       "kind": {
+        "description": "bar, line, pie and doughnut as before; area (filled line), scatter (series need x), radar, combo (bars and lines, series.type)",
         "enum": [
           "bar",
           "line",
           "pie",
           "doughnut",
+          "area",
+          "scatter",
+          "radar",
+          "combo",
         ],
         "type": "string",
       },
       "labels": {
+        "description": "Categories (point names for scatter); ISO dates when x.format is date",
         "items": {
           "maxLength": 120,
           "type": "string",
@@ -1197,9 +1306,57 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
         "minItems": 1,
         "type": "array",
       },
+      "legend": {
+        "description": "Legend under or over the chart, or none. Default: shown when there is more than one series, and for pie and doughnut. Readers toggle series (slices) with its buttons",
+        "enum": [
+          "top",
+          "bottom",
+          "none",
+        ],
+        "type": "string",
+      },
+      "png": {
+        "default": false,
+        "description": "A button downloads the drawn chart as a PNG image",
+        "type": "boolean",
+      },
+      "references": {
+        "description": "Bar, line, area, combo and scatter: dashed horizontal lines (target, average, threshold)",
+        "items": {
+          "properties": {
+            "axis": {
+              "description": "Measure against y2",
+              "enum": [
+                "right",
+              ],
+              "type": "string",
+            },
+            "label": {
+              "maxLength": 120,
+              "type": "string",
+            },
+            "value": {
+              "type": "number",
+            },
+          },
+          "required": [
+            "value",
+          ],
+          "type": "object",
+        },
+        "maxItems": 10,
+        "type": "array",
+      },
       "series": {
         "items": {
           "properties": {
+            "axis": {
+              "description": "bar, line, area and combo: plot against the right-hand axis (y2)",
+              "enum": [
+                "right",
+              ],
+              "type": "string",
+            },
             "data": {
               "description": "Same length as labels",
               "items": {
@@ -1210,6 +1367,23 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
             "name": {
               "maxLength": 120,
               "type": "string",
+            },
+            "type": {
+              "default": "bar",
+              "description": "combo only: how this series is drawn",
+              "enum": [
+                "bar",
+                "line",
+                "area",
+              ],
+              "type": "string",
+            },
+            "x": {
+              "description": "scatter only (required there): one x value per label; data holds the y values",
+              "items": {
+                "type": "number",
+              },
+              "type": "array",
             },
           },
           "required": [
@@ -1222,6 +1396,11 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
         "minItems": 1,
         "type": "array",
       },
+      "stacked": {
+        "default": false,
+        "description": "bar, line, area and combo: stack the series",
+        "type": "boolean",
+      },
       "title": {
         "maxLength": 500,
         "type": "string",
@@ -1229,6 +1408,135 @@ exports[`schema v1 documents render unchanged v1 block schemas (OpenAPI and MCP 
       "type": {
         "const": "chart",
         "type": "string",
+      },
+      "x": {
+        "description": "x axis. Category charts: title, and format "date" when labels are ISO dates (shown in the edition style). Scatter: every value field",
+        "properties": {
+          "currency": {
+            "description": "Required with format currency: ISO 4217 code such as VND or USD",
+            "pattern": "^[A-Z]{3}$",
+            "type": "string",
+          },
+          "decimals": {
+            "maximum": 6,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "format": {
+            "default": "number",
+            "description": "Values in the edition style (vi: 1.234,5 · 12,5% · 490.000 ₫; others: 1,234.5); date only for category x axes",
+            "enum": [
+              "number",
+              "percent",
+              "currency",
+              "date",
+            ],
+            "type": "string",
+          },
+          "max": {
+            "description": "Greater than min",
+            "type": "number",
+          },
+          "min": {
+            "type": "number",
+          },
+          "title": {
+            "maxLength": 120,
+            "type": "string",
+          },
+          "unit": {
+            "description": "Shown after each value, such as kg",
+            "maxLength": 120,
+            "type": "string",
+          },
+        },
+        "type": "object",
+      },
+      "y": {
+        "description": "y axis (radial scale for radar without title; only the value format for pie and doughnut)",
+        "properties": {
+          "currency": {
+            "description": "Required with format currency: ISO 4217 code such as VND or USD",
+            "pattern": "^[A-Z]{3}$",
+            "type": "string",
+          },
+          "decimals": {
+            "maximum": 6,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "format": {
+            "default": "number",
+            "description": "Values in the edition style (vi: 1.234,5 · 12,5% · 490.000 ₫; others: 1,234.5); date only for category x axes",
+            "enum": [
+              "number",
+              "percent",
+              "currency",
+              "date",
+            ],
+            "type": "string",
+          },
+          "max": {
+            "description": "Greater than min",
+            "type": "number",
+          },
+          "min": {
+            "type": "number",
+          },
+          "title": {
+            "maxLength": 120,
+            "type": "string",
+          },
+          "unit": {
+            "description": "Shown after each value, such as kg",
+            "maxLength": 120,
+            "type": "string",
+          },
+        },
+        "type": "object",
+      },
+      "y2": {
+        "description": "Right-hand axis of bar, line, area and combo charts, used by series with axis 'right'",
+        "properties": {
+          "currency": {
+            "description": "Required with format currency: ISO 4217 code such as VND or USD",
+            "pattern": "^[A-Z]{3}$",
+            "type": "string",
+          },
+          "decimals": {
+            "maximum": 6,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "format": {
+            "default": "number",
+            "description": "Values in the edition style (vi: 1.234,5 · 12,5% · 490.000 ₫; others: 1,234.5); date only for category x axes",
+            "enum": [
+              "number",
+              "percent",
+              "currency",
+              "date",
+            ],
+            "type": "string",
+          },
+          "max": {
+            "description": "Greater than min",
+            "type": "number",
+          },
+          "min": {
+            "type": "number",
+          },
+          "title": {
+            "maxLength": 120,
+            "type": "string",
+          },
+          "unit": {
+            "description": "Shown after each value, such as kg",
+            "maxLength": 120,
+            "type": "string",
+          },
+        },
+        "type": "object",
       },
     },
     "required": [

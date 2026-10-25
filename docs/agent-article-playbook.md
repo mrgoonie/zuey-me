@@ -115,6 +115,28 @@ A `table` block needs only `headers` and `rows` (one string per header, at most 
 - The CSV holds plain text for text cells, the URL for links and the canonical value for other cells. It is UTF-8 with a BOM, so spreadsheets open it correctly. A cell starting with `=`, `+`, `-`, `@`, a tab or a carriage return (also their full-width forms, or after zero-width characters) gets a leading `'`, so a spreadsheet will not run it as a formula. Numbers in numeric columns are exempt, so `-12.5` stays a number.
 - `translatables` lists the title, the caption and the text and badge cells. Typed cells are data and must stay as in the source.
 
+## Charts
+
+A `chart` block needs `kind`, `labels` and `series` (`[{name, data}]`, each `data` as long as `labels`). A `bar`, `line`, `pie` or `doughnut` chart without any field below renders exactly as before. Any other kind or any field below switches to the v2 chart. `block_schema {types: ["chart"]}` returns the schema and a `chart_v2` example.
+
+| Field | Effect |
+| --- | --- |
+| `kind` | Also `area` (filled line), `scatter` (each series needs `x`, one number per label; labels name the points), `radar` and `combo` (bars and lines; `series[i].type` is `bar` (default), `line` or `area`) |
+| `series[i].axis: "right"` | Bar, line, area and combo: plot this series against the right-hand axis `y2` |
+| `x`, `y`, `y2: {title?, min?, max?, format?, currency?, decimals?, unit?}` | Axis title, range and value format. `format` is `number` (default), `percent` (`12.5` shows `12,5%`) or `currency` (needs `currency` such as `VND`). On category charts `x` takes only `title` and `format: "date"`, which needs ISO labels (`2026-01`). Radar uses `y` for its scale, pie and doughnut only for the value format. A field the kind does not use fails with `422` |
+| `stacked: true` | Bar, line, area and combo: stack the series |
+| `legend` | `top`, `bottom` or `none`. By default a legend shows when there is more than one series, and for pie and doughnut. Its buttons hide and show series (slices) |
+| `dataLabels: true` | Writes the formatted values on bars, points and slices |
+| `references: [{value, label?, axis?}]` | Bar, line, area, combo and scatter: up to 10 dashed horizontal lines (target, average). `axis: "right"` measures against `y2` |
+| `annotations: [{index, text}]` | Bar, line, area and combo: up to 10 markers, each at the label with that index, with a note |
+| `caption` | One-line inline caption under the chart |
+| `csv: true`, `png: true` | Download buttons for the data (UTF-8 CSV with a BOM, formula-guarded like data tables) and for the drawn chart |
+
+- Readers see values in the style of the edition (`vi`: `1.234,5`; others: `1,234.5`). The server renders the data as a table with these values, so readers without script and search engines get every figure. Once the chart draws, the table stays for screen readers. If the chart cannot load, the table stays visible with a note.
+- Chart.js loads only on pages with a chart, inside the browser. Full screen, the legend buttons and the downloads appear once the page has loaded. Reduced motion turns animation off.
+- Markdown and Zuey AI get the canonical data table plus lines for axes, reference lines and notes. Emails link to the web page for charts.
+- `translatables` lists the title, series names, axis titles and units, reference labels, notes and the caption. It lists labels too, except ISO date labels (`x.format: "date"`). Notes point at labels by index, so they survive translation.
+
 ## Math blocks
 
 - `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.
