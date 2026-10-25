@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime } from '../members/runtime';
 import type { CommissionSourceKind } from './commissions';
@@ -20,11 +20,30 @@ export async function isSourceReversed(d1: D1DatabaseLike, kind: CommissionSourc
   return row !== null;
 }
 
+/**
+ * The marker of a referred source as a statement for a D1 batch (with `onlyIf`, inserted only while it holds).
+ * Idempotent; sources without a referral snapshot are not recorded.
+ */
+export function markSourceReversedStatement(
+  d1: D1DatabaseLike, kind: CommissionSourceKind, sourceId: string, reason: string, onlyIf?: SqlCondition,
+): D1PreparedStatementLike {
+  return d1.prepare(
+    `INSERT OR IGNORE INTO referral_source_reversals (source_kind, source_id, reason, created_at)
+     SELECT ?, id, ?, ? FROM ${SOURCE_TABLE[kind]} WHERE id = ? AND referrer_user_id IS NOT NULL${onlyIf ? ` AND ${onlyIf.sql}` : ''}`
+  ).bind(kind, reason, iso(membersRuntime.now()), sourceId, ...(onlyIf?.params ?? []));
+}
+
 /** Marks a referred source as reversed (idempotent). Sources without a referral snapshot are not recorded. */
 export async function markSourceReversed(d1: D1DatabaseLike, kind: CommissionSourceKind, sourceId: string, reason: string): Promise<boolean> {
-  const res = await d1.prepare(
-    `INSERT OR IGNORE INTO referral_source_reversals (source_kind, source_id, reason, created_at)
-     SELECT ?, id, ?, ? FROM ${SOURCE_TABLE[kind]} WHERE id = ? AND referrer_user_id IS NOT NULL`
-  ).bind(kind, reason, iso(membersRuntime.now()), sourceId).run();
+  const res = await markSourceReversedStatement(d1, kind, sourceId, reason).run();
   return res.meta?.changes === 1;
+}
+
+/** The source still has a referral snapshot and no marker when the statement runs. */
+export function sourceUnmarked(kind: CommissionSourceKind, sourceId: string): SqlCondition {
+  return {
+    sql: `EXISTS (SELECT 1 FROM ${SOURCE_TABLE[kind]} WHERE id = ? AND referrer_user_id IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM referral_source_reversals WHERE source_kind = ? AND source_id = ?)`,
+    params: [sourceId, kind, sourceId],
+  };
 }

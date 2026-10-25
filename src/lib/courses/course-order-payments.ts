@@ -24,7 +24,7 @@ import { grantCourseStatements, revokeCourseStatements } from './course-purchase
 import { getCourseById } from './course-store';
 import { POLICY_PATH } from './course-terms';
 import { formatUsd } from './course-types';
-import { onCourseOrderPaid, onCourseOrderReversed } from './referral-bridge';
+import { courseCommissionReversalStatements, onCourseOrderPaid } from './referral-bridge';
 
 export type CoursePaymentOutcome = 'duplicate_event' | 'unmatched' | 'paid' | 'already_paid' | 'needs_attention' | 'reversed' | 'restored' | 'ignored';
 
@@ -248,10 +248,11 @@ const REVERSIBLE = ['paid', 'needs_attention'] as const;
  * refund, or the chargeback of a lost dispute) are one D1 batch, each applied only while the order is still
  * reversible. A webhook passes its `payment_events` record as `gate`: it is the batch's first statement under the same
  * guard, so a failure or a crash before the commit leaves neither the reversal nor the record, and the redelivery
- * applies it once; a redelivery after the commit fails on the record's unique key and writes nothing. The commission
- * reversal cannot join the batch (it reads and appends to the shared referral ledger) and runs first for an order
- * read as reversible: it is idempotent, so running it again on the redelivery is safe. `onlyIf` narrows the guard
- * (an opened dispute already resolved for the merchant reverses nothing).
+ * applies it once; a redelivery after the commit fails on the record's unique key and writes nothing. The referral
+ * commission reversal (its log, ledger line and status, or the marker of a referred order with no commission yet) is
+ * part of the same batch under the same guard, so the order and its commission change together: an order still paid
+ * keeps its commission, and one reversed has its commission reversed, whatever status the order was read in. `onlyIf`
+ * narrows the guard (an opened dispute already resolved for the merchant reverses nothing).
  */
 export async function reverseCourseOrder(
   d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind, reason: string, actor = 'system',
@@ -261,8 +262,6 @@ export async function reverseCourseOrder(
   gate?: CourseEventGate,
   onlyIf?: SqlCondition,
 ): Promise<boolean> {
-  const commissionFirst = (REVERSIBLE as readonly string[]).includes(order.status);
-  if (commissionFirst) await reverseReferral(d1, order, kind);
   const base = orderIn(order.id, REVERSIBLE);
   const reversible: SqlCondition = onlyIf ? { sql: `${base.sql} AND ${onlyIf.sql}`, params: [...base.params, ...onlyIf.params] } : base;
   const course = await getCourseById(d1, order.course_id);
@@ -275,22 +274,11 @@ export async function reverseCourseOrder(
     // A refund always took the money back. A chargeback is reported only once the dispute is lost: an opened dispute
     // revokes access but may still be won.
     ...(moneyBack ? [moneyBack] : []),
+    ...courseCommissionReversalStatements(d1, order.id, kind, reversible),
     d1.prepare(`UPDATE course_orders SET status = ?, attention_reason = ?, updated_at = ? WHERE id = ? AND ${reversible.sql}`)
       .bind(kind, reason.slice(0, 200), iso(membersRuntime.now()), order.id, ...reversible.params),
   ]);
-  const applied = Boolean(results.at(-1)?.meta?.changes);
-  // The order was read in another status and became reversible since: the commission was not reversed above.
-  if (applied && !commissionFirst) await reverseReferral(d1, order, kind);
-  return applied;
-}
-
-/** Referral failures are logged and never block the reversal. */
-async function reverseReferral(d1: D1DatabaseLike, order: CourseOrder, kind: ReversalKind): Promise<void> {
-  try {
-    await onCourseOrderReversed(d1, order, kind);
-  } catch (err) {
-    console.error(`referral reversal for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
-  }
+  return Boolean(results.at(-1)?.meta?.changes);
 }
 
 /**
