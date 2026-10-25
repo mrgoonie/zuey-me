@@ -109,26 +109,55 @@ async function refreshTagged(db: D1DatabaseLike, tagId: string, env?: RuntimeEnv
   }
 }
 
+/**
+ * Inserts the tag row, or restores a soft-deleted one (its slug stays reserved and its id stable).
+ * Returns false when a concurrent writer already owns the slug, instead of failing on the unique index.
+ */
+async function writeTagRow(db: D1DatabaseLike, candidate: Pick<TopicTag, 'slug' | 'aliases' | 'names'>): Promise<boolean> {
+  const now = nowIso();
+  const names = JSON.stringify(candidate.names);
+  const aliases = JSON.stringify(candidate.aliases);
+  const existing = await db.prepare('SELECT id, deleted_at FROM topic_tags WHERE slug = ?').bind(candidate.slug).first<Row>();
+  if (existing) {
+    if (existing.deleted_at == null) return false;
+    const res = await db.prepare('UPDATE topic_tags SET names = ?, aliases = ?, deleted_at = NULL, revision = revision + 1, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL')
+      .bind(names, aliases, now, str(existing, 'id')).run();
+    return Boolean(res.meta?.changes);
+  }
+  const res = await db.prepare('INSERT INTO topic_tags (id, slug, names, aliases, revision, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(slug) DO NOTHING')
+    .bind(newId('tag_'), candidate.slug, names, aliases, now, now).run();
+  return Boolean(res.meta?.changes);
+}
+
+/** Explicitly creates a tag; a slug, alias or name that is already taken (even by a concurrent create) is `409 tag_conflict`. */
 export async function createTag(d1: D1DatabaseLike | undefined, input: TagInput, actor: string): Promise<TopicTag> {
   const db = requireDb(d1);
   if (!input.slug || !input.names) throw new AppError(400, 'invalid_field', 'names are required');
   const candidate = { slug: input.slug, names: input.names, aliases: input.aliases ?? [] };
   await assertNoCollision(db, candidate, null);
-  const now = nowIso();
-  const id = newId('tag_');
-  const existing = await db.prepare('SELECT id FROM topic_tags WHERE slug = ?').bind(input.slug).first<Row>();
-  if (existing) {
-    // A soft-deleted tag keeps its slug reserved; restoring it keeps its stable id.
-    await db.prepare('UPDATE topic_tags SET names = ?, aliases = ?, deleted_at = NULL, revision = revision + 1, updated_at = ? WHERE id = ?')
-      .bind(JSON.stringify(candidate.names), JSON.stringify(candidate.aliases), now, str(existing, 'id')).run();
-  } else {
-    await db.prepare('INSERT INTO topic_tags (id, slug, names, aliases, revision, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)')
-      .bind(id, candidate.slug, JSON.stringify(candidate.names), JSON.stringify(candidate.aliases), now, now).run();
+  if (!await writeTagRow(db, candidate)) {
+    const owner = await getTag(db, candidate.slug);
+    throw new AppError(409, 'tag_conflict', `Slug "${candidate.slug}" is already used by another tag`, owner ? { tag_id: owner.id } : {});
   }
   const tag = await getTag(db, input.slug);
   if (!tag) throw new AppError(500, 'internal_error', 'Tag was not persisted');
   await writeAuditLog(db, { actor, action: 'tag.create', targetType: 'tag', targetId: tag.id, after: tag });
   return tag;
+}
+
+/**
+ * Returns the live tag with this slug, creating it when missing. Unlike `createTag`, a slug taken by a concurrent
+ * create is not a conflict: both callers get the same tag. A clash on another tag's alias or name still is.
+ */
+async function ensureTag(db: D1DatabaseLike, input: Required<TagInput>, actor: string): Promise<TopicTag> {
+  try {
+    return await createTag(db, input, actor);
+  } catch (err) {
+    if (!(err instanceof AppError) || err.code !== 'tag_conflict') throw err;
+    const existing = await getTag(db, input.slug);
+    if (existing?.slug === input.slug) return existing;
+    throw err;
+  }
 }
 
 export async function updateTag(
@@ -191,7 +220,7 @@ export async function resolveTagRefs(
       if (!opts.createMissing) throw new AppError(400, 'unknown_tag', `Unknown tag "${raw}"`, { tag: raw });
       const slug = slugify(raw);
       if (!slug) bad(`tags[${i}]`, 'must contain letters or digits');
-      tag = await createTag(db, { slug, names: { [opts.locale]: raw }, aliases: [] }, opts.actor);
+      tag = await ensureTag(db, { slug, names: { [opts.locale]: raw }, aliases: [] }, opts.actor);
       byKey.set(tag.id, tag);
       for (const k of tagKeys(tag)) byKey.set(k, tag);
     }
