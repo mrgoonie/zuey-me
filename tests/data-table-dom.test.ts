@@ -180,6 +180,18 @@ describe('data table controls', () => {
     expect(root.querySelector('td .zb-dt-yes')?.parentElement?.textContent).toBe('✓ Có');
   });
 
+  test('cards mode keeps a multi-line text cell as one value item after the label', async () => {
+    const root = await mount([{ ...TABLE, mobile: 'cards', rows: [['dòng 1\ndòng **2**', '490000', 'true', 'Mới']] }]);
+    const td = root.querySelector('tbody tr td');
+    expect(td?.getAttribute('data-label')).toBe('Gói');
+    // The label is the ::before pseudo-element; the value must be the cell's only node so it stays in the value column.
+    expect(td?.childNodes).toHaveLength(1);
+    expect(td?.children).toHaveLength(1);
+    expect(td?.querySelector('br')).not.toBeNull();
+    expect(td?.textContent).toBe('dòng 1dòng 2');
+    for (const cell of root.querySelectorAll('tbody td')) expect(cell.childNodes).toHaveLength(1);
+  });
+
   test('English editions get English labels and numbers', async () => {
     const root = await mount([TABLE], 'en');
     expect(root.querySelector('[role="status"]')?.textContent).toBe('Showing 3 of 3 rows');
