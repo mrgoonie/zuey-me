@@ -743,6 +743,28 @@ describe('interactive blocks', () => {
     expect(srcdoc).not.toContain('</style><script>alert(1)');
     expect(srcdoc).not.toContain('</script><script>alert(2)');
   });
+
+  it('limits widget images and media to data: and blob: and tags every bridge message with the run nonce', () => {
+    expect(SANDBOX_CSP).toContain('img-src data: blob:;');
+    expect(SANDBOX_CSP).toContain('media-src data: blob:;');
+    expect(SANDBOX_CSP).not.toContain('https:');
+    expect(SANDBOX_CSP).toContain("form-action 'none'");
+    const nonce = 'a'.repeat(32);
+    const srcdoc = buildSandboxSrcdoc({ title: 'T', html: '', css: '', js: '' }, nonce);
+    const bridge = srcdoc.slice(srcdoc.indexOf('<script>'), srcdoc.indexOf('</script>'));
+    // The nonce is declared once and every postMessage payload is a literal that carries it.
+    expect(bridge.split(nonce)).toHaveLength(2);
+    const sends = bridge.match(/send\(\{[^}]*\}/g) ?? [];
+    expect(sends.length).toBeGreaterThanOrEqual(6);
+    for (const s of sends) expect(s).toContain('channel:C,nonce:N,type:');
+    expect(bridge).toContain("addEventListener('pagehide'");
+    expect(bridge).toContain('removeChild(s)');
+    // Each build without an explicit nonce gets a fresh one.
+    const nonceIn = (doc: string) => /,N="([0-9a-f]{32})"/.exec(doc)?.[1];
+    const a = nonceIn(buildSandboxSrcdoc({ title: 'T', html: '', css: '', js: '' }));
+    expect(a).toBeDefined();
+    expect(a).not.toBe(nonceIn(buildSandboxSrcdoc({ title: 'T', html: '', css: '', js: '' })));
+  });
 });
 
 describe('sandbox fetch proxy', () => {

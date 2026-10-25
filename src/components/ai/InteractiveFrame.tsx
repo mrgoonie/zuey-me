@@ -1,24 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { SyntheticEvent } from 'react';
 import { Maximize2, Play, RefreshCw, Square, X } from 'lucide-react';
 import './zuey-ai.css';
 import type { InteractiveBlock } from '../../lib/blocks/schema';
 import { LIMITS } from '../../lib/blocks/schema';
 import type { Locale } from '../../lib/i18n/locales';
 import { DEFAULT_LOCALE } from '../../lib/i18n/locales';
-import { SANDBOX_CHANNEL, SANDBOX_SANDBOX_ATTR, buildSandboxSrcdoc } from '../../lib/ai/sandbox-doc';
+import { SANDBOX_CHANNEL, SANDBOX_SANDBOX_ATTR, buildSandboxSrcdoc, createFrameNonce } from '../../lib/ai/sandbox-doc';
 import { readEmbedPref } from '../blocks/EmbedView';
 import { AI_COPY } from './copy';
 import { claimAutoRunSlot, releaseAutoRunSlot, scheduleFrameStart } from './frame-start-queue';
 
 export const READY_TIMEOUT_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 8_000;
+/** How long after the iframe's `load` the sandboxed document may take to report its own `load`. */
+export const LOAD_HANDSHAKE_MS = 1_000;
 export const MAX_FETCHES_PER_RUN = 50;
 export const MAX_CONCURRENT_FETCHES = 4;
 /** Published readers start a widget slightly before it scrolls into view, like third-party embeds. */
 export const INTERACTIVE_PRELOAD_MARGIN = '200px 0px';
 const MAX_SRCDOC_CHARS = LIMITS.interactiveTotal + 8_000;
 
-type FrameState = 'idle' | 'running' | 'unresponsive';
+/** `navigated`: the widget navigated its own frame away from the sandboxed document and was halted. */
+type FrameState = 'idle' | 'running' | 'unresponsive' | 'navigated';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -74,6 +78,8 @@ interface FrameProps {
  * Runs an interactive block in `<iframe sandbox="allow-scripts">` (opaque origin, strict CSP).
  * The parent only answers messages from this exact frame window; network requests are brokered
  * by POST /api/v1/sandbox/fetch. A ready/heartbeat watchdog unloads frames that stop responding.
+ * A widget that navigates its own frame (reported by the bridge's `pagehide`, or a second iframe `load`)
+ * is unloaded too, and only messages carrying this run's nonce are answered.
  */
 export function InteractiveFrame({ block, autoRun = false, runWhenVisible = false, locale = DEFAULT_LOCALE, inDialog = false }: FrameProps) {
   const t = AI_COPY[locale];
@@ -93,8 +99,37 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
-  const srcdoc = useMemo(() => buildSandboxSrcdoc(block), [block]);
+  // A fresh nonce per run: messages from an earlier run's document, or from a document the frame navigated
+  // to, never match the run that is listening.
+  const { nonce, srcdoc } = useMemo(() => {
+    const n = createFrameNonce();
+    return { nonce: n, srcdoc: buildSandboxSrcdoc(block, n) };
+  }, [block, runId]);
   const tooLarge = srcdoc.length > MAX_SRCDOC_CHARS;
+  // The sandboxed document loads exactly once per run and says so with a nonce-tagged `loaded` message. A
+  // second iframe `load`, or a `load` whose document never says `loaded` (the widget navigated before its own
+  // document finished loading), means the frame now shows another document.
+  const loadsRef = useRef(0);
+  const docLoadedRef = useRef(false);
+  const handshakeRef = useRef<number | null>(null);
+  const clearHandshake = useCallback(() => {
+    if (handshakeRef.current !== null) window.clearTimeout(handshakeRef.current);
+    handshakeRef.current = null;
+  }, []);
+  const haltNavigated = useCallback(() => {
+    clearHandshake();
+    setState(s => (s === 'running' ? 'navigated' : s));
+  }, [clearHandshake]);
+  const onFrameLoad = useCallback((event: SyntheticEvent<HTMLIFrameElement>) => {
+    // Only the frame of the current run counts (a removed frame can still report a late load).
+    if (event.currentTarget !== frameRef.current) return;
+    loadsRef.current += 1;
+    if (loadsRef.current > 1) {
+      haltNavigated();
+    } else if (!docLoadedRef.current) {
+      handshakeRef.current = window.setTimeout(() => { if (!docLoadedRef.current) haltNavigated(); }, LOAD_HANDSHAKE_MS);
+    }
+  }, [haltNavigated]);
 
   const reply = useCallback((message: Record<string, unknown>) => {
     // Opaque-origin frames can only be addressed with '*'; the target window is this exact frame.
@@ -119,10 +154,17 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
     const onMessage = (event: MessageEvent) => {
       if (!frameRef.current || event.source !== frameRef.current.contentWindow) return;
       const data: unknown = event.data;
-      if (!isRecord(data) || data.channel !== SANDBOX_CHANNEL) return;
+      // A document the frame navigated to shares its window but not the nonce: everything it posts is ignored.
+      if (!isRecord(data) || data.channel !== SANDBOX_CHANNEL || data.nonce !== nonce) return;
       lastBeat = Date.now();
       switch (data.type) {
         case 'ready': ready = true; break;
+        case 'loaded':
+          docLoadedRef.current = true;
+          clearHandshake();
+          break;
+        // The sandboxed document is being unloaded while the widget runs: it navigated its own frame.
+        case 'leave': haltNavigated(); break;
         case 'heartbeat': break;
         case 'resize':
           if (typeof data.height === 'number' && Number.isFinite(data.height)) setHeight(clampHeight(data.height + 4));
@@ -170,7 +212,11 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('message', onMessage);
     };
-  }, [state, runId, tooLarge, reply]);
+  }, [state, runId, tooLarge, reply, nonce, clearHandshake, haltNavigated]);
+
+  // Leaving the running state (Stop, Reload, watchdog, unmount) drops a pending load handshake.
+  useEffect(() => { if (state !== 'running') clearHandshake(); }, [state, clearHandshake]);
+  useEffect(() => clearHandshake, [clearHandshake]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -180,10 +226,13 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
   }, [full]);
 
   const run = useCallback(() => {
+    loadsRef.current = 0;
+    docLoadedRef.current = false;
+    clearHandshake();
     setFrameError(null);
     setState('running');
     setRunId(n => n + 1);
-  }, []);
+  }, [clearHandshake]);
 
   /** Reader-started run: never counted against the auto-start cap, and it disarms the automatic start. */
   const start = useCallback(() => {
@@ -291,6 +340,7 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
           srcDoc={srcdoc}
           referrerPolicy="no-referrer"
           allow=""
+          onLoad={onFrameLoad}
           style={{ height }}
         />
       ) : (
@@ -298,6 +348,7 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
         <div className="zif-placeholder" style={runWhenVisible && state === 'idle' ? { minHeight: height } : undefined}>
           {block.caption && <span>{block.caption}</span>}
           {state === 'unresponsive' && <span role="status">{t.unresponsive}</span>}
+          {state === 'navigated' && <span role="status">{t.leftSandbox}</span>}
           {state === 'idle' && capped && <span className="zif-note-limit">{t.autoRunLimit}</span>}
         </div>
       )}

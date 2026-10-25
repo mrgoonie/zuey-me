@@ -58,6 +58,8 @@ export interface AiCopy {
   reload: string;
   sandboxNote: string;
   unresponsive: string;
+  /** Shown when a widget navigated its own frame away from the sandboxed document. */
+  leftSandbox: string;
   frameError: string;
   artifactRejected: string;
   loadFailed: string;
@@ -132,6 +134,7 @@ const vi: AiCopy = {
   reload: 'Chạy lại',
   sandboxNote: 'Chạy trong sandbox cô lập; mạng chỉ qua proxy được duyệt.',
   unresponsive: 'Demo không phản hồi nên đã được dừng.',
+  leftSandbox: 'Demo đã cố rời khỏi vùng cách ly nên đã được dừng.',
   frameError: 'Demo báo lỗi',
   artifactRejected: 'Một khối tương tác không hợp lệ đã bị bỏ qua.',
   loadFailed: 'Không tải được dữ liệu. Thử lại sau.',
@@ -217,6 +220,7 @@ const en: AiCopy = {
   reload: 'Run again',
   sandboxNote: 'Runs in an isolated sandbox; network only through the approved proxy.',
   unresponsive: 'The demo stopped responding and was halted.',
+  leftSandbox: 'The demo tried to leave its sandbox and was halted.',
   frameError: 'The demo reported an error',
   artifactRejected: 'An invalid interactive block was skipped.',
   loadFailed: 'Could not load data. Try again later.',
@@ -302,6 +306,7 @@ const zh: AiCopy = {
   reload: '重新运行',
   sandboxNote: '在隔离沙箱中运行；网络只能经由已批准的代理。',
   unresponsive: '演示无响应，已停止。',
+  leftSandbox: '演示试图离开沙盒，已停止。',
   frameError: '演示报告了错误',
   artifactRejected: '已跳过一个无效的交互模块。',
   loadFailed: '无法加载数据，请稍后重试。',
@@ -387,6 +392,7 @@ const ko: AiCopy = {
   reload: '다시 실행',
   sandboxNote: '격리된 샌드박스에서 실행되며, 네트워크는 승인된 프록시로만 가능합니다.',
   unresponsive: '데모가 응답하지 않아 중지했습니다.',
+  leftSandbox: '데모가 샌드박스를 벗어나려 해서 중지했습니다.',
   frameError: '데모에서 오류가 발생했습니다',
   artifactRejected: '유효하지 않은 인터랙티브 블록을 건너뛰었습니다.',
   loadFailed: '데이터를 불러오지 못했습니다. 나중에 다시 시도하세요.',
@@ -472,6 +478,7 @@ const ja: AiCopy = {
   reload: '再実行',
   sandboxNote: '隔離されたサンドボックスで実行。ネットワークは承認済みプロキシ経由のみ。',
   unresponsive: 'デモが応答しないため停止しました。',
+  leftSandbox: 'デモがサンドボックスの外へ移動しようとしたため停止しました。',
   frameError: 'デモでエラーが発生しました',
   artifactRejected: '無効なインタラクティブブロックをスキップしました。',
   loadFailed: 'データを読み込めませんでした。後でもう一度お試しください。',

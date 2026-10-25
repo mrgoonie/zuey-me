@@ -150,6 +150,13 @@ function stubFrameWindow(frame: HTMLIFrameElement): { posted: unknown[] } {
   return win;
 }
 
+/** The per-run nonce the bridge in this frame's srcdoc posts with. */
+function nonceOf(frame: HTMLIFrameElement | undefined): string {
+  const match = /,N="([0-9a-f]{32})"/.exec(frame?.getAttribute('srcdoc') ?? '');
+  if (!match) throw new Error('frame srcdoc carries no nonce');
+  return match[1];
+}
+
 function postFromFrame(source: object | null, data: unknown) {
   const event = new window.MessageEvent('message', { data, origin: 'null' });
   Object.defineProperty(event, 'source', { value: source });
@@ -456,13 +463,15 @@ describe('surfaces that stay as they were', () => {
 });
 
 describe('auto-started frames keep the watchdog, message checks and broker quotas', () => {
-  function started(): { view: HTMLElement; frame: HTMLIFrameElement; win: { posted: unknown[] } } {
+  function started(): { view: HTMLElement; frame: HTMLIFrameElement; win: { posted: unknown[] }; say: (data: Record<string, unknown>) => void } {
     const view = published([widget('w1')]);
     enter(observerFor(view, 'Demo w1'));
     advance(0);
     const [frame] = frames(view);
     if (!frame) throw new Error('frame did not start');
-    return { view, frame, win: stubFrameWindow(frame) };
+    const win = stubFrameWindow(frame);
+    const nonce = nonceOf(frame);
+    return { view, frame, win, say: data => postFromFrame(win, { channel: SANDBOX_CHANNEL, nonce, ...data }) };
   }
 
   it('halts a frame that never reports ready and does not restart it by itself', () => {
@@ -478,14 +487,100 @@ describe('auto-started frames keep the watchdog, message checks and broker quota
     expect(frames(view)).toHaveLength(1);
   });
 
-  it('only answers messages sent by its own frame window', () => {
-    const { view, win } = started();
-    postFromFrame({}, { channel: SANDBOX_CHANNEL, type: 'resize', height: 600 });
-    postFromFrame(null, { channel: SANDBOX_CHANNEL, type: 'resize', height: 600 });
-    postFromFrame(win, { channel: 'other', type: 'resize', height: 600 });
-    expect(frames(view)[0].style.height).toBe('320px');
+  it('only answers messages sent by its own frame window with this run\'s nonce', () => {
+    const { view, frame, win, say } = started();
+    const nonce = nonceOf(frame);
+    postFromFrame({}, { channel: SANDBOX_CHANNEL, nonce, type: 'resize', height: 600 });
+    postFromFrame(null, { channel: SANDBOX_CHANNEL, nonce, type: 'resize', height: 600 });
+    postFromFrame(win, { channel: 'other', nonce, type: 'resize', height: 600 });
     postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'resize', height: 600 });
+    postFromFrame(win, { channel: SANDBOX_CHANNEL, nonce: 'f'.repeat(32), type: 'resize', height: 600 });
+    expect(frames(view)[0].style.height).toBe('320px');
+    say({ type: 'resize', height: 600 });
     expect(frames(view)[0].style.height).toBe('604px');
+  });
+
+  it('a normal widget loads once, keeps running and still stops on request', () => {
+    const { view, frame, say } = started();
+    say({ type: 'ready' });
+    // The iframe's load event may reach the parent just before the document's own `loaded` message.
+    React.act(() => { frame.dispatchEvent(new window.Event('load')); });
+    advance(frameModule.LOAD_HANDSHAKE_MS / 2);
+    say({ type: 'loaded' });
+    for (let i = 0; i < 20; i++) {
+      advance(1000);
+      say({ type: 'heartbeat' });
+    }
+    expect(frames(view)).toHaveLength(1);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('running');
+    click(button(view, 'Dừng'));
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBeNull();
+  });
+
+  it('halts a widget whose sandboxed document unloads (self-navigation) and ignores what the frame posts next', () => {
+    const { view, frame, win, say } = started();
+    const nonce = nonceOf(frame);
+    say({ type: 'ready' });
+    say({ type: 'leave' });
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('navigated');
+    expect(view.querySelector('[role="status"]')?.textContent).toContain('rời khỏi vùng cách ly');
+    // The navigated document still holds the same window: nothing it posts is answered, even with a leaked nonce.
+    const calls: string[] = [];
+    Object.assign(globalThis, { fetch: (input: string) => { calls.push(String(input)); return Promise.reject(new Error('no')); } });
+    postFromFrame(win, { channel: SANDBOX_CHANNEL, nonce, type: 'fetch', id: 1, url: 'https://api.github.com/x' });
+    postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'fetch', id: 2, url: 'https://api.github.com/x' });
+    expect(calls).toHaveLength(0);
+    expect(win.posted).toHaveLength(0);
+    // It never restarts by itself; the reader can run it again with a fresh nonce.
+    advance(10_000);
+    expect(frames(view)).toHaveLength(0);
+    click(button(view, 'Chạy demo'));
+    const [again] = frames(view);
+    expect(again).toBeDefined();
+    expect(nonceOf(again)).not.toBe(nonce);
+  });
+
+  it('halts a widget whose frame fires a second load and ignores messages posted after it', () => {
+    const { view, frame, win, say } = started();
+    say({ type: 'ready' });
+    say({ type: 'loaded' });
+    React.act(() => { frame.dispatchEvent(new window.Event('load')); });
+    advance(frameModule.LOAD_HANDSHAKE_MS * 2);
+    expect(frames(view)).toHaveLength(1);
+    React.act(() => { frame.dispatchEvent(new window.Event('load')); });
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('navigated');
+    say({ type: 'fetch', id: 1, url: 'https://api.github.com/x' });
+    expect(win.posted).toHaveLength(0);
+  });
+
+  it('halts a widget that navigates before its own document finished loading', () => {
+    const { view, frame, win, say } = started();
+    // The bridge reported ready, then widget code navigated during parsing: the only load event belongs to
+    // the document the frame landed on, which never says `loaded` with the nonce.
+    say({ type: 'ready' });
+    React.act(() => { frame.dispatchEvent(new window.Event('load')); });
+    advance(frameModule.LOAD_HANDSHAKE_MS - 1);
+    expect(frames(view)).toHaveLength(1);
+    postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'loaded' });
+    advance(1);
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('navigated');
+  });
+  it('a reloaded run ignores messages that carry the previous run\'s nonce', () => {
+    const { view, frame } = started();
+    const oldNonce = nonceOf(frame);
+    click(button(view, 'Chạy lại'));
+    const [next] = frames(view);
+    if (!next) throw new Error('reload did not mount a frame');
+    const win = stubFrameWindow(next);
+    expect(nonceOf(next)).not.toBe(oldNonce);
+    postFromFrame(win, { channel: SANDBOX_CHANNEL, nonce: oldNonce, type: 'leave' });
+    postFromFrame(win, { channel: SANDBOX_CHANNEL, nonce: oldNonce, type: 'resize', height: 600 });
+    expect(frames(view)).toHaveLength(1);
+    expect(frames(view)[0].style.height).toBe('320px');
   });
 
   it('brokers fetches through the same-origin proxy with the concurrency and per-run limits', async () => {
@@ -499,9 +594,9 @@ describe('auto-started frames keep the watchdog, message checks and broker quota
         });
       },
     });
-    const { win } = started();
-    postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'ready' });
-    for (let id = 1; id <= 5; id++) postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'fetch', id, url: 'https://api.github.com/x' });
+    const { win, say } = started();
+    say({ type: 'ready' });
+    for (let id = 1; id <= 5; id++) say({ type: 'fetch', id, url: 'https://api.github.com/x' });
     expect(calls).toHaveLength(frameModule.MAX_CONCURRENT_FETCHES);
     expect(calls.every(c => c.url === '/api/v1/sandbox/fetch' && c.body === JSON.stringify({ url: 'https://api.github.com/x' }))).toBe(true);
     expect(win.posted).toContainEqual({ channel: SANDBOX_CHANNEL, type: 'fetch:result', id: 5, ok: false, error: 'request limit reached' });
@@ -514,10 +609,10 @@ describe('auto-started frames keep the watchdog, message checks and broker quota
     await React.act(settle);
     let id = 100;
     while (calls.length < frameModule.MAX_FETCHES_PER_RUN) {
-      postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'fetch', id: id++, url: 'https://api.github.com/x' });
+      say({ type: 'fetch', id: id++, url: 'https://api.github.com/x' });
       await React.act(settle);
     }
-    postFromFrame(win, { channel: SANDBOX_CHANNEL, type: 'fetch', id: 999, url: 'https://api.github.com/x' });
+    say({ type: 'fetch', id: 999, url: 'https://api.github.com/x' });
     expect(calls).toHaveLength(frameModule.MAX_FETCHES_PER_RUN);
     expect(win.posted).toContainEqual({ channel: SANDBOX_CHANNEL, type: 'fetch:result', id: 999, ok: false, error: 'request limit reached' });
     jest.useFakeTimers();
