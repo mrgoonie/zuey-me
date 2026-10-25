@@ -1,13 +1,14 @@
 /**
- * Course ownership. `grantCourse` and `revokeCourse` are the only writers of `course_purchases`, so
- * every path (payment, refund, chargeback, admin) also syncs GitHub access and the activity log.
+ * Course ownership. `grantCourseStatements` and `revokeCourseStatements` build the only writes to `course_purchases`
+ * (run as one batch by `grantCourse`/`revokeCourse`, or inside the payment, refund, chargeback and restore batches), so
+ * every path also syncs GitHub access and the activity log.
  */
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { AppError } from '../http';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime, randomId, str, strOrNull } from '../members/runtime';
-import { activityStatement, getUserById, logActivity } from '../members/users';
-import { enqueueGithubSync, githubSyncStatements } from './course-github-invites';
+import { activityStatement, getUserById } from '../members/users';
+import { githubSyncStatements } from './course-github-invites';
 import { getCourseById } from './course-store';
 import type { CourseRecord } from './course-types';
 
@@ -43,16 +44,15 @@ export async function listPurchases(d1: D1DatabaseLike, userId: string): Promise
   return (results ?? []).map(rowToPurchase);
 }
 
-/** Activates ownership (idempotent) and queues GitHub invites. Returns false when it was already active. */
+/**
+ * Activates ownership (idempotent), queues the GitHub invites and logs it, as one D1 batch: a failed write (the
+ * activity log included) fails the whole grant and leaves nothing written. Returns false when it was already active.
+ */
 export async function grantCourse(d1: D1DatabaseLike, input: GrantInput): Promise<boolean> {
   const course = await getCourseById(d1, input.courseId);
   if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
-  const existing = await getPurchase(d1, input.userId, input.courseId);
-  if (existing?.status === 'active') return false;
-  await purchaseUpsertStatement(d1, input).run();
-  await enqueueGithubSync(d1, input.userId, course, 'invite');
-  await logActivity(d1, input.userId, 'courses.granted', grantDetail(course, input));
-  return true;
+  const results = await d1.batch(grantCourseStatements(d1, course, input));
+  return Boolean(results.at(-1)?.meta?.changes);
 }
 
 type GrantInput = { userId: string; courseId: string; orderId: string | null; source: 'purchase' | 'grant'; actor?: string };
@@ -74,7 +74,8 @@ function purchaseUpsertStatement(d1: D1DatabaseLike, input: GrantInput, onlyIf?:
 /**
  * The writes of `grantCourse` for a caller that makes them part of one D1 batch: they apply only while the course is
  * not active for the user and `onlyIf` holds when the batch runs. The purchase upsert is the last statement, so the
- * conditions hold for every earlier one. Unlike `grantCourse`, a failed activity insert fails the batch.
+ * conditions hold for every earlier one and its result says whether access was granted. A failed activity insert
+ * fails the batch.
  */
 export function grantCourseStatements(
   d1: D1DatabaseLike, course: Pick<CourseRecord, 'id' | 'slug' | 'github_repos'>, input: GrantInput, onlyIf?: SqlCondition,

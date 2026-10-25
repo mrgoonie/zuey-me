@@ -18,7 +18,7 @@ import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode } from './course-orders';
-import { grantCourse, grantCourseStatements, revokeCourseStatements } from './course-purchases';
+import { grantCourseStatements, revokeCourseStatements } from './course-purchases';
 import { getCourseById } from './course-store';
 import { POLICY_PATH } from './course-terms';
 import { formatUsd } from './course-types';
@@ -97,12 +97,31 @@ export function isPartialCourseReversal(order: CourseOrder, amountMinor: number 
 }
 
 /**
- * Grants the course for a paid order, notifies the referral program and emails a receipt.
- * Referral and email failures are logged and never undo the purchase.
+ * How a caller marks an order paid: the `SET` assignments of its update with their values, applied only while `when`
+ * (a predicate on the order row `o`) holds.
  */
-export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<void> {
-  const granted = await grantCourse(d1, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' });
-  if (!granted) {
+export interface CoursePayment { set: string; values: unknown[]; when: string }
+
+/**
+ * Marks the order paid and grants its course as one D1 batch, then notifies the referral program and emails a
+ * receipt. The grant (GitHub invite rows and log included) applies only while the order is still payable, and the
+ * status update is last: a failed write leaves the order unpaid and nothing granted, so the caller's retry pays it once.
+ * Returns false, with nothing written, when the order was no longer payable. Referral and email failures are logged and
+ * never undo the purchase.
+ */
+export async function fulfilCourseOrder(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payment: CoursePayment, payerText: string | null = null,
+): Promise<boolean> {
+  const course = await getCourseById(d1, order.course_id);
+  if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
+  const payable: SqlCondition = { sql: `EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND (${payment.when}))`, params: [order.id] };
+  const grant = grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, payable);
+  const results = await d1.batch([
+    ...grant,
+    d1.prepare(`UPDATE course_orders SET ${payment.set} WHERE id = ? AND ${payable.sql}`).bind(...payment.values, order.id, ...payable.params),
+  ]);
+  if (!results.at(-1)?.meta?.changes) return false;
+  if (!results[grant.length - 1]?.meta?.changes) {
     // Bought twice (two open checkouts paid): keep the money traceable for a manual refund.
     await d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'already_owned'), updated_at = ? WHERE id = ?")
       .bind(iso(membersRuntime.now()), order.id).run();
@@ -117,6 +136,7 @@ export async function fulfilCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, ord
     });
   }
   await afterCourseOrderPaid(d1, env, order, payerText);
+  return true;
 }
 
 function orderPaidDetail(order: CourseOrder): Record<string, unknown> {
@@ -314,10 +334,10 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
   const note = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 200) : 'admin';
   const now = iso(membersRuntime.now());
   if (action === 'grant') {
-    if (order.status === 'paid') throw new AppError(409, 'already_paid', 'Order is already paid');
-    await d1.prepare("UPDATE course_orders SET status = 'paid', paid_at = COALESCE(paid_at, ?), attention_reason = ?, updated_at = ? WHERE id = ?")
-      .bind(now, `admin_grant:${note}`, now, order.id).run();
-    await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now });
+    const paid = order.status !== 'paid' && await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
+      set: "status = 'paid', paid_at = COALESCE(paid_at, ?), attention_reason = ?, updated_at = ?", values: [now, `admin_grant:${note}`, now], when: "o.status <> 'paid'",
+    });
+    if (!paid) throw new AppError(409, 'already_paid', 'Order is already paid');
   } else if (action === 'dismiss') {
     if (order.status === 'paid') throw new AppError(409, 'already_paid', 'Use refund for a paid order');
     await d1.prepare("UPDATE course_orders SET status = 'cancelled', attention_reason = ?, updated_at = ? WHERE id = ?").bind(`dismissed:${note}`, now, order.id).run();

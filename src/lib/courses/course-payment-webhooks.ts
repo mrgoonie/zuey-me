@@ -10,6 +10,7 @@ import { iso, isUniqueViolation, membersRuntime } from '../members/runtime';
 import { DODO_DISPUTE_FUNDS_KEPT, DODO_DISPUTE_FUNDS_LOST, minorUnitsOrNull } from '../payments/dodo';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
+import { getCourseById } from './course-store';
 import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from './course-order-payments';
 import {
   chargeBackLostCourseOrder, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention,
@@ -60,18 +61,23 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
       await markCourseOrderAttention(d1, order, 'underpaid', extra);
       return { outcome: 'needs_attention', order_code: order.code };
     }
+    if (!(await getCourseById(d1, order.course_id))) {
+      // The course was deleted after checkout: the money is recorded on the order for a refund, and nothing is granted.
+      await markCourseOrderAttention(d1, order, 'course_missing', extra);
+      return { outcome: 'needs_attention', order_code: order.code };
+    }
     const nowIso = iso(nowMs);
-    const res = await d1.prepare(
-      `UPDATE course_orders SET status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = 'VND', payment_ref = ?, provider_event_id = ?, updated_at = ?
-       WHERE id = ? AND (status = 'pending' OR (status = 'expired' AND attention_reason IS NULL))`
-    ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id).run();
-    if (res.meta?.changes !== 1) {
+    const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, {
+      set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = 'VND', payment_ref = ?, provider_event_id = ?, updated_at = ?",
+      values: [nowIso, n.amount, n.paymentRef, n.eventId, nowIso],
+      when: "o.status = 'pending' OR (o.status = 'expired' AND o.attention_reason IS NULL)",
+    }, n.payerText ?? null);
+    if (!paid) {
       const current = await getCourseOrderByCode(d1, order.code);
       if (current?.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
       if (current) await markCourseOrderAttention(d1, current, 'late_payment', extra);
       return { outcome: 'needs_attention', order_code: order.code };
     }
-    await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, n.payerText ?? null);
     return { outcome: 'paid', order_code: order.code };
   } catch (err) {
     await releaseCoursePaymentEvent(d1, 'sepay', n.eventId);
@@ -211,11 +217,13 @@ async function applyDodoCoursePayment(
 ): Promise<CoursePaymentResult> {
   if (order.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
   const extra = { amount: p.amount ?? 0, currency: p.currency ?? undefined, ref: p.paymentId, eventId: p.eventId };
-  // Another account's checkout, a SePay order, or a USD charge below the quote (tampered or misconfigured checkout):
-  // the card money is captured, so the order is flagged with its payment id for a grant or a Dodo refund.
+  // Another account's checkout, a SePay order, a USD charge below the quote (tampered or misconfigured checkout), or a
+  // course deleted since checkout: the card money is captured, so the order is flagged with its payment id for a grant
+  // or a Dodo refund.
   const reason = p.userMismatch ? 'user_mismatch'
     : order.provider !== 'dodo' ? 'provider_mismatch'
-      : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid' : null;
+      : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid'
+        : !(await getCourseById(d1, order.course_id)) ? 'course_missing' : null;
   if (reason) {
     await markCourseOrderAttention(d1, order, reason, extra);
     if (p.paymentId) {
@@ -225,11 +233,10 @@ async function applyDodoCoursePayment(
   }
   const nowIso = iso(membersRuntime.now());
   // Card money is captured: pay even an expired or flagged order rather than lose the payment.
-  const res = await d1.prepare(
-    `UPDATE course_orders SET status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = ?, provider_payment_id = ?, payment_ref = ?,
-       provider_event_id = ?, updated_at = ? WHERE id = ? AND status <> 'paid'`
-  ).bind(nowIso, p.amount, p.currency, p.paymentId, p.paymentId, p.eventId, nowIso, order.id).run();
-  if (res.meta?.changes !== 1) return { outcome: 'already_paid', order_code: order.code };
-  await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: p.amount, currency_paid: p.currency, provider_payment_id: p.paymentId });
-  return { outcome: 'paid', order_code: order.code };
+  const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: p.amount, currency_paid: p.currency, provider_payment_id: p.paymentId }, {
+    set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = ?, provider_payment_id = ?, payment_ref = ?, provider_event_id = ?, updated_at = ?",
+    values: [nowIso, p.amount, p.currency, p.paymentId, p.paymentId, p.eventId, nowIso],
+    when: "o.status <> 'paid'",
+  });
+  return { outcome: paid ? 'paid' : 'already_paid', order_code: order.code };
 }
