@@ -2,13 +2,14 @@
  * Course ownership. `grantCourse` and `revokeCourse` are the only writers of `course_purchases`, so
  * every path (payment, refund, chargeback, admin) also syncs GitHub access and the activity log.
  */
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { AppError } from '../http';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime, randomId, str, strOrNull } from '../members/runtime';
-import { getUserById, logActivity } from '../members/users';
-import { enqueueGithubSync } from './course-github-invites';
+import { activityStatement, getUserById, logActivity } from '../members/users';
+import { enqueueGithubSync, githubSyncStatements } from './course-github-invites';
 import { getCourseById } from './course-store';
+import type { CourseRecord } from './course-types';
 
 export interface PurchaseView {
   course_id: string;
@@ -78,6 +79,35 @@ export async function revokeCourse(
   return true;
 }
 
+/**
+ * The writes of `revokeCourse` for a caller that makes them part of one D1 batch: they apply only while the
+ * course is active for the user (granted by `orderId` when given) and `onlyIf` holds when the batch runs. The
+ * purchase update is the last statement, so the conditions hold for every earlier one and its result says
+ * whether access was revoked. Unlike `revokeCourse`, a failed activity insert fails the batch.
+ */
+export function revokeCourseStatements(
+  d1: D1DatabaseLike, course: Pick<CourseRecord, 'id' | 'github_repos'> | null,
+  input: { userId: string; courseId: string; reason: string; actor?: string; orderId?: string },
+  onlyIf?: SqlCondition,
+): D1PreparedStatementLike[] {
+  const now = iso(membersRuntime.now());
+  const owner = input.orderId ? ' AND order_id = ?' : '';
+  const ownerParams = input.orderId ? [input.orderId] : [];
+  const extra = onlyIf ? { sql: ` AND (${onlyIf.sql})`, params: onlyIf.params } : { sql: '', params: [] };
+  const active: SqlCondition = {
+    sql: `EXISTS (SELECT 1 FROM course_purchases WHERE user_id = ? AND course_id = ? AND status = 'active'${owner})${extra.sql}`,
+    params: [input.userId, input.courseId, ...ownerParams, ...extra.params],
+  };
+  return [
+    d1.prepare(`UPDATE course_certificates SET revoked_at = ? WHERE user_id = ? AND course_id = ? AND revoked_at IS NULL AND ${active.sql}`)
+      .bind(now, input.userId, input.courseId, ...active.params),
+    ...(course ? githubSyncStatements(d1, input.userId, course, 'remove', active) : []),
+    activityStatement(d1, input.userId, 'courses.revoked', { course_id: input.courseId, reason: input.reason, actor: input.actor ?? 'system' }, undefined, active),
+    d1.prepare(
+      `UPDATE course_purchases SET status = 'revoked', revoked_at = ?, revoked_reason = ? WHERE user_id = ? AND course_id = ? AND status = 'active'${owner}${extra.sql}`
+    ).bind(now, input.reason.slice(0, 200), input.userId, input.courseId, ...ownerParams, ...extra.params),
+  ];
+}
 export interface CourseOwnerRow { user_id: string; email: string | null; source: string; status: string; granted_at: string; revoked_reason: string | null }
 
 /** Admin: who owns (or owned) a course. */

@@ -13,12 +13,14 @@
  * - Analytics never affects payment: enqueueing validates and inserts inside a catch-all and returns an
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
  *   with it) so a missing table or a failed insert can never roll a payment back. The one exception is
- *   `outboxInsertStatement`, for a once-per-fact gate row that must land together with its event (the
- *   Dodo refund/dispute log): the batch holds no payment state, so a failure only makes the webhook retry.
+ *   `outboxInsertStatement`, for an event that must land together with the fact it reports: the Dodo
+ *   refund/dispute gate row and log (no payment state), and a course order reversal (status, access and log).
+ *   A failure there rolls the whole fact back and makes the webhook (or the admin) retry it, so the event is
+ *   never lost and never written twice.
  * - A drain run is bounded: at most MAX_DRAIN_QUERIES D1 statements and DEFAULT_DRAIN_LIMIT deliveries by
  *   default, so it fits the per-invocation limits of the Workers free plan.
  */
-import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { iso, membersRuntime } from '../members/runtime';
 import type { EventProperties, ServerEventName } from './events';
 import { validateEvent } from './events';
@@ -95,11 +97,12 @@ export interface PaymentEventGuard {
 /**
  * Validates the event against the taxonomy and PII guard and returns its outbox insert (once per `dedupeKey`)
  * without running it, for a caller that writes the event in one D1 batch with the fact it reports. With
- * `unlessPaymentEvent`, nothing is inserted when that row exists at the time the batch runs. Null when the
- * event is invalid (logged). Throws only if the statement cannot be prepared.
+ * `unlessPaymentEvent`, nothing is inserted when that row exists at the time the batch runs; with `onlyIf`,
+ * nothing is inserted unless it holds then. Null when the event is invalid (logged). Throws only if the
+ * statement cannot be prepared.
  */
 export function outboxInsertStatement<E extends ServerEventName>(
-  d1: D1DatabaseLike, input: OutboxEventInput<E>, unlessPaymentEvent?: PaymentEventGuard,
+  d1: D1DatabaseLike, input: OutboxEventInput<E>, unlessPaymentEvent?: PaymentEventGuard, onlyIf?: SqlCondition,
 ): D1PreparedStatementLike | null {
   if (!DEDUPE_KEY_RE.test(input.dedupeKey) || !isValidDistinctId(input.distinctId)) {
     console.warn(`analytics outbox: rejected ${input.event} (invalid dedupe key or distinct id)`);
@@ -118,10 +121,14 @@ export function outboxInsertStatement<E extends ServerEventName>(
     resolveOccurredAt(input.occurredAt, nowMs), now, now, now,
   ];
   const row = "?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?";
-  const source = unlessPaymentEvent
-    ? `SELECT ${row} WHERE NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = ? AND event_id = ?)`
-    : `VALUES (${row})`;
-  const guard = unlessPaymentEvent ? [unlessPaymentEvent.provider, unlessPaymentEvent.eventId] : [];
+  const conditions: SqlCondition[] = [
+    ...(unlessPaymentEvent ? [{
+      sql: 'NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = ? AND event_id = ?)', params: [unlessPaymentEvent.provider, unlessPaymentEvent.eventId],
+    }] : []),
+    ...(onlyIf ? [onlyIf] : []),
+  ];
+  const source = conditions.length ? `SELECT ${row} WHERE ${conditions.map(c => `(${c.sql})`).join(' AND ')}` : `VALUES (${row})`;
+  const guard = conditions.flatMap(c => c.params);
   return d1.prepare(
     `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
      ${source} ON CONFLICT (dedupe_key) DO NOTHING`
