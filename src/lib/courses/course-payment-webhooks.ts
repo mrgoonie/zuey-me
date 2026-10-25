@@ -61,17 +61,17 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
       return { outcome: 'needs_attention', order_code: order.code };
     }
     const nowIso = iso(nowMs);
-    const res = await d1.prepare(
-      `UPDATE course_orders SET status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = 'VND', payment_ref = ?, provider_event_id = ?, updated_at = ?
-       WHERE id = ? AND (status = 'pending' OR (status = 'expired' AND attention_reason IS NULL))`
-    ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id).run();
-    if (res.meta?.changes !== 1) {
+    const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, {
+      set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = 'VND', payment_ref = ?, provider_event_id = ?, updated_at = ?",
+      values: [nowIso, n.amount, n.paymentRef, n.eventId, nowIso],
+      when: "o.status = 'pending' OR (o.status = 'expired' AND o.attention_reason IS NULL)",
+    }, n.payerText ?? null);
+    if (!paid) {
       const current = await getCourseOrderByCode(d1, order.code);
       if (current?.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
       if (current) await markCourseOrderAttention(d1, current, 'late_payment', extra);
       return { outcome: 'needs_attention', order_code: order.code };
     }
-    await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, n.payerText ?? null);
     return { outcome: 'paid', order_code: order.code };
   } catch (err) {
     await releaseCoursePaymentEvent(d1, 'sepay', n.eventId);
@@ -225,11 +225,10 @@ async function applyDodoCoursePayment(
   }
   const nowIso = iso(membersRuntime.now());
   // Card money is captured: pay even an expired or flagged order rather than lose the payment.
-  const res = await d1.prepare(
-    `UPDATE course_orders SET status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = ?, provider_payment_id = ?, payment_ref = ?,
-       provider_event_id = ?, updated_at = ? WHERE id = ? AND status <> 'paid'`
-  ).bind(nowIso, p.amount, p.currency, p.paymentId, p.paymentId, p.eventId, nowIso, order.id).run();
-  if (res.meta?.changes !== 1) return { outcome: 'already_paid', order_code: order.code };
-  await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: p.amount, currency_paid: p.currency, provider_payment_id: p.paymentId });
-  return { outcome: 'paid', order_code: order.code };
+  const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: p.amount, currency_paid: p.currency, provider_payment_id: p.paymentId }, {
+    set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = ?, provider_payment_id = ?, payment_ref = ?, provider_event_id = ?, updated_at = ?",
+    values: [nowIso, p.amount, p.currency, p.paymentId, p.paymentId, p.eventId, nowIso],
+    when: "o.status <> 'paid'",
+  });
+  return { outcome: paid ? 'paid' : 'already_paid', order_code: order.code };
 }
