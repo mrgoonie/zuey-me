@@ -74,9 +74,18 @@ export interface PurchaseInput {
 
 /** One `purchase` per verified transaction. Zero-amount grants (100% promo codes) are not purchases. */
 export async function queuePurchase(d1: D1DatabaseLike, p: PurchaseInput): Promise<EnqueueOutcome> {
+  const input = await purchaseEvent(d1, p);
+  return input ? enqueueServerEvent(d1, input) : 'rejected';
+}
+
+/**
+ * The `purchase` event of `queuePurchase`, for a caller that writes it in one D1 batch with the payment
+ * (`outboxInsertStatement`). Null when it is not a purchase (zero amount or unknown currency).
+ */
+export async function purchaseEvent(d1: D1DatabaseLike, p: PurchaseInput): Promise<OutboxEventInput<'purchase'> | null> {
   const currency = normaliseCurrency(p.currency);
-  if (currency === null || !Number.isFinite(p.amountMinor) || p.amountMinor <= 0) return 'rejected';
-  return enqueueServerEvent(d1, {
+  if (currency === null || !Number.isFinite(p.amountMinor) || p.amountMinor <= 0) return null;
+  return {
     event: 'purchase',
     distinctId: p.distinctId,
     dedupeKey: `purchase:${p.provider}:${p.transactionId}`,
@@ -91,7 +100,7 @@ export async function queuePurchase(d1: D1DatabaseLike, p: PurchaseInput): Promi
       ...(await ga4OutboxProperties(d1, p.distinctId, !(p.renewal ?? false))),
     },
     occurredAt: p.occurredAt,
-  });
+  };
 }
 
 export interface PaymentIssueInput {
@@ -107,7 +116,12 @@ export interface PaymentIssueInput {
 }
 
 export async function queueNeedsAttention(d1: D1DatabaseLike, p: PaymentIssueInput & { reason: string }): Promise<EnqueueOutcome> {
-  return enqueueServerEvent(d1, {
+  return enqueueServerEvent(d1, needsAttentionEvent(p));
+}
+
+/** The `payment_needs_attention` event of `queueNeedsAttention`, for a caller that writes it in one D1 batch with the flag. */
+export function needsAttentionEvent(p: PaymentIssueInput & { reason: string }): OutboxEventInput<'payment_needs_attention'> {
+  return {
     event: 'payment_needs_attention',
     distinctId: p.distinctId,
     dedupeKey: `payment_needs_attention:${p.provider}:${p.reference}`,
@@ -115,7 +129,7 @@ export async function queueNeedsAttention(d1: D1DatabaseLike, p: PaymentIssueInp
       provider: p.provider, order_type: p.orderType, reason: p.reason, ...money(p.amountMinor, p.currency), ...(p.plan ? { plan: p.plan } : {}),
     },
     occurredAt: p.occurredAt,
-  });
+  };
 }
 
 export async function queuePaymentFailed(d1: D1DatabaseLike, p: PaymentIssueInput): Promise<EnqueueOutcome> {

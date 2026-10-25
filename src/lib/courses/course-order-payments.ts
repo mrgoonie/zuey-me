@@ -1,18 +1,19 @@
 /**
  * Turning money into ownership and back. SePay transfers (ZSC codes) and Dodo card payments both
  * end in `fulfilCourseOrder`; refunds, chargebacks and admin revokes end in `reverseCourseOrder`.
- * Every provider event is recorded in payment_events, which makes retries idempotent: first for a payment, and in the
- * own batch of the reversal or restore for a refund or a dispute.
+ * Every provider event is recorded in payment_events, which makes retries idempotent. The record is written in the own
+ * batch of whatever the event changes (the payment, the flag for the admin, the reversal or the restore), so a failure
+ * or a worker crash before that batch commits leaves no record and the provider's redelivery applies the event once.
  */
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
-import { queueNeedsAttention, queuePurchase, refundEvent } from '../analytics/commerce-events';
+import { needsAttentionEvent, purchaseEvent, refundEvent } from '../analytics/commerce-events';
 import { outboxInsertStatement } from '../analytics/outbox';
 import { AppError } from '../http';
 import { courseReceiptEmail, sendLoggedEmail } from '../members/email';
 import type { Row } from '../members/runtime';
-import { iso, isUniqueViolation, membersRuntime, siteUrl } from '../members/runtime';
-import { activityStatement, getUserById, logActivity } from '../members/users';
+import { iso, membersRuntime, siteUrl, str } from '../members/runtime';
+import { activityStatement, getUserById } from '../members/users';
 import { DODO_DISPUTE_FUNDS_LOST } from '../payments/dodo';
 import { activateInvoiceRequest } from '../promos/invoice-requests';
 import { redeemPromo } from '../promos/promo-redemptions';
@@ -40,6 +41,14 @@ export function coursePaymentEventStatement(d1: D1DatabaseLike, e: CoursePayment
     .bind(e.provider, e.eventId, e.orderId, e.amount, e.currency, e.rawType, iso(membersRuntime.now()), ...(onlyIf?.params ?? []));
 }
 
+/**
+ * True when `err` is the unique key of `payment_events` (provider, event_id): another delivery of the same event
+ * recorded it first. Any other constraint failure is a real error.
+ */
+export function isPaymentEventConflict(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed: payment_events\.provider, payment_events\.event_id\b/i.test(err.message);
+}
+
 /** Inserts the idempotency record; false when this provider event was already processed. */
 export async function recordCoursePaymentEvent(
   d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string, orderId: string | null, amount: number | null, currency: string | null, rawType: string,
@@ -48,7 +57,7 @@ export async function recordCoursePaymentEvent(
     await coursePaymentEventStatement(d1, { provider, eventId, orderId, amount, currency, rawType }).run();
     return true;
   } catch (err) {
-    if (isUniqueViolation(err)) return false;
+    if (isPaymentEventConflict(err)) return false;
     throw err;
   }
 }
@@ -59,27 +68,36 @@ export async function coursePaymentEventRecorded(d1: D1DatabaseLike, provider: '
 }
 
 /**
- * The idempotency record of a webhook, built for the reversal batch it gates: written as the batch's first statement,
- * only while the batch's own guard holds, so the record and the reversal commit together or not at all.
+ * The idempotency record of a webhook, built for the batch it gates (payment, flag, reversal or restore): written as
+ * the batch's first statement, only while the batch's own guard holds, so the record and what the event changes commit
+ * together or not at all.
  */
 export type CourseEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike;
 
-/** Lets the provider retry an event whose processing failed half-way. */
-export async function releaseCoursePaymentEvent(d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string): Promise<void> {
-  await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind(provider, eventId).run().catch(() => undefined);
-}
-
-export async function markCourseOrderAttention(d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string } = {}): Promise<void> {
-  await d1.prepare(
-    `UPDATE course_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
-       currency_paid = COALESCE(?, currency_paid), payment_ref = COALESCE(?, payment_ref), provider_event_id = COALESCE(?, provider_event_id), updated_at = ?
-     WHERE id = ? AND status <> 'paid'`
-  ).bind(reason, extra.amount ?? 0, extra.currency ?? null, extra.ref ?? null, extra.eventId ?? null, iso(membersRuntime.now()), order.id).run();
-  await logActivity(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null });
-  await queueNeedsAttention(d1, {
+/**
+ * Flags the order for the admin and adds the money to it. The webhook's record (`gate`), the update, any `also`
+ * statement, the activity log and the `payment_needs_attention` event are one D1 batch: the amount is added once, and a
+ * failure or a crash before the commit leaves nothing, so the redelivery flags the order once.
+ */
+export async function markCourseOrderAttention(
+  d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string },
+  gate: CourseEventGate, also: D1PreparedStatementLike[] = [],
+): Promise<void> {
+  const attention = outboxInsertStatement(d1, needsAttentionEvent({
     distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: extra.eventId ?? `course_order:${order.id}:${reason}`,
     reason, amountMinor: extra.amount, currency: extra.currency ?? (order.provider === 'sepay' ? 'VND' : null),
-  });
+  }));
+  await d1.batch([
+    gate(),
+    d1.prepare(
+      `UPDATE course_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
+         currency_paid = COALESCE(?, currency_paid), payment_ref = COALESCE(?, payment_ref), provider_event_id = COALESCE(?, provider_event_id), updated_at = ?
+       WHERE id = ? AND status <> 'paid'`
+    ).bind(reason, extra.amount ?? 0, extra.currency ?? null, extra.ref ?? null, extra.eventId ?? null, iso(membersRuntime.now()), order.id),
+    ...also,
+    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null }),
+    ...(attention ? [attention] : []),
+  ]);
 }
 
 /** Amount and currency actually paid for an order (falls back to the amount due on its rail). */
@@ -100,47 +118,73 @@ export function isPartialCourseReversal(order: CourseOrder, amountMinor: number 
  * How a caller marks an order paid: the `SET` assignments of its update with their values, applied only while `when`
  * (a predicate on the order row `o`) holds.
  */
-export interface CoursePayment { set: string; values: unknown[]; when: string }
+export interface CoursePayment {
+  set: string; values: unknown[]; when: string;
+  /** The order's `attention_reason` once paid (an admin grant names itself); `set` must not assign it. */
+  reason?: string;
+}
 
 /**
  * Marks the order paid and grants its course as one D1 batch, then notifies the referral program and emails a
- * receipt. The grant (GitHub invite rows and log included) applies only while the order is still payable, and the
- * status update is last: a failed write leaves the order unpaid and nothing granted, so the caller's retry pays it once.
- * Returns false, with nothing written, when the order was no longer payable. Referral and email failures are logged and
- * never undo the purchase.
+ * receipt. The batch holds every durable write of the payment: the webhook's `payment_events` record (`gate`, first),
+ * the grant (GitHub invite rows and log included), the order log, the `purchase` event and, last, the status update,
+ * which also flags a course bought twice as `already_owned`. Each applies only while the order is still payable: a failed write or
+ * a worker crash before the commit leaves the order unpaid, nothing granted and no record, so the redelivery pays it
+ * once. Returns false, with nothing written, when the order was no longer payable. The follow-ups after the batch
+ * (referral, promo and invoice bookkeeping, receipt) are idempotent; their failures are logged and never undo the
+ * purchase, and a redelivery that finds the receipt missing runs them again (`resumeCourseOrderFollowUps`).
  */
 export async function fulfilCourseOrder(
-  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payment: CoursePayment, payerText: string | null = null,
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payment: CoursePayment, payerText: string | null = null, gate?: CourseEventGate,
 ): Promise<boolean> {
   const course = await getCourseById(d1, order.course_id);
   if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
   const payable: SqlCondition = { sql: `EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND (${payment.when}))`, params: [order.id] };
-  const grant = grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, payable);
-  const results = await d1.batch([
-    ...grant,
-    d1.prepare(`UPDATE course_orders SET ${payment.set} WHERE id = ? AND ${payable.sql}`).bind(...payment.values, order.id, ...payable.params),
-  ]);
-  if (!results.at(-1)?.meta?.changes) return false;
-  if (!results[grant.length - 1]?.meta?.changes) {
-    // Bought twice (two open checkouts paid): keep the money traceable for a manual refund.
-    await d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'already_owned'), updated_at = ? WHERE id = ?")
-      .bind(iso(membersRuntime.now()), order.id).run();
-  }
-  await logActivity(d1, order.user_id, 'courses.order_paid', orderPaidDetail(order));
   // A course order is paid by one verified payment, so the order id is the transaction.
   const paid = paidAmount(order);
-  if (paid.amountMinor !== null) {
-    await queuePurchase(d1, {
-      distinctId: order.user_id, provider: order.provider, orderType: 'course', transactionId: `course_order:${order.id}`,
-      amountMinor: paid.amountMinor, currency: paid.currency, occurredAt: order.paid_at,
-    });
-  }
+  const purchase = paid.amountMinor === null ? null : await purchaseEvent(d1, {
+    distinctId: order.user_id, provider: order.provider, orderType: 'course', transactionId: `course_order:${order.id}`,
+    amountMinor: paid.amountMinor, currency: paid.currency, occurredAt: order.paid_at,
+  });
+  const purchaseInsert = purchase ? outboxInsertStatement(d1, purchase, undefined, payable) : null;
+  // Bought twice (two open checkouts paid): the access stays with what granted it, and the order keeps the money
+  // traceable for a manual refund. The grant earlier in the batch activates only a course that was not active, so an
+  // active purchase of another order (or an admin grant) means the course was owned already. The payment's own reason
+  // wins, and an earlier reason is kept.
+  const reason = `attention_reason = COALESCE(?, CASE WHEN EXISTS (SELECT 1 FROM course_purchases WHERE user_id = ? AND course_id = ? AND status = 'active'
+    AND order_id IS NOT ?) THEN COALESCE(attention_reason, 'already_owned') ELSE attention_reason END)`;
+  const results = await d1.batch([
+    ...(gate ? [gate(payable)] : []),
+    ...grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, payable),
+    activityStatement(d1, order.user_id, 'courses.order_paid', orderPaidDetail(order), undefined, payable),
+    ...(purchaseInsert ? [purchaseInsert] : []),
+    d1.prepare(`UPDATE course_orders SET ${payment.set}, ${reason} WHERE id = ? AND ${payable.sql}`)
+      .bind(...payment.values, payment.reason ?? null, order.user_id, order.course_id, order.id, order.id, ...payable.params),
+  ]);
+  if (!results.at(-1)?.meta?.changes) return false;
   await afterCourseOrderPaid(d1, env, order, payerText);
   return true;
 }
 
 function orderPaidDetail(order: CourseOrder): Record<string, unknown> {
   return { code: order.code, course_id: order.course_id, provider: order.provider };
+}
+
+const receiptKey = (orderId: string) => `course-receipt:${orderId}`;
+
+/**
+ * A redelivered payment event (already recorded) of a paid order whose receipt was never sent: the worker died after
+ * the payment batch committed. The follow-ups run again; each is idempotent (the referral commission once per order,
+ * promo and invoice updates guarded on their status, the receipt once per order), and the receipt is sent last, so
+ * its log marks them done.
+ */
+export async function resumeCourseOrderFollowUps(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, payerText: string | null = null): Promise<void> {
+  const current = await getCourseOrderByCode(d1, order.code);
+  if (current?.status !== 'paid') return;
+  const mail = await d1.prepare('SELECT status FROM email_log WHERE idempotency_key = ?').bind(receiptKey(current.id)).first<Row>();
+  const status = mail ? str(mail, 'status') : '';
+  if (status === 'sent' || status === 'skipped') return;
+  await afterCourseOrderPaid(d1, env, current, payerText);
 }
 
 /** Referral capture, promo/invoice bookkeeping and the receipt of an order whose access is granted. */
@@ -162,7 +206,7 @@ async function afterCourseOrderPaid(d1: D1DatabaseLike, env: RuntimeEnv, order: 
     ? `${new Intl.NumberFormat('vi-VN').format(order.amount_paid ?? order.amount_vnd ?? 0)} ₫`
     : formatUsd(order.amount_paid ?? order.amount_usd_cents);
   const mail = await sendLoggedEmail(d1, env, {
-    key: `course-receipt:${order.id}`,
+    key: receiptKey(order.id),
     kind: 'course_receipt',
     to: user.email,
     userId: user.id,
@@ -335,7 +379,7 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
   const now = iso(membersRuntime.now());
   if (action === 'grant') {
     const paid = order.status !== 'paid' && await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
-      set: "status = 'paid', paid_at = COALESCE(paid_at, ?), attention_reason = ?, updated_at = ?", values: [now, `admin_grant:${note}`, now], when: "o.status <> 'paid'",
+      set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: "o.status <> 'paid'", reason: `admin_grant:${note}`,
     });
     if (!paid) throw new AppError(409, 'already_paid', 'Order is already paid');
   } else if (action === 'dismiss') {
