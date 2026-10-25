@@ -9,11 +9,15 @@
  *   which posts to the parent and goes through the server allowlist proxy. Images and media are
  *   limited to `data:` and `blob:` URLs, so a widget contacts no host by itself.
  * - The sandbox still lets a frame navigate itself (`location.href`, `<meta http-equiv=refresh>`), and
- *   the document it lands on carries none of this CSP. CSP has no shipped directive that stops it
- *   (`navigate-to` was dropped from the spec), so the parent halts the frame instead: every bridge
- *   message carries a per-run nonce that only this document knows, the bridge reports this document's own
- *   `load` (`loaded`) and `pagehide` (`leave`) with it, and the parent halts a frame that leaves, loads a
- *   second time, or fires `load` for a document that never reported `loaded`.
+ *   the document it lands on carries none of this meta CSP. CSP has no shipped directive that stops it
+ *   (`navigate-to` was dropped from the spec). Two layers cover it:
+ *   1. The renderer also sets the iframe `csp` attribute to SANDBOX_CSP (CSP Embedded Enforcement,
+ *      Chromium only): a page that does not opt into that policy fails to load, so the frame lands on an
+ *      error page and no foreign script runs. Safari and Firefox ignore the attribute.
+ *   2. The parent halts the frame: every bridge message carries a per-run nonce that only this document
+ *      knows; the bridge reports this document's own trusted `load` (`loaded`) and non-bfcache trusted
+ *      `pagehide` (`leave`) with it; the parent halts a frame that leaves, loads a second time, fires
+ *      `load` for a document that never reported `loaded`, or never reports `loaded` after `ready`.
  */
 import type { InteractiveBlock } from '../blocks/schema';
 
@@ -59,10 +63,10 @@ window.addEventListener('message',function(e){
 function request(u){return new Promise(function(resolve,reject){var id=++seq;pending[id]={resolve:resolve,reject:reject};send({channel:C,nonce:N,type:'fetch',id:id,url:u});});}
 window.zuey={fetch:function(url){return request(String(url));}};
 function size(){send({channel:C,nonce:N,type:'resize',height:Math.ceil(document.documentElement.scrollHeight)});}
-window.addEventListener('load',function(){size();send({channel:C,nonce:N,type:'loaded'});});
+window.addEventListener('load',function(e){size();if(e.isTrusted)send({channel:C,nonce:N,type:'loaded'});});
 if(typeof ResizeObserver==='function'){new ResizeObserver(size).observe(document.documentElement);}
 window.addEventListener('error',function(e){send({channel:C,nonce:N,type:'error',message:String(e&&e.message||'error').slice(0,300)});});
-window.addEventListener('pagehide',function(){send({channel:C,nonce:N,type:'leave'});},true);
+window.addEventListener('pagehide',function(e){if(e.isTrusted&&!e.persisted)send({channel:C,nonce:N,type:'leave'});},true);
 setInterval(function(){send({channel:C,nonce:N,type:'heartbeat'});},1000);
 send({channel:C,nonce:N,type:'ready'});
 var s=document.currentScript;if(s&&s.parentNode)s.parentNode.removeChild(s);

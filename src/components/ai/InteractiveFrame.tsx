@@ -6,7 +6,7 @@ import type { InteractiveBlock } from '../../lib/blocks/schema';
 import { LIMITS } from '../../lib/blocks/schema';
 import type { Locale } from '../../lib/i18n/locales';
 import { DEFAULT_LOCALE } from '../../lib/i18n/locales';
-import { SANDBOX_CHANNEL, SANDBOX_SANDBOX_ATTR, buildSandboxSrcdoc, createFrameNonce } from '../../lib/ai/sandbox-doc';
+import { SANDBOX_CHANNEL, SANDBOX_CSP, SANDBOX_SANDBOX_ATTR, buildSandboxSrcdoc, createFrameNonce } from '../../lib/ai/sandbox-doc';
 import { readEmbedPref } from '../blocks/EmbedView';
 import { AI_COPY } from './copy';
 import { claimAutoRunSlot, releaseAutoRunSlot, scheduleFrameStart } from './frame-start-queue';
@@ -15,11 +15,21 @@ export const READY_TIMEOUT_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 8_000;
 /** How long after the iframe's `load` the sandboxed document may take to report its own `load`. */
 export const LOAD_HANDSHAKE_MS = 1_000;
+/** How long after `ready` the sandboxed document may take to report its own `load`, visible or not. */
+export const LOADED_AFTER_READY_MS = 5_000;
+/** Longest silence tolerated while the reader's tab is hidden (frame timers may be throttled to once a minute). */
+export const HIDDEN_HEARTBEAT_TIMEOUT_MS = 180_000;
 export const MAX_FETCHES_PER_RUN = 50;
 export const MAX_CONCURRENT_FETCHES = 4;
 /** Published readers start a widget slightly before it scrolls into view, like third-party embeds. */
 export const INTERACTIVE_PRELOAD_MARGIN = '200px 0px';
 const MAX_SRCDOC_CHARS = LIMITS.interactiveTotal + 8_000;
+/**
+ * CSP Embedded Enforcement (`<iframe csp>`, Chromium): every document in the frame must accept the widget
+ * policy, so a page the widget navigates to fails to load instead of running without it. React has no typed
+ * prop for it, hence the spread.
+ */
+const EMBEDDED_CSP_ATTR: Record<string, string> = { csp: SANDBOX_CSP };
 
 /** `navigated`: the widget navigated its own frame away from the sandboxed document and was halted. */
 type FrameState = 'idle' | 'running' | 'unresponsive' | 'navigated';
@@ -78,8 +88,9 @@ interface FrameProps {
  * Runs an interactive block in `<iframe sandbox="allow-scripts">` (opaque origin, strict CSP).
  * The parent only answers messages from this exact frame window; network requests are brokered
  * by POST /api/v1/sandbox/fetch. A ready/heartbeat watchdog unloads frames that stop responding.
- * A widget that navigates its own frame (reported by the bridge's `pagehide`, or a second iframe `load`)
- * is unloaded too, and only messages carrying this run's nonce are answered.
+ * A widget that navigates its own frame is unloaded too: the iframe `csp` attribute makes Chromium refuse the
+ * foreign page, and the parent halts on the bridge's `pagehide`, a second iframe `load`, or a document that
+ * never reports its own load. Only messages carrying this run's nonce are answered.
  */
 export function InteractiveFrame({ block, autoRun = false, runWhenVisible = false, locale = DEFAULT_LOCALE, inDialog = false }: FrameProps) {
   const t = AI_COPY[locale];
@@ -142,23 +153,44 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
     let lastBeat = Date.now();
     let fetches = 0;
     let inFlight = 0;
+    // Set by the cleanup: replies to requests of a halted, stopped or reloaded run are dropped, so they never
+    // reach a document the frame navigated to or the next run's bridge.
+    let cancelled = false;
+    let loadedTimer: number | null = null;
     const halt = () => setState('unresponsive');
     const readyTimer = window.setTimeout(() => { if (!ready) halt(); }, READY_TIMEOUT_MS);
+    const silentFor = () => Date.now() - lastBeat;
     const watchdog = window.setInterval(() => {
-      // Background tabs throttle timers inside the frame: only judge while visible.
-      if (ready && document.visibilityState === 'visible' && Date.now() - lastBeat > HEARTBEAT_TIMEOUT_MS) halt();
+      if (!ready) return;
+      // Background tabs throttle timers inside the frame: a hidden tab gets a long, but finite, allowance.
+      if (silentFor() > (document.visibilityState === 'visible' ? HEARTBEAT_TIMEOUT_MS : HIDDEN_HEARTBEAT_TIMEOUT_MS)) halt();
     }, 2_000);
-    const onVisible = () => { if (document.visibilityState === 'visible') lastBeat = Date.now(); };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (ready && silentFor() > HIDDEN_HEARTBEAT_TIMEOUT_MS) halt();
+      else lastBeat = Date.now();
+    };
     document.addEventListener('visibilitychange', onVisible);
 
     const onMessage = (event: MessageEvent) => {
-      if (!frameRef.current || event.source !== frameRef.current.contentWindow) return;
+      const frame = frameRef.current;
+      if (!frame) return;
       const data: unknown = event.data;
       // A document the frame navigated to shares its window but not the nonce: everything it posts is ignored.
       if (!isRecord(data) || data.channel !== SANDBOX_CHANNEL || data.nonce !== nonce) return;
+      // Chromium delivers the last message of a document that is being navigated away with no source. Only
+      // `leave` is accepted that way; the nonce proves it came from this run's document.
+      if (event.source !== frame.contentWindow && !(event.source === null && data.type === 'leave')) return;
       lastBeat = Date.now();
       switch (data.type) {
-        case 'ready': ready = true; break;
+        case 'ready':
+          ready = true;
+          // A document that never reports its own load (it navigated while parsing, or the page it landed on
+          // never finishes loading) is halted even if the iframe never fires `load`.
+          if (loadedTimer === null && !docLoadedRef.current) {
+            loadedTimer = window.setTimeout(() => { if (!docLoadedRef.current) halt(); }, LOADED_AFTER_READY_MS);
+          }
+          break;
         case 'loaded':
           docLoadedRef.current = true;
           clearHandshake();
@@ -181,6 +213,7 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
           }
           fetches += 1;
           inFlight += 1;
+          const answer = (message: Record<string, unknown>) => { if (!cancelled) reply(message); };
           fetch('/api/v1/sandbox/fetch', {
             method: 'POST',
             credentials: 'same-origin',
@@ -191,13 +224,13 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
               const body: unknown = await res.json().catch(() => null);
               const payload = isRecord(body) && isRecord(body.data) ? body.data : null;
               if (res.ok && payload) {
-                reply({ type: 'fetch:result', id, ok: true, status: payload.status, contentType: payload.content_type, body: payload.body });
+                answer({ type: 'fetch:result', id, ok: true, status: payload.status, contentType: payload.content_type, body: payload.body });
               } else {
                 const error = isRecord(body) && isRecord(body.error) && typeof body.error.code === 'string' ? body.error.code : `http_${res.status}`;
-                reply({ type: 'fetch:result', id, ok: false, error });
+                answer({ type: 'fetch:result', id, ok: false, error });
               }
             })
-            .catch(() => reply({ type: 'fetch:result', id, ok: false, error: 'network_error' }))
+            .catch(() => answer({ type: 'fetch:result', id, ok: false, error: 'network_error' }))
             .finally(() => { inFlight -= 1; });
           break;
         }
@@ -207,7 +240,9 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
     };
     window.addEventListener('message', onMessage);
     return () => {
+      cancelled = true;
       window.clearTimeout(readyTimer);
+      if (loadedTimer !== null) window.clearTimeout(loadedTimer);
       window.clearInterval(watchdog);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('message', onMessage);
@@ -337,6 +372,7 @@ export function InteractiveFrame({ block, autoRun = false, runWhenVisible = fals
           ref={frameRef}
           title={block.title}
           sandbox={SANDBOX_SANDBOX_ATTR}
+          {...EMBEDDED_CSP_ATTR}
           srcDoc={srcdoc}
           referrerPolicy="no-referrer"
           allow=""

@@ -758,6 +758,9 @@ describe('interactive blocks', () => {
     expect(sends.length).toBeGreaterThanOrEqual(6);
     for (const s of sends) expect(s).toContain('channel:C,nonce:N,type:');
     expect(bridge).toContain("addEventListener('pagehide'");
+    // Synthetic events dispatched by widget code neither satisfy the load report nor force a halt.
+    expect(bridge).toContain("if(e.isTrusted)send({channel:C,nonce:N,type:'loaded'})");
+    expect(bridge).toContain("if(e.isTrusted&&!e.persisted)send({channel:C,nonce:N,type:'leave'})");
     expect(bridge).toContain('removeChild(s)');
     // Each build without an explicit nonce gets a fresh one.
     const nonceIn = (doc: string) => /,N="([0-9a-f]{32})"/.exec(doc)?.[1];

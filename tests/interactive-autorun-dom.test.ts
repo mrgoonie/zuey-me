@@ -522,7 +522,15 @@ describe('auto-started frames keep the watchdog, message checks and broker quota
     const { view, frame, win, say } = started();
     const nonce = nonceOf(frame);
     say({ type: 'ready' });
-    say({ type: 'leave' });
+    // Chromium delivers the unloading document's last message with no source; only `leave` is accepted so,
+    // and only with this run's nonce.
+    postFromFrame(null, { channel: SANDBOX_CHANNEL, nonce, type: 'resize', height: 600 });
+    postFromFrame(null, { channel: SANDBOX_CHANNEL, nonce: 'f'.repeat(32), type: 'leave' });
+    postFromFrame(null, { channel: SANDBOX_CHANNEL, type: 'leave' });
+    postFromFrame({}, { channel: SANDBOX_CHANNEL, nonce, type: 'leave' });
+    expect(frames(view)).toHaveLength(1);
+    expect(frames(view)[0].style.height).toBe('320px');
+    postFromFrame(null, { channel: SANDBOX_CHANNEL, nonce, type: 'leave' });
     expect(frames(view)).toHaveLength(0);
     expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('navigated');
     expect(view.querySelector('[role="status"]')?.textContent).toContain('rời khỏi vùng cách ly');
@@ -569,6 +577,66 @@ describe('auto-started frames keep the watchdog, message checks and broker quota
     expect(frames(view)).toHaveLength(0);
     expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('navigated');
   });
+  it('halts a widget whose document never reports its own load after ready, even without any iframe load', () => {
+    const { view, say } = started();
+    say({ type: 'ready' });
+    for (let i = 0; i < 4; i++) {
+      advance(1000);
+      say({ type: 'heartbeat' });
+    }
+    expect(frames(view)).toHaveLength(1);
+    advance(frameModule.LOADED_AFTER_READY_MS - 4000);
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('unresponsive');
+  });
+
+  it('a hidden tab still halts a frame that stays silent past the hidden allowance', () => {
+    const { view, say } = started();
+    say({ type: 'ready' });
+    say({ type: 'loaded' });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    try {
+      // Throttled heartbeats once a minute are tolerated while hidden.
+      for (let i = 0; i < 3; i++) {
+        advance(60_000);
+        say({ type: 'heartbeat' });
+      }
+      expect(frames(view)).toHaveLength(1);
+      advance(frameModule.HIDDEN_HEARTBEAT_TIMEOUT_MS + 2_000);
+      expect(frames(view)).toHaveLength(0);
+      expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('unresponsive');
+    } finally {
+      Reflect.deleteProperty(document, 'visibilityState');
+    }
+  });
+
+  it('drops broker replies that settle after the run was halted', async () => {
+    const resolvers: Array<() => void> = [];
+    Object.assign(globalThis, {
+      fetch: () => new Promise<Response>(resolve => {
+        resolvers.push(() => resolve(new Response(JSON.stringify({ success: true, data: { status: 200, content_type: 'text/plain', body: 'secret' } }), { status: 200 })));
+      }),
+    });
+    const { view, frame, win, say } = started();
+    say({ type: 'ready' });
+    say({ type: 'loaded' });
+    say({ type: 'fetch', id: 1, url: 'https://api.github.com/x' });
+    expect(resolvers).toHaveLength(1);
+    postFromFrame(null, { channel: SANDBOX_CHANNEL, nonce: nonceOf(frame), type: 'leave' });
+    expect(frames(view)).toHaveLength(0);
+    advance(queue.FRAME_START_GAP_MS);
+    jest.useRealTimers();
+    await React.act(async () => { resolvers[0](); await new Promise(r => setTimeout(r, 0)); await new Promise(r => setTimeout(r, 0)); });
+    jest.useFakeTimers();
+    expect(win.posted).toHaveLength(0);
+  });
+
+  it('sets the widget CSP as the iframe csp attribute (embedded enforcement)', () => {
+    const { frame } = started();
+    expect(frame.getAttribute('csp')).toBe(SANDBOX_CSP);
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+  });
+
   it('a reloaded run ignores messages that carry the previous run\'s nonce', () => {
     const { view, frame } = started();
     const oldNonce = nonceOf(frame);
