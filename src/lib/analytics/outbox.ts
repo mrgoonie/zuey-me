@@ -22,6 +22,7 @@
  *   default, so it fits the per-invocation limits of the Workers free plan.
  */
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
+import { CARD_RENEWAL_GRACE_MS } from '../members/card-renewal-grace';
 import { iso, membersRuntime } from '../members/runtime';
 import type { EventProperties, ServerEventName } from './events';
 import { validateEvent } from './events';
@@ -321,21 +322,41 @@ async function settleBatch(d1: D1DatabaseLike, leaseToken: string, deliveries: D
  * `INSERT … SELECT`. The dedupe key (member, plan, period end) is the one `recomputeSubscription` uses when
  * it revokes access, so each end of access is reported once, whichever path sees it first. Ends already in
  * the outbox are skipped by the select, so the LIMIT only counts new ones.
+ *
+ * `provider` is the rail that granted the access end: `dodo` when a card subscription of the member's plan has a
+ * period end equal to it (with or without the renewal grace, as `recomputeSubscription` computes it), otherwise
+ * `sepay` when the member has a paid SePay order for the plan. With neither, the property is left out.
  */
 export async function sweepExpiredSubscriptions(d1: D1DatabaseLike): Promise<number> {
   const nowMs = membersRuntime.now();
   const now = iso(nowMs);
-  // The row id is a random v4 UUID (PostHog requires a UUID as event id).
+  // The row id is a random v4 UUID (PostHog requires a UUID as event id). Period ends are compared in
+  // milliseconds within a second, so ISO strings of the same instant in another format still match.
   const res = await d1.prepare(
     `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
      SELECT
        lower(substr(h, 1, 8) || '-' || substr(h, 9, 4) || '-4' || substr(h, 14, 3) || '-'
          || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(h, 18, 3) || '-' || substr(h, 21, 12)),
        'subscription_expired:' || user_id || ':' || plan || ':' || current_period_end,
-       'subscription_expired', user_id, json_object('plan', plan, 'period_end', current_period_end), current_period_end,
+       'subscription_expired', user_id,
+       CASE WHEN provider IS NULL THEN json_object('plan', plan, 'period_end', current_period_end)
+         ELSE json_object('plan', plan, 'period_end', current_period_end, 'provider', provider) END,
+       current_period_end,
        'pending', 0, ?, ?, ?
      FROM (
-       SELECT hex(randomblob(16)) AS h, s.user_id, s.plan, s.current_period_end FROM subscriptions s
+       SELECT hex(randomblob(16)) AS h, s.user_id, s.plan, s.current_period_end,
+         CASE
+           WHEN EXISTS (
+             SELECT 1 FROM card_subscriptions c
+             WHERE c.user_id = s.user_id AND c.plan = s.plan AND c.current_period_end IS NOT NULL
+               AND (abs((julianday(s.current_period_end) - julianday(c.current_period_end)) * 86400000.0) < 1000
+                 OR abs((julianday(s.current_period_end) - julianday(c.current_period_end)) * 86400000.0 - ?) < 1000)
+           ) THEN 'dodo'
+           WHEN EXISTS (
+             SELECT 1 FROM billing_orders b WHERE b.user_id = s.user_id AND b.plan = s.plan AND b.status = 'paid' AND b.paid_at IS NOT NULL
+           ) THEN 'sepay'
+         END AS provider
+       FROM subscriptions s
        WHERE s.status IN ('active', 'expired') AND s.current_period_end <= ? AND s.current_period_end > ?
          AND NOT EXISTS (
            SELECT 1 FROM analytics_outbox o
@@ -345,7 +366,7 @@ export async function sweepExpiredSubscriptions(d1: D1DatabaseLike): Promise<num
      )
      WHERE true
      ON CONFLICT (dedupe_key) DO NOTHING`
-  ).bind(now, now, now, now, iso(nowMs - EXPIRY_SWEEP_LOOKBACK_MS), SWEEP_LIMIT).run();
+  ).bind(now, now, now, CARD_RENEWAL_GRACE_MS, now, iso(nowMs - EXPIRY_SWEEP_LOOKBACK_MS), SWEEP_LIMIT).run();
   return res.meta?.changes ?? 0;
 }
 

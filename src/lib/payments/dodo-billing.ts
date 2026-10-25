@@ -296,7 +296,7 @@ export async function cancelCardSubscription(
     const updated = await cancelDodoSubscription(env, card.provider_subscription_id, membersRuntime.fetch);
     await d1.prepare('UPDATE card_subscriptions SET cancel_at_period_end = 1, current_period_end = COALESCE(?, current_period_end), updated_at = ? WHERE id = ?')
       .bind(updated?.nextBillingDate ?? null, iso(membersRuntime.now()), card.id).run();
-    if (card.plan) await recomputeSubscription(d1, userId, card.plan, { env });
+    if (card.plan) await recomputeSubscription(d1, userId, card.plan, { provider: 'dodo', env });
     await logActivity(d1, userId, 'billing.card_cancel_scheduled', { plan: card.plan, card_subscription_id: card.id }, request);
     await queueCardSubscriptionEnd(d1, 'subscription_cancel_scheduled', card);
   }
@@ -477,7 +477,7 @@ async function applySubscriptionEvent(
   await queueCardStateChange(d1, card, { status, cancelAtPeriodEnd: data.cancelAtPeriodEnd, reason }, event.occurredAt);
 
   if (card.user_id && card.plan) {
-    const sub = await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
+    const sub = await recomputeSubscription(d1, card.user_id, card.plan, { provider: 'dodo', env, waitUntil });
     if (status !== card.status || event.type === 'subscription.renewed') {
       const action = status === 'needs_attention' ? 'billing.needs_attention'
         : status === 'active' ? (event.type === 'subscription.renewed' && card.status === 'active' ? 'billing.card_renewed' : 'billing.card_active')
@@ -537,7 +537,7 @@ async function applyPaymentEvent(
   if (reason) {
     await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reason, nowIso, card.id).run();
     if (card.user_id && card.plan) {
-      await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
+      await recomputeSubscription(d1, card.user_id, card.plan, { provider: 'dodo', env, waitUntil });
       await logActivity(d1, card.user_id, 'billing.needs_attention', { plan: card.plan, card_subscription_id: card.id, reason, amount: data.totalAmount, currency: data.currency });
     }
     if (card.user_id) await queueNeedsAttention(d1, { ...analytics, reference: data.paymentId, reason });
@@ -562,7 +562,7 @@ async function applyPaymentEvent(
       const reasonText = card.promo_code_id ? 'promo_discount_not_applied' : 'referral_discount_not_applied';
       await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reasonText, nowIso, card.id).run();
       if (card.user_id) {
-        await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
+        await recomputeSubscription(d1, card.user_id, card.plan, { provider: 'dodo', env, waitUntil });
         await logActivity(d1, card.user_id, 'billing.needs_attention', {
           plan: card.plan, card_subscription_id: card.id, reason: reasonText, amount: data.totalAmount, tax: data.tax ?? 0, currency: data.currency,
         });

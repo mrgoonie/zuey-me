@@ -217,7 +217,7 @@ GROUP BY event, plan, status;
 
 `subscriptions.status` is not flipped by the clock, so "active" always means `current_period_end` in the future. `subscriptions.current_period_end` already includes the 24-hour card renewal grace (`recomputeSubscription` adds it), so the first query counts card plans in grace as active; only `card_subscriptions.current_period_end` is the provider's period end without grace.
 
-`subscriptions` keeps one row per member and plan with the latest period end. A member whose access ended in the window and who then re-activated has moved out of the second query, but `subscription_expired` was still sent. So PostHog `subscription_expired` ≥ the second query, and the difference is re-activations; for an exact check, compare PostHog with the outbox `subscription_expired` rows (third query). `subscription_expired` never carries `provider` (neither `queueSubscriptionChange` nor the drain sweep sets it); [#275](https://github.com/mrgoonie/zuey-me/issues/275) tracks that.
+`subscriptions` keeps one row per member and plan with the latest period end. A member whose access ended in the window and who then re-activated has moved out of the second query, but `subscription_expired` was still sent. So PostHog `subscription_expired` ≥ the second query, and the difference is re-activations; for an exact check, compare PostHog with the outbox `subscription_expired` rows (third query). `subscription_expired` carries `provider` (`sepay` or `dodo`, the rail whose access ended) except when the drain sweep finds neither a card period nor a paid SePay order behind the access end, and on rows queued before [#275](https://github.com/mrgoonie/zuey-me/issues/275) shipped.
 
 `subscription_activated` and `subscription_renewed` are derived from the change in `current_period_end`, so check them through the outbox query (and then PostHog), not against a D1 count.
 
@@ -345,7 +345,7 @@ Record every confirmed gap as a GitHub issue (one issue per cause), with the que
 
 - Facts before the first outbox row (2026-10-11 16:20 UTC) never reached PostHog.
 - Membership Dodo disputes that end `accepted` or `expired` produce no `payment_events` row and no `refund` until [#269](https://github.com/mrgoonie/zuey-me/issues/269) ships.
-- `subscription_expired` has no `provider`, so it cannot be split by rail.
+- `subscription_expired` rows queued before [#275](https://github.com/mrgoonie/zuey-me/issues/275) shipped, and swept expiries with neither a card period nor a paid SePay order behind them, have no `provider`, so they cannot be split by rail.
 - Fully discounted (0 VND or 0 USD) orders grant access without a `purchase`.
 - Dodo charges flagged for review are included with `flagged: true`; filter them for a settled-only figure.
 - Booking guests have no person profile; booking revenue is compared on totals only.
