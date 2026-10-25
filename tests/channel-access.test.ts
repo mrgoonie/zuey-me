@@ -319,7 +319,7 @@ describe('channel access decisions', () => {
     await d1.prepare(
       "INSERT INTO card_subscriptions (id, provider, provider_subscription_id, user_id, plan, status, current_period_end, cancel_at_period_end, created_at, updated_at) VALUES ('cs_1', 'dodo', 'sub_1', ?, 'ai', 'active', ?, 0, ?, ?)"
     ).bind(carol.userId, periodEnd, ts, ts).run();
-    await recomputeSubscription(d1, carol.userId, 'ai');
+    await recomputeSubscription(d1, carol.userId, 'ai', { provider: 'dodo' });
     now += 5 * HOUR; // past the provider billing date, inside the 24-hour grace
     expect(field((await check(bearer(SERVICE_KEY))).data, 'decision')).toBe('allow');
     now += DAY; // grace over and no renewal webhook
@@ -704,7 +704,7 @@ describe('access change push to dewee', () => {
     await linkDirect(alice.userId, '777001');
     await linkDirect(alice.userId, '777002');
     await paidOrder(alice.userId, 'ai', now);
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: pushEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: pushEnv() });
     expect(fetchLog.length).toBe(2);
     const [call] = fetchLog;
     expect(call.url).toBe('https://dewee.test/v1/channels/instances/zuey-ai/access/invalidate');
@@ -714,13 +714,13 @@ describe('access change push to dewee', () => {
 
     // No status change (re-run): no push.
     fetchLog = [];
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: pushEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: pushEnv() });
     expect(fetchLog.length).toBe(0);
 
     // Revocation (e.g. a reversed payment) ends access now: a change again. Plain clock expiry needs no push,
     // because dewee re-checks live once its short cache expires.
     await d1.prepare("UPDATE billing_orders SET status = 'needs_attention' WHERE user_id = ?").bind(alice.userId).run();
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: pushEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: pushEnv() });
     expect(fetchLog.length).toBe(2);
   });
 
@@ -728,16 +728,16 @@ describe('access change push to dewee', () => {
     const alice = await member('alice@example.com');
     await linkDirect(alice.userId, '777001');
     await paidOrder(alice.userId, 'knowledges', now);
-    await recomputeSubscription(d1, alice.userId, 'knowledges', { env: pushEnv() });
+    await recomputeSubscription(d1, alice.userId, 'knowledges', { provider: 'sepay', env: pushEnv() });
     await paidOrder(alice.userId, 'ai', now);
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: baseEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: baseEnv() });
     expect(fetchLog.length).toBe(0);
 
     const bob = await member('bob@example.com');
     await linkDirect(bob.userId, '888');
     await paidOrder(bob.userId, 'combo', now);
     fetchImpl = async () => { throw new Error('network down'); };
-    const view = await recomputeSubscription(d1, bob.userId, 'combo', { env: pushEnv() });
+    const view = await recomputeSubscription(d1, bob.userId, 'combo', { provider: 'sepay', env: pushEnv() });
     expect(view?.status).toBe('active');
     expect(fetchLog.length).toBe(1);
 
@@ -745,7 +745,7 @@ describe('access change push to dewee', () => {
     await linkDirect(carol.userId, '999');
     await paidOrder(carol.userId, 'community', now);
     fetchImpl = async () => new Response('nope', { status: 500 });
-    expect((await recomputeSubscription(d1, carol.userId, 'community', { env: pushEnv() }))?.status).toBe('active');
+    expect((await recomputeSubscription(d1, carol.userId, 'community', { provider: 'sepay', env: pushEnv() }))?.status).toBe('active');
   });
 
   it('sends pushes for several senders in parallel', async () => {
@@ -800,7 +800,7 @@ describe('access change push to dewee', () => {
     await linkDirect(alice.userId, '777001');
     await paidOrder(alice.userId, 'ai', now);
     const deferred: Promise<unknown>[] = [];
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: pushEnv(), waitUntil: p => { deferred.push(p); } });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: pushEnv(), waitUntil: p => { deferred.push(p); } });
     expect(deferred.length).toBe(1);
     await Promise.all(deferred);
     expect(fetchLog.length).toBe(1);
