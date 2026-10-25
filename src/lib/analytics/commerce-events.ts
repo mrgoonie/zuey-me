@@ -14,6 +14,8 @@ import type { EnqueueOutcome, OutboxEventInput } from './outbox';
 import { enqueueServerEvent, subscriptionExpiredKey } from './outbox';
 
 export type CommerceProvider = 'sepay' | 'dodo' | 'paypal';
+/** Rails that grant membership access: SePay prepaid orders and Dodo card subscriptions. */
+export type MembershipProvider = 'sepay' | 'dodo';
 export type OrderType = 'membership' | 'course' | 'booking';
 
 /** Currencies without a minor unit (amounts already in major units). */
@@ -220,7 +222,12 @@ export interface SubscriptionChange {
   /** State after the recompute; null when the member has no row for the plan. */
   after: { status: 'active' | 'expired'; current_period_end: string } | null;
   /** Rail that grants the (new) access end. */
-  provider: 'sepay' | 'dodo';
+  provider: MembershipProvider;
+  /**
+   * Rail whose record change (SePay order, Dodo card) triggered the recompute; the `provider` of an expiry. Only a
+   * change on the rail that granted the access end can end that access, so this is the rail whose access ended.
+   */
+  changedProvider: MembershipProvider;
 }
 
 /**
@@ -251,7 +258,7 @@ export async function queueSubscriptionChange(d1: D1DatabaseLike, c: Subscriptio
     return enqueueServerEvent(d1, {
       event: 'subscription_expired', distinctId: c.userId,
       dedupeKey: subscriptionExpiredKey(c.userId, c.plan, end),
-      properties: { plan: c.plan, period_end: end },
+      properties: { plan: c.plan, period_end: end, provider: c.changedProvider },
       occurredAt: end,
     });
   }

@@ -304,7 +304,12 @@ export const ANALYTICS_EVENTS = {
   },
   subscription_expired: {
     version: 1, source: 'server', owner: 'revenue', trigger: 'Access to a plan ends (period over or access revoked)',
-    props: { plan: str, period_end: str, provider: { kind: 'string', optional: true } },
+    props: {
+      plan: str, period_end: str,
+      // Rail whose access ended (`sepay` | `dodo`), as on purchases and renewals. Left out only when the expiry
+      // sweep finds neither a card period nor a paid SePay order behind the access end.
+      provider: { kind: 'string', optional: true },
+    },
   },
 } as const satisfies Taxonomy;
 

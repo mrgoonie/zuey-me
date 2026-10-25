@@ -154,7 +154,7 @@ Plans: `knowledges`, `ai`, `combo`, `community`. Rails: `sepay` (prepaid 1, 3, 6
 - Formula: total `subscription_cancel_scheduled` and `subscription_cancelled`, breakdown `plan` (provider is always `dodo`).
 
 **SUB-4 Expirations.** Active access that ended.
-- Formula: total `subscription_expired`, breakdown `plan`. No emitter sets `provider` on this event (neither `queueSubscriptionChange` nor the drain sweep), so it cannot be split by rail; [#275](https://github.com/mrgoonie/zuey-me/issues/275) tracks that.
+- Formula: total `subscription_expired`, breakdown `plan` or `provider`. `provider` is the rail whose access ended: on a recompute, `sepay` or `dodo` from the order or card change that ended it; on the drain sweep, `dodo` when a card period matches the access end, else `sepay` when the member has a paid SePay order for the plan, and left out when neither matches. Expiries queued before [#275](https://github.com/mrgoonie/zuey-me/issues/275) shipped have no `provider`.
 - Caveats: prepaid expiries are found by the outbox drain looking back 3 days; a drain outage longer than that loses them in PostHog (D1 still has `subscriptions.current_period_end`).
 
 **SUB-5 Active subscribers (point in time).** Members with active access to a plan now.

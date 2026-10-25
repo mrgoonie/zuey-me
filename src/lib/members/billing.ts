@@ -400,7 +400,7 @@ async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: st
 export async function fulfilOrder(
   d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder, waitUntil?: WaitUntil,
 ): Promise<SubscriptionView | null> {
-  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { env, waitUntil });
+  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { provider: 'sepay', env, waitUntil });
   try {
     if (order.promo_code_id) await redeemPromo(d1, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
     await activateInvoiceRequest(d1, env, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
