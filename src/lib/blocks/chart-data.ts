@@ -38,8 +38,9 @@ export function seriesAxis(b: ChartBlock, s: ChartSeries): ChartAxis | undefined
 export function formatChartValue(n: number, axis: ChartAxis | undefined, locale: TableLocale): string {
   if (!Number.isFinite(n)) return String(n);
   let raw = axis?.decimals !== undefined ? n.toFixed(axis.decimals) : String(Number(n.toPrecision(12)));
-  // Tiny values print with more than 10 decimals or as exponents (1e-7): round them to 10 decimals instead.
-  if (!NUMBER_RE.test(raw) && Math.abs(n) < 1) raw = n.toFixed(10).replace(/\.?0+$/, '').replace(/^-0$/, '0');
+  // Values below 1e15 can still print with more than 10 decimals (1.23456789012), as exponents (1e-7) or round up
+  // to 16 digits (999999999999999): round them to 10 decimals instead. Larger values are shown as written.
+  if (!NUMBER_RE.test(raw) && Math.abs(n) < 1e15) raw = n.toFixed(10).replace(/\.?0+$/, '').replace(/^-0$/, '0');
   const format = axis?.format === 'percent' || axis?.format === 'currency' ? axis.format : 'number';
   // Exponent forms (1e+21) do not fit the grouping rules and are shown as written.
   const shown = NUMBER_RE.test(raw) ? formatCell({ type: format, ...(axis?.currency ? { currency: axis.currency } : {}) }, raw, locale).trim() : raw;
