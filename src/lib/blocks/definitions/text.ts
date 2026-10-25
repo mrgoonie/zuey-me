@@ -1,5 +1,5 @@
 /** Text blocks: paragraph, heading, list, checklist, quote, callout, code, divider and icon. */
-import type { BlockDefinition, BlockValidator, RawBlock } from '../block-definition';
+import type { BlockDefinition } from '../block-definition';
 import { CALLOUT_TONES, LIMITS } from '../schema';
 import type {
   CalloutBlock, ChecklistBlock, ChecklistItem, CodeBlock, DividerBlock, HeadingBlock, IconBlock, ListBlock, ParagraphBlock, QuoteBlock,
@@ -8,7 +8,7 @@ import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../icons';
 import { LINE_RANGES_RE, codeDisplay, displayLines, parseLineRanges } from '../code-syntax';
 import { fence, quoteLines } from '../markdown-format';
 import { iconName, inline, short } from './schema-fragments';
-import { isInt, isObj, isOneOf, plain, plainLength } from './shared';
+import { flag, isInt, isObj, isOneOf, plain, plainLength } from './shared';
 
 const T = LIMITS.text;
 const S = LIMITS.shortText;
@@ -139,14 +139,6 @@ export const CODE_BLOCK_EXAMPLE = {
 /** One line, no backticks or double quotes: the name also goes into the Markdown fence's info string. */
 const FILENAME_RE = /^[^\u0000-\u001f\u007f`"]+$/;
 
-/** Optional boolean option: true, or undefined for false/absent; null when it is not a boolean. */
-function flag(v: BlockValidator, raw: RawBlock, key: string, path: string): true | undefined | null {
-  const value = raw[key];
-  if (value === undefined || value === null || value === false) return undefined;
-  if (value === true) return true;
-  v.err(`${path}.${key}`, 'must be a boolean');
-  return null;
-}
 
 /** Markdown fence info string: the language, then `title="…"`, `{lines}` and `showLineNumbers` metadata. */
 function codeInfo(b: CodeBlock): string {

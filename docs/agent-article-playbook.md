@@ -87,6 +87,33 @@ A `code` block needs only `code` (and usually `language`). Every other field is 
 - Markdown, search and Zuey AI see the file name and the code as written (diff markers included). The `.md` fence carries the options as metadata: ```` ```diff lang="ts" title="src/config.ts" {2} showLineNumbers ````.
 - Options are presentation only: `filename` is never listed in `translatables`, and a translation must keep every code field as in the source.
 
+## Data tables
+
+A `table` block needs only `headers` and `rows` (one string per header, at most 20 columns and 200 rows). A table that uses any field below becomes a data table. A table without them renders exactly as before. `block_schema {types: ["table"]}` returns the schema and a `data_table` example.
+
+| Field | Effect |
+| --- | --- |
+| `columns: [{type, currency?, decimals?, filter?}]` | One entry per header. `type` is `text` (default, inline Markdown), `number`, `currency` (needs a 3-letter `currency` such as `VND`), `percent`, `date`, `boolean`, `link` or `badge`. `decimals` (0–6) applies to the numeric types. `filter: true` adds a column filter: a from/to range for numbers and dates, otherwise a value list |
+| `title`, `caption` | One-line plain title above the table (also its accessible name and the CSV file name); inline caption below |
+| `sortable: true` | Header buttons sort by value (asc → desc → off) and set `aria-sort`. Empty cells always sort last |
+| `search: true` | Search box over every cell. It ignores accents, so `ha noi` finds `Hà Nội` |
+| `stickyHeader: true` | The table scrolls inside a box and its header row stays visible |
+| `csv: true` | Download button that exports the rows currently shown, in their current order |
+| `mobile: "cards"` | On narrow screens each row becomes a card of label/value pairs once the page has loaded (without script it scrolls sideways). The default scrolls sideways |
+
+- Typed cells hold a canonical value, or `""` for empty. A cell with the wrong form fails with `422` at its `rows[i][j]` path:
+  - numbers: `1234.5` or `-3`, stored without leading zeros (`00012` is saved as `12`, `-0` as `0`);
+  - dates: `2026-01-15`, `2026-01` or `2026`;
+  - booleans: `true` or `false`;
+  - links: `https://…` or `[label](https://…)`, without a user name or password in the URL;
+  - badges: plain text of at most 100 characters.
+- Readers see formatted values in the style of the edition. A `vi` edition shows `490.000 ₫`, `12,5%`, `15/01/2026` and `Có`/`Không`. Other editions show `490,000 ₫`, `12.5%`, `Jan 15, 2026` and `Yes`/`No`, with English control labels. Emails follow the same rule.
+- Markdown and Zuey AI get the canonical values (`490000`, `2026-01-15`, `true`), with the unit added to the header (`Giá (VND)`). Site search indexes both forms, so `490000` and `490.000` both find the row.
+- Data table cells are capped at 1,000 characters each and 100,000 in total.
+- The server renders every row, so readers without script and search engines see the full table. The controls appear once the page loads and are fetched only for pages that have a data table.
+- The CSV holds plain text for text cells, the URL for links and the canonical value for other cells. It is UTF-8 with a BOM, so spreadsheets open it correctly. A cell starting with `=`, `+`, `-`, `@`, a tab or a carriage return (also their full-width forms, or after zero-width characters) gets a leading `'`, so a spreadsheet will not run it as a formula. Numbers in numeric columns are exempt, so `-12.5` stays a number.
+- `translatables` lists the title, the caption and the text and badge cells. Typed cells are data and must stay as in the source.
+
 ## Math blocks
 
 - `math.tex` is TeX for KaTeX without surrounding `$` or `$$`. Pages typeset it on the server (HTML plus MathML) and link the self-hosted KaTeX stylesheet only when the document has math; the source stays readable and copyable. `mode: "inline"` sets it at text size, `numbered: true` (display only) adds an equation number in document order. `block_schema {types: ["math"]}` returns the schema and an example.

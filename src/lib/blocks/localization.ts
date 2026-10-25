@@ -12,6 +12,7 @@
 import { parseInline } from './inline';
 import type { ArticleDocument, Block } from './schema';
 import { childBlockLists } from './schema';
+import { columnOf, isProseColumn } from './table-data';
 
 export type EntryKind = 'text' | 'inline' | 'diagram_label' | 'widget_text' | 'meta';
 
@@ -59,8 +60,11 @@ function stringFields(block: Block): FieldSpec[] {
     case 'image': plainText('alt', block.alt); inline('caption', block.caption); break;
     case 'embed': inline('caption', block.caption); break;
     case 'table':
+      plainText('title', block.title);
       block.headers.forEach((t, i) => inline(`headers[${i}]`, t));
-      block.rows.forEach((row, r) => row.forEach((t, c) => inline(`rows[${r}][${c}]`, t)));
+      // Numbers, dates, booleans and links are data, not prose: only text and badge cells are translated.
+      block.rows.forEach((row, r) => row.forEach((t, c) => { if (isProseColumn(columnOf(block, c))) inline(`rows[${r}][${c}]`, t); }));
+      inline('caption', block.caption);
       break;
     case 'chart':
       plainText('title', block.title);
