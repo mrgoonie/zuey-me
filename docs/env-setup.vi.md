@@ -137,7 +137,7 @@ Khoá học thay cho AI Workflows. Mã nguồn ở `src/lib/courses/`; quyết �
 2. **Thanh toán**:
    - SePay dùng lại cấu hình mục 5 và `USD_VND_RATE`. Mã chuyển khoản khoá học có dạng `ZSC…`; webhook và job đối soát đã nhận dạng mã này.
    - Dodo: tạo **một** product *One-time*, bật *Pay What You Want* (giá tối thiểu $1), tiền USD. Lưu ID vào `DODO_PRODUCT_COURSE`. Checkout tự đặt số tiền theo giá đã giảm.
-   - Trong webhook Dodo (mục 4a), bật thêm `refund.succeeded` và mọi sự kiện `dispute.*`. Hoàn tiền hoặc dispute `opened` / `accepted` / `lost` / `expired` sẽ thu hồi khoá học, quyền repo GitHub và chứng chỉ. Dispute `won` / `cancelled` khôi phục lại.
+   - Trong webhook Dodo (mục 4a), bật thêm `refund.succeeded` và mọi sự kiện `dispute.*`. Hoàn tiền hoặc dispute `opened` / `accepted` / `lost` / `expired` sẽ thu hồi khoá học, quyền repo GitHub và chứng chỉ. Dispute `won` / `cancelled` khôi phục lại, trừ khi đơn đã được hoàn tiền (toàn phần hay một phần) trong lúc dispute còn mở: khi đó đơn chuyển sang `refunded`, hoàn tiền được ghi một lần và quyền truy cập không trở lại.
 3. **Media**:
    - `COURSE_MEDIA_SECRET`: chuỗi ngẫu nhiên dài (`openssl rand -base64 48`), dùng ký link tải file và audio (hết hạn sau khoảng 10 phút, gắn với tài khoản người xem).
    - R2: bucket `zuey-course-files` (binding `COURSE_FILES` trong `wrangler.toml`), để private, không bật public access. Bucket phải tồn tại trước khi deploy.

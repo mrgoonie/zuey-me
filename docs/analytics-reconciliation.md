@@ -186,7 +186,7 @@ A course order that was never paid (`paid_at` NULL, for example a flagged order 
 
 Keys: `refund:dodo:refund:<refund id>` and `refund:dodo:dispute_lost:<dispute id>` for memberships; `refund:<provider>:course_order:<id>:refunded` or `…:charged_back` for courses; `refund:paypal:<event id>` for bookings.
 
-- A course is set to `charged_back` as soon as a dispute opens, but `refund` is sent only when the dispute is lost (`dispute.accepted`, `dispute.lost`, `dispute.expired`). Count `charged_back` rows whose `refund` is missing as open disputes, not as gaps.
+- A course is set to `charged_back` as soon as a dispute opens, but `refund` is sent only when the dispute is lost (`dispute.accepted`, `dispute.lost`, `dispute.expired`). Count `charged_back` rows whose `refund` is missing as open disputes, not as gaps. A refund during an open dispute moves the order to `refunded` with its `…:refunded` key, and the dispute outcome no longer restores it.
 - Dodo `dispute.opened` is stored in `payment_events` but is not a refund.
 - **Membership gap ([#269](https://github.com/mrgoonie/zuey-me/issues/269)).** For memberships, Dodo `dispute.accepted` and `dispute.expired` are not handled (`DODO_REVERSAL_KINDS` in `src/lib/payments/dodo.ts` maps only `refund.succeeded`, `dispute.opened` and `dispute.lost`). Such a dispute leaves no `payment_events` row and no `refund`, so every check here reads clean. Until #269 ships, check accepted or expired membership disputes in the Dodo dashboard.
 - PayPal booking reversals (`PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED`) are not written to `payment_events`; the only D1 trace is the outbox row (30 days). Check older ones in the PayPal dashboard.
