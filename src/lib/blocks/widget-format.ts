@@ -12,9 +12,11 @@ const MAX_DECIMALS = 4;
 /**
  * Canonical value for Markdown, AI text and search: `.` separator, no grouping. With `decimals` the value is
  * fixed to that many places; without, it keeps its own precision (up to four places) so 4.5 never reads as 5.
+ * Rounding to four places and back to the shortest round-trip form drops the binary float digits that
+ * `toFixed` would print for large fractional values (123456789012345.67 stays `.67`, not `.6719`).
  */
 export function canonicalNumber(value: number, decimals?: number): string {
-  const s = decimals === undefined ? value.toFixed(MAX_DECIMALS).replace(/\.?0+$/, '') : value.toFixed(decimals);
+  const s = decimals === undefined ? String(Number(value.toFixed(MAX_DECIMALS))) : value.toFixed(decimals);
   return /^-0(?:\.0+)?$/.test(s) ? s.slice(1) : s;
 }
 

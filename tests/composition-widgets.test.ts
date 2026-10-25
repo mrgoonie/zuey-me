@@ -323,6 +323,28 @@ describe('composition widget export', () => {
     expect(aiDocumentText(stat)).toContain('Churn: 2.15%');
   });
 
+  it('trims a large fractional value to its real precision when decimals is not set', () => {
+    expect(canonicalNumber(123456789012345.67)).toBe('123456789012345.67');
+    expect(canonicalNumber(999999999999999.9)).toBe('999999999999999.9');
+    expect(canonicalNumber(-123456789012345.67)).toBe('-123456789012345.67');
+    expect(localeNumber(123456789012345.67, undefined, 'vi')).toBe('123.456.789.012.345,67');
+    expect(localeNumber(999999999999999.9, undefined, 'en')).toBe('999,999,999,999,999.9');
+    // Values that already formatted correctly keep their output.
+    expect(canonicalNumber(4.5)).toBe('4.5');
+    expect(canonicalNumber(2.15)).toBe('2.15');
+    expect(canonicalNumber(0.1 + 0.2)).toBe('0.3');
+    expect(canonicalNumber(1.23456)).toBe('1.2346');
+    expect(canonicalNumber(-1.23456)).toBe('-1.2346');
+    expect(canonicalNumber(-0.00001)).toBe('0');
+    expect(canonicalNumber(-0)).toBe('0');
+    expect(canonicalNumber(1e15)).toBe('1000000000000000');
+    expect(canonicalNumber(-1e15)).toBe('-1000000000000000');
+    expect(localeNumber(1e15, undefined, 'vi')).toBe('1.000.000.000.000.000');
+    expect(localeNumber(-1e15, undefined, 'en')).toBe('-1,000,000,000,000,000');
+    expect(localeNumber(-1250.5, undefined, 'vi')).toBe('-1.250,5');
+    expect(localeNumber(-1250.5, undefined, 'en')).toBe('-1,250.5');
+  });
+
   it('publishes the schemas in OpenAPI and the MCP block schema', async () => {
     for (const t of WIDGETS) {
       const name = `Block${t[0].toUpperCase()}${t.slice(1)}`;
