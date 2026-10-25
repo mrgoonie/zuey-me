@@ -112,6 +112,9 @@
    nothing moves on hydration). Plain blocks keep their layout; the toolbar sits beside their language label. */
 .zb-code-top { padding-top: 2.6rem; }
 .zb-code-top > .zb-code-lang { position: absolute; top: 0.95rem; left: 1rem; margin: 0; }
+/* A plain block without a language label has no row above its code for the toolbar (2.35rem tall from the top),
+   so it reserves the same clear first line. Applied to the server markup too, so nothing moves on hydration. */
+.zb-code:not(:has(> .zb-code-lang)):not(.zb-code-head + .zb-code) { padding-top: 2.6rem; }
 .zb-code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 .zb-code-lines { padding-inline: 0; }
 .zb-code-lines > .zb-code-lang { padding-inline: 1rem; }
@@ -133,6 +136,9 @@
 .zb-line-add::after { content: '+'; content: '+' / ''; color: #86efac; }
 .zb-line-del { background: rgba(239, 68, 68, 0.16); }
 .zb-line-del::after { content: '-'; content: '-' / ''; color: #fca5a5; }
+/* The spoken "added"/"removed" label stays out of a manual selection, like the gutter markers. */
+.zb-diff-sr { user-select: none; }
+.zb-line-head { color: var(--zb-tk-meta); }
 .zb-line-hl { background: rgba(250, 204, 21, 0.14); box-shadow: inset 3px 0 #fcd34d; }
 .zb-code-collapsed { max-height: calc(var(--zb-code-rows) * 1.6em + 1.8rem); overflow-y: auto; }
 .zb-code-top.zb-code-collapsed { max-height: calc(var(--zb-code-rows) * 1.6em + 3.5rem); }

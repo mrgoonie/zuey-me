@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 import type { CodeBlock } from '../../lib/blocks/schema';
 import {
   codeDisplay, codeRuns, codeSegments, copyText, displayLines, highlightSource, highlightedLines,
 } from '../../lib/blocks/code-syntax';
 import type { CodeHighlights, CodeSegment, DiffMark, TokenRuns } from '../../lib/blocks/code-syntax';
 import { showToast } from '../feedback/toast-bus';
+import type { ToastTone } from '../feedback/toast-bus';
 
 type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
 
@@ -13,8 +14,14 @@ type CssVars = CSSProperties & { [key: `--${string}`]: string | number };
 const LIVE_HIGHLIGHT_DELAY_MS = 150;
 /** How long the copy button reports its result. */
 const COPIED_MS = 2_000;
+const COPY_TEXT = 'Chép code';
+/** A diff copies the code after the change, so its button says so. */
+const COPY_DIFF_TEXT = 'Chép code sau thay đổi';
 const COPIED_TEXT = 'Đã chép code';
 const COPY_FAILED_TEXT = 'Không chép được, hãy chọn và chép tay';
+const COPY_EMPTY_TEXT = 'Không có code để chép';
+/** Keys that move focus between toolbar buttons (one tab stop for the whole toolbar). */
+const TOOL_STEP: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1 };
 
 function renderSegments(segments: CodeSegment[]): ReactNode[] {
   return segments.map(({ text, kind }, i) => (kind
@@ -39,14 +46,16 @@ function hasOptions(block: CodeBlock): boolean {
   return Boolean(block.filename || block.lineNumbers || block.highlightLines || block.diff || block.wrap || block.collapseAfter);
 }
 
-const LINE_TAG: Record<DiffMark, 'ins' | 'del' | 'span'> = { add: 'ins', del: 'del', ctx: 'span' };
+const LINE_TAG: Record<DiffMark, 'ins' | 'del' | 'span'> = { add: 'ins', del: 'del', ctx: 'span', head: 'span' };
+/** Screen readers rarely announce <ins>/<del>, and the +/- gutter is CSS, so each changed line says what it is. */
+const DIFF_SR_TEXT: Partial<Record<DiffMark, string>> = { add: 'Đã thêm: ', del: 'Đã xoá: ' };
 
 interface LinesProps { text: string; segments: CodeSegment[] | null; marks: DiffMark[] | null; highlighted: Set<number> }
 
 /**
  * One element per line so the gutter, emphasis and diff colours can style whole lines. Each line keeps its own
- * line break, so the text of <code> is exactly the displayed code (numbers and markers are CSS, never text).
- * Added and removed lines are <ins>/<del>, which assistive technology can announce.
+ * line break, so the visible text of <code> is exactly the displayed code (numbers and markers are CSS, never
+ * text). Added and removed lines are <ins>/<del> and also start with a visually hidden, unselectable label.
  */
 function CodeLines({ text, segments, marks, highlighted }: LinesProps) {
   const lines = displayLines(text);
@@ -54,12 +63,15 @@ function CodeLines({ text, segments, marks, highlighted }: LinesProps) {
   return (
     <>
       {lines.map((line, i) => {
-        const Tag = LINE_TAG[marks?.[i] ?? 'ctx'];
-        const classes = ['zb-line', marks ? `zb-line-${marks[i] ?? 'ctx'}` : '', highlighted.has(i + 1) ? 'zb-line-hl' : ''].filter(Boolean).join(' ');
+        const mark = marks?.[i] ?? 'ctx';
+        const Tag = LINE_TAG[mark];
+        const classes = ['zb-line', marks ? `zb-line-${mark}` : '', highlighted.has(i + 1) ? 'zb-line-hl' : ''].filter(Boolean).join(' ');
         const tokens = tokenLines?.[i];
         const last = i === lines.length - 1;
+        const sr = marks ? DIFF_SR_TEXT[mark] : undefined;
         return (
           <Tag key={i} className={classes}>
+            {sr && <span className="zb-sr-only zb-diff-sr">{sr}</span>}
             {tokens ? renderSegments(tokens) : line}
             {last && !text.endsWith('\n') ? null : '\n'}
           </Tag>
@@ -93,7 +105,13 @@ function WrapIcon() {
   );
 }
 
-type CopyState = 'idle' | 'copied' | 'failed';
+type CopyState = 'idle' | 'copied' | 'failed' | 'empty';
+
+const COPY_RESULT: Record<Exclude<CopyState, 'idle'>, { message: string; tone: ToastTone }> = {
+  copied: { message: COPIED_TEXT, tone: 'success' },
+  failed: { message: COPY_FAILED_TEXT, tone: 'error' },
+  empty: { message: COPY_EMPTY_TEXT, tone: 'info' },
+};
 
 /**
  * Code block. Token runs come pre-computed from the server (`highlights`, so no-JS readers get colours and
@@ -118,6 +136,9 @@ export function CodeView({ block, highlights, liveHighlight }: { block: CodeBloc
   /** Inline announcement, used only when no page Toaster took the message (so it is announced once). */
   const [announce, setAnnounce] = useState('');
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Index of the toolbar button that takes the toolbar's single tab stop. */
+  const [tool, setTool] = useState(0);
+  const toolsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -167,16 +188,31 @@ export function CodeView({ block, highlights, liveHighlight }: { block: CodeBloc
 
   const onCopy = () => {
     clearTimeout(copyTimer.current);
-    const done = (state: CopyState) => {
-      const message = state === 'copied' ? COPIED_TEXT : COPY_FAILED_TEXT;
+    const done = (state: Exclude<CopyState, 'idle'>) => {
+      const { message, tone } = COPY_RESULT[state];
       setCopy(state);
-      setAnnounce(showToast(message, state === 'copied' ? 'success' : 'error') ? '' : message);
+      setAnnounce(showToast(message, tone) ? '' : message);
       copyTimer.current = setTimeout(() => { setCopy('idle'); setAnnounce(''); }, COPIED_MS);
     };
+    const copied = copyText(block);
+    // An all-removed diff (or blank code) leaves nothing to copy: say so instead of reporting success.
+    if (!copied.trim()) { done('empty'); return; }
     if (!navigator.clipboard) { done('failed'); return; }
-    navigator.clipboard.writeText(copyText(block)).then(() => done('copied'), () => done('failed'));
+    navigator.clipboard.writeText(copied).then(() => done('copied'), () => done('failed'));
   };
-  const copyLabel = copy === 'copied' ? COPIED_TEXT : copy === 'failed' ? COPY_FAILED_TEXT : 'Chép code';
+  const copyName = marks ? COPY_DIFF_TEXT : COPY_TEXT;
+  const copyLabel = copy === 'idle' ? copyName : COPY_RESULT[copy].message;
+  const onToolsKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const buttons = Array.from(toolsRef.current?.querySelectorAll('button') ?? []);
+    let next: number;
+    if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = buttons.length - 1;
+    else if (Object.hasOwn(TOOL_STEP, e.key)) next = (tool + (TOOL_STEP[e.key] ?? 0) + buttons.length) % buttons.length;
+    else return;
+    e.preventDefault();
+    setTool(next);
+    buttons[next]?.focus();
+  };
 
   return (
     <figure className="zb-codeblock">
@@ -192,11 +228,13 @@ export function CodeView({ block, highlights, liveHighlight }: { block: CodeBloc
         <code>{lineMode ? <CodeLines text={text} segments={segments} marks={marks} highlighted={highlightedLines(block.highlightLines, lineCount)} /> : segments ? renderSegments(segments) : text}</code>
       </pre>
       {mounted && (
-        <div className="zb-code-tools" role="toolbar" aria-label="Công cụ code">
-          <button type="button" onClick={() => setWrap(w => !w)} aria-pressed={wrap} aria-label="Xuống dòng" title="Xuống dòng">
+        <div className="zb-code-tools" role="toolbar" aria-label="Công cụ code" ref={toolsRef} onKeyDown={onToolsKey}>
+          <button type="button" onClick={() => setWrap(w => !w)} onFocus={() => setTool(0)} tabIndex={tool === 0 ? 0 : -1}
+            aria-pressed={wrap} aria-label="Xuống dòng" title="Xuống dòng">
             <WrapIcon />
           </button>
-          <button type="button" onClick={onCopy} aria-label="Chép code" title={copyLabel} data-state={copy}>
+          <button type="button" onClick={onCopy} onFocus={() => setTool(1)} tabIndex={tool === 1 ? 0 : -1}
+            aria-label={copyName} title={copyLabel} data-state={copy}>
             {copy === 'copied' ? <CheckIcon /> : <CopyIcon />}
           </button>
         </div>
