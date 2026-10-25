@@ -3,7 +3,7 @@ import type { APIRoute } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
-import type { ArticleRecord, WriteOperation } from '../src/lib/blocks/articles';
+import type { ArticleInput, ArticleRecord, WriteOperation } from '../src/lib/blocks/articles';
 import type { Locale } from '../src/lib/i18n/locales';
 import { createArticle, deleteEdition, getArticle, publishArticle, requireArticleId, setTagsForArticle, toWriteReceipt, updateArticle } from '../src/lib/blocks/articles';
 import { createCategory, deleteCategory } from '../src/lib/taxonomy/categories';
@@ -933,8 +933,8 @@ describe('revisioned writes on an article with three editions: stale revisions a
 
     it(`${writer.name}: the fallback reports label_revision and category_id as committed after a label write and a category delete in between`, async () => {
       const rec = await writer.run(interleaveAtFirstWrite(failReadBackAfterCommit(d1), 'before', unrevisionedWrites), CURRENT);
-      expect(rec).toMatchObject({ read_back: 'failed', revision: CURRENT + 1, label_revision: 1 });
-      expect(storedArticle()).toMatchObject({ revision: CURRENT + 1, label_revision: 1 });
+      expect(rec).toMatchObject({ read_back: 'failed', revision: CURRENT + 1, label_revision: 1, category_id: null });
+      expect(storedArticle()).toMatchObject({ revision: CURRENT + 1, label_revision: 1, category_id: null });
       await expectFallbackMatchesStored(d1, rec, writer.operation, writer.deletedLocale);
     });
   }
@@ -943,5 +943,68 @@ describe('revisioned writes on an article with three editions: stale revisions a
     expect((await getArticle(d1, 'post'))?.editions.map(e => e.locale).sort()).toEqual(['en', 'vi', 'zh']);
     await deleteEdition(d1, 'post', 'zh', CURRENT);
     expect((await getArticle(d1, 'post'))?.editions.map(e => e.locale).sort()).toEqual(['en', 'vi']);
+  });
+});
+
+describe('a category deleted between an article write\'s read and its commit is not stored back (real SQLite)', () => {
+  let d1: ReturnType<typeof createTestD1>;
+  let category: { id: string; revision: number };
+
+  beforeEach(async () => {
+    d1 = createTestD1();
+    category = await createCategory(d1, { slug: 'guides', names: { vi: 'Hướng dẫn' } }, 'admin');
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', document: doc('original'), category: 'guides' });
+  });
+
+  const storedCategory = (slug: string) => d1.raw.query('SELECT category_id FROM articles WHERE slug = ?').get(slug);
+  const deleteBeforeCommit = (inner: D1DatabaseLike = d1) => interleaveAtFirstWrite(inner, 'before', async () => {
+    await deleteCategory(d1, category.id, category.revision, 'admin');
+  });
+
+  const updates: Array<[string, ArticleInput]> = [
+    ['an update that leaves the category alone', { document: doc('saved') }],
+    ['an update that sets the same category', { document: doc('saved'), category: 'guides' }],
+  ];
+
+  for (const [name, input] of updates) {
+    it(`${name} ends uncategorized`, async () => {
+      const rec = await updateArticle(deleteBeforeCommit(), 'post', input, 1);
+      expect(rec).toMatchObject({ revision: 2, category_id: null, category: null });
+      expect(paragraphText(rec)).toBe('saved');
+      expect(storedCategory('post')).toEqual({ category_id: null });
+      expect(await getArticle(d1, 'post')).toMatchObject({ category_id: null, category: null });
+    });
+
+    it(`${name}: the read-back fallback reports the category as cleared`, async () => {
+      const rec = await updateArticle(deleteBeforeCommit(failReadBackAfterCommit(d1)), 'post', input, 1);
+      expect(rec).toMatchObject({ read_back: 'failed', revision: 2, category_id: null });
+      expect(storedCategory('post')).toEqual({ category_id: null });
+    });
+  }
+
+  it('an update that moves the article to another live category still stores it', async () => {
+    await createCategory(d1, { slug: 'notes', names: { vi: 'Ghi chú' } }, 'admin');
+    const rec = await updateArticle(deleteBeforeCommit(), 'post', { category: 'notes' }, 1);
+    expect(rec.category?.slug).toBe('notes');
+    expect(storedCategory('post')).toEqual({ category_id: rec.category_id });
+  });
+
+  it('a create naming the category ends uncategorized, also in the read-back fallback', async () => {
+    const rec = await createArticle(deleteBeforeCommit(), { slug: 'fresh', title: 'Bài mới', category: 'guides' });
+    expect(rec).toMatchObject({ category_id: null, category: null });
+    expect(storedCategory('fresh')).toEqual({ category_id: null });
+
+    category = await createCategory(d1, { slug: 'more', names: { vi: 'Thêm' } }, 'admin');
+    const fallback = await createArticle(deleteBeforeCommit(failReadBackAfterFirstWrite(d1)), { slug: 'fresh-2', title: 'Bài mới 2', category: 'more' });
+    expect(fallback).toMatchObject({ read_back: 'failed', category_id: null });
+    expect(storedCategory('fresh-2')).toEqual({ category_id: null });
+  });
+
+  it('a request naming a category deleted before it is read is still 400 unknown_category', async () => {
+    await deleteCategory(d1, category.id, category.revision, 'admin');
+    for (const write of [() => updateArticle(d1, 'post', { category: 'guides' }, 1), () => createArticle(d1, { slug: 'late', title: 'Muộn', category: 'guides' })]) {
+      const err = await write().catch((e: unknown) => e);
+      expect(err instanceof AppError ? [err.status, err.code] : err).toEqual([400, 'unknown_category']);
+    }
   });
 });

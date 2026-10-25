@@ -1,4 +1,4 @@
-import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, D1RunResultLike } from '../../db/store';
 import { AppError, jsonError } from '../http';
 import { authenticateAdmin } from '../auth';
 import type { ArticleAccess, ArticleDocument, ArticleStatus, Block } from './schema';
@@ -774,6 +774,13 @@ async function managedCoverUrl(db: D1DatabaseLike, art: ArticleRowData): Promise
  */
 const AT_EXPECTED = 'EXISTS (SELECT 1 FROM articles WHERE id = ? AND revision = ? AND deleted_at IS NULL)';
 
+/**
+ * The category_id an article write stores (bind: category id, category id): the category resolved before the
+ * commit, or NULL once it has been deleted. A category delete clears the column without moving the article
+ * revision, so a write that read the category before that delete must not store it back.
+ */
+const LIVE_CATEGORY = 'CASE WHEN EXISTS (SELECT 1 FROM knowledge_categories WHERE id = ? AND deleted_at IS NULL) THEN ? ELSE NULL END';
+
 /** A history row written only while the article is still at `expected`. */
 function guardedRevisionStatement(
   db: D1DatabaseLike, articleId: string, expected: number, locale: Locale,
@@ -814,11 +821,18 @@ type UnrevisionedFields = Pick<ArticleRowData, 'labelRevision' | 'categoryId'>;
 async function commitAtRevision(
   db: D1DatabaseLike, articleId: string, writes: D1PreparedStatementLike[], bump: D1PreparedStatementLike, derived: D1PreparedStatementLike[] = [],
 ): Promise<Partial<UnrevisionedFields>> {
-  const results = await db.batch([
-    ...writes, bump, ...derived,
-    db.prepare('SELECT label_revision, category_id FROM articles WHERE id = ?').bind(articleId),
-  ]);
+  const results = await db.batch([...writes, bump, ...derived, unrevisionedRead(db, articleId)]);
   if (!results[writes.length]?.meta?.changes) return conflict(db, articleId);
+  return unrevisionedFields(results);
+}
+
+/** Last statement of a write batch: reads the fields the revision guard does not cover, as committed. */
+function unrevisionedRead(db: D1DatabaseLike, articleId: string): D1PreparedStatementLike {
+  return db.prepare('SELECT label_revision, category_id FROM articles WHERE id = ?').bind(articleId);
+}
+
+/** The fields read by `unrevisionedRead` at the end of a batch (empty only from a driver that returns no rows). */
+function unrevisionedFields(results: D1RunResultLike[]): Partial<UnrevisionedFields> {
   const row = results[results.length - 1]?.results?.[0];
   if (!row) return {};
   return { labelRevision: n(row, 'label_revision'), categoryId: typeof row.category_id === 'string' ? row.category_id : null };
@@ -900,12 +914,13 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
   const excerpt = input.excerpt ?? '';
   // One D1 batch (one transaction): the article, its edition, its first history row and its tags exist
   // together or not at all, so a failure leaves nothing behind and a retry can succeed.
+  let committed: Partial<UnrevisionedFields>;
   try {
-    await db.batch([
+    committed = unrevisionedFields(await db.batch([
       db.prepare(`
         INSERT INTO articles (id, slug, locale, title, excerpt, tags, access, status, draft_json, revision, category_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, '[]', ?, 'draft', ?, 1, ?, ?, ?)
-      `).bind(id, input.slug, locale, input.title, excerpt, access, docJson, categoryId, now, now),
+        VALUES (?, ?, ?, ?, ?, '[]', ?, 'draft', ?, 1, ${LIVE_CATEGORY}, ?, ?)
+      `).bind(id, input.slug, locale, input.title, excerpt, access, docJson, categoryId, categoryId, now, now),
       db.prepare(`
         INSERT INTO article_editions (id, article_id, locale, title, excerpt, draft_json, revision, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?)
@@ -917,7 +932,8 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
       `).bind(newId('rev_'), id, locale, input.title, excerpt, docJson, actor, now),
       ...tagIds.map((tagId, i) => db.prepare('INSERT OR IGNORE INTO article_tags (article_id, tag_id, position, created_at) VALUES (?, ?, ?, ?)')
         .bind(id, tagId, i, now)),
-    ]);
+      unrevisionedRead(db, id),
+    ]));
   } catch (err) {
     // A concurrent create took the slug after the check above; the batch rolled back as a whole.
     if (isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${input.slug}" is already used`);
@@ -928,7 +944,7 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
   return readBackAfterCommit(db, id, {
     art: {
       id, slug: input.slug, primary: locale, access, categoryId, revision: 1, labelRevision: 0, createdAt: now, updatedAt: now,
-      coverAssetId: null, socialPreviewMode: 'generated_card', socialPreviewAssetId: null,
+      coverAssetId: null, socialPreviewMode: 'generated_card', socialPreviewAssetId: null, ...committed,
     },
     edition: draftEditionRow(id, locale, input.title, excerpt, docJson, 1, now),
   }, locale);
@@ -993,9 +1009,9 @@ export async function updateArticle(
   writes.push(guardedRevisionStatement(db, art.id, expected, locale, edition ? 'save' : 'create', title, excerpt, docJson, actor, now));
   if (tagIds) writes.push(...guardedTagStatements(db, art.id, expected, tagIds, now));
   const bump = db.prepare(`
-    UPDATE articles SET slug = ?, locale = ?, access = ?, category_id = ?, revision = revision + 1, updated_at = ?
+    UPDATE articles SET slug = ?, locale = ?, access = ?, category_id = ${LIVE_CATEGORY}, revision = revision + 1, updated_at = ?
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(nextSlug, primary, input.access ?? art.access, categoryId, now, art.id, expected);
+  `).bind(nextSlug, primary, input.access ?? art.access, categoryId, categoryId, now, art.id, expected);
   // The primary mirror is derived from the editions, so it is correct to run whether or not this save won.
   let committed: Partial<UnrevisionedFields>;
   try {
