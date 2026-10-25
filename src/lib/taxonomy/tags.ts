@@ -1,8 +1,8 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { Locale } from '../i18n/locales';
-import { LOCALES, isLocale } from '../i18n/locales';
+import { LOCALES } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import type { LocalizedNames, Row } from './common';
 import {
@@ -214,21 +214,20 @@ export async function deleteTag(d1: D1DatabaseLike | undefined, idOrSlug: string
   const tag = await getTag(db, idOrSlug);
   if (!tag) throw new AppError(404, 'not_found', 'Tag not found');
   const now = nowIso();
-  // One batch (one transaction): the tag is deleted, unassigned from its articles and audited together; the
-  // unassign and the audit row apply only when this batch's own delete did.
+  // One batch (one transaction): the tag is deleted, dropped from its articles' legacy tag names, unassigned and
+  // audited together; the unassign and the audit row apply only when this batch's own delete did. The legacy names
+  // are rewritten while the assignments still identify the articles, after the mark has hidden the tag.
   const deleted = softDeletedAt('topic_tags', tag.id, expected, now);
   const [mark, assigned] = await db.batch([
     db.prepare('UPDATE topic_tags SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
       .bind(now, now, tag.id, expected),
     db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tag.id),
+    legacyTagsStatement(db, 'id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)', tag.id),
     db.prepare(`DELETE FROM article_tags WHERE tag_id = ? AND ${deleted.sql}`).bind(tag.id, ...deleted.params),
     auditLogStatement(db, { actor, action: 'tag.delete', targetType: 'tag', targetId: tag.id, before: tag }, deleted),
   ]);
   if (!mark?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
-  for (const r of assigned?.results ?? []) {
-    await mirrorLegacyTags(db, str(r, 'article_id'));
-    await reindexArticle(db, str(r, 'article_id'), env);
-  }
+  for (const r of assigned?.results ?? []) await reindexArticle(db, str(r, 'article_id'), env);
 }
 
 /**
@@ -263,17 +262,34 @@ export async function resolveTagRefs(
   return ids;
 }
 
+/** `t.names` at a JSON path when it holds a non-blank string (as `parseNames` keeps it), else NULL. */
+const tagNameAt = (path: string) => `CASE WHEN json_type(t.names, ${path}) = 'text' AND trim(json_extract(t.names, ${path})) <> '' THEN json_extract(t.names, ${path}) END`;
+
+/** SQL twin of `localizedName` for an article's live tags: its locale (unknown means vi), en, vi, any locale, the slug. */
+const LEGACY_TAG_NAME_SQL = `COALESCE(CASE WHEN json_valid(t.names) THEN COALESCE(${[
+  `'$.' || CASE WHEN articles.locale IN (${LOCALES.map(l => `'${l}'`).join(', ')}) THEN articles.locale ELSE 'vi' END`,
+  "'$.en'", "'$.vi'", ...LOCALES.map(l => `'$.${l}'`),
+].map(tagNameAt).join(', ')}) END, t.slug)`;
+
+/**
+ * Rewrites the legacy `articles.tags` JSON (read by older builds) from each matched article's live tags, in display
+ * order. It is one statement, so callers put it in the same batch as the tag change it follows; recomputing is
+ * idempotent, so running it when that change did not apply leaves the column as it was.
+ */
+function legacyTagsStatement(db: D1DatabaseLike, where: string, ...params: unknown[]): D1PreparedStatementLike {
+  return db.prepare(`
+    UPDATE articles SET tags = (
+      SELECT json_group_array(name) FROM (
+        SELECT ${LEGACY_TAG_NAME_SQL} AS name FROM article_tags at JOIN topic_tags t ON t.id = at.tag_id
+        WHERE at.article_id = articles.id AND t.deleted_at IS NULL ORDER BY at.position
+      )
+    ) WHERE ${where}
+  `).bind(...params);
+}
+
 /** Keeps the legacy `articles.tags` JSON (read by older builds) in sync with topic tags. */
 export async function mirrorLegacyTags(db: D1DatabaseLike, articleId: string): Promise<void> {
-  const art = await db.prepare('SELECT locale FROM articles WHERE id = ?').bind(articleId).first<Row>();
-  if (!art) return;
-  const { results } = await db.prepare(`
-    SELECT t.slug, t.names FROM article_tags at JOIN topic_tags t ON t.id = at.tag_id
-    WHERE at.article_id = ? AND t.deleted_at IS NULL ORDER BY at.position
-  `).bind(articleId).all<Row>();
-  const locale = str(art, 'locale');
-  const names = (results ?? []).map(r => localizedName(parseNames(r.names), isLocale(locale) ? locale : 'vi', str(r, 'slug')));
-  await db.prepare('UPDATE articles SET tags = ? WHERE id = ?').bind(JSON.stringify(names), articleId).run();
+  await legacyTagsStatement(db, 'id = ?', articleId).run();
 }
 
 /** Tags per article in display order (deleted tags excluded). */
