@@ -12,6 +12,8 @@ const CONFIRM: Record<Action, string> = {
   dismiss: 'Dismiss this order (cancelled, no access)?',
   refund: 'Record a manual refund? This revokes course access, GitHub access and any referral commission. Send the money back yourself in SePay/Dodo.',
 };
+/** A dispute already revoked access and the commission; the refund only closes the order so a won dispute cannot restore it. */
+const CONFIRM_DISPUTED_REFUND = 'Record a manual refund of this disputed order? Access and commission were already revoked when the dispute opened; the order becomes refunded and a won dispute will not restore access. Send the money back yourself in Dodo.';
 
 interface OrderRow {
   code: string; provider: string; status: string; course_title: string; user_id: string; user_email: string | null; list_usd_cents: number; amount_usd_cents: number;
@@ -32,8 +34,9 @@ function OrderCard({ order, busy, onResolve }: { order: OrderRow; busy: boolean;
   const [reason, setReason] = useState('');
   const canGrant = order.status !== 'paid';
   const canDismiss = order.status !== 'paid' && order.status !== 'cancelled';
-  const canRefund = order.status === 'paid' || order.status === 'needs_attention';
-  const go = (a: Action) => { if (window.confirm(`${order.code}: ${CONFIRM[a]}`)) onResolve(a, reason.trim()); };
+  const canRefund = order.status === 'paid' || order.status === 'needs_attention' || order.status === 'charged_back';
+  const confirmText = (a: Action) => (a === 'refund' && order.status === 'charged_back' ? CONFIRM_DISPUTED_REFUND : CONFIRM[a]);
+  const go = (a: Action) => { if (window.confirm(`${order.code}: ${confirmText(a)}`)) onResolve(a, reason.trim()); };
   return (
     <li className="rounded-xl border border-stone-800 bg-stone-950/60 p-3 space-y-1.5">
       <div className="flex flex-wrap items-center gap-2 text-xs">

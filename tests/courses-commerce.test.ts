@@ -372,6 +372,73 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(reversals()).toBe(1);
     });
 
+    describe('recorded by an admin', () => {
+      const adminRefunds = () => state.d1.raw
+        .query<{ detail: string }, []>("SELECT detail FROM user_activity WHERE action = 'courses.order_refunded'").all().map(r => JSON.parse(r.detail));
+
+      it('refunds a disputed order once, keeps access revoked and reverses the commission once when the dispute is then won', async () => {
+        const { course } = await publishedCourse();
+        const { user: ref } = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
+        const { code: referralCode } = await ensureReferralProfile(state.d1, ref.id);
+        await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.id).run();
+        const lan = await member('lan@example.com');
+        const code = await paidByCard(lan, { referral_code: referralCode });
+        const order = await getCourseOrderByCode(state.d1, code);
+        const commission = () => state.d1.prepare("SELECT status FROM referral_commissions WHERE source_kind = 'course_order' AND source_id = ?")
+          .bind(order?.id ?? '').first<{ status: string }>();
+        const reversals = () => state.d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM referral_events WHERE action = 'commission.reversed'").get()?.n;
+
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        expect(reversals()).toBe(1);
+        expect(await resolveCourseOrder(state.d1, env(), code, 'refund', 'refunded by bank transfer')).toMatchObject({ status: 'refunded', attention_reason: 'refunded by bank transfer' });
+        expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+        expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+        expect(adminRefunds()).toEqual([{ code, reason: 'refunded by bank transfer', actor: 'admin' }]);
+        await expect(resolveCourseOrder(state.d1, env(), code, 'refund', 'again')).rejects.toMatchObject({ status: 409, code: 'not_refundable' });
+
+        expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+        expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+        expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+        expect(purchases()).toBe(1);
+        expect((await commission())?.status).toBe('reversed');
+        expect(reversals()).toBe(1);
+      });
+
+      it('does not count a disputed order it refunded again when the dispute is then lost', async () => {
+        const { course } = await publishedCourse();
+        const lan = await member('lan@example.com');
+        const code = await paidByCard(lan);
+        const order = await getCourseOrderByCode(state.d1, code);
+        await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+        expect((await resolveCourseOrder(state.d1, env(), code, 'refund', 'goodwill')).status).toBe('refunded');
+
+        expect(await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+        expect(await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+        expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+        expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+      });
+
+      it('still refuses a refund after a lost dispute and of orders that were never paid or already reversed', async () => {
+        await publishedCourse();
+        const lost = await paidByCard(await member('lan@example.com'));
+        await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${lost}` });
+        await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${lost}`, amount: 4900, currency: 'USD' });
+        await expect(resolveCourseOrder(state.d1, env(), lost, 'refund', 'late')).rejects.toMatchObject({ status: 409, code: 'not_refundable', message: expect.stringMatching(/dispute .* was lost/) });
+        expect((await getCourseOrderByCode(state.d1, lost))?.status).toBe('charged_back');
+
+        const refunded = await paidByCard(await member('mai@example.com'));
+        expect((await resolveCourseOrder(state.d1, env(), refunded, 'refund', 'goodwill')).status).toBe('refunded');
+        await expect(resolveCourseOrder(state.d1, env(), refunded, 'refund', 'again')).rejects.toMatchObject({ status: 409, code: 'not_refundable' });
+
+        const pending = String(field((await read(await checkout(await member('hoa@example.com'), { provider: 'dodo', accept_terms: true }))).data, 'code'));
+        await expect(resolveCourseOrder(state.d1, env(), pending, 'refund', 'never paid')).rejects.toMatchObject({ status: 409, code: 'not_refundable' });
+        expect((await getCourseOrderByCode(state.d1, pending))?.status).toBe('pending');
+        expect(adminRefunds()).toHaveLength(1);
+      });
+    });
+
     /**
      * A D1 that runs `meanwhile` right after the handler checked whether `eventId` was already recorded, as a webhook
      * landing between the order read and the reversal batch.
