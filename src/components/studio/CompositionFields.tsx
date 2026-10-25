@@ -20,16 +20,20 @@ const lines = (raw: string): string[] | undefined => {
   return out.some(l => l.trim()) ? out : undefined;
 };
 
-/** Optional number field: keeps the raw text while typing and commits a finite number, or undefined when empty. */
+/**
+ * Optional number field: keeps the raw text while typing and commits a finite number, or undefined when empty.
+ * The draft text lives only until the field loses focus; otherwise the field shows the saved value, so it stays
+ * right when items are removed, moved or replaced (items are keyed by position, the document has no item ids).
+ */
 function NumInput({ label, value, onChange, required }: { label: string; value: number | undefined; onChange: (v: number | undefined) => void; required?: boolean }) {
-  const [raw, setRaw] = useState(value === undefined ? '' : String(value));
-  const shown = raw.trim() === '' || Number(raw) !== value ? raw : String(value);
+  const [draft, setDraft] = useState<string | null>(null);
   return (
     <Field label={label}>
       <input
-        className={inputCls} inputMode="decimal" value={shown} placeholder={required ? '0' : '–'}
+        className={inputCls} inputMode="decimal" value={draft ?? (value === undefined ? '' : String(value))} placeholder={required ? '0' : '–'}
+        onBlur={() => setDraft(null)}
         onChange={e => {
-          setRaw(e.target.value);
+          setDraft(e.target.value);
           const text = e.target.value.trim().replace(',', '.');
           if (text === '') { if (!required) onChange(undefined); return; }
           const n = Number(text);
@@ -109,17 +113,19 @@ function TabsFields({ block, onChange, renderBody }: { block: TabsBlock; onChang
   const setTab = (i: number, tab: TabItem) => setTabs(block.tabs.map((t, j) => (j === i ? tab : t)));
   const labels = Object.fromEntries(block.tabs.map((t, i) => [String(i), `${i + 1}. ${t.label || '(chưa đặt tên)'}`]));
   const indices = block.tabs.map((_, i) => String(i));
+  const openTab = block.defaultTab ?? 0;
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
-        <Select label="Tab mở sẵn" value={String(block.defaultTab ?? 0)} options={indices} labels={labels} onChange={v => setTabs(block.tabs, Number(v))} />
+        <Select label="Tab mở sẵn" value={String(openTab)} options={indices} labels={labels} onChange={v => setTabs(block.tabs, Number(v))} />
         <Select label="Cấp tiêu đề (khi không có JS)" value={String(block.level ?? DEFAULT_CARD_LEVEL)} options={CARD_LEVELS.map(String)}
           onChange={v => { const level = CARD_LEVELS.find(l => String(l) === v); const rest = without(block, 'level'); onChange(level === undefined || level === DEFAULT_CARD_LEVEL ? rest : { ...rest, level }); }} />
       </div>
       {block.tabs.map((tab, i) => (
+        // The default tab follows its tab on reorder and removal; no explicit default means the first tab.
         <ItemFrame key={i} title={`Tab ${i + 1}`} index={i} count={block.tabs.length} min={LIMITS.tabsMin}
-          onMove={to => setTabs(move(block.tabs, i, to), block.defaultTab === i ? to : block.defaultTab === to ? i : block.defaultTab)}
-          onRemove={() => setTabs(block.tabs.filter((_, j) => j !== i), (block.defaultTab ?? 0) > i ? (block.defaultTab ?? 0) - 1 : block.defaultTab === i ? 0 : block.defaultTab)}>
+          onMove={to => setTabs(move(block.tabs, i, to), openTab === i ? to : openTab === to ? i : openTab)}
+          onRemove={() => setTabs(block.tabs.filter((_, j) => j !== i), openTab > i ? openTab - 1 : openTab === i ? 0 : openTab)}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Text label="Nhãn" value={tab.label} onChange={label => setTab(i, { ...tab, label })} />
             <Text label="Neo (#anchor, tuỳ chọn)" value={tab.anchor ?? ''} onChange={anchor => { const rest = without(tab, 'anchor'); setTab(i, anchor ? { ...rest, anchor } : rest); }} />
@@ -172,12 +178,13 @@ function StatItemFields({ item, onChange }: { item: StatItem; onChange: (item: S
   );
 }
 
+/** Comma-separated numbers; like NumInput, the draft text is kept only while the field has focus. */
 function SparklineInput({ values, onChange }: { values: number[] | undefined; onChange: (v: number[] | undefined) => void }) {
-  const [raw, setRaw] = useState(values?.join(', ') ?? '');
+  const [draft, setDraft] = useState<string | null>(null);
   return (
     <Field label={`Đường xu hướng (${LIMITS.sparklineMin}–${LIMITS.sparklineMax} số, cách nhau dấu phẩy)`}>
-      <input className={inputCls} value={raw} onChange={e => {
-        setRaw(e.target.value);
+      <input className={inputCls} value={draft ?? values?.join(', ') ?? ''} onBlur={() => setDraft(null)} onChange={e => {
+        setDraft(e.target.value);
         const nums = e.target.value.split(',').map(s => s.trim()).filter(Boolean).map(Number);
         onChange(nums.length > 0 && nums.every(Number.isFinite) ? nums : undefined);
       }} />
