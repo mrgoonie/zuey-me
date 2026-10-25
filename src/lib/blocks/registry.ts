@@ -15,7 +15,8 @@ import type { Block, BlockType } from './schema';
 import { BLOCK_TYPES } from './schema';
 import { callout, checklist, code, divider, heading, icon, list, paragraph, quote } from './definitions/text';
 import { audio, bookmark, embed, file, gallery, image, math, video } from './definitions/media';
-import { chart, diagram, survey, table } from './definitions/data';
+import { diagram, survey, table } from './definitions/data';
+import { chart } from './definitions/chart';
 import { interactive } from './definitions/interactive';
 import { card, layout, section, toggle } from './definitions/containers';
 

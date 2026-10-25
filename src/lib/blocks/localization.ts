@@ -68,8 +68,13 @@ function stringFields(block: Block): FieldSpec[] {
       break;
     case 'chart':
       plainText('title', block.title);
-      block.labels.forEach((t, i) => plainText(`labels[${i}]`, t));
+      // ISO date labels are data, not prose; annotations point at labels by index, so they survive translation.
+      if (block.x?.format !== 'date') block.labels.forEach((t, i) => plainText(`labels[${i}]`, t));
       block.series.forEach((s, i) => plainText(`series[${i}].name`, s.name));
+      for (const key of ['x', 'y', 'y2'] as const) { plainText(`${key}.title`, block[key]?.title); plainText(`${key}.unit`, block[key]?.unit); }
+      block.references?.forEach((r, i) => plainText(`references[${i}].label`, r.label));
+      block.annotations?.forEach((a, i) => plainText(`annotations[${i}].text`, a.text));
+      inline('caption', block.caption);
       break;
     case 'diagram': inline('caption', block.caption); break;
     case 'survey':

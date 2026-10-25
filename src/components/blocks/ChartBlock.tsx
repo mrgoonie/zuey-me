@@ -3,6 +3,11 @@ import type { ChartBlock as ChartBlockData } from '../../lib/blocks/schema';
 
 const PALETTE = ['#d97706', '#1c1917', '#0f766e', '#be123c', '#4338ca', '#65a30d', '#c2410c', '#0369a1', '#a21caf', '#57534e', '#ca8a04', '#15803d'];
 
+/** This renderer draws only the original kinds; the newer ones go to the chart v2 renderer. */
+function legacyType(kind: ChartBlockData['kind']): 'bar' | 'line' | 'pie' | 'doughnut' {
+  return kind === 'line' || kind === 'pie' || kind === 'doughnut' ? kind : 'bar';
+}
+
 /**
  * SSR renders an accessible data table; on the client, Chart.js is loaded lazily
  * (dynamic import inside the effect only, so it never enters the server bundle)
@@ -24,7 +29,7 @@ export function ChartBlock({ block }: { block: ChartBlockData }) {
         if (cancelled || !canvas) return;
         const circular = block.kind === 'pie' || block.kind === 'doughnut';
         const chart = new Chart(canvas, {
-          type: block.kind,
+          type: legacyType(block.kind),
           data: {
             labels: block.labels,
             datasets: block.series.map((s, i) => ({

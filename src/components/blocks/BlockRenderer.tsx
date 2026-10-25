@@ -1,9 +1,9 @@
 import { Component, lazy, Suspense, useMemo } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import '../../styles/blocks.css';
-import type { ArticleDocument, Block, LayoutBlock } from '../../lib/blocks/schema';
+import type { ArticleDocument, Block, ChartAxis, ChartSeries, LayoutBlock } from '../../lib/blocks/schema';
 import type { CodeHighlights } from '../../lib/blocks/code-syntax';
-import { childBlockLists, documentLanes, imageSizeAttrs, isDataTable, resolveSpan } from '../../lib/blocks/schema';
+import { childBlockLists, documentLanes, imageSizeAttrs, isChartV2, isDataTable, resolveSpan } from '../../lib/blocks/schema';
 import { responsiveImage } from '../../lib/media/image-transform';
 import type { ImageTransforms } from '../../lib/media/image-transform';
 import { parseInline } from '../../lib/blocks/inline';
@@ -11,6 +11,8 @@ import type { InlineNode } from '../../lib/blocks/inline';
 import { CodeView } from './CodeBlock';
 import { EmbedView } from './EmbedView';
 import { ChartBlock } from './ChartBlock';
+import { ChartV2 as StaticChartV2 } from './ChartV2Block';
+import type { ChartV2Props } from './ChartV2Block';
 import { MediaBlockView } from './MediaBlocks';
 import { MathView } from './MathBlock';
 import { mathMarkup, mathNumbers } from '../../lib/blocks/math';
@@ -100,6 +102,72 @@ function DataTableSlot(props: DataTableProps) {
     <LazyBoundary fallback={fallback}>
       <Suspense fallback={fallback}>
         {import.meta.env.SSR ? <StaticDataTable {...props} /> : <LazyDataTable {...props} />}
+      </Suspense>
+    </LazyBoundary>
+  );
+}
+
+/**
+ * Charts with v2 options load their component the same way (Chart.js itself is imported inside its effect). While
+ * the chunk loads, or if it fails, the client shows the figures as a plain table, so no value is lost.
+ */
+const LazyChartV2 = lazy(() => import('./ChartV2Block'));
+
+/**
+ * A value for the chart fallback below: the edition's number style, decimals, percent, currency code and unit.
+ * Built on Intl rather than the chart helpers so they (and the formatting code they bring) stay in the chart
+ * chunk; the chunk's own table formats exactly like the server.
+ */
+function fallbackValue(n: number | undefined, axis: ChartAxis | undefined, en: boolean): string {
+  if (n === undefined) return '';
+  const d = axis?.decimals;
+  const s = n.toLocaleString(en ? 'en-US' : 'vi-VN', d !== undefined ? { minimumFractionDigits: d, maximumFractionDigits: d } : { maximumFractionDigits: 10 });
+  const shown = axis?.format === 'percent' ? `${s}%` : axis?.format === 'currency' && axis.currency ? `${s} ${axis.currency}` : s;
+  return axis?.unit ? `${shown} ${axis.unit}` : shown;
+}
+
+/**
+ * The chart's figures while its chunk loads on the client, or if it fails: the BlockFrame shell with the same
+ * table, marks and caption as the chart component's own fallback.
+ */
+export function ChartV2Fallback(props: ChartV2Props) {
+  const { block } = props;
+  const en = props.locale !== undefined && props.locale !== 'vi';
+  const scatter = block.kind === 'scatter';
+  const axisOf = (s: ChartSeries) => (s.axis === 'right' ? block.y2 : block.y);
+  const headers = [block.x?.title ?? (en ? 'Label' : 'Nhãn'), ...block.series.flatMap(s => (scatter ? [`${s.name} (x)`, `${s.name} (y)`] : [s.name]))];
+  const rows = block.labels.map((l, i) => [
+    l, ...block.series.flatMap(s => (scatter ? [fallbackValue(s.x?.[i], block.x, en), fallbackValue(s.data[i], block.y, en)] : [fallbackValue(s.data[i], axisOf(s), en)])),
+  ]);
+  const marks = [
+    ...(block.references ?? []).map(r => `${en ? 'Reference line' : 'Đường mốc'}: ${r.label ? `${r.label} · ` : ''}${fallbackValue(r.value, r.axis === 'right' ? block.y2 : block.y, en)}`),
+    ...(block.annotations ?? []).map(a => `${en ? 'Note at' : 'Ghi chú tại'} ${block.labels[a.index] ?? ''}: ${a.text}`),
+  ];
+  return (
+    <figure className="zb-frame zb-chart zb-chart-v2">
+      {block.title && <div className="zb-frame-head"><div className="zb-frame-title">{block.title}</div></div>}
+      <div className="zb-frame-body zb-scroll">
+        <table className="zb-table">
+          <thead><tr>{headers.map((h, i) => <th scope="col" key={i}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.map(([label, ...values], r) => (
+              <tr key={r}><th scope="row">{label}</th>{values.map((c, i) => <td className="zb-num" key={i}>{c}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+        {marks.length > 0 && <ul className="zb-chart-marks">{marks.map((m, i) => <li key={i}>{m}</li>)}</ul>}
+      </div>
+      {block.caption && <figcaption>{props.renderInline(block.caption)}</figcaption>}
+    </figure>
+  );
+}
+
+function ChartV2Slot(props: ChartV2Props) {
+  const fallback = <ChartV2Fallback {...props} />;
+  return (
+    <LazyBoundary fallback={fallback}>
+      <Suspense fallback={fallback}>
+        {import.meta.env.SSR ? <StaticChartV2 {...props} /> : <LazyChartV2 {...props} />}
       </Suspense>
     </LazyBoundary>
   );
@@ -246,7 +314,10 @@ function BlockView({ block, ctx }: { block: Block; ctx: RenderContext }) {
       return isDataTable(block)
         ? <DataTableSlot block={block} locale={ctx.locale} renderInline={text => <Inline text={text} />} />
         : <PlainTable headers={block.headers} rows={block.rows} />;
-    case 'chart': return <ChartBlock block={block} />;
+    case 'chart':
+      return isChartV2(block)
+        ? <ChartV2Slot block={block} locale={ctx.locale} renderInline={text => <Inline text={text} />} />
+        : <ChartBlock block={block} />;
     case 'diagram': return <DiagramBlock block={block} />;
     case 'survey': return <SurveyBlock block={block} articleSlug={ctx.articleSlug} interactive={ctx.interactive} />;
     case 'layout': return <LayoutView block={block} ctx={ctx} />;

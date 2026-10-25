@@ -1,7 +1,7 @@
-/** Data blocks: table, chart, diagram and survey (interactive lives in ./interactive). */
+/** Data blocks: table, diagram and survey (chart lives in ./chart, interactive in ./interactive). */
 import type { BlockDefinition, BlockValidator, RawBlock } from '../block-definition';
-import { CHART_KINDS, LIMITS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES } from '../schema';
-import type { ChartBlock, ChartSeries, DiagramBlock, SurveyBlock, SurveyOption, TableBlock, TableColumn } from '../schema';
+import { LIMITS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES } from '../schema';
+import type { DiagramBlock, SurveyBlock, SurveyOption, TableBlock, TableColumn } from '../schema';
 import { fence, gfmTable, mdCaption } from '../markdown-format';
 import { CELL_FORMATS, CURRENCY_RE, NUMERIC_COLUMN_TYPES, canonicalCell, columnOf, formatCell, isDataTable, isProseColumn } from '../table-data';
 import { blockId, inline, short } from './schema-fragments';
@@ -177,60 +177,6 @@ export const table: BlockDefinition<TableBlock> = {
     },
     required: ['headers', 'rows'],
     extra: { examples: [TABLE_EXAMPLE] },
-  },
-};
-
-export const chart: BlockDefinition<ChartBlock> = {
-  type: 'chart',
-  validate(v, raw, { id, path }) {
-    if (!isOneOf(CHART_KINDS, raw.kind)) { v.err(`${path}.kind`, `must be one of ${CHART_KINDS.join(', ')}`); return undefined; }
-    const kind = raw.kind;
-    const title = v.str(raw, 'title', path, S, { optional: true });
-    const labels = v.strArray(raw, 'labels', path, LIMITS.chartLabels, 120, 1);
-    if (!labels) return undefined;
-    if (!Array.isArray(raw.series) || raw.series.length < 1 || raw.series.length > LIMITS.chartSeries) {
-      v.err(`${path}.series`, `must contain 1–${LIMITS.chartSeries} series`);
-      return undefined;
-    }
-    const series: ChartSeries[] = [];
-    raw.series.forEach((s: unknown, i: number) => {
-      const p = `${path}.series[${i}]`;
-      if (!isObj(s)) { v.err(p, 'must be an object {name, data}'); return; }
-      const name = v.str(s, 'name', p, 120);
-      const data = s.data;
-      if (!Array.isArray(data) || !data.every(n => typeof n === 'number' && Number.isFinite(n))) {
-        v.err(`${p}.data`, 'must be an array of finite numbers');
-        return;
-      }
-      if (data.length !== labels.length) {
-        v.err(`${p}.data`, `length ${data.length} must equal labels length ${labels.length}`);
-        return;
-      }
-      if (name !== undefined) series.push({ name, data: data.map(Number) });
-    });
-    if (series.length !== raw.series.length) return undefined;
-    return { id, type: 'chart', kind, labels, series, ...(title ? { title } : {}) };
-  },
-  markdown(b) {
-    const title = b.title ? `**${b.title}** (${b.kind} chart)` : `*${b.kind} chart*`;
-    const headers = ['Label', ...b.series.map(s => s.name)];
-    const rows = b.labels.map((label, i) => [label, ...b.series.map(s => String(s.data[i]))]);
-    return `${title}\n\n${gfmTable(headers, rows)}`;
-  },
-  searchText: b => [b.title ?? '', ...b.labels, ...b.series.map(s => s.name)],
-  aiText: b => [b.title ?? '', b.labels.join(', ')].join(' '),
-  weight: b => 40 + b.labels.join('').length + b.series.length * b.labels.length * 3,
-  schema: {
-    properties: {
-      kind: { type: 'string', enum: [...CHART_KINDS] },
-      title: short,
-      labels: { type: 'array', minItems: 1, maxItems: LIMITS.chartLabels, items: { type: 'string', maxLength: 120 } },
-      series: {
-        type: 'array', minItems: 1, maxItems: LIMITS.chartSeries,
-        items: { type: 'object', required: ['name', 'data'], properties: { name: { type: 'string', maxLength: 120 }, data: { type: 'array', items: { type: 'number' }, description: 'Same length as labels' } } },
-      },
-    },
-    required: ['kind', 'labels', 'series'],
   },
 };
 
