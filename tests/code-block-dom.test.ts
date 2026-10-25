@@ -69,10 +69,58 @@ afterAll(async () => {
 describe('code block toolbar', () => {
   test('copies a diff as the code after the change, without markers, and announces it once', async () => {
     const root = mount([{ id: 'd', type: 'code', language: 'ts', diff: true, code: ' a = 1\n-b = 2\n+b = 3' }]);
-    await click(root.querySelector('button[aria-label="Chép code"]'));
+    // The button names what a diff copies: the code after the change.
+    expect(root.querySelector('button[aria-label="Chép code"]')).toBeNull();
+    await click(root.querySelector('button[aria-label="Chép code sau thay đổi"]'));
     expect(written).toEqual(['a = 1\nb = 3']);
     expect(root.querySelector('[role="status"]')?.textContent).toBe('Đã chép code');
-    expect(root.querySelector('button[aria-label="Chép code"]')?.getAttribute('data-state')).toBe('copied');
+    expect(root.querySelector('button[aria-label="Chép code sau thay đổi"]')?.getAttribute('data-state')).toBe('copied');
+  });
+
+  test('leaves pasted git diff headers out of the copied code', async () => {
+    const root = mount([{ id: 'g', type: 'code', language: '', diff: true, code: '--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n keep\n-old\n+new' }]);
+    await click(root.querySelector('button[aria-label="Chép code sau thay đổi"]'));
+    expect(written).toEqual(['keep\nnew']);
+  });
+
+  test('does not report success when a diff leaves nothing to copy', async () => {
+    const root = mount([{ id: 'e', type: 'code', language: 'ts', diff: true, code: '-a = 1\n-b = 2\n' }]);
+    const button = root.querySelector('button[aria-label="Chép code sau thay đổi"]');
+    await click(button);
+    expect(written).toEqual([]);
+    expect(root.querySelector('[role="status"]')?.textContent).toBe('Không có code để chép');
+    expect(button?.getAttribute('data-state')).toBe('empty');
+  });
+
+  test('labels added and removed lines for screen readers, outside the visible code', () => {
+    const root = mount([{ id: 's', type: 'code', language: '', diff: true, code: ' a\n-b\n+c' }]);
+    const label = (selector: string) => root.querySelector(`${selector} > .zb-sr-only`)?.textContent;
+    expect(label('del.zb-line-del')).toBe('Đã xoá: ');
+    expect(label('ins.zb-line-add')).toBe('Đã thêm: ');
+    expect(root.querySelector('.zb-line-ctx > .zb-sr-only')).toBeNull();
+    expect(root.querySelector('del.zb-line-del')?.textContent).toBe('Đã xoá: b\n');
+  });
+
+  test('gives the toolbar one tab stop and moves between its buttons with arrow keys', async () => {
+    const root = mount([{ id: 'k', type: 'code', language: 'ts', code: 'let a = 1;' }]);
+    const wrap = root.querySelector<HTMLButtonElement>('button[aria-label="Xuống dòng"]');
+    const copy = root.querySelector<HTMLButtonElement>('button[aria-label="Chép code"]');
+    expect([wrap?.tabIndex, copy?.tabIndex]).toEqual([0, -1]);
+    const press = async (key: string) => {
+      await React.act(async () => {
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    };
+    React.act(() => wrap?.focus());
+    await press('ArrowRight');
+    expect(document.activeElement).toBe(copy);
+    expect([wrap?.tabIndex, copy?.tabIndex]).toEqual([-1, 0]);
+    await press('ArrowRight');
+    expect(document.activeElement).toBe(wrap);
+    await press('End');
+    expect(document.activeElement).toBe(copy);
+    await press('Home');
+    expect(document.activeElement).toBe(wrap);
   });
 
   test('hands the confirmation to a page Toaster when one is mounted', async () => {
