@@ -841,7 +841,8 @@ function isSlugUniqueViolation(err: unknown): boolean {
 
 /**
  * Runs a derived-cache rebuild after a write has committed. A failure is logged, not thrown: the write
- * landed (a retry would only get 409), and the cache is rebuilt by the next write or an admin reindex.
+ * landed (a retry would only get 409). The search index is rebuilt by the next write or an admin reindex; the
+ * legacy tag mirror only by a later tags write, tag rename or tag delete (a reindex does not touch it).
  */
 async function afterCommit(what: string, task: () => Promise<unknown>): Promise<void> {
   try {
