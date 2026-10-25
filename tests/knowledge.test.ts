@@ -820,6 +820,35 @@ describe('REST, OpenAPI and MCP registration', () => {
     expect(codeOf(create)).toEqual([409, 'label_conflict']);
   });
 
+  it('only the (kind, slug) unique index maps to label_conflict; another unique violation propagates', async () => {
+    // The label write fails with the given D1 error text instead of running.
+    const failing = (pattern: RegExp, message: string): D1DatabaseLike => ({
+      prepare: (sql: string) => {
+        const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => ({
+          bind: (...values: unknown[]) => wrap(stmt.bind(...values)),
+          first: <T = Record<string, unknown>>() => stmt.first<T>(),
+          all: <T = Record<string, unknown>>() => stmt.all<T>(),
+          run: () => Promise.reject(new Error(message)),
+        });
+        return pattern.test(sql) ? wrap(d1.prepare(sql)) : d1.prepare(sql);
+      },
+      batch: statements => d1.batch(statements),
+    });
+    const kindSlug = 'D1_ERROR: UNIQUE constraint failed: taxonomy_labels.kind, taxonomy_labels.slug: SQLITE_CONSTRAINT';
+    const idKey = 'D1_ERROR: UNIQUE constraint failed: taxonomy_labels.id: SQLITE_CONSTRAINT';
+    const UPDATE = /UPDATE taxonomy_labels SET slug/;
+    const INSERT = /INSERT INTO taxonomy_labels/;
+    const codeOf = (e: unknown) => (e instanceof AppError ? [e.status, e.code] : e instanceof Error ? e.message : e);
+    const mover = await createLabel(d1, { kind: 'domain', slug: 'unique-mover', names: { en: 'Mover' } }, 'admin');
+    const update = (message: string) => updateLabel(failing(UPDATE, message), mover.id, { slug: 'unique-renamed' }, mover.revision, 'admin').catch((e: unknown) => e);
+    const create = (message: string) => createLabel(failing(INSERT, message), { kind: 'domain', slug: 'unique-new', names: { en: 'New' } }, 'admin').catch((e: unknown) => e);
+
+    expect(codeOf(await update(kindSlug))).toEqual([409, 'label_conflict']);
+    expect(codeOf(await create(kindSlug))).toEqual([409, 'label_conflict']);
+    expect(codeOf(await update(idKey))).toBe(idKey);
+    expect(codeOf(await create(idKey))).toBe(idKey);
+  });
+
   it('renaming a tag onto a live or soft-deleted tag slug is 409 tag_conflict over REST and MCP', async () => {
     const make = async (name: string) => rec(await taxonomyMcpModule.call('tag_create', { names: { en: name } }, mcpCtx(admin())));
     const put = async (id: unknown, body: Record<string, unknown>) => payload(await call(updateTagApi, { method: 'PUT', headers: admin(), params: { id: String(id) }, body }));

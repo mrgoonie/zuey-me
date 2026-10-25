@@ -3,7 +3,6 @@ import { findBlock } from '../blocks/schema';
 import { readStoredDocument } from '../blocks/validate';
 import { AppError } from '../http';
 import { LOCALES, isLocale } from '../i18n/locales';
-import { isUniqueViolation } from '../members/runtime';
 import type { Locale } from '../i18n/locales';
 import type { LocalizedNames, Row } from './common';
 import {
@@ -160,12 +159,17 @@ async function assertSlugFree(db: D1DatabaseLike, kind: LabelKind, slug: string,
   if (owner) throw labelConflict(kind, slug);
 }
 
+/** Only the `(kind, slug)` unique index maps to `label_conflict`; any other unique violation propagates. */
+function isKindSlugViolation(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed: taxonomy_labels\.kind, taxonomy_labels\.slug\b/i.test(err.message);
+}
+
 /** Runs a label write; a concurrent writer that took the same `(kind, slug)` first is `409 label_conflict`, not a raw 500. */
 async function runLabelWrite(stmt: D1PreparedStatementLike, kind: LabelKind, slug: string): Promise<D1RunResultLike> {
   try {
     return await stmt.run();
   } catch (err) {
-    if (isUniqueViolation(err)) throw labelConflict(kind, slug);
+    if (isKindSlugViolation(err)) throw labelConflict(kind, slug);
     throw err;
   }
 }
