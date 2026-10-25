@@ -190,7 +190,7 @@ export const bookingOpenApi: OpenApiFragment = {
         company: { type: 'string', nullable: true }, notes: { type: 'string', nullable: true },
         payment_method: { type: 'string' }, amount_expected: { type: 'integer', nullable: true }, amount_paid: { type: 'integer', nullable: true },
         currency: { type: 'string', nullable: true }, payment_ref: { type: 'string', nullable: true },
-        meet_status: { type: 'string', nullable: true, enum: ['sent', 'unconfigured', 'failed', null] }, meet_error: { type: 'string', nullable: true },
+        meet_status: { type: 'string', nullable: true, enum: ['pending', 'sent', 'unconfigured', 'failed', null] }, meet_error: { type: 'string', nullable: true },
         email_status: { type: 'string', nullable: true, enum: ['sent', 'unconfigured', 'failed', null] }, email_error: { type: 'string', nullable: true },
         attention_reason: { type: 'string', nullable: true, description: 'amount_mismatch | late_payment | admin' },
         admin_note: { type: 'string', nullable: true }, reschedule_count: { type: 'integer' },
