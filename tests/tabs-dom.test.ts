@@ -186,4 +186,26 @@ describe('tabs on the client', () => {
     });
     expect(selected(root)).toBe(0);
   });
+
+  test('ignores a malformed percent-encoded fragment on load and on hashchange', async () => {
+    window.history.replaceState(null, '', '/articles/demo#%E0%A4%A');
+    const root = await mount([{ ...TABS, defaultTab: 1 }]);
+    expect(errors).toEqual([]);
+    expect(selected(root)).toBe(1);
+    expect(visible(root)).toEqual(['cai-bun']);
+    await React.act(async () => {
+      window.history.replaceState(null, '', '/articles/demo#cai-%');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      await new Promise(r => setTimeout(r, 0));
+    });
+    expect(errors).toEqual([]);
+    expect(selected(root)).toBe(1);
+    // A well-formed fragment still works afterwards.
+    await React.act(async () => {
+      window.history.replaceState(null, '', '/articles/demo#cai-npm');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      await new Promise(r => setTimeout(r, 0));
+    });
+    expect(selected(root)).toBe(0);
+  });
 });
