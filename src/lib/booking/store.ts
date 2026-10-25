@@ -695,10 +695,36 @@ async function markAttention(d1: D1DatabaseLike, row: BookingRow, reason: string
 }
 
 /**
+ * How long a delivery's claim on a booking's follow-ups (`meet_status = 'pending'`) holds. The first delivery takes it
+ * in the batch that confirms the booking; a duplicate delivery takes it only while no follow-up ran (both statuses
+ * empty) or once the claim is older than this (the worker that held it died), so a duplicate that arrives while the
+ * Meet event and the invite are being sent never sends them again.
+ */
+export const FOLLOW_UP_CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/** The confirm statement's claim on the follow-ups: set only when none ran yet. */
+const CLAIM_ON_CONFIRM = "meet_status = CASE WHEN meet_status IS NULL AND email_status IS NULL THEN 'pending' ELSE meet_status END";
+
+/**
+ * Claims the follow-ups of a confirmed booking for a duplicate delivery: true only for the one delivery whose update
+ * applied (none ran yet, or the previous claim expired). The claim's time is `updated_at`.
+ */
+async function claimBookingFollowUps(d1: D1DatabaseLike, id: string): Promise<boolean> {
+  const now = bookingRuntime.now();
+  const expired = iso(now - FOLLOW_UP_CLAIM_LEASE_MS);
+  const r = await d1.prepare(
+    `UPDATE bookings SET meet_status = 'pending', updated_at = ?
+     WHERE id = ? AND status = 'confirmed' AND email_status IS NULL
+       AND (meet_status IS NULL OR (meet_status = 'pending' AND updated_at < ?))`
+  ).bind(iso(now), id, expired).run();
+  return (r.meta?.changes ?? 0) === 1;
+}
+
+/**
  * The follow-ups of a booking confirmed by a payment, each safe to run again: the promo redemption and the invoice
  * request are guarded on their status and the referral commission is captured once per booking. The Meet event and
  * the guest's invite email (`fulfilBooking`) run last: they reach outside the database, so their recorded status marks
- * the follow-ups done.
+ * the follow-ups done. The caller holds the claim on them (see `FOLLOW_UP_CLAIM_LEASE_MS`).
  */
 async function afterBookingConfirmed(d1: D1DatabaseLike, env: RuntimeEnv, id: string, payer: { payerText: string | null; payerEmail: string | null }): Promise<void> {
   const confirmed = await getBookingRow(d1, id);
@@ -714,8 +740,8 @@ async function afterBookingConfirmed(d1: D1DatabaseLike, env: RuntimeEnv, id: st
  * front: it is the first statement of the batch that confirms or flags the booking (or written alone when the notice
  * changes nothing), under that batch's guard. A failure or a worker crash before the commit leaves no record, so the
  * redelivery applies the notice once, and a record is never deleted. A redelivery after the commit is answered
- * `duplicate_event`; if the booking it confirmed was never fulfilled (no Meet or email status: the worker died after
- * the batch), the follow-ups run again. A delivery racing this one fails on the record's unique key: its batch rolled
+ * `duplicate_event`; if the booking it confirmed was never fulfilled (the worker died after the batch and its claim
+ * on the follow-ups expired, see `FOLLOW_UP_CLAIM_LEASE_MS`), the follow-ups run again. A delivery racing this one fails on the record's unique key: its batch rolled
  * back, so nothing was written twice.
  */
 export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: PaymentNotice): Promise<{ outcome: PaymentOutcome; booking_id: string | null }> {
@@ -724,7 +750,8 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
   const payer = { payerText: n.payerText ?? null, payerEmail: n.payerEmail ?? null };
   if (await paymentEventRecorded(d1, n.provider, n.eventId)) {
     const current = row ? await getBookingRow(d1, row.id) : null;
-    if (current?.status === 'confirmed' && current.meet_status === null && current.email_status === null) await afterBookingConfirmed(d1, env, current.id, payer);
+    const unfulfilled = current?.status === 'confirmed' && current.email_status === null && (current.meet_status === null || current.meet_status === 'pending');
+    if (current && unfulfilled && await claimBookingFollowUps(d1, current.id)) await afterBookingConfirmed(d1, env, current.id, payer);
     return result('duplicate_event');
   }
   const nowIso = iso(bookingRuntime.now());
@@ -766,7 +793,8 @@ export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: Payme
         gate(confirmable),
         ...(purchaseInsert ? [purchaseInsert] : []),
         d1.prepare(
-          `UPDATE bookings SET status = 'confirmed', amount_paid = ?, payment_ref = COALESCE(?, payment_ref), attention_reason = NULL, updated_at = ?
+          `UPDATE bookings SET status = 'confirmed', amount_paid = ?, payment_ref = COALESCE(?, payment_ref), attention_reason = NULL,
+             ${CLAIM_ON_CONFIRM}, updated_at = ?
            WHERE id = ? AND ${confirmable.sql}`
         ).bind(n.amount, n.paymentRef, nowIso, row.id, ...confirmable.params),
       ]);
@@ -1092,7 +1120,8 @@ export async function adminUpdateBooking(
   } else {
     if (row.status === 'confirmed') throw new AppError(409, 'already_confirmed', 'Booking is already confirmed');
     try {
-      await d1.prepare("UPDATE bookings SET status = 'confirmed', attention_reason = NULL, admin_note = ?, updated_at = ? WHERE id = ?")
+      // Takes the follow-ups' claim too, so a redelivered notice of this booking does not send the invite again.
+      await d1.prepare(`UPDATE bookings SET status = 'confirmed', attention_reason = NULL, ${CLAIM_ON_CONFIRM}, admin_note = ?, updated_at = ? WHERE id = ?`)
         .bind(noteValue, nowIso, id).run();
     } catch (err) {
       if (isUniqueViolation(err)) throw new AppError(409, 'slot_taken', 'Another active booking holds this slot; cancel or move it first');

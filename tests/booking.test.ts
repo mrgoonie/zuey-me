@@ -6,7 +6,7 @@ import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { generateSlots } from '../src/lib/booking/availability';
 import { zonedTimeToUtc } from '../src/lib/booking/timezone';
-import { applyPayment, bookingRuntime, getBookingRow } from '../src/lib/booking/store';
+import { applyPayment, bookingRuntime, FOLLOW_UP_CLAIM_LEASE_MS, getBookingRow } from '../src/lib/booking/store';
 import type { BookingRow } from '../src/lib/booking/store';
 import { resetPaypalTokenCache } from '../src/lib/payments/paypal';
 import { GET as slotsApi } from '../src/pages/api/v1/booking/slots';
@@ -726,9 +726,16 @@ describe('a booking payment the worker dies on', () => {
         return false;
       };
       await expect(p.deliver(crashingD1(d1, pastBatch).d1)).rejects.toThrow(/crashed/);
-      expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: null, email_status: null });
+      expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: 'pending', email_status: null });
       expect(meetEvents()).toBe(0);
 
+      // The dead worker's claim still holds: a redelivery within its lease leaves the follow-ups to it.
+      now += FOLLOW_UP_CLAIM_LEASE_MS - 1000;
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(meetEvents()).toBe(0);
+
+      // Once the claim has expired, the redelivery takes it and runs the follow-ups once.
+      now += 2000;
       expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
       expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: 'sent', email_status: 'sent' });
       expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
@@ -736,6 +743,24 @@ describe('a booking payment the worker dies on', () => {
       expect(invites()).toBe(1);
       expect(events('pay_crash')).toBe(1);
       expect(purchaseKeys()).toHaveLength(1);
+    });
+
+    it(`sends one ${provider} Meet event and invite when a duplicate arrives while the first delivery calls Calendar`, async () => {
+      const p = await heldPayment(provider);
+      let duplicate: Promise<unknown> | null = null;
+      bookingRuntime.fetch = async (input, init) => {
+        if (!duplicate && input.startsWith('https://www.googleapis.com/calendar/v3/')) {
+          duplicate = p.deliver(d1);
+          await duplicate;
+        }
+        return fakeFetch(input, init);
+      };
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'confirmed' });
+      expect(await duplicate).toMatchObject({ outcome: 'duplicate_event' });
+      expect(await row(p.id)).toMatchObject({ status: 'confirmed', meet_status: 'sent', email_status: 'sent' });
+      expect(meetEvents()).toBe(1);
+      expect(invites()).toBe(1);
+      expect(events('pay_crash')).toBe(1);
     });
   }
 
