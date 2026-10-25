@@ -498,6 +498,19 @@ th[aria-sort='ascending'] .zb-dt-sort-icon, th[aria-sort='descending'] .zb-dt-so
 .zb-frame-error { color: #b91c1c; font-size: 0.9rem; }
 .zb-frame figcaption { font-size: 0.85rem; color: #78716c; text-align: center; }
 @keyframes zb-frame-pulse { 50% { opacity: 0.55; } }
+
+/* Chart v2: HTML legend whose items toggle series (or slices). */
+.zb-chart-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.35rem; }
+.zb-chart-legend-item, .zb-chart-legend-reset {
+  display: inline-flex; align-items: center; gap: 0.4rem; min-height: 2rem; padding: 0.2rem 0.65rem; border-radius: 999px;
+  border: 1px solid #e7e5e4; background: transparent; color: #44403c; font: inherit; font-size: 0.8rem; cursor: pointer;
+}
+.zb-chart-legend-item[aria-pressed="false"] { color: #a8a29e; text-decoration: line-through; }
+.zb-chart-legend-item[aria-pressed="false"] .zb-chart-swatch { opacity: 0.35; }
+.zb-chart-legend-reset { font-weight: 700; }
+.zb-chart-legend :is(button):focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+.zb-chart-swatch { width: 0.75rem; height: 0.75rem; border-radius: 0.2rem; flex: none; }
+.zb-chart-v2:fullscreen canvas { max-height: calc(100vh - 9rem); }
 @media (prefers-reduced-motion: reduce) {
   .zb-frame-loading { animation: none; }
   .zb-frame-btn { transition: none; }

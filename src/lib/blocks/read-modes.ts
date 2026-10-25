@@ -125,8 +125,13 @@ function blockTexts(block: Block): TextField[] {
     ];
     case 'chart': return [
       ...text('title', block.title),
-      ...block.labels.flatMap((l, i) => text(`labels.${i}`, l)),
+      // ISO date labels are data, not prose.
+      ...(block.x?.format === 'date' ? [] : block.labels.flatMap((l, i) => text(`labels.${i}`, l))),
       ...block.series.flatMap((s, i) => text(`series.${i}.name`, s.name)),
+      ...(['x', 'y', 'y2'] as const).flatMap(k => [...text(`${k}.title`, block[k]?.title), ...text(`${k}.unit`, block[k]?.unit)]),
+      ...(block.references ?? []).flatMap((r, i) => text(`references.${i}.label`, r.label)),
+      ...(block.annotations ?? []).flatMap((a, i) => text(`annotations.${i}.text`, a.text)),
+      ...text('caption', block.caption),
     ];
     case 'survey': return [...text('question', block.question), ...block.options.flatMap((o, i) => text(`options.${i}.label`, o.label))];
     case 'interactive': return [...text('title', block.title), ...text('caption', block.caption)];

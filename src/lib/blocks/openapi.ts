@@ -15,6 +15,7 @@ export { CALLOUT_ICON_EXAMPLE, CODE_BLOCK_EXAMPLE, ICON_BLOCK_EXAMPLE } from './
 export { CARD_EXAMPLE, SECTION_EXAMPLE } from './definitions/containers';
 export { MATH_EXAMPLE } from './definitions/media';
 export { TABLE_EXAMPLE } from './definitions/data';
+export { CHART_EXAMPLE } from './definitions/chart';
 
 const schemaName = (type: string) => `Block${type.charAt(0).toUpperCase()}${type.slice(1)}`;
 
@@ -33,6 +34,7 @@ export const BLOCK_SCHEMA_NOTES = [
   `Layouts may nest at most ${LIMITS.layoutDepth} levels (a layout inside a layout is fine, a third level is rejected).`,
   'Object span values must be ≤ cols at that breakpoint; a numeric span must be ≤ cols.lg and is clamped per breakpoint.',
   'Each chart series must have exactly as many data points as labels.',
+  `Chart options are optional: a chart with any of them (or kind area, scatter, radar or combo) gets formatted axes and tooltips, a legend whose buttons show and hide series, fullscreen and the chosen downloads (csv, png). Scatter series need x (one per label); combo series pick type bar, line or area; series with axis 'right' use y2. x.format 'date' needs ISO-date labels. references (at most ${LIMITS.chartReferences}) are horizontal lines; annotations (at most ${LIMITS.chartAnnotations}) mark a label by index. Fields a kind cannot use are rejected.`,
   `Table rows have one cell per header. A table with any option (columns, title, caption, sortable, search, stickyHeader, csv, mobile) is a data table: columns types its cells (text, number, currency, percent, date, boolean, link, badge; typed cells hold a canonical value such as 1234.5, 2026-01-15 or true, or are empty), cells are at most ${LIMITS.dataTableCell} characters and ${LIMITS.dataTableChars} in total. Values are formatted for readers and sort by value; search, column filters, the sticky header, CSV export and mobile cards run in the browser over the full server-rendered table.`,
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
   `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,

@@ -35,6 +35,12 @@ export const LIMITS = {
   tableDecimalsMax: 6,
   chartSeries: 12,
   chartLabels: 100,
+  /** Axis titles, units, reference labels and annotation texts of a chart. */
+  chartText: 120,
+  chartReferences: 10,
+  chartAnnotations: 10,
+  /** Fixed decimals of chart values. */
+  chartDecimalsMax: 6,
   surveyOptionsMin: 2,
   surveyOptionsMax: 10,
   layoutChildren: 12,
@@ -79,7 +85,16 @@ export const CALLOUT_TONES = ['info', 'warn', 'tip'] as const;
 /** Math layout: `display` (default when absent) or `inline`. */
 export const MATH_MODES = ['display', 'inline'] as const;
 export type MathMode = (typeof MATH_MODES)[number];
-export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut'] as const;
+export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut', 'area', 'scatter', 'radar', 'combo'] as const;
+export type ChartKind = (typeof CHART_KINDS)[number];
+/** How one series of a `combo` chart is drawn. */
+export const CHART_SERIES_TYPES = ['bar', 'line', 'area'] as const;
+export type ChartSeriesType = (typeof CHART_SERIES_TYPES)[number];
+/** Value style of an axis; `date` is for the category labels of the x axis only. */
+export const CHART_FORMATS = ['number', 'percent', 'currency', 'date'] as const;
+export type ChartFormat = (typeof CHART_FORMATS)[number];
+export const CHART_LEGENDS = ['top', 'bottom', 'none'] as const;
+export type ChartLegend = (typeof CHART_LEGENDS)[number];
 /** Value type of a table column; cells stay strings in a canonical form per type (see ./table-data.ts). */
 export const TABLE_COLUMN_TYPES = ['text', 'number', 'currency', 'percent', 'date', 'boolean', 'link', 'badge'] as const;
 export type TableColumnType = (typeof TABLE_COLUMN_TYPES)[number];
@@ -181,13 +196,73 @@ export interface TableBlock extends BlockBase {
 export function isDataTable(b: TableBlock): boolean {
   return Boolean(b.columns || b.title || b.caption || b.sortable || b.search || b.stickyHeader || b.csv || b.mobile);
 }
-export interface ChartSeries { name: string; data: number[] }
+export interface ChartSeries {
+  name: string;
+  /** One value per label (the y values of a scatter chart). */
+  data: number[];
+  /** combo only: how this series is drawn (bar when absent). */
+  type?: ChartSeriesType;
+  /** Plot against the right-hand axis (`y2`). */
+  axis?: 'right';
+  /** scatter only: one x value per label. */
+  x?: number[];
+}
+export interface ChartAxis {
+  title?: string;
+  /** Value axes (y, y2, the x of a scatter chart): domain bounds. */
+  min?: number;
+  max?: number;
+  format?: ChartFormat;
+  /** currency format: ISO 4217 code such as VND or USD. */
+  currency?: string;
+  /** Fixed decimals of the values. */
+  decimals?: number;
+  /** Unit shown after each value, such as `kg` or `người`. */
+  unit?: string;
+}
+/** Horizontal reference line (target, average, threshold) at a value of the y (or right-hand) axis. */
+export interface ChartReference { value: number; label?: string; axis?: 'right' }
+/** Note pinned to one category: `index` of the label it marks. */
+export interface ChartAnnotation { index: number; text: string }
+/**
+ * Chart. Every option is optional, so charts stored before they existed read and render unchanged. A chart
+ * using any option (or one of the newer kinds) is drawn by the chart v2 renderer: formatted axes and tooltips,
+ * a keyboard legend that shows and hides series, reference lines, annotations, fullscreen and exports.
+ */
 export interface ChartBlock extends BlockBase {
   type: 'chart';
-  kind: (typeof CHART_KINDS)[number];
+  kind: ChartKind;
   title?: string;
   labels: string[];
   series: ChartSeries[];
+  /** Inline text under the chart (source, notes). */
+  caption?: string;
+  /** bar, line, area and combo: series stack on top of each other. */
+  stacked?: true;
+  x?: ChartAxis;
+  y?: ChartAxis;
+  /** Right-hand axis for series with `axis: 'right'`. */
+  y2?: ChartAxis;
+  /** Legend placement, or `none`; one legend entry per series (per label for pie and doughnut). */
+  legend?: ChartLegend;
+  /** Values written on the bars and points. */
+  dataLabels?: true;
+  references?: ChartReference[];
+  annotations?: ChartAnnotation[];
+  /** CSV download of the data. */
+  csv?: true;
+  /** PNG download of the drawn chart. */
+  png?: true;
+}
+
+/** Kinds the original chart renderer drew. */
+const LEGACY_CHART_KINDS: readonly string[] = ['bar', 'line', 'pie', 'doughnut'];
+
+/** True when the chart uses a newer kind or any option; charts without them keep their original markup. */
+export function isChartV2(b: ChartBlock): boolean {
+  return !LEGACY_CHART_KINDS.includes(b.kind)
+    || Boolean(b.caption || b.stacked || b.x || b.y || b.y2 || b.legend || b.dataLabels || b.references || b.annotations || b.csv || b.png)
+    || b.series.some(s => s.type || s.axis || s.x);
 }
 export interface DiagramBlock extends BlockBase { type: 'diagram'; syntax: 'mermaid'; source: string; caption?: string }
 export interface SurveyOption { id: string; label: string }
