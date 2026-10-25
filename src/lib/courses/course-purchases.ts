@@ -44,23 +44,50 @@ export async function listPurchases(d1: D1DatabaseLike, userId: string): Promise
 }
 
 /** Activates ownership (idempotent) and queues GitHub invites. Returns false when it was already active. */
-export async function grantCourse(
-  d1: D1DatabaseLike, input: { userId: string; courseId: string; orderId: string | null; source: 'purchase' | 'grant'; actor?: string },
-): Promise<boolean> {
+export async function grantCourse(d1: D1DatabaseLike, input: GrantInput): Promise<boolean> {
   const course = await getCourseById(d1, input.courseId);
   if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
   const existing = await getPurchase(d1, input.userId, input.courseId);
   if (existing?.status === 'active') return false;
-  const now = iso(membersRuntime.now());
-  await d1.prepare(
+  await purchaseUpsertStatement(d1, input).run();
+  await enqueueGithubSync(d1, input.userId, course, 'invite');
+  await logActivity(d1, input.userId, 'courses.granted', grantDetail(course, input));
+  return true;
+}
+
+type GrantInput = { userId: string; courseId: string; orderId: string | null; source: 'purchase' | 'grant'; actor?: string };
+
+function grantDetail(course: Pick<CourseRecord, 'id' | 'slug'>, input: GrantInput): Record<string, unknown> {
+  return { course_id: course.id, slug: course.slug, source: input.source, order_id: input.orderId, actor: input.actor ?? 'system' };
+}
+
+/** Activates ownership; with `onlyIf`, only while it holds. The WHERE clause also keeps SQLite from reading ON as a join constraint. */
+function purchaseUpsertStatement(d1: D1DatabaseLike, input: GrantInput, onlyIf?: SqlCondition): D1PreparedStatementLike {
+  return d1.prepare(
     `INSERT INTO course_purchases (id, user_id, course_id, order_id, source, status, granted_at)
-     VALUES (?, ?, ?, ?, ?, 'active', ?)
+     SELECT ?, ?, ?, ?, ?, 'active', ? WHERE ${onlyIf?.sql ?? 'true'}
      ON CONFLICT (user_id, course_id) DO UPDATE SET status = 'active', order_id = excluded.order_id, source = excluded.source,
        granted_at = excluded.granted_at, revoked_at = NULL, revoked_reason = NULL`
-  ).bind(randomId('cpu'), input.userId, input.courseId, input.orderId, input.source, now).run();
-  await enqueueGithubSync(d1, input.userId, course, 'invite');
-  await logActivity(d1, input.userId, 'courses.granted', { course_id: course.id, slug: course.slug, source: input.source, order_id: input.orderId, actor: input.actor ?? 'system' });
-  return true;
+  ).bind(randomId('cpu'), input.userId, input.courseId, input.orderId, input.source, iso(membersRuntime.now()), ...(onlyIf?.params ?? []));
+}
+
+/**
+ * The writes of `grantCourse` for a caller that makes them part of one D1 batch: they apply only while the course is
+ * not active for the user and `onlyIf` holds when the batch runs. The purchase upsert is the last statement, so the
+ * conditions hold for every earlier one. Unlike `grantCourse`, a failed activity insert fails the batch.
+ */
+export function grantCourseStatements(
+  d1: D1DatabaseLike, course: Pick<CourseRecord, 'id' | 'slug' | 'github_repos'>, input: GrantInput, onlyIf?: SqlCondition,
+): D1PreparedStatementLike[] {
+  const inactive: SqlCondition = {
+    sql: `NOT EXISTS (SELECT 1 FROM course_purchases WHERE user_id = ? AND course_id = ? AND status = 'active')${onlyIf ? ` AND (${onlyIf.sql})` : ''}`,
+    params: [input.userId, input.courseId, ...(onlyIf?.params ?? [])],
+  };
+  return [
+    ...githubSyncStatements(d1, input.userId, course, 'invite', inactive),
+    activityStatement(d1, input.userId, 'courses.granted', grantDetail(course, input), undefined, inactive),
+    purchaseUpsertStatement(d1, input, inactive),
+  ];
 }
 
 /** Ends ownership, removes GitHub access and revokes the certificate. Returns false when nothing was active. */
