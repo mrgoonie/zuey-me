@@ -129,8 +129,8 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
 
   const amount = typeof d.total_amount === 'number' ? d.total_amount : minorUnitsOrNull(d.amount);
   const currency = text(d, 'currency')?.toUpperCase() ?? null;
-  if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type))) {
-    return applyDodoCourseReversal(d1, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type });
+  if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type) || DODO_DISPUTE_FUNDS_KEPT.has(type))) {
+    return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type });
   }
   if (!(await recordCoursePaymentEvent(d1, 'dodo', eventId, order?.id ?? null, amount, currency, type))) {
     return { outcome: 'duplicate_event', order_code: order?.code ?? null };
@@ -144,9 +144,6 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
       return { outcome: 'ignored', order_code: order.code };
     }
     if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch });
-    if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
-      return { outcome: (await restoreCourseOrder(d1, env, order, type)) ? 'restored' : 'ignored', order_code: order.code };
-    }
     return { outcome: 'ignored', order_code: order.code };
   } catch (err) {
     await releaseCoursePaymentEvent(d1, 'dodo', eventId);
@@ -155,13 +152,14 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
 }
 
 /**
- * A refund or a dispute that takes access away. Its `payment_events` record is not written up front: it is the first
- * statement of the batch that applies the reversal (`gate`), so a failure or a worker crash before that batch commits
- * leaves no record and Dodo's redelivery applies the reversal once. A redelivery after the commit is found by the
- * read below, or, when it races the first delivery, fails on the record's unique key and writes nothing. When no batch
- * applies, the record is written alone, so a later redelivery is still a duplicate.
+ * A refund or a dispute: one that takes access away, or a won or cancelled one that gives it back. Its
+ * `payment_events` record is not written up front: it is the first statement of the batch that applies the reversal or
+ * the restore (`gate`), so a failure or a worker crash before that batch commits leaves no record and Dodo's
+ * redelivery applies it once. A redelivery after the commit is found by the read below, or, when it races the first
+ * delivery, fails on the record's unique key and writes nothing. When no batch applies, the record is written alone,
+ * so a later redelivery is still a duplicate.
  */
-async function applyDodoCourseReversal(d1: D1DatabaseLike, order: CourseOrder, event: CoursePaymentEvent): Promise<CoursePaymentResult> {
+async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, event: CoursePaymentEvent): Promise<CoursePaymentResult> {
   const result = (outcome: CoursePaymentOutcome): CoursePaymentResult => ({ outcome, order_code: order.code });
   if (await coursePaymentEventRecorded(d1, 'dodo', event.eventId)) return result('duplicate_event');
   const gate: CourseEventGate = onlyIf => coursePaymentEventStatement(d1, event, onlyIf);
@@ -185,6 +183,9 @@ async function applyDodoCourseReversal(d1: D1DatabaseLike, order: CourseOrder, e
         if (current && current.status !== order.status) done = await refund(current);
       }
       if (done) return result('reversed');
+    } else if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
+      // Only a charged-back order is restored; one refunded meanwhile stays revoked.
+      if (await restoreCourseOrder(d1, env, order, type, gate)) return result('restored');
     } else {
       const lost = DODO_DISPUTE_FUNDS_LOST.has(type);
       // A funds-lost outcome on a paid order reports the chargeback in the same batch as the reversal.
