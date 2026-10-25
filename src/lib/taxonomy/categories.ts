@@ -5,8 +5,8 @@ import type { Locale } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import type { LocalizedNames, Row } from './common';
 import {
-  bad, localizedName, newId, normalizeKey, nowIso, num, parseNames, parseNamesInput, parseSlug, requireDb, requireRevision,
-  slugify, str, writeAuditLog,
+  auditLogStatement, bad, localizedName, newId, normalizeKey, nowIso, num, parseNames, parseNamesInput, parseSlug, requireDb, requireRevision,
+  slugify, softDeletedAt, str, writeAuditLog,
 } from './common';
 
 export interface PublicCategory { id: string; slug: string; name: string }
@@ -123,13 +123,19 @@ export async function deleteCategory(d1: D1DatabaseLike | undefined, idOrSlug: s
   const cat = await getCategory(db, idOrSlug);
   if (!cat) throw new AppError(404, 'not_found', 'Category not found');
   const now = nowIso();
-  const res = await db.prepare('UPDATE knowledge_categories SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
-    .bind(now, now, cat.id, expected).run();
-  if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Category was changed by someone else; reload and retry', { current_revision: cat.revision });
-  const { results } = await db.prepare('SELECT id FROM articles WHERE category_id = ?').bind(cat.id).all<Row>();
-  await db.prepare('UPDATE articles SET category_id = NULL WHERE category_id = ?').bind(cat.id).run();
-  for (const r of results ?? []) await reindexArticle(db, str(r, 'id'), env);
-  await writeAuditLog(db, { actor, action: 'category.delete', targetType: 'category', targetId: cat.id, before: cat });
+  // One batch (one transaction): the category is deleted, detached from its articles and audited together, so a
+  // crash or a failed statement never leaves an article pointing at a deleted category. The detach and the audit
+  // row apply only when this batch's own delete did.
+  const deleted = softDeletedAt('knowledge_categories', cat.id, expected, now);
+  const [mark, attached] = await db.batch([
+    db.prepare('UPDATE knowledge_categories SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
+      .bind(now, now, cat.id, expected),
+    db.prepare('SELECT id FROM articles WHERE category_id = ?').bind(cat.id),
+    db.prepare(`UPDATE articles SET category_id = NULL WHERE category_id = ? AND ${deleted.sql}`).bind(cat.id, ...deleted.params),
+    auditLogStatement(db, { actor, action: 'category.delete', targetType: 'category', targetId: cat.id, before: cat }, deleted),
+  ]);
+  if (!mark?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Category was changed by someone else; reload and retry', { current_revision: cat.revision });
+  for (const r of attached?.results ?? []) await reindexArticle(db, str(r, 'id'), env);
 }
 
 /** Resolves a category reference (id or slug); null clears the category. */
