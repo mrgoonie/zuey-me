@@ -2,7 +2,7 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { Locale } from '../i18n/locales';
-import { isLocale } from '../i18n/locales';
+import { LOCALES, isLocale } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import type { LocalizedNames, Row } from './common';
 import {
@@ -10,7 +10,12 @@ import {
   requireDb, requireRevision, safeText, slugify, str, writeAuditLog,
 } from './common';
 
-export const TAG_LIMITS = { perArticle: 20, nameLength: 40, aliases: 10 } as const;
+export const TAG_LIMITS = { perArticle: 20, slugLength: 60, nameLength: 40, aliases: 10 } as const;
+
+/** Field docs shared by the REST tag body and the MCP tag tools, so both describe the same contract. */
+export const TAG_SLUG_DOC = `Lowercase kebab-case of at most ${TAG_LIMITS.slugLength} characters, unique across tags; derived from the first name when omitted on create. Creating with a deleted tag's slug restores that tag (same id, new names and aliases); renaming onto it is a conflict`;
+export const TAG_NAMES_DOC = `Localized names keyed by locale (${LOCALES.join(', ')}), at least one, each up to ${TAG_LIMITS.nameLength} characters, e.g. {"vi": "Trí tuệ nhân tạo", "en": "AI"}; replaces the whole object`;
+export const TAG_ALIASES_DOC = `Alternative names, at most ${TAG_LIMITS.aliases} strings of up to ${TAG_LIMITS.nameLength} characters; duplicates collapse; replaces the whole list`;
 
 /** Public tag metadata (safe for every reader, including free and anonymous). */
 export interface PublicTag { id: string; slug: string; name: string }
@@ -42,7 +47,7 @@ export function toPublicTag(tag: Pick<TopicTag, 'id' | 'slug' | 'names'>, locale
 export function parseTagInput(body: Record<string, unknown>, mode: 'create' | 'update'): TagInput {
   const out: TagInput = {};
   if (body.names !== undefined) out.names = parseNamesInput('names', body.names, TAG_LIMITS.nameLength);
-  if (body.slug !== undefined) out.slug = parseSlug('slug', body.slug);
+  if (body.slug !== undefined) out.slug = parseSlug('slug', body.slug, TAG_LIMITS.slugLength);
   if (body.aliases !== undefined) {
     if (!Array.isArray(body.aliases) || body.aliases.length > TAG_LIMITS.aliases) bad('aliases', `must be an array of at most ${TAG_LIMITS.aliases} strings`);
     const seen = new Set<string>();
