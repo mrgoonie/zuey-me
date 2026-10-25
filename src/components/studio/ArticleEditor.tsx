@@ -6,11 +6,12 @@ import { mathNumbers } from '../../lib/blocks/math';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
   BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
-  SECTION_SURFACES, SECTION_WIDTHS, emptyDocument,
+  SECTION_SURFACES, SECTION_WIDTHS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES, emptyDocument,
 } from '../../lib/blocks/schema';
+import { NUMERIC_COLUMN_TYPES, headerSources } from '../../lib/blocks/table-data';
 import type {
   ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, CodeBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, MathMode, ParagraphBlock,
-  ResponsiveSpan, SectionBlock, SurveyBlock, ToggleBlock,
+  ResponsiveSpan, SectionBlock, SurveyBlock, TableBlock, TableColumn, TableColumnType, ToggleBlock,
 } from '../../lib/blocks/schema';
 import { canContain, childContext } from '../../lib/blocks/nesting';
 import type { NestContext } from '../../lib/blocks/nesting';
@@ -458,6 +459,93 @@ function CodeFields({ block, onChange }: { block: CodeBlock; onChange: (b: Block
   );
 }
 
+const TABLE_TYPE_LABELS: Record<TableColumnType, string> = {
+  text: 'Chữ', number: 'Số', currency: 'Tiền tệ', percent: 'Phần trăm', date: 'Ngày', boolean: 'Có/Không', link: 'Liên kết', badge: 'Nhãn',
+};
+type TableFlag = 'sortable' | 'search' | 'stickyHeader' | 'csv';
+type TableOption = TableFlag | 'columns' | 'title' | 'caption' | 'mobile';
+
+/** Table: headers and rows, plus the optional data-table settings (typed columns, reader tools, mobile layout). */
+function TableFields({ block, onChange }: { block: TableBlock; onChange: (b: Block) => void }) {
+  const columns = block.headers.map((_, i) => block.columns?.[i] ?? { type: 'text' as const });
+  // Unset options are removed rather than stored as false or empty, like the validator normalises them.
+  const without = (key: TableOption): TableBlock => { const next = { ...block }; delete next[key]; return next; };
+  const setColumns = (next: TableColumn[]) => {
+    onChange(next.every(c => c.type === 'text' && !c.filter) ? without('columns') : { ...block, columns: next });
+  };
+  const setColumn = (i: number, col: TableColumn) => setColumns(columns.map((c, j) => (j === i ? col : c)));
+  const setType = (i: number, type: TableColumnType) => {
+    const prev = columns[i];
+    const col: TableColumn = { type };
+    if (NUMERIC_COLUMN_TYPES.includes(type) && prev?.decimals !== undefined) col.decimals = prev.decimals;
+    if (type === 'currency') col.currency = prev?.currency ?? 'VND';
+    if (prev?.filter) col.filter = true;
+    setColumn(i, col);
+  };
+  const setFlag = (key: TableFlag, on: boolean) => onChange(on ? { ...block, [key]: true } : without(key));
+  const flagBox = (key: TableFlag, label: string) => (
+    <label className="text-[11px] text-stone-300 flex items-center gap-1.5">
+      <input type="checkbox" checked={block[key] === true} onChange={e => setFlag(key, e.target.checked)} />
+      {label}
+    </label>
+  );
+  const setHeaders = (headers: string[]) => {
+    // Column settings and cells follow their header; new columns are empty plain text.
+    const sources = headerSources(block.headers, headers);
+    const resized = sources.map(s => columns[s] ?? { type: 'text' as const });
+    const rows = block.rows.map(row => sources.map(s => row[s] ?? ''));
+    const { columns: _old, ...rest } = block;
+    onChange(resized.every(c => c.type === 'text' && !c.filter) ? { ...rest, headers, rows } : { ...rest, headers, rows, columns: resized });
+  };
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <Text label="Tiêu đề bảng (tuỳ chọn)" value={block.title ?? ''} onChange={title => onChange(title.trim() ? { ...block, title } : without('title'))} />
+        <Text label="Chú thích (tuỳ chọn)" value={block.caption ?? ''} onChange={caption => onChange(caption.trim() ? { ...block, caption } : without('caption'))} />
+      </div>
+      <CsvInput label="Tiêu đề cột (phân cách bằng dấu phẩy)" initial={block.headers.join(', ')} onCommit={raw => setHeaders(splitCsv(raw))} />
+      <Area label="Hàng: mỗi dòng một hàng, các ô phân cách bằng |" value={block.rows.map(r => r.join(' | ')).join('\n')} rows={4}
+        onChange={v => onChange({ ...block, rows: lines(v).map(l => l.split('|').map(c => c.trim())) })} />
+      <details className="rounded-lg border border-stone-800 p-2">
+        <summary className="text-[11px] text-stone-300 cursor-pointer">Kiểu cột và công cụ cho người đọc</summary>
+        <p className="text-[11px] text-stone-500 mt-2">
+          Ô số ghi dạng 1234.5 (không dấu phân cách), ngày dạng 2026-01-15, Có/Không là true/false, liên kết là https://… hoặc [nhãn](https://…).
+        </p>
+        <div className="space-y-2 mt-2">
+          {columns.map((col, i) => (
+            <div key={i} className="grid grid-cols-[1fr_8rem_6rem_5rem_auto] gap-2 items-end">
+              <span className="text-[11px] text-stone-300 truncate pb-2">{block.headers[i] || `Cột ${i + 1}`}</span>
+              <Select label="Kiểu" value={col.type} options={TABLE_COLUMN_TYPES} labels={TABLE_TYPE_LABELS} onChange={type => setType(i, type)} />
+              {col.type === 'currency'
+                ? <Text label="Mã tiền" value={col.currency ?? ''} placeholder="VND" onChange={currency => setColumn(i, { ...col, currency: currency.toUpperCase() })} />
+                : <span />}
+              {NUMERIC_COLUMN_TYPES.includes(col.type)
+                ? <NumberSelect label="Số lẻ" value={col.decimals} min={0} max={LIMITS.tableDecimalsMax} allowEmpty
+                  onChange={decimals => { const { decimals: _old, ...rest } = col; setColumn(i, decimals === undefined ? rest : { ...rest, decimals }); }} />
+                : <span />}
+              <label className="text-[11px] text-stone-300 flex items-center gap-1.5 pb-2">
+                <input type="checkbox" checked={col.filter === true}
+                  onChange={e => { const { filter: _old, ...rest } = col; setColumn(i, e.target.checked ? { ...rest, filter: true } : rest); }} />
+                Bộ lọc
+              </label>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+          {flagBox('sortable', 'Sắp xếp theo cột')}
+          {flagBox('search', 'Ô tìm kiếm')}
+          {flagBox('stickyHeader', 'Ghim hàng tiêu đề')}
+          {flagBox('csv', 'Tải CSV')}
+        </div>
+        <div className="mt-2 max-w-xs">
+          <Select label="Trên điện thoại" value={block.mobile ?? 'scroll'} options={TABLE_MOBILE_MODES} labels={{ scroll: 'Cuộn ngang', cards: 'Thẻ xếp chồng' }}
+            onChange={mobile => onChange(mobile === 'cards' ? { ...block, mobile } : without('mobile'))} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
 function ToggleFields({ block, onChange, ctx }: { block: ToggleBlock; onChange: (b: Block) => void; ctx: ListCtx }) {
   return (
     <div className="space-y-2">
@@ -592,13 +680,7 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
     case 'embed':
       return <EmbedFields block={block} onChange={onChange} />;
     case 'table':
-      return (
-        <div className="space-y-2">
-          <CsvInput label="Tiêu đề cột (phân cách bằng dấu phẩy)" initial={block.headers.join(', ')} onCommit={raw => onChange({ ...block, headers: splitCsv(raw) })} />
-          <Area label="Hàng: mỗi dòng một hàng, các ô phân cách bằng |" value={block.rows.map(r => r.join(' | ')).join('\n')} rows={4}
-            onChange={v => onChange({ ...block, rows: lines(v).map(l => l.split('|').map(c => c.trim())) })} />
-        </div>
-      );
+      return <TableFields block={block} onChange={onChange} />;
     case 'chart':
       return (
         <div className="space-y-2">
