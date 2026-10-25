@@ -12,11 +12,16 @@ import { AI_COPY } from './copy';
 import { claimAutoRunSlot, releaseAutoRunSlot, scheduleFrameStart } from './frame-start-queue';
 
 export const READY_TIMEOUT_MS = 10_000;
-const HEARTBEAT_TIMEOUT_MS = 8_000;
+/** Longest silence tolerated from a running frame while the reader's tab is visible. */
+export const HEARTBEAT_TIMEOUT_MS = 8_000;
 /** How long after the iframe's `load` the sandboxed document may take to report its own `load`. */
 export const LOAD_HANDSHAKE_MS = 1_000;
-/** How long after `ready` the sandboxed document may take to report its own `load`, visible or not. */
-export const LOADED_AFTER_READY_MS = 5_000;
+/**
+ * How long after `ready` the sandboxed document may take to report its own `load`, visible or not. Chromium
+ * runs every srcdoc widget of a page in one process, so a neighbour's slow start-up can delay a healthy
+ * widget's `loaded`; matching the heartbeat limit halts nothing the heartbeat watchdog would tolerate.
+ */
+export const LOADED_AFTER_READY_MS = HEARTBEAT_TIMEOUT_MS;
 /** Longest silence tolerated while the reader's tab is hidden (frame timers may be throttled to once a minute). */
 export const HIDDEN_HEARTBEAT_TIMEOUT_MS = 180_000;
 export const MAX_FETCHES_PER_RUN = 50;
