@@ -721,6 +721,17 @@ describe('REST, OpenAPI and MCP registration', () => {
     for (const t of ['knowledge_search', 'label_proposal_decide', 'label_audit_job_run', 'article_labels_revert']) expect(tools).toContain(t);
   });
 
+  it('the MCP label_update schema lists slug and aliases as the REST label body documents them', () => {
+    const tool = taxonomyMcpModule.tools.find(t => t.name === 'label_update');
+    const props = rec(rec(tool?.inputSchema).properties);
+    const restProps = rec(rec(taxonomyOpenApi.schemas.TaxonomyLabelInput).properties);
+    for (const field of ['slug', 'aliases']) {
+      expect(props[field]).toBeDefined();
+      expect(rec(props[field]).description).toBeTruthy();
+      expect(props[field]).toEqual(restProps[field]);
+    }
+  });
+
   it('documents the 409 codes each taxonomy CRUD operation actually throws', async () => {
     const conflictDoc = (path: string, method: string): string => {
       const description = rec(rec(rec(rec(taxonomyOpenApi.paths)[path])[method]).responses)['409'];
