@@ -139,6 +139,24 @@ describe('chart v2 formatting and data', () => {
     expect(formatChartLabel(LEGACY, 'A', 'vi')).toBe('A');
   });
 
+  it('rounds long values below 1e15 to 10 decimals in the edition style', () => {
+    // 12 significant digits leave 11 decimals here, more than the number grammar allows.
+    expect(formatChartValue(1.23456789012, undefined, 'vi')).toBe('1,2345678901');
+    expect(formatChartValue(1.23456789012, undefined, 'en')).toBe('1.2345678901');
+    expect(formatChartValue(-1.23456789012, { unit: 'kg' }, 'vi')).toBe('-1,2345678901 kg');
+    expect(formatChartValue(-1.23456789012, undefined, 'en')).toBe('-1.2345678901');
+    // Just under 1e15, 12 significant digits round up to 16 integer digits.
+    expect(formatChartValue(999999999999999, undefined, 'vi')).toBe('999.999.999.999.999');
+    expect(formatChartValue(-999999999999999, undefined, 'en')).toBe('-999,999,999,999,999');
+    // From 1e15 up, values are still shown as written.
+    expect(formatChartValue(1234567890123456, undefined, 'vi')).toBe('1234567890120000');
+    expect(formatChartValue(-1e16, undefined, 'en')).toBe('-10000000000000000');
+    expect(formatChartValue(Number.POSITIVE_INFINITY, undefined, 'vi')).toBe('Infinity');
+    // CSV keeps the stored numbers.
+    const csv = chartCsv(chart({}, { type: 'chart', kind: 'bar', labels: ['a', 'b', 'c'], series: [{ name: 'S', data: [1.23456789012, -1.23456789012, 999999999999999] }] }), 'L');
+    expect(csv).toBe('﻿L,S\r\na,1.23456789012\r\nb,-1.23456789012\r\nc,999999999999999\r\n');
+  });
+
   it('exports formula-safe CSV with canonical values and x/y columns for scatter', () => {
     const b = chart({ labels: ['2026-01', '2026-02', '2026-03'], series: [{ name: '=cmd', data: [1, -2, 3] }], y2: undefined, references: [{ value: 1 }] });
     const csv = chartCsv(b, 'Tháng');
