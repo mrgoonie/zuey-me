@@ -84,16 +84,29 @@ async function click(el: Element | null | undefined) {
 const legendButtons = (root: HTMLElement) => [...root.querySelectorAll<HTMLButtonElement>('.zb-chart-legend-item')];
 const button = (root: HTMLElement, label: string) => [...root.querySelectorAll('button')].find(b => b.textContent === label);
 
+// happy-dom element prototypes and the URL global outlive GlobalRegistrator.unregister() and are shared by every
+// later test file in the process, so each patch below is undone in afterAll.
+const previousSsr = process.env.SSR;
+let restore: Array<() => void> = [];
+
 beforeAll(async () => {
   delete process.env.SSR;
   GlobalRegistrator.register({ url: 'https://zuey.me/articles/demo' });
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const { createObjectURL, revokeObjectURL } = URL;
+  const { click } = HTMLAnchorElement.prototype;
+  const { getContext, toDataURL } = HTMLCanvasElement.prototype;
+  restore = [
+    () => { URL.createObjectURL = createObjectURL; URL.revokeObjectURL = revokeObjectURL; },
+    () => { HTMLAnchorElement.prototype.click = click; },
+    () => { HTMLCanvasElement.prototype.getContext = getContext; HTMLCanvasElement.prototype.toDataURL = toDataURL; },
+  ];
   URL.createObjectURL = (obj: Blob | MediaSource) => {
     if (obj instanceof Blob) blobs.push(obj);
     return 'blob:test';
   };
   URL.revokeObjectURL = () => {};
-  HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) { savedNames.push(this.download); };
+  HTMLAnchorElement.prototype.click = function saveClick(this: HTMLAnchorElement) { savedNames.push(this.download); };
   HTMLCanvasElement.prototype.getContext = () => null;
   HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,iVBORw0KGgo=';
   React = await import('react');
@@ -113,6 +126,10 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  for (const undo of restore.splice(0)) undo();
+  Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
+  if (previousSsr === undefined) delete process.env.SSR;
+  else process.env.SSR = previousSsr;
   await GlobalRegistrator.unregister();
 });
 
