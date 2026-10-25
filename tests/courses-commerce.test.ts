@@ -8,6 +8,9 @@ import type { CourseRecord } from '../src/lib/courses/course-types';
 import { GET as catalogApi } from '../src/pages/api/v1/courses/index';
 import { POST as checkoutApi } from '../src/pages/api/v1/courses/[course]/checkout';
 import { POST as resolveApi } from '../src/pages/api/v1/admin/course-orders/[code]/resolve';
+import { DELETE as revokeOwnerApi } from '../src/pages/api/v1/admin/courses/[course]/owners';
+import { coursesMcpModule } from '../src/lib/courses/course-mcp';
+import type { McpContext } from '../src/lib/mcp/types';
 import { POST as sepayWebhook } from '../src/pages/api/webhooks/sepay';
 import { POST as dodoWebhook } from '../src/pages/api/webhooks/dodo';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
@@ -651,6 +654,71 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
       expect(activities('courses.order_refunded')).toBe(1);
       expect(refundKeys()).toEqual([`refund:${order?.provider}:course_order:${order?.id}:refunded`]);
+    });
+
+    describe('an admin revoke', () => {
+      /** The admin revoke through REST (`DELETE /admin/courses/:course/owners`) or MCP (`course_access_set`). */
+      const surfaces = {
+        REST: async (d1: D1DatabaseLike, admin: Member, userId: string): Promise<unknown> => {
+          const res = await read(await revokeOwnerApi(ctx({
+            method: 'DELETE', body: { user_id: userId, reason: 'abuse' }, headers: admin.browser, params: { course: 'ai-product' }, env: { ...env(), DB: d1 },
+          })));
+          if (res.status !== 200) throw new Error(`${res.status} ${res.code}`);
+          return res.data;
+        },
+        MCP: (d1: D1DatabaseLike, admin: Member, userId: string): Promise<unknown> => {
+          const mcp: McpContext = {
+            request: new Request('https://zuey.test/api/mcp', { headers: admin.browser }), env: env(), d1,
+            async requireAdmin() {}, async isAdmin() { return true; },
+          };
+          return coursesMcpModule.call('course_access_set', { course: 'ai-product', action: 'revoke', user_id: userId, reason: 'abuse' }, mcp);
+        },
+      } as const;
+
+      for (const [surface, revoke] of Object.entries(surfaces)) {
+        for (const [point, fails] of revokePoints) {
+          it(`through ${surface} writes nothing when it fails at ${point}, and the retry revokes once`, async () => {
+            await publishedCourse({ github_repos: ['zuey/course-repo'] });
+            const { userId, courseId } = await paidWithCertificate('lan@example.com');
+            const boss = await member('boss@example.com');
+
+            const failed = await revoke(failingD1(fails), boss, userId).then(() => 'ok', (err: unknown) => (err instanceof Error ? err.message : 'failed'));
+            expect(failed).toMatch(surface === 'REST' ? /^500 internal_error$/ : /injected/);
+            expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
+            expect(activities('courses.revoked')).toBe(0);
+            expect(removals()).toBe(0);
+            expect(certRevoked()).toBe(0);
+
+            expect(await revoke(state.d1, boss, userId)).toEqual({ revoked: true });
+            expect(await revoke(state.d1, boss, userId)).toEqual({ revoked: false });
+            expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+            expect(activities('courses.revoked')).toBe(1);
+            expect(removals()).toBe(1);
+            expect(certRevoked()).toBe(1);
+          });
+        }
+      }
+
+      it('is followed by a refund that only refunds the order, and a dispute that only charges it back', async () => {
+        await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const boss = await member('boss@example.com');
+        const refunded = await paidWithCertificate('lan@example.com');
+        const disputed = await paidWithCertificate('mai@example.com');
+        for (const p of [refunded, disputed]) expect(await surfaces.REST(state.d1, boss, p.userId)).toEqual({ revoked: true });
+
+        expect(await dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${refunded.code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${disputed.code}` })).toMatchObject({ outcome: 'reversed' });
+        expect((await getCourseOrderByCode(state.d1, refunded.code))?.status).toBe('refunded');
+        expect((await getCourseOrderByCode(state.d1, disputed.code))?.status).toBe('charged_back');
+        for (const p of [refunded, disputed]) expect(await ownsCourse(state.d1, p.userId, p.courseId)).toBe(false);
+        expect(activities('courses.revoked')).toBe(2);
+        expect(activities('courses.order_refunded')).toBe(1);
+        expect(activities('courses.order_charged_back')).toBe(1);
+        expect(removals()).toBe(2);
+        expect(certRevoked()).toBe(2);
+        const refundedOrder = await getCourseOrderByCode(state.d1, refunded.code);
+        expect(refundKeys()).toEqual([`refund:dodo:course_order:${refundedOrder?.id}:refunded`]);
+      });
     });
 
     /**
