@@ -5,6 +5,7 @@ import { SEARCH_TIERS } from '../search/indexer';
 import { JOB_STATUSES } from './audit';
 import { LABEL_ALIASES_DOC, LABEL_KINDS, LABEL_SCOPES, LABEL_SLUG_DOC } from './labels';
 import { DECISIONS, PROPOSAL_STATUSES } from './proposals';
+import { TAG_ALIASES_DOC, TAG_LIMITS, TAG_NAMES_DOC, TAG_SLUG_DOC } from './tags';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: unknown) => ({ 'application/json': { schema } });
@@ -128,7 +129,14 @@ export const taxonomyOpenApi: OpenApiFragment = {
         revision: { type: 'integer' }, article_count: { type: 'integer' }, created_at: { type: 'string' }, updated_at: { type: 'string' },
       },
     },
-    TopicTagInput: { type: 'object', properties: { names, slug: { type: 'string' }, aliases: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 40 } } } },
+    TopicTagInput: {
+      type: 'object',
+      properties: {
+        names: { ...names, description: TAG_NAMES_DOC, properties: Object.fromEntries(LOCALES.map(l => [l, { type: 'string', maxLength: TAG_LIMITS.nameLength }])) },
+        slug: { type: 'string', maxLength: TAG_LIMITS.slugLength, description: TAG_SLUG_DOC },
+        aliases: { type: 'array', maxItems: TAG_LIMITS.aliases, items: { type: 'string', maxLength: TAG_LIMITS.nameLength }, description: TAG_ALIASES_DOC },
+      },
+    },
     Category: {
       type: 'object',
       properties: {
