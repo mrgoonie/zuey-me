@@ -716,6 +716,37 @@ describe('REST, OpenAPI and MCP registration', () => {
     for (const t of ['knowledge_search', 'label_proposal_decide', 'label_audit_job_run', 'article_labels_revert']) expect(tools).toContain(t);
   });
 
+  it('documents the 409 codes each taxonomy CRUD operation actually throws', async () => {
+    const conflictDoc = (path: string, method: string): string => {
+      const description = rec(rec(rec(rec(taxonomyOpenApi.paths)[path])[method]).responses)['409'];
+      return String(rec(description).description);
+    };
+    const allCodes = ['tag_conflict', 'slug_taken', 'label_conflict', 'label_in_use', 'revision_conflict'];
+    const expected: [string, string, string[]][] = [
+      ['/api/v1/taxonomy/tags', 'post', ['tag_conflict']],
+      ['/api/v1/taxonomy/tags/{id}', 'put', ['tag_conflict', 'revision_conflict']],
+      ['/api/v1/taxonomy/tags/{id}', 'delete', ['revision_conflict']],
+      ['/api/v1/taxonomy/categories', 'post', ['slug_taken']],
+      ['/api/v1/taxonomy/categories/{id}', 'put', ['slug_taken', 'revision_conflict']],
+      ['/api/v1/taxonomy/categories/{id}', 'delete', ['revision_conflict']],
+      ['/api/v1/taxonomy/labels', 'post', ['label_conflict']],
+      ['/api/v1/taxonomy/labels/{id}', 'put', ['revision_conflict']],
+      ['/api/v1/taxonomy/labels/{id}', 'delete', ['label_in_use', 'revision_conflict']],
+    ];
+    for (const [path, method, codes] of expected) {
+      const doc = conflictDoc(path, method);
+      for (const code of allCodes) expect({ path, method, code, documented: doc.includes(`\`${code}\``) }).toEqual({ path, method, code, documented: codes.includes(code) });
+    }
+    expect(conflictDoc('/api/v1/taxonomy/tags', 'post')).toContain('tag_id');
+
+    // The documented code and owner field match what tag create really returns.
+    const owner = rec((await payload(await call(createTagApi, { method: 'POST', headers: admin(), body: { names: { en: 'Doc owner' }, aliases: ['doc-alias'] } }))).data);
+    const dup = await payload(await call(createTagApi, { method: 'POST', headers: admin(), body: { names: { en: 'doc-alias' } } }));
+    expect(dup.status).toBe(409);
+    expect(dup.code).toBe('tag_conflict');
+    expect(dup.error.tag_id).toBe(owner.id);
+  });
+
   it('enforces admin on taxonomy MCP writes', async () => {
     const denied = await taxonomyMcpModule.call('tag_create', { names: { en: 'Nope' } }, mcpCtx({})).then(() => null, (e: unknown) => e);
     expect(denied).not.toBeNull();
