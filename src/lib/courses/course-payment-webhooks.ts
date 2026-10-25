@@ -6,15 +6,15 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { queuePaymentFailed } from '../analytics/commerce-events';
 import type { Row } from '../members/runtime';
-import { iso, isUniqueViolation, membersRuntime } from '../members/runtime';
+import { iso, membersRuntime } from '../members/runtime';
 import { DODO_DISPUTE_FUNDS_KEPT, DODO_DISPUTE_FUNDS_LOST, minorUnitsOrNull } from '../payments/dodo';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import { getCourseById } from './course-store';
 import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from './course-order-payments';
 import {
-  chargeBackLostCourseOrder, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention,
-  recordCoursePaymentEvent, refundDisputedCourseOrder, releaseCoursePaymentEvent, restoreCourseOrder, reverseCourseOrder,
+  chargeBackLostCourseOrder, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder, isPartialCourseReversal, isPaymentEventConflict,
+  markCourseOrderAttention, recordCoursePaymentEvent, refundDisputedCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
 } from './course-order-payments';
 
 export interface CourseTransferNotice {
@@ -36,53 +36,86 @@ function paymentTimeMs(order: CourseOrder, transactedAt: number | null | undefin
   return Math.min(nowMs, Math.max(Date.parse(order.created_at), transactedAt));
 }
 
-/** Full, on-time payment of a pending SePay order pays it; anything else is flagged for the admin. */
-export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: CourseTransferNotice): Promise<CoursePaymentResult> {
-  const order = await getCourseOrderByCode(d1, n.orderCode);
-  if (!(await recordCoursePaymentEvent(d1, 'sepay', n.eventId, order?.id ?? null, n.amount, 'VND', n.rawType))) {
-    return { outcome: 'duplicate_event', order_code: order?.code ?? null };
+/**
+ * Runs a course payment event once. Its `payment_events` record is never written up front: `apply` writes it through
+ * `gate` exactly once, as the first statement of the batch that pays or flags the order, or alone when the event changes
+ * nothing. A failure or a worker crash before that commit leaves no record, so the provider's redelivery applies the
+ * event once, and a record is never deleted. A redelivery after the commit is found by the read below; if the receipt of
+ * the order it paid is still missing (the worker died after the batch), the follow-ups run again. A delivery racing
+ * this one fails on the record's unique key: its batch rolled back, so nothing was written twice.
+ */
+async function applyCoursePaymentEvent(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder | null, event: CoursePaymentEvent, payerText: string | null,
+  apply: (gate: CourseEventGate) => Promise<CoursePaymentOutcome>,
+): Promise<CoursePaymentResult> {
+  const result = (outcome: CoursePaymentOutcome): CoursePaymentResult => ({ outcome, order_code: order?.code ?? null });
+  if (await coursePaymentEventRecorded(d1, event.provider, event.eventId)) {
+    if (order) await resumeCourseOrderFollowUps(d1, env, order, payerText);
+    return result('duplicate_event');
   }
   try {
-    if (!order) return { outcome: 'unmatched', order_code: null };
+    return result(await apply(onlyIf => coursePaymentEventStatement(d1, event, onlyIf)));
+  } catch (err) {
+    if (isPaymentEventConflict(err) && await coursePaymentEventRecorded(d1, event.provider, event.eventId)) return result('duplicate_event');
+    throw err;
+  }
+}
+
+/**
+ * Full, on-time payment of a pending SePay order pays it; anything else is flagged for the admin. SePay's transaction
+ * id (`eventId`, the same on every redelivery and on reconciliation) is the idempotency key of the `payment_events`
+ * record, so a transfer is applied once.
+ */
+export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: CourseTransferNotice): Promise<CoursePaymentResult> {
+  const order = await getCourseOrderByCode(d1, n.orderCode);
+  const event: CoursePaymentEvent = { provider: 'sepay', eventId: n.eventId, orderId: order?.id ?? null, amount: n.amount, currency: 'VND', rawType: n.rawType };
+  return applyCoursePaymentEvent(d1, env, order, event, n.payerText ?? null, async gate => {
+    if (!order) {
+      await gate().run();
+      return 'unmatched';
+    }
     const extra = { amount: n.amount, currency: 'VND', ref: n.paymentRef, eventId: n.eventId };
     if (order.status === 'paid') {
-      await d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ?")
-        .bind(iso(membersRuntime.now()), order.id).run();
-      return { outcome: 'already_paid', order_code: order.code };
+      await d1.batch([
+        gate(),
+        d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ?")
+          .bind(iso(membersRuntime.now()), order.id),
+      ]);
+      return 'already_paid';
     }
     const nowMs = membersRuntime.now();
     const paidIso = iso(paymentTimeMs(order, n.transactedAt, nowMs));
     const payable = order.provider === 'sepay' && (order.status === 'pending' || (order.status === 'expired' && order.attention_reason === null));
     if (!payable || order.expires_at < paidIso) {
-      await markCourseOrderAttention(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', extra);
-      return { outcome: 'needs_attention', order_code: order.code };
+      await markCourseOrderAttention(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', extra, gate);
+      return 'needs_attention';
     }
     if (order.amount_vnd === null || n.amount < order.amount_vnd) {
-      await markCourseOrderAttention(d1, order, 'underpaid', extra);
-      return { outcome: 'needs_attention', order_code: order.code };
+      await markCourseOrderAttention(d1, order, 'underpaid', extra, gate);
+      return 'needs_attention';
     }
     if (!(await getCourseById(d1, order.course_id))) {
       // The course was deleted after checkout: the money is recorded on the order for a refund, and nothing is granted.
-      await markCourseOrderAttention(d1, order, 'course_missing', extra);
-      return { outcome: 'needs_attention', order_code: order.code };
+      await markCourseOrderAttention(d1, order, 'course_missing', extra, gate);
+      return 'needs_attention';
     }
     const nowIso = iso(nowMs);
     const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, {
       set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = 'VND', payment_ref = ?, provider_event_id = ?, updated_at = ?",
       values: [nowIso, n.amount, n.paymentRef, n.eventId, nowIso],
       when: "o.status = 'pending' OR (o.status = 'expired' AND o.attention_reason IS NULL)",
-    }, n.payerText ?? null);
-    if (!paid) {
-      const current = await getCourseOrderByCode(d1, order.code);
-      if (current?.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
-      if (current) await markCourseOrderAttention(d1, current, 'late_payment', extra);
-      return { outcome: 'needs_attention', order_code: order.code };
+    }, n.payerText ?? null, gate);
+    if (paid) return 'paid';
+    // The order changed since it was read; the payment batch wrote nothing, its record included.
+    const current = await getCourseOrderByCode(d1, order.code);
+    if (current?.status === 'paid') {
+      await gate().run();
+      return 'already_paid';
     }
-    return { outcome: 'paid', order_code: order.code };
-  } catch (err) {
-    await releaseCoursePaymentEvent(d1, 'sepay', n.eventId);
-    throw err;
-  }
+    if (current) await markCourseOrderAttention(d1, current, 'late_payment', extra, gate);
+    else await gate().run();
+    return 'needs_attention';
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -138,23 +171,18 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type) || DODO_DISPUTE_FUNDS_KEPT.has(type))) {
     return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type });
   }
-  if (!(await recordCoursePaymentEvent(d1, 'dodo', eventId, order?.id ?? null, amount, currency, type))) {
-    return { outcome: 'duplicate_event', order_code: order?.code ?? null };
-  }
-  try {
-    if (!order) return { outcome: 'unmatched', order_code: null };
-    if (type === 'payment.failed') {
+  const event: CoursePaymentEvent = { provider: 'dodo', eventId, orderId: order?.id ?? null, amount, currency, rawType: type };
+  return applyCoursePaymentEvent(d1, env, order, event, null, async gate => {
+    if (order && type === 'payment.succeeded') return applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch }, gate);
+    if (order && type === 'payment.failed') {
+      // Once per payment (its dedupe key), so queueing it again on a redelivery is safe; it never throws.
       await queuePaymentFailed(d1, {
         distinctId: order.user_id, provider: 'dodo', orderType: 'course', reference: paymentId ?? eventId, amountMinor: amount, currency,
       });
-      return { outcome: 'ignored', order_code: order.code };
     }
-    if (type === 'payment.succeeded') return await applyDodoCoursePayment(d1, env, order, { paymentId, amount, currency, eventId, userMismatch });
-    return { outcome: 'ignored', order_code: order.code };
-  } catch (err) {
-    await releaseCoursePaymentEvent(d1, 'dodo', eventId);
-    throw err;
-  }
+    await gate().run();
+    return order ? 'ignored' : 'unmatched';
+  });
 }
 
 /**
@@ -206,7 +234,7 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
     return result((await recordCoursePaymentEvent(d1, 'dodo', event.eventId, event.orderId, amount, currency, type)) ? 'ignored' : 'duplicate_event');
   } catch (err) {
     // A delivery racing this one committed the record first; this batch rolled back, so nothing was written twice.
-    if (isUniqueViolation(err) && await coursePaymentEventRecorded(d1, 'dodo', event.eventId)) return result('duplicate_event');
+    if (isPaymentEventConflict(err) && await coursePaymentEventRecorded(d1, 'dodo', event.eventId)) return result('duplicate_event');
     throw err;
   }
 }
@@ -214,8 +242,12 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
 async function applyDodoCoursePayment(
   d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder,
   p: { paymentId: string | null; amount: number | null; currency: string | null; eventId: string; userMismatch: boolean },
-): Promise<CoursePaymentResult> {
-  if (order.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
+  gate: CourseEventGate,
+): Promise<CoursePaymentOutcome> {
+  if (order.status === 'paid') {
+    await gate().run();
+    return 'already_paid';
+  }
   const extra = { amount: p.amount ?? 0, currency: p.currency ?? undefined, ref: p.paymentId, eventId: p.eventId };
   // Another account's checkout, a SePay order, a USD charge below the quote (tampered or misconfigured checkout), or a
   // course deleted since checkout: the card money is captured, so the order is flagged with its payment id for a grant
@@ -225,11 +257,12 @@ async function applyDodoCoursePayment(
       : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid'
         : !(await getCourseById(d1, order.course_id)) ? 'course_missing' : null;
   if (reason) {
-    await markCourseOrderAttention(d1, order, reason, extra);
-    if (p.paymentId) {
-      await d1.prepare('UPDATE course_orders SET provider_payment_id = COALESCE(provider_payment_id, ?) WHERE id = ?').bind(p.paymentId, order.id).run();
-    }
-    return { outcome: 'needs_attention', order_code: order.code };
+    // The payment id lands in the same batch as the flag, so a later refund always finds the order.
+    const paymentId = p.paymentId
+      ? [d1.prepare('UPDATE course_orders SET provider_payment_id = COALESCE(provider_payment_id, ?) WHERE id = ?').bind(p.paymentId, order.id)]
+      : [];
+    await markCourseOrderAttention(d1, order, reason, extra, gate, paymentId);
+    return 'needs_attention';
   }
   const nowIso = iso(membersRuntime.now());
   // Card money is captured: pay even an expired or flagged order rather than lose the payment.
@@ -237,6 +270,9 @@ async function applyDodoCoursePayment(
     set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = ?, provider_payment_id = ?, payment_ref = ?, provider_event_id = ?, updated_at = ?",
     values: [nowIso, p.amount, p.currency, p.paymentId, p.paymentId, p.eventId, nowIso],
     when: "o.status <> 'paid'",
-  });
-  return { outcome: paid ? 'paid' : 'already_paid', order_code: order.code };
+  }, null, gate);
+  if (paid) return 'paid';
+  // Paid by another delivery meanwhile: the payment batch wrote nothing, its record included.
+  await gate().run();
+  return 'already_paid';
 }

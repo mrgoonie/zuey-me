@@ -14,7 +14,8 @@
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
  *   with it) so a missing table or a failed insert can never roll a payment back. The one exception is
  *   `outboxInsertStatement`, for an event that must land together with the fact it reports: the Dodo
- *   refund/dispute gate row and log (no payment state), and a course order reversal (status, access and log).
+ *   refund/dispute gate row and log (no payment state), a course order payment or flag (webhook record, status,
+ *   access and log), and a course order reversal (status, access and log).
  *   A failure there rolls the whole fact back and makes the webhook (or the admin) retry it, so the event is
  *   never lost and never written twice.
  * - A drain run is bounded: at most MAX_DRAIN_QUERIES D1 statements and DEFAULT_DRAIN_LIMIT deliveries by

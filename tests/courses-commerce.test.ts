@@ -893,9 +893,9 @@ describe('Dodo course payments, refunds and disputes', () => {
     });
 
     /**
-     * The test database, except that the worker dies at the first write matching `at` (alone or in a batch): that
-     * write never commits, and every later call fails too, so no cleanup runs. It also records each batch's SQL and
-     * each write run alone.
+     * The test database, except that the worker dies at the first statement matching `at` (a read, a write alone or a
+     * write in a batch): that write never commits, and every later call fails too, so no cleanup runs. It also records
+     * each batch's SQL and each write run alone.
      */
     function crashingD1(at: (sql: string) => boolean = () => false) {
       const base = state.d1;
@@ -904,12 +904,13 @@ describe('Dodo course payments, refunds and disputes', () => {
       const runs: string[] = [];
       const alive = () => { if (dead) throw new Error('worker crashed'); };
       const crash = (): never => { dead = true; throw new Error('worker crashed'); };
+      const read = (sql: string) => { alive(); if (at(sql)) crash(); };
       const sources = new WeakMap<D1PreparedStatementLike, { sql: string; inner: D1PreparedStatementLike }>();
       const wrap = (sql: string, inner: D1PreparedStatementLike): D1PreparedStatementLike => {
         const statement: D1PreparedStatementLike = {
           bind: (...v: unknown[]) => wrap(sql, inner.bind(...v)),
-          first: async <T,>() => { alive(); return inner.first<T>(); },
-          all: async <T,>() => { alive(); return inner.all<T>(); },
+          first: async <T,>() => { read(sql); return inner.first<T>(); },
+          all: async <T,>() => { read(sql); return inner.all<T>(); },
           run: async () => {
             alive();
             runs.push(sql);
@@ -1085,6 +1086,136 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(activities('courses.order_refunded')).toBe(0);
       expect(refundKeys()).toEqual([]);
       expect(gate('evt_x')).toBe(1);
+    });
+
+    describe('a payment the worker dies on', () => {
+      const events = (eventId: string) => count('SELECT COUNT(*) AS n FROM payment_events WHERE event_id = ?', eventId);
+      const attentionKeys = () => state.d1.raw
+        .query<{ dedupe_key: string }, []>("SELECT dedupe_key FROM analytics_outbox WHERE event = 'payment_needs_attention'").all().map(r => r.dedupe_key);
+
+      /** A pending order on `provider` and its payment event (short by `shortBy`), delivered through any database. */
+      async function pendingPayment(provider: 'dodo' | 'sepay', shortBy = 0) {
+        const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const lan = await member('lan@example.com');
+        if (provider === 'sepay') {
+          const { code, amount } = await sepayOrder(lan);
+          const notice = { eventId: 'sepay_1', amount: amount - shortBy, orderCode: code, paymentRef: 'FT1', rawType: 'in' };
+          return { course, lan, code, eventId: notice.eventId, amount: notice.amount, deliver: (d1: D1DatabaseLike) => applyCourseSepayPayment(d1, env(), notice) };
+        }
+        const code = String(field((await read(await checkout(lan, { provider: 'dodo', accept_terms: true }))).data, 'code'));
+        const data = { payment_id: `pay_${code}`, total_amount: 4900 - shortBy, currency: 'USD', metadata: { course_order: code, user_id: lan.userId } };
+        return {
+          course, lan, code, eventId: 'evt_pay', amount: data.total_amount,
+          deliver: (d1: D1DatabaseLike) => applyDodoCourseWebhook(d1, env(), 'evt_pay', { type: 'payment.succeeded', data }),
+        };
+      }
+
+      const crashPoints = [
+        ['the course read before the payment batch', sqlPoint(/^SELECT \* FROM courses WHERE id/)],
+        ['the GitHub invite', sqlPoint(/^\s*INSERT INTO github_invites/)],
+        ['the access grant', sqlPoint(/^\s*INSERT INTO course_purchases/)],
+        ['the purchase event', sqlPoint(/INSERT INTO analytics_outbox/)],
+        ['the status update', sqlPoint(/^UPDATE course_orders SET status = 'paid'/)],
+      ] as const;
+
+      for (const provider of ['dodo', 'sepay'] as const) {
+        for (const [point, at] of crashPoints) {
+          it(`pays a ${provider} order once on the redelivery after the worker dies at ${point}`, async () => {
+            const p = await pendingPayment(provider);
+            await expect(p.deliver(crashingD1(at).d1)).rejects.toThrow(/crashed/);
+            expect(events(p.eventId)).toBe(0);
+            expect((await getCourseOrderByCode(state.d1, p.code))?.status).toBe('pending');
+            expect(await ownsCourse(state.d1, p.lan.userId, p.course.id)).toBe(false);
+            expect(purchaseKeys()).toEqual([]);
+
+            expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'paid' });
+            expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });
+            const order = await getCourseOrderByCode(state.d1, p.code);
+            expect(order).toMatchObject({ status: 'paid', attention_reason: null });
+            expect(await ownsCourse(state.d1, p.lan.userId, p.course.id)).toBe(true);
+            expect(events(p.eventId)).toBe(1);
+            expect(activities('courses.granted')).toBe(1);
+            expect(activities('courses.order_paid')).toBe(1);
+            expect(invites()).toBe(1);
+            expect(purchaseKeys()).toEqual([`purchase:${provider}:course_order:${order?.id}`]);
+            expect(state.emails.length).toBe(1);
+          });
+        }
+
+        it(`sends the receipt of a ${provider} order on the redelivery after the worker dies past the payment batch`, async () => {
+          const p = await pendingPayment(provider);
+          await expect(p.deliver(crashingD1(sqlPoint(/^\s*INSERT INTO email_log/)).d1)).rejects.toThrow(/crashed/);
+          expect((await getCourseOrderByCode(state.d1, p.code))?.status).toBe('paid');
+          expect(state.emails.length).toBe(0);
+
+          expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });
+          expect(state.emails.length).toBe(1);
+          expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });
+          expect(state.emails.length).toBe(1);
+          expect(events(p.eventId)).toBe(1);
+          expect(activities('courses.granted')).toBe(1);
+          expect(activities('courses.order_paid')).toBe(1);
+          expect(invites()).toBe(1);
+          expect(purchaseKeys()).toHaveLength(1);
+        });
+
+        it(`writes the record of a ${provider} payment only as the first statement of its payment batch`, async () => {
+          const p = await pendingPayment(provider);
+          const spy = crashingD1();
+          expect(await p.deliver(spy.d1)).toMatchObject({ outcome: 'paid' });
+          expect(spy.runs.filter(isGate)).toEqual([]);
+          expect(spy.batches.length).toBe(1);
+          expect(isGate(spy.batches[0][0])).toBe(true);
+          expect(spy.batches[0].at(-1)).toMatch(/^UPDATE course_orders SET status = 'paid'/);
+          expect(events(p.eventId)).toBe(1);
+
+          // A redelivery is found before anything runs and, with the receipt sent, writes nothing.
+          const again = crashingD1();
+          expect(await p.deliver(again.d1)).toMatchObject({ outcome: 'duplicate_event' });
+          expect(again.batches).toEqual([]);
+          expect(again.runs).toEqual([]);
+        });
+
+        it(`rolls a ${provider} payment back when its record is already taken, and answers duplicate_event`, async () => {
+          const p = await pendingPayment(provider);
+          await state.d1.prepare("INSERT INTO payment_events (provider, event_id, raw_type, received_at) VALUES (?, ?, 'race', ?)")
+            .bind(provider, p.eventId, new Date(state.now).toISOString()).run();
+          // The first record check misses it, as for a delivery that checked just before another one committed.
+          let checks = 0;
+          const blind: D1DatabaseLike = {
+            prepare: (sql: string) => state.d1.prepare(sql.startsWith('SELECT 1 AS found FROM payment_events') && checks++ === 0 ? 'SELECT 1 AS found WHERE 0 AND ? AND ?' : sql),
+            batch: statements => state.d1.batch(statements),
+          };
+          expect(await p.deliver(blind)).toMatchObject({ outcome: 'duplicate_event' });
+          expect((await getCourseOrderByCode(state.d1, p.code))?.status).toBe('pending');
+          expect(await ownsCourse(state.d1, p.lan.userId, p.course.id)).toBe(false);
+          expect(activities('courses.granted')).toBe(0);
+          expect(purchaseKeys()).toEqual([]);
+          expect(events(p.eventId)).toBe(1);
+        });
+
+        for (const reason of ['underpaid', 'course_missing'] as const) {
+          it(`flags a ${provider} payment as ${reason} once on the redelivery after the worker dies at the flag`, async () => {
+            const p = await pendingPayment(provider, reason === 'underpaid' ? 1000 : 0);
+            if (reason === 'course_missing') {
+              await state.d1.prepare('UPDATE courses SET deleted_at = ? WHERE id = ?').bind(new Date(state.now).toISOString(), p.course.id).run();
+            }
+            await expect(p.deliver(crashingD1(sqlPoint(/^UPDATE course_orders SET status = 'needs_attention'/)).d1)).rejects.toThrow(/crashed/);
+            expect(events(p.eventId)).toBe(0);
+            expect((await getCourseOrderByCode(state.d1, p.code))?.status).toBe('pending');
+
+            expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'needs_attention' });
+            expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });
+            expect(await getCourseOrderByCode(state.d1, p.code)).toMatchObject({ status: 'needs_attention', attention_reason: reason, amount_paid: p.amount });
+            expect(events(p.eventId)).toBe(1);
+            expect(activities('courses.order_attention')).toBe(1);
+            expect(attentionKeys()).toEqual([`payment_needs_attention:${provider}:${p.eventId}`]);
+            expect(await ownsCourse(state.d1, p.lan.userId, p.course.id)).toBe(false);
+            expect(purchaseKeys()).toEqual([]);
+            expect(state.emails.length).toBe(0);
+          });
+        }
+      }
     });
   });
   it('keeps the string amount of a signed Dodo dispute on the payment event and the chargeback report', async () => {
