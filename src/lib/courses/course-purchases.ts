@@ -1,6 +1,7 @@
 /**
- * Course ownership. `grantCourse` and `revokeCourse` are the only writers of `course_purchases`, so
- * every path (payment, refund, chargeback, admin) also syncs GitHub access and the activity log.
+ * Course ownership. `grantCourseStatements` and `revokeCourseStatements` build the only writes to `course_purchases`
+ * (run as one batch by `grantCourse`/`revokeCourse`, or inside the payment, refund, chargeback and restore batches), so
+ * every path also syncs GitHub access and the activity log.
  */
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { AppError } from '../http';

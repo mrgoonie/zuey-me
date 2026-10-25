@@ -10,6 +10,7 @@ import { iso, isUniqueViolation, membersRuntime } from '../members/runtime';
 import { DODO_DISPUTE_FUNDS_KEPT, DODO_DISPUTE_FUNDS_LOST, minorUnitsOrNull } from '../payments/dodo';
 import type { CourseOrder } from './course-orders';
 import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
+import { getCourseById } from './course-store';
 import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from './course-order-payments';
 import {
   chargeBackLostCourseOrder, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder, isPartialCourseReversal, markCourseOrderAttention,
@@ -58,6 +59,11 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
     }
     if (order.amount_vnd === null || n.amount < order.amount_vnd) {
       await markCourseOrderAttention(d1, order, 'underpaid', extra);
+      return { outcome: 'needs_attention', order_code: order.code };
+    }
+    if (!(await getCourseById(d1, order.course_id))) {
+      // The course was deleted after checkout: the money is recorded on the order for a refund, and nothing is granted.
+      await markCourseOrderAttention(d1, order, 'course_missing', extra);
       return { outcome: 'needs_attention', order_code: order.code };
     }
     const nowIso = iso(nowMs);
@@ -211,11 +217,13 @@ async function applyDodoCoursePayment(
 ): Promise<CoursePaymentResult> {
   if (order.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
   const extra = { amount: p.amount ?? 0, currency: p.currency ?? undefined, ref: p.paymentId, eventId: p.eventId };
-  // Another account's checkout, a SePay order, or a USD charge below the quote (tampered or misconfigured checkout):
-  // the card money is captured, so the order is flagged with its payment id for a grant or a Dodo refund.
+  // Another account's checkout, a SePay order, a USD charge below the quote (tampered or misconfigured checkout), or a
+  // course deleted since checkout: the card money is captured, so the order is flagged with its payment id for a grant
+  // or a Dodo refund.
   const reason = p.userMismatch ? 'user_mismatch'
     : order.provider !== 'dodo' ? 'provider_mismatch'
-      : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid' : null;
+      : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid'
+        : !(await getCourseById(d1, order.course_id)) ? 'course_missing' : null;
   if (reason) {
     await markCourseOrderAttention(d1, order, reason, extra);
     if (p.paymentId) {

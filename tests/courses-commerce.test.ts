@@ -823,7 +823,73 @@ describe('Dodo course payments, refunds and disputes', () => {
           await expect(applyCourseSepayPayment(failingD1(fails), env(), notice)).rejects.toThrow(/injected/);
           await expectRetriedOnce(code, lan.userId, course.id, 'sepay_1', () => applyCourseSepayPayment(state.d1, env(), notice));
         });
+
+        it(`leaves a flagged order unpaid when the admin grant fails at ${point}, and the retry pays it once`, async () => {
+          const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+          const lan = await member('lan@example.com');
+          const { code, amount } = await sepayOrder(lan);
+          expect(await payTransfer(code, amount - 1000)).toMatchObject({ outcome: 'needs_attention' });
+
+          await expect(resolveCourseOrder(failingD1(fails), env(), code, 'grant', 'rounding')).rejects.toThrow(/injected/);
+          expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('needs_attention');
+          expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+          expect(activities('courses.granted')).toBe(0);
+          expect(activities('courses.order_paid')).toBe(0);
+          expect(invites()).toBe(0);
+          expect(purchaseKeys()).toEqual([]);
+
+          expect((await resolveCourseOrder(state.d1, env(), code, 'grant', 'rounding')).status).toBe('paid');
+          await expect(resolveCourseOrder(state.d1, env(), code, 'grant', 'rounding')).rejects.toThrow(/already paid/);
+          expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+          expect(activities('courses.granted')).toBe(1);
+          expect(activities('courses.order_paid')).toBe(1);
+          expect(invites()).toBe(1);
+          expect(purchaseKeys()).toHaveLength(1);
+        });
       }
+    });
+
+    describe('a payment for a course deleted since checkout', () => {
+      const deleteCourse = (courseId: string) => state.d1.prepare('UPDATE courses SET deleted_at = ? WHERE id = ?').bind(new Date(state.now).toISOString(), courseId).run();
+
+      it('records a Dodo payment on the flagged order without granting, so the redelivery stops and a refund finds it', async () => {
+        const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const lan = await member('lan@example.com');
+        const code = String(field((await read(await checkout(lan, { provider: 'dodo', accept_terms: true }))).data, 'code'));
+        await deleteCourse(course.id);
+        const data = { payment_id: `pay_${code}`, total_amount: 4900, currency: 'USD', metadata: { course_order: code, user_id: lan.userId } };
+
+        expect(await dodo('evt_pay', 'payment.succeeded', data)).toMatchObject({ outcome: 'needs_attention' });
+        expect(await dodo('evt_pay', 'payment.succeeded', data)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({
+          status: 'needs_attention', attention_reason: 'course_missing', provider_payment_id: `pay_${code}`, amount_paid: 4900, currency_paid: 'USD',
+        });
+        expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+        expect(activities('courses.granted')).toBe(0);
+        expect(invites()).toBe(0);
+        expect(purchaseKeys()).toEqual([]);
+
+        expect(await dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+      });
+
+      it('records a SePay transfer on the flagged order without granting, so the redelivery stops', async () => {
+        const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const lan = await member('lan@example.com');
+        const { code, amount } = await sepayOrder(lan);
+        await deleteCourse(course.id);
+        const notice = { eventId: 'sepay_1', amount, orderCode: code, paymentRef: 'FT1', rawType: 'in' };
+
+        expect(await applyCourseSepayPayment(state.d1, env(), notice)).toMatchObject({ outcome: 'needs_attention' });
+        expect(await applyCourseSepayPayment(state.d1, env(), notice)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({
+          status: 'needs_attention', attention_reason: 'course_missing', amount_paid: amount, currency_paid: 'VND',
+        });
+        expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+        expect(activities('courses.granted')).toBe(0);
+        expect(invites()).toBe(0);
+        expect(purchaseKeys()).toEqual([]);
+      });
     });
 
     /**
