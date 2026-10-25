@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import { MAX_SCRUB_LENGTH, REDACTED, containsPii, looksLikePhone, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
 import { scrubCaptureResult } from '../src/lib/analytics/destinations/posthog';
+import { SMOKE_CEILING_MS, elapsedMs, regexRuns } from './helpers/work-bound';
 
 describe('phone numbers are redacted', () => {
   test('Vietnamese mobile and landline numbers, with or without separators', () => {
@@ -181,15 +182,27 @@ describe('phone scan stays linear', () => {
     ['encoded', '%2B84%20'],
   ];
 
-  test('16 KB adversarial strings are scrubbed in a few milliseconds', () => {
-    for (const [, unit] of shapes) {
-      const value = unit.repeat(Math.ceil(MAX_SCRUB_LENGTH / unit.length)).slice(0, MAX_SCRUB_LENGTH);
-      redactString(value);
-      const started = performance.now();
-      redactString(value);
-      containsPii(value);
-      const elapsed = performance.now() - started;
-      expect(elapsed).toBeLessThan(25);
+  const adversarial = shapes.map(([name, unit]): [string, string] => [name, unit.repeat(Math.ceil(MAX_SCRUB_LENGTH / unit.length)).slice(0, MAX_SCRUB_LENGTH)]);
+  const scan = (value: string) => () => {
+    redactString(value);
+    containsPii(value);
+  };
+
+  test('16 KB adversarial strings cost a bounded number of regex runs per character', () => {
+    // The work bound: about 7 runs per character for the worst shape. A window of digit groups that is not
+    // capped at 15 digits, or a scan that restarts per group, costs hundreds per character on these inputs.
+    for (const [name, value] of adversarial) {
+      const bound = 16 * value.length;
+      const runs = regexRuns(scan(value), bound);
+      expect({ name, runs, withinBound: runs <= bound }).toEqual({ name, runs, withinBound: true });
+    }
+  });
+
+  test('16 KB adversarial strings are scanned well inside the smoke ceiling', () => {
+    // Ten scans of each shape: a few to 60 ms when linear, seconds for a regex that backtracks over a run.
+    for (const [name, value] of adversarial) {
+      const ms = elapsedMs(scan(value), 10);
+      expect({ name, ms, fast: ms < SMOKE_CEILING_MS }).toEqual({ name, ms, fast: true });
     }
   });
 
