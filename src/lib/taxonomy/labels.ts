@@ -107,7 +107,7 @@ export async function getLabel(d1: D1DatabaseLike | undefined, idOrKey: string):
 }
 
 /** Field docs shared by the REST label body and the MCP label tools, so both describe the same contract. */
-export const LABEL_SLUG_DOC = 'Lowercase kebab-case, unique per kind (a deleted label keeps its slug reserved); built-in labels cannot change it';
+export const LABEL_SLUG_DOC = 'Lowercase kebab-case of at most 60 characters, unique per kind (a deleted label keeps its slug reserved); built-in labels cannot change it';
 export const LABEL_ALIASES_DOC = 'Alternative names, at most 10 strings of up to 60 characters; replaces the whole list';
 
 export interface LabelInput {
