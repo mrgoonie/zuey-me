@@ -13,7 +13,8 @@ import { getCourseOrderByCode, rowToCourseOrder } from './course-orders';
 import { getCourseById } from './course-store';
 import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from './course-order-payments';
 import {
-  chargeBackLostCourseOrder, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder, isPartialCourseReversal, isPaymentEventConflict,
+  chargeBackLostCourseOrder, courseDisputeResolvedEarly, courseDisputesPaired, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder,
+  isPartialCourseReversal, isPaymentEventConflict,
   markCourseOrderAttention, recordCoursePaymentEvent, refundDisputedCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
 } from './course-order-payments';
 
@@ -218,12 +219,20 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
       }
       if (done) return result('reversed');
     } else if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
-      // Only a charged-back order is restored; one refunded meanwhile stays revoked.
-      if (await restoreCourseOrder(d1, env, order, type, gate)) return result('restored');
+      // Only a charged-back order is restored; one refunded meanwhile stays revoked. Before its opened event the order
+      // is still paid: the outcome is only recorded, and the late opened event then finds it.
+      const restored = await restoreCourseOrder(d1, env, order, type, gate);
+      if (restored) return result(restored);
     } else {
       const lost = DODO_DISPUTE_FUNDS_LOST.has(type);
+      // A late `dispute.opened` of a dispute already won or cancelled takes nothing away; the check is also part of the
+      // batch guard, so an outcome racing this event is seen either way.
+      const opened = type === 'dispute.opened';
+      const settled = opened && await courseDisputeResolvedEarly(d1, order.id);
       // A funds-lost outcome on a paid order reports the chargeback in the same batch as the reversal.
-      if (await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost, gate)) return result('reversed');
+      if (!settled && await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost, gate, opened ? courseDisputesPaired(order.id) : undefined)) {
+        return result('reversed');
+      }
       if (lost) {
         // Usually already charged back by `dispute.opened`: the record and the chargeback report are one batch.
         await chargeBackLostCourseOrder(d1, order, moneyBack, gate);
