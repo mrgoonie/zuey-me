@@ -146,8 +146,9 @@ export async function createTag(d1: D1DatabaseLike | undefined, input: TagInput,
 }
 
 /**
- * Returns the live tag with this slug, creating it when missing. Unlike `createTag`, a slug taken by a concurrent
- * create is not a conflict: both callers get the same tag. A clash on another tag's alias or name still is.
+ * Creates the tag, or returns the one a concurrent write just created for the same name. A tag is reused only
+ * when it owns the slug and already resolves every requested name; a different tag that merely shares the slug
+ * (`slugify` maps "C++" and "C#" both to "c") or an alias stays a `409 tag_conflict`.
  */
 async function ensureTag(db: D1DatabaseLike, input: Required<TagInput>, actor: string): Promise<TopicTag> {
   try {
@@ -155,8 +156,10 @@ async function ensureTag(db: D1DatabaseLike, input: Required<TagInput>, actor: s
   } catch (err) {
     if (!(err instanceof AppError) || err.code !== 'tag_conflict') throw err;
     const existing = await getTag(db, input.slug);
-    if (existing?.slug === input.slug) return existing;
-    throw err;
+    if (existing?.slug !== input.slug) throw err;
+    const keys = new Set(tagKeys(existing));
+    if (!Object.values(input.names).every(name => typeof name === 'string' && keys.has(normalizeKey(name)))) throw err;
+    return existing;
   }
 }
 

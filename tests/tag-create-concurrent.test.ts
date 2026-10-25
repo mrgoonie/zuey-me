@@ -146,6 +146,26 @@ describe('concurrent article creates adding the same new tag (real SQLite)', () 
     const err = await createArticle(d1, { ...article('post-a'), tags: ['gamma_ray!'] }).catch((e: unknown) => e);
     expect(err instanceof AppError ? [err.status, err.code] : err).toEqual([409, 'tag_conflict']);
   });
+
+  it('a different name that only shares the slug ("C++" then "C#") is refused, not reused', async () => {
+    await createArticle(d1, { ...article('post-a'), tags: ['C++'] });
+    const err = await createArticle(d1, { ...article('post-b'), tags: ['C#'] }).catch((e: unknown) => e);
+    expect(err instanceof AppError ? [err.status, err.code] : err).toEqual([409, 'tag_conflict']);
+    expect(await getArticle(d1, 'post-b')).toBeNull();
+    expect(d1.raw.query('SELECT slug, names FROM topic_tags').all()).toEqual([{ slug: 'c', names: JSON.stringify({ vi: 'C++' }) }]);
+    expect(d1.raw.query('SELECT COUNT(*) AS n FROM article_tags').get()).toEqual({ n: 1 });
+  });
+
+  it('when the slug owner differs from the tag owning the clashing alias, nothing is reused', async () => {
+    // Legacy rows can hold a slug and an equal alias on two tags; the requested name matches neither.
+    d1.raw.run(`INSERT INTO topic_tags (id, slug, names, aliases, created_at, updated_at) VALUES
+      ('tag_x', 'gamma-ray', '{"vi":"Gamma Ray"}', '[]', '2026-01-01', '2026-01-01'),
+      ('tag_y', 'other', '{"vi":"Other"}', '["gamma-ray"]', '2026-01-01', '2026-01-01')`);
+    const err = await createArticle(d1, { ...article('post-a'), tags: ['Gamma-Ray!'] }).catch((e: unknown) => e);
+    expect(err instanceof AppError ? [err.status, err.code] : err).toEqual([409, 'tag_conflict']);
+    expect(await getArticle(d1, 'post-a')).toBeNull();
+    expect(d1.raw.query('SELECT COUNT(*) AS n FROM topic_tags').get()).toEqual({ n: 2 });
+  });
 });
 
 describe('explicit admin tag creates keep 409 tag_conflict (real SQLite)', () => {
