@@ -403,6 +403,79 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(gateRows('evt_refund')).toBe(1);
     });
 
+    /**
+     * A D1 that runs `meanwhile` once inside the won handler's restore: right after the order's update to `paid` when
+     * it runs alone, or just before the batch that carries it (D1 runs a batch as one unit, so that is the last point a
+     * webhook can land before the restore).
+     */
+    function racingRestore(meanwhile: () => Promise<unknown>): D1DatabaseLike {
+      let fired = false;
+      const fire = async () => {
+        if (fired) return;
+        fired = true;
+        await meanwhile();
+      };
+      const inner = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
+      const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => {
+        const statement: D1PreparedStatementLike = {
+          bind: (...v: unknown[]) => wrap(stmt.bind(...v)),
+          first: <T,>() => stmt.first<T>(),
+          all: <T,>() => stmt.all<T>(),
+          run: async () => {
+            const res = await stmt.run();
+            await fire();
+            return res;
+          },
+        };
+        inner.set(statement, stmt);
+        return statement;
+      };
+      return {
+        prepare: (sql: string) => /^UPDATE course_orders SET status = 'paid'/.test(sql) ? wrap(state.d1.prepare(sql)) : state.d1.prepare(sql),
+        batch: async statements => {
+          if (statements.some(s => inner.has(s))) await fire();
+          return state.d1.batch(statements.map(s => inner.get(s) ?? s));
+        },
+      };
+    }
+    const inviteActions = () => state.d1.raw.query<{ action: string }, []>('SELECT action FROM github_invites ORDER BY repo').all().map(r => r.action);
+
+    it('keeps access revoked when a refund lands while dispute.won restores the order', async () => {
+      const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      const order = await getCourseOrderByCode(state.d1, code);
+      await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+      const refund = { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' };
+      const d1 = racingRestore(() => dodo('evt_refund', 'refund.succeeded', refund));
+      expect(await applyDodoCourseWebhook(d1, env(), 'evt_won', { type: 'dispute.won', data: { payment_id: `pay_${code}` } })).toMatchObject({ outcome: 'ignored' });
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+      expect(inviteActions()).toEqual(['remove']);
+      expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+      expect(purchases()).toBe(1);
+      expect(await dodo('evt_refund', 'refund.succeeded', refund)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'duplicate_event' });
+    });
+
+    it('restores access, the GitHub invite and the order logs once when a dispute is won', async () => {
+      const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      const logs = (action: string) => state.d1.raw.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM user_activity WHERE action = ?').get(action)?.n;
+      await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` });
+      expect(inviteActions()).toEqual(['remove']);
+      expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'restored' });
+      expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'duplicate_event' });
+      expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'paid', attention_reason: 'dispute.won' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+      expect(inviteActions()).toEqual(['invite']);
+      expect(logs('courses.granted')).toBe(2);
+      expect(logs('courses.order_paid')).toBe(2);
+      expect(purchases()).toBe(1);
+      expect(refundKeys()).toEqual([]);
+    });
+
     it('reports no refund after an opened dispute was lost', async () => {
       const { course } = await publishedCourse();
       const lan = await member('lan@example.com');
@@ -527,6 +600,41 @@ describe('Dodo course payments, refunds and disputes', () => {
           expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:${s.kind}`]);
         });
       }
+    }
+
+    const restorePoints = [
+      ['the GitHub invite', sqlPoint(/^\s*INSERT INTO github_invites/)],
+      ['the grant log', activity('courses.granted')],
+      ['the access grant', sqlPoint(/^\s*INSERT INTO course_purchases/)],
+      ['the order log', activity('courses.order_paid')],
+      ['the status update', sqlPoint(/^UPDATE course_orders SET status = 'paid'/)],
+    ] as const;
+    for (const [point, fails] of restorePoints) {
+      it(`writes nothing when a won dispute fails at ${point}, and the retry restores it once`, async () => {
+        await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        const invites = () => count("SELECT COUNT(*) AS n FROM github_invites WHERE action = 'invite'");
+        const before = { granted: activities('courses.granted'), paid: activities('courses.order_paid') };
+        const payload = { type: 'dispute.won', data: { payment_id: `pay_${code}` } };
+
+        await expect(applyDodoCourseWebhook(failingD1(fails), env(), 'evt_w', payload)).rejects.toThrow(/injected/);
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        expect(invites()).toBe(0);
+        expect(activities('courses.granted')).toBe(before.granted);
+        expect(activities('courses.order_paid')).toBe(before.paid);
+        expect(gate('evt_w')).toBe(0);
+
+        expect(await dodo('evt_w', 'dispute.won', payload.data)).toMatchObject({ outcome: 'restored' });
+        expect(await dodo('evt_w', 'dispute.won', payload.data)).toMatchObject({ outcome: 'duplicate_event' });
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
+        expect(invites()).toBe(1);
+        expect(activities('courses.granted')).toBe(before.granted + 1);
+        expect(activities('courses.order_paid')).toBe(before.paid + 1);
+        expect(refundKeys()).toEqual([]);
+      });
     }
 
     it('writes nothing when an admin refund fails at the refund event, and the admin can retry it', async () => {
