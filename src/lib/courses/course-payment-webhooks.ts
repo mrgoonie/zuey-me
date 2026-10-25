@@ -15,7 +15,7 @@ import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from '
 import {
   chargeBackLostCourseOrder, courseDisputeResolvedEarly, courseDisputesPaired, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder,
   isPartialCourseReversal, isPaymentEventConflict,
-  markCourseOrderAttention, recordCoursePaymentEvent, refundDisputedCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
+  markCourseOrderAttention, recordCoursePaymentEvent, refundCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
 } from './course-order-payments';
 
 export interface CourseTransferNotice {
@@ -206,18 +206,7 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
       // chargeback is still counted. A refund while a dispute is open moves the charged-back order to refunded, so a won
       // or cancelled dispute no longer restores it.
       const reason = isPartialCourseReversal(order, amount) ? 'dodo_partial_refund' : 'dodo_refund';
-      const refund = (o: CourseOrder) => o.status === 'charged_back'
-        ? refundDisputedCourseOrder(d1, o, reason, moneyBack, gate)
-        : reverseCourseOrder(d1, o, 'refunded', reason, 'system', moneyBack, true, gate);
-      let done = await refund(order);
-      if (!done) {
-        // The order was read before this batch ran: a dispute that opened or was won meanwhile changed its status, so the
-        // refund is applied once more on the current order instead of being dropped. Only the batch that applies
-        // writes the record.
-        const current = await getCourseOrderByCode(d1, order.code);
-        if (current && current.status !== order.status) done = await refund(current);
-      }
-      if (done) return result('reversed');
+      if (await refundCourseOrder(d1, order, reason, 'system', moneyBack, gate)) return result('reversed');
     } else if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
       // Only a charged-back order is restored; one refunded meanwhile stays revoked. Before its opened event the order
       // is still paid: the outcome is only recorded, and the late opened event then finds it.
