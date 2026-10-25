@@ -31,6 +31,7 @@ import { taxonomyMcpModule } from '../src/lib/taxonomy/mcp';
 import { taxonomyOpenApi } from '../src/lib/taxonomy/openapi';
 import { createLabel, deleteLabel, updateLabel } from '../src/lib/taxonomy/labels';
 import type { LabelKind } from '../src/lib/taxonomy/labels';
+import { parseTagInput } from '../src/lib/taxonomy/tags';
 import { GET as listApi, POST as createApi } from '../src/pages/api/v1/articles/index';
 import { GET as getApi, PUT as putApi } from '../src/pages/api/v1/articles/[slug]';
 import { POST as publishApi } from '../src/pages/api/v1/articles/[slug]/publish';
@@ -734,6 +735,28 @@ describe('REST, OpenAPI and MCP registration', () => {
         expect(props[field]).toEqual(restProps[field]);
       }
     }
+  });
+
+  it('the MCP tag_create and tag_update schemas describe slug, names and aliases exactly as the REST tag body does', () => {
+    const restProps = rec(rec(taxonomyOpenApi.schemas.TopicTagInput).properties);
+    expect(String(rec(restProps.slug).description)).toContain('at most 60 characters');
+    expect(String(rec(restProps.names).description)).toContain('each up to 40 characters');
+    expect(String(rec(restProps.aliases).description)).toContain('at most 10 strings of up to 40 characters');
+    for (const name of ['tag_create', 'tag_update']) {
+      const tool = taxonomyMcpModule.tools.find(t => t.name === name);
+      const props = rec(rec(tool?.inputSchema).properties);
+      for (const field of ['slug', 'names', 'aliases']) {
+        expect(rec(props[field]).description).toBeTruthy();
+        expect(rec(props[field]).description).toBe(rec(restProps[field]).description);
+      }
+    }
+    // The documented limits are the ones the tag parser enforces.
+    const rejects = (body: Record<string, unknown>) => expect(() => parseTagInput(body, 'update')).toThrow(AppError);
+    expect(parseTagInput({ slug: 'a'.repeat(60), names: { en: 'n'.repeat(40) }, aliases: Array.from({ length: 10 }, (_, i) => `${i}`.padEnd(40, 'x')) }, 'update').aliases).toHaveLength(10);
+    rejects({ slug: 'a'.repeat(61) });
+    rejects({ names: { en: 'n'.repeat(41) } });
+    rejects({ aliases: Array.from({ length: 11 }, (_, i) => `alias ${i}`) });
+    rejects({ aliases: ['x'.repeat(41)] });
   });
 
   it('documents the 409 codes each taxonomy CRUD operation actually throws', async () => {
