@@ -144,8 +144,8 @@ function discoveryFromArgs(args: Record<string, unknown>) {
 
 /** Shared wording of the write receipt in tool descriptions. */
 const RECEIPT_NOTE = 'The response carries a receipt (operation_success, operation, locale, article_revision, edition_draft_revision, published_revision, has_unpublished_changes, submitted_fields, next_action); status still describes the public edition, not this write.';
-/** Update and publish answers when the write committed but the article could not be read back. */
-const READ_BACK_NOTE = 'read_back "failed" means the write committed but the article could not be read back: do not retry (a retry gets 409); the edition, revisions, document and receipt are exact, while tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty), so call article_get for them; an idempotent replay repeats the flag.';
+/** Write answers when the write committed but the article could not be read back. */
+const READ_BACK_NOTE = 'read_back "failed" means the write committed but the article could not be read back: do not retry (a retry gets 409, slug_taken for article_create); the edition shown, revisions, document and receipt are exact, while tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty, also after article_tags_set), so call article_get for them; an idempotent replay repeats the flag.';
 
 /** Write tools that accept an idempotency_key. */
 const IDEMPOTENT_TOOLS = new Set(['article_create', 'article_update', 'article_publish', 'article_delete', 'article_edition_delete', 'article_tags_set']);
@@ -194,7 +194,7 @@ export const articlesMcpModule: McpToolModule = {
       },
     },
     {
-      name: 'article_create', description: `Admin: create a draft article; its first edition uses locale (default vi). ${RECEIPT_NOTE} response_mode "summary" omits the saved document from the answer.`,
+      name: 'article_create', description: `Admin: create a draft article; its first edition uses locale (default vi). ${RECEIPT_NOTE} ${READ_BACK_NOTE} response_mode "summary" omits the saved document from the answer.`,
       inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp, ...responseModeProp, ...idempotencyKeyProp }, required: ['slug', 'title'] },
     },
     {
@@ -218,7 +218,7 @@ export const articlesMcpModule: McpToolModule = {
     { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp, ...idempotencyKeyProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     {
-      name: 'article_edition_delete', description: `Admin: delete one non-primary locale edition. Requires expected_revision. ${RECEIPT_NOTE} The answer shows the primary edition; its receipt describes the deleted locale (published_revision null, next_action none).`,
+      name: 'article_edition_delete', description: `Admin: delete one non-primary locale edition. Requires expected_revision. ${RECEIPT_NOTE} The answer shows the primary edition; its receipt describes the deleted locale (published_revision null, next_action none). ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'locale', 'expected_revision'] },
     },
     {
@@ -226,7 +226,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, revision: { type: 'integer' } }, required: ['slug'] },
     },
     {
-      name: 'article_tags_set', description: `Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision. ${RECEIPT_NOTE} Tags are public at once; the receipt describes the primary edition.`,
+      name: 'article_tags_set', description: `Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision. ${RECEIPT_NOTE} Tags are public at once; the receipt describes the primary edition. ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'tags', 'expected_revision'] },
     },
     {
