@@ -19,6 +19,7 @@ import { diagram, survey, table } from './definitions/data';
 import { chart } from './definitions/chart';
 import { interactive } from './definitions/interactive';
 import { card, layout, section, toggle } from './definitions/containers';
+import { comparison, progress, stat, steps, tabs } from './definitions/composition';
 
 type BlockRegistry = { readonly [K in BlockType]: BlockDefinition<BlockOf<K>> };
 
@@ -28,6 +29,7 @@ export const BLOCK_REGISTRY: BlockRegistry = {
   math, gallery, audio, video, file, bookmark, toggle,
   icon,
   section, card,
+  tabs, stat, steps, comparison, progress,
 };
 
 /** Definition for a block type (callers pass blocks of that same type). */

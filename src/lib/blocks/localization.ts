@@ -93,6 +93,30 @@ function stringFields(block: Block): FieldSpec[] {
     case 'toggle': inline('summary', block.summary); break;
     case 'icon': plainText('label', block.label); break;
     case 'card': plainText('title', block.title); plainText('image.alt', block.image?.alt); inline('footer', block.footer); break;
+    case 'tabs': block.tabs.forEach((t, i) => plainText(`tabs[${i}].label`, t.label)); break;
+    case 'stat':
+      plainText('title', block.title);
+      block.items.forEach((s, i) => {
+        plainText(`items[${i}].label`, s.label); plainText(`items[${i}].unit`, s.unit); plainText(`items[${i}].delta.label`, s.delta?.label); inline(`items[${i}].note`, s.note);
+      });
+      break;
+    case 'steps': block.items.forEach((s, i) => { inline(`items[${i}].title`, s.title); plainText(`items[${i}].date`, s.date); }); break;
+    case 'comparison':
+      plainText('title', block.title);
+      block.options.forEach((o, i) => {
+        plainText(`options[${i}].name`, o.name); plainText(`options[${i}].badge`, o.badge); inline(`options[${i}].description`, o.description);
+        o.pros?.forEach((s, j) => inline(`options[${i}].pros[${j}]`, s));
+        o.cons?.forEach((s, j) => inline(`options[${i}].cons[${j}]`, s));
+      });
+      block.features?.forEach((f, i) => {
+        plainText(`features[${i}].label`, f.label);
+        f.values.forEach((x, j) => { if (typeof x === 'string') plainText(`features[${i}].values[${j}]`, x); });
+      });
+      break;
+    case 'progress':
+      plainText('title', block.title);
+      block.items.forEach((s, i) => { plainText(`items[${i}].label`, s.label); inline(`items[${i}].note`, s.note); });
+      break;
     default: break;
   }
   return out;
