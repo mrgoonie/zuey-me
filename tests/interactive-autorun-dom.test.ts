@@ -590,6 +590,32 @@ describe('auto-started frames keep the watchdog, message checks and broker quota
     expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('unresponsive');
   });
 
+  it('keeps a ready widget whose own load is delayed by a busy shared process, within the heartbeat limit', () => {
+    const { view, say } = started();
+    say({ type: 'ready' });
+    // A neighbour's 6 s synchronous start-up blocks the shared sandbox process: nothing arrives meanwhile.
+    advance(6_000);
+    expect(frames(view)).toHaveLength(1);
+    say({ type: 'loaded' });
+    for (let i = 0; i < 10; i++) {
+      advance(1000);
+      say({ type: 'heartbeat' });
+    }
+    expect(frames(view)).toHaveLength(1);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('running');
+  });
+
+  it('still halts a ready widget that stays silent past the heartbeat limit without reporting its own load', () => {
+    expect(frameModule.LOADED_AFTER_READY_MS).toBe(frameModule.HEARTBEAT_TIMEOUT_MS);
+    const { view, say } = started();
+    say({ type: 'ready' });
+    advance(frameModule.HEARTBEAT_TIMEOUT_MS - 1);
+    expect(frames(view)).toHaveLength(1);
+    advance(2_001);
+    expect(frames(view)).toHaveLength(0);
+    expect(view.querySelector('figure.zif')?.getAttribute('data-state')).toBe('unresponsive');
+  });
+
   it('a hidden tab still halts a frame that stays silent past the hidden allowance', () => {
     const { view, say } = started();
     say({ type: 'ready' });
