@@ -334,27 +334,30 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(reversals()).toBe(1);
     });
 
-    /** A D1 that runs `meanwhile` right after `eventId` is recorded, as a webhook landing between the order read and the update. */
+    /**
+     * A D1 that runs `meanwhile` right after the handler checked whether `eventId` was already recorded, as a webhook
+     * landing between the order read and the reversal batch.
+     */
     function racing(eventId: string, meanwhile: () => Promise<unknown>): D1DatabaseLike {
       let fired = false;
       return {
         prepare(sql: string) {
           const stmt = state.d1.prepare(sql);
-          if (!sql.startsWith('INSERT INTO payment_events')) return stmt;
+          if (!sql.startsWith('SELECT 1 AS found FROM payment_events')) return stmt;
           return {
             bind(...values: unknown[]) {
               const bound = stmt.bind(...values);
               if (fired || values[1] !== eventId) return bound;
               return {
                 bind: (...v: unknown[]) => bound.bind(...v),
-                first<T>() { return bound.first<T>(); },
-                all<T>() { return bound.all<T>(); },
-                async run() {
-                  const res = await bound.run();
+                async first<T>() {
+                  const res = await bound.first<T>();
                   fired = true;
                   await meanwhile();
                   return res;
                 },
+                all<T>() { return bound.all<T>(); },
+                run: () => bound.run(),
               };
             },
             first<T>() { return stmt.first<T>(); },
@@ -365,6 +368,8 @@ describe('Dodo course payments, refunds and disputes', () => {
         batch: statements => state.d1.batch(statements),
       };
     }
+    const gateRows = (eventId: string) => state.d1.raw
+      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM payment_events WHERE provider = 'dodo' AND event_id = ?").get(eventId)?.n;
 
     it('applies a refund that races dispute.opened, so the won dispute restores nothing', async () => {
       const { course } = await publishedCourse();
@@ -378,6 +383,9 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
       expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
       expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+      // The first batch found the order charged back and wrote nothing; the retry wrote the record with the refund.
+      expect(gateRows('evt_refund')).toBe(1);
+      expect(await dodo('evt_refund', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
     });
 
     it('applies a refund that races dispute.won, so access does not stay restored', async () => {
@@ -392,6 +400,7 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
       expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
       expect(refundKeys()).toEqual([`refund:dodo:course_order:${order?.id}:refunded`]);
+      expect(gateRows('evt_refund')).toBe(1);
     });
 
     it('reports no refund after an opened dispute was lost', async () => {
@@ -533,6 +542,130 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
       expect(activities('courses.order_refunded')).toBe(1);
       expect(refundKeys()).toEqual([`refund:${order?.provider}:course_order:${order?.id}:refunded`]);
+    });
+
+    /**
+     * The test database, except that the worker dies at the first write matching `at` (alone or in a batch): that
+     * write never commits, and every later call fails too, so no cleanup runs. It also records each batch's SQL and
+     * each write run alone.
+     */
+    function crashingD1(at: (sql: string) => boolean = () => false) {
+      const base = state.d1;
+      let dead = false;
+      const batches: string[][] = [];
+      const runs: string[] = [];
+      const alive = () => { if (dead) throw new Error('worker crashed'); };
+      const crash = (): never => { dead = true; throw new Error('worker crashed'); };
+      const sources = new WeakMap<D1PreparedStatementLike, { sql: string; inner: D1PreparedStatementLike }>();
+      const wrap = (sql: string, inner: D1PreparedStatementLike): D1PreparedStatementLike => {
+        const statement: D1PreparedStatementLike = {
+          bind: (...v: unknown[]) => wrap(sql, inner.bind(...v)),
+          first: async <T,>() => { alive(); return inner.first<T>(); },
+          all: async <T,>() => { alive(); return inner.all<T>(); },
+          run: async () => {
+            alive();
+            runs.push(sql);
+            if (at(sql)) crash();
+            return inner.run();
+          },
+        };
+        sources.set(statement, { sql, inner });
+        return statement;
+      };
+      const d1: D1DatabaseLike = {
+        prepare: (sql: string) => wrap(sql, base.prepare(sql)),
+        batch: async (statements: D1PreparedStatementLike[]) => {
+          alive();
+          const list = statements.map(s => {
+            const source = sources.get(s);
+            if (!source) throw new Error('foreign statement');
+            return source;
+          });
+          batches.push(list.map(s => s.sql));
+          if (list.some(s => at(s.sql))) crash();
+          return base.batch(list.map(s => s.inner));
+        },
+      };
+      return { d1, batches, runs };
+    }
+
+    const isGate = (sql: string) => sql.startsWith('INSERT INTO payment_events');
+    const crashes = [
+      { name: 'a refund of a paid order', type: 'refund.succeeded', kind: 'refunded', opened: false, outcome: 'reversed', at: sqlPoint(/^UPDATE course_orders SET status/) },
+      { name: 'a lost dispute of a paid order', type: 'dispute.lost', kind: 'charged_back', opened: false, outcome: 'reversed', at: sqlPoint(/^UPDATE course_orders SET status/) },
+      { name: 'an opened dispute of a paid order', type: 'dispute.opened', kind: 'charged_back', opened: false, outcome: 'reversed', at: sqlPoint(/^UPDATE course_orders SET status/) },
+      { name: 'a refund during an open dispute', type: 'refund.succeeded', kind: 'refunded', opened: true, outcome: 'reversed', at: sqlPoint(/^UPDATE course_orders SET status/) },
+      { name: 'a lost dispute after an opened one', type: 'dispute.lost', kind: 'charged_back', opened: true, outcome: 'ignored', at: sqlPoint(/INSERT INTO analytics_outbox/) },
+    ] as const;
+
+    for (const s of crashes) {
+      it(`keeps no record of ${s.name} when the worker dies before the reversal commits, so the redelivery applies it once`, async () => {
+        await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+        const order = await getCourseOrderByCode(state.d1, code);
+        if (s.opened) expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        const statusBefore = (await getCourseOrderByCode(state.d1, code))?.status;
+        const payload = { type: s.type, data: { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' } };
+
+        await expect(applyDodoCourseWebhook(crashingD1(s.at).d1, env(), 'evt_x', payload)).rejects.toThrow(/crashed/);
+        expect(gate('evt_x')).toBe(0);
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe(statusBefore);
+
+        expect(await dodo('evt_x', s.type, payload.data)).toMatchObject({ outcome: s.outcome });
+        expect(await dodo('evt_x', s.type, payload.data)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(gate('evt_x')).toBe(1);
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe(s.kind);
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        expect(activities('courses.revoked')).toBe(1);
+        expect(activities(`courses.order_${s.kind}`)).toBe(1);
+        expect(removals()).toBe(1);
+        const money = s.type === 'dispute.opened' ? [] : [`refund:dodo:course_order:${order?.id}:${s.kind}`];
+        expect(refundKeys()).toEqual(money);
+      });
+
+      it(`writes the record of ${s.name} only as the first statement of its reversal batch`, async () => {
+        await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const { code } = await paidWithCertificate('lan@example.com');
+        if (s.opened) expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+        const spy = crashingD1();
+        const payload = { type: s.type, data: { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' } };
+        expect(await applyDodoCourseWebhook(spy.d1, env(), 'evt_x', payload)).toMatchObject({ outcome: s.outcome });
+        expect(spy.runs.filter(isGate)).toEqual([]);
+        // Every batch is an attempt that carries the record under its own guard; only the one that applies writes it.
+        expect(spy.batches.length).toBeGreaterThan(0);
+        for (const batch of spy.batches) {
+          expect(isGate(batch[0])).toBe(true);
+          expect(batch.some(s.at)).toBe(true);
+        }
+        expect(gate('evt_x')).toBe(1);
+
+        // A redelivery is found before anything runs and writes nothing.
+        const again = crashingD1();
+        expect(await applyDodoCourseWebhook(again.d1, env(), 'evt_x', payload)).toMatchObject({ outcome: 'duplicate_event' });
+        expect(again.batches).toEqual([]);
+        expect(again.runs).toEqual([]);
+      });
+    }
+
+    it('rolls the whole reversal back when its record is already taken, and answers duplicate_event', async () => {
+      await publishedCourse();
+      const { code, userId, courseId } = await paidWithCertificate('lan@example.com');
+      const order = await getCourseOrderByCode(state.d1, code);
+      await state.d1.prepare("INSERT INTO payment_events (provider, event_id, course_order_id, raw_type, received_at) VALUES ('dodo', 'evt_x', ?, 'refund.succeeded', ?)")
+        .bind(order?.id ?? '', new Date(state.now).toISOString()).run();
+      // The first record check misses it, as for a delivery that checked just before another one committed.
+      let checks = 0;
+      const blind: D1DatabaseLike = {
+        prepare: (sql: string) => state.d1.prepare(sql.startsWith('SELECT 1 AS found FROM payment_events') && checks++ === 0 ? 'SELECT 1 AS found WHERE 0 AND ? AND ?' : sql),
+        batch: statements => state.d1.batch(statements),
+      };
+      const payload = { type: 'refund.succeeded', data: { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' } };
+      expect(await applyDodoCourseWebhook(blind, env(), 'evt_x', payload)).toMatchObject({ outcome: 'duplicate_event' });
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+      expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
+      expect(activities('courses.order_refunded')).toBe(0);
+      expect(refundKeys()).toEqual([]);
+      expect(gate('evt_x')).toBe(1);
     });
   });
   it('keeps the string amount of a signed Dodo dispute on the payment event and the chargeback report', async () => {
