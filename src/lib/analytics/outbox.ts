@@ -12,11 +12,13 @@
  *   whether a row is sent, retried or dead.
  * - Analytics never affects payment: enqueueing validates and inserts inside a catch-all and returns an
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
- *   with it) so a missing table or a failed insert can never roll a payment back.
+ *   with it) so a missing table or a failed insert can never roll a payment back. The one exception is
+ *   `outboxInsertStatement`, for a once-per-fact gate row that must land together with its event (the
+ *   Dodo refund/dispute log): the batch holds no payment state, so a failure only makes the webhook retry.
  * - A drain run is bounded: at most MAX_DRAIN_QUERIES D1 statements and DEFAULT_DRAIN_LIMIT deliveries by
  *   default, so it fits the per-invocation limits of the Workers free plan.
  */
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import { iso, membersRuntime } from '../members/runtime';
 import type { EventProperties, ServerEventName } from './events';
 import { validateEvent } from './events';
@@ -84,6 +86,48 @@ function resolveOccurredAt(value: string | null | undefined, nowMs: number): str
   return iso(Number.isFinite(parsed) ? parsed : nowMs);
 }
 
+/** A `payment_events` row whose presence, when the statement runs, means the event must not be queued. */
+export interface PaymentEventGuard {
+  provider: string;
+  eventId: string;
+}
+
+/**
+ * Validates the event against the taxonomy and PII guard and returns its outbox insert (once per `dedupeKey`)
+ * without running it, for a caller that writes the event in one D1 batch with the fact it reports. With
+ * `unlessPaymentEvent`, nothing is inserted when that row exists at the time the batch runs. Null when the
+ * event is invalid (logged). Throws only if the statement cannot be prepared.
+ */
+export function outboxInsertStatement<E extends ServerEventName>(
+  d1: D1DatabaseLike, input: OutboxEventInput<E>, unlessPaymentEvent?: PaymentEventGuard,
+): D1PreparedStatementLike | null {
+  if (!DEDUPE_KEY_RE.test(input.dedupeKey) || !isValidDistinctId(input.distinctId)) {
+    console.warn(`analytics outbox: rejected ${input.event} (invalid dedupe key or distinct id)`);
+    return null;
+  }
+  const checked = validateEvent(input.event, input.properties, 'server');
+  if (!checked.ok) {
+    const where = 'property' in checked.error ? ` ${checked.error.property}` : '';
+    console.warn(`analytics outbox: rejected ${input.event} (${checked.error.reason}${where})`);
+    return null;
+  }
+  const nowMs = membersRuntime.now();
+  const now = iso(nowMs);
+  const values = [
+    crypto.randomUUID(), input.dedupeKey, input.event, input.distinctId, JSON.stringify(checked.properties),
+    resolveOccurredAt(input.occurredAt, nowMs), now, now, now,
+  ];
+  const row = "?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?";
+  const source = unlessPaymentEvent
+    ? `SELECT ${row} WHERE NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = ? AND event_id = ?)`
+    : `VALUES (${row})`;
+  const guard = unlessPaymentEvent ? [unlessPaymentEvent.provider, unlessPaymentEvent.eventId] : [];
+  return d1.prepare(
+    `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
+     ${source} ON CONFLICT (dedupe_key) DO NOTHING`
+  ).bind(...values, ...guard);
+}
+
 /**
  * Validates the event against the taxonomy and PII guard, then inserts it once per `dedupeKey`.
  * Never throws: returns `rejected` (invalid event, logged), `duplicate`, `queued` or `failed` (logged).
@@ -93,26 +137,9 @@ export async function enqueueServerEvent<E extends ServerEventName>(
 ): Promise<EnqueueOutcome> {
   try {
     if (!d1) return 'failed';
-    if (!DEDUPE_KEY_RE.test(input.dedupeKey) || !isValidDistinctId(input.distinctId)) {
-      console.warn(`analytics outbox: rejected ${input.event} (invalid dedupe key or distinct id)`);
-      return 'rejected';
-    }
-    const checked = validateEvent(input.event, input.properties, 'server');
-    if (!checked.ok) {
-      const where = 'property' in checked.error ? ` ${checked.error.property}` : '';
-      console.warn(`analytics outbox: rejected ${input.event} (${checked.error.reason}${where})`);
-      return 'rejected';
-    }
-    const nowMs = membersRuntime.now();
-    const now = iso(nowMs);
-    const res = await d1.prepare(
-      `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-       ON CONFLICT (dedupe_key) DO NOTHING`
-    ).bind(
-      crypto.randomUUID(), input.dedupeKey, input.event, input.distinctId, JSON.stringify(checked.properties),
-      resolveOccurredAt(input.occurredAt, nowMs), now, now, now,
-    ).run();
+    const statement = outboxInsertStatement(d1, input);
+    if (!statement) return 'rejected';
+    const res = await statement.run();
     return res.meta?.changes === 0 ? 'duplicate' : 'queued';
   } catch (err) {
     console.warn(`analytics outbox: could not queue ${input.event}: ${errorMessage(err)}`);

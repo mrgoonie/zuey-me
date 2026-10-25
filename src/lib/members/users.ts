@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { forgetGa4Client } from '../analytics/ga4-attribution';
 import { deferChannelAccessPush, invalidateSenders } from '../channel-access/invalidate';
@@ -160,8 +160,19 @@ export async function insertActivity(
   detail: Record<string, unknown> | null = null,
   request?: Request,
 ): Promise<void> {
-  await d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso()).run();
+  await activityStatement(d1, userId, action, detail, request).run();
+}
+
+/** The activity insert of `insertActivity` without running it, for a caller that writes it in a D1 batch. */
+export function activityStatement(
+  d1: D1DatabaseLike,
+  userId: string,
+  action: string,
+  detail: Record<string, unknown> | null = null,
+  request?: Request,
+): D1PreparedStatementLike {
+  return d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso());
 }
 
 export async function logActivity(

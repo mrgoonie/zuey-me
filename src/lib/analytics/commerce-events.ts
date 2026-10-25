@@ -10,7 +10,7 @@
 import type { D1DatabaseLike } from '../../db/store';
 import { ga4OutboxProperties } from './ga4-attribution';
 import { GUEST_ID_PREFIX } from './identity';
-import type { EnqueueOutcome } from './outbox';
+import type { EnqueueOutcome, OutboxEventInput } from './outbox';
 import { enqueueServerEvent, subscriptionExpiredKey } from './outbox';
 
 export type CommerceProvider = 'sepay' | 'dodo' | 'paypal';
@@ -128,15 +128,19 @@ export async function queuePaymentFailed(d1: D1DatabaseLike, p: PaymentIssueInpu
   });
 }
 
-export async function queueRefund(
-  d1: D1DatabaseLike,
-  p: PaymentIssueInput & {
-    reason: string; partial?: boolean;
-    /** The refunded purchase's `transactionId` (as given to `queuePurchase`), when known. */
-    purchaseTransactionId?: string | null;
-  },
-): Promise<EnqueueOutcome> {
-  return enqueueServerEvent(d1, {
+export type RefundInput = PaymentIssueInput & {
+  reason: string; partial?: boolean;
+  /** The refunded purchase's `transactionId` (as given to `queuePurchase`), when known. */
+  purchaseTransactionId?: string | null;
+};
+
+export async function queueRefund(d1: D1DatabaseLike, p: RefundInput): Promise<EnqueueOutcome> {
+  return enqueueServerEvent(d1, await refundEvent(d1, p));
+}
+
+/** The `refund` outbox event of money that went back, keyed by `reference` (see `queueRefund`). Never throws. */
+export async function refundEvent(d1: D1DatabaseLike, p: RefundInput): Promise<OutboxEventInput<'refund'>> {
+  return {
     event: 'refund',
     distinctId: p.distinctId,
     dedupeKey: `refund:${p.provider}:${p.reference}`,
@@ -147,7 +151,7 @@ export async function queueRefund(
       ...(await ga4OutboxProperties(d1, p.distinctId, false)),
     },
     occurredAt: p.occurredAt,
-  });
+  };
 }
 
 /** `subscription_cancel_scheduled` / `subscription_cancelled` of a card subscription: once per card. */
