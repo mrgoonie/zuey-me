@@ -19,7 +19,14 @@ export interface SyncReadsOptions {
   fetchImpl?: FetchLike;
   now?: () => Date;
   baseUrl?: string;
+  /** Tagged items to skip before this batch (position in crawl order). Defaults to 0. */
+  offset?: number;
+  /** Max tagged items to summarize in this call; omit to process every remaining item. */
+  limit?: number;
 }
+
+/** A sync run plus the offset for the next batch (`null` when this call finished the whole set). */
+export type ReadsSyncBatch = ReadsSyncRun & { next_offset: number | null };
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -35,7 +42,7 @@ function describeError(err: unknown): string {
  * Crawls the AnyMD library, keeps items tagged `zuey-reads`, summarizes new or changed content,
  * and hides rows that lost the tag. Raw article markdown is only hashed and summarized, never stored.
  */
-export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncRun> {
+export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncBatch> {
   const now = opts.now ?? (() => new Date());
   const client = new AnyMdClient(opts.apiKey, opts.fetchImpl, opts.baseUrl);
   const errors: string[] = [];
@@ -53,12 +60,13 @@ export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncRun> {
   };
   await insertSyncRun(opts.d1, run);
 
-  const finish = async (status: ReadsSyncRun['status']): Promise<ReadsSyncRun> => {
+  let nextOffset: number | null = null;
+  const finish = async (status: ReadsSyncRun['status']): Promise<ReadsSyncBatch> => {
     run.status = status;
     run.finished_at = now().toISOString();
     run.error = errors.length ? errors.join('\n').slice(0, MAX_ERROR_LENGTH) : null;
     await finishSyncRun(opts.d1, run);
-    return run;
+    return { ...run, next_offset: nextOffset };
   };
 
   // 1. Crawl every library page; AnyMD has no tag filter so we filter client-side.
@@ -89,7 +97,11 @@ export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncRun> {
   run.tagged = tagged.length;
 
   // 2. Summarize new/changed items; skip the LLM when the content hash is unchanged.
-  for (const item of tagged) {
+  // A bounded batch keeps each HTTP request under the edge timeout; the caller loops on next_offset.
+  const offset = Math.max(0, opts.offset ?? 0);
+  const end = opts.limit === undefined ? tagged.length : Math.min(tagged.length, offset + Math.max(1, opts.limit));
+  nextOffset = end < tagged.length ? end : null;
+  for (const item of tagged.slice(offset, end)) {
     try {
       const markdown = await client.getMarkdown(item.id);
       const contentHash = await sha256Hex(markdown);
@@ -127,17 +139,21 @@ export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncRun> {
     }
   }
 
-  // 3. Hide untagged rows only when we saw the complete tagged set.
-  if (crawlComplete) run.hidden = await hideReadsNotIn(opts.d1, new Set(tagged.map(i => i.id)));
+  // 3. Hide untagged rows only when we saw the complete tagged set, once the final batch runs.
+  if (crawlComplete && nextOffset === null) run.hidden = await hideReadsNotIn(opts.d1, new Set(tagged.map(i => i.id)));
 
   return finish(errors.length ? 'partial' : 'success');
 }
 
 /** Builds a sync from runtime bindings, failing honestly when configuration is missing. */
-export async function syncReadsFromEnv(env: RuntimeEnv, summarizer?: Summarizer): Promise<ReadsSyncRun> {
+export async function syncReadsFromEnv(
+  env: RuntimeEnv,
+  summarizer?: Summarizer,
+  batch: Pick<SyncReadsOptions, 'offset' | 'limit'> = {},
+): Promise<ReadsSyncBatch> {
   const apiKey = env.ANYMD_API_KEY?.trim();
   if (!apiKey) throw new AppError(503, 'anymd_unconfigured', 'ANYMD_API_KEY is not configured; Zuey Reads cannot sync from AnyMD');
   const resolvedSummarizer = summarizer ?? createSummarizer(env.AI, env.READS_SUMMARY_MODEL);
   if (!env.DB) throw new AppError(503, 'db_unconfigured', 'D1 database binding (DB) is not configured; sync results cannot be stored');
-  return syncReads({ d1: env.DB, apiKey, summarizer: resolvedSummarizer });
+  return syncReads({ d1: env.DB, apiKey, summarizer: resolvedSummarizer, ...batch });
 }

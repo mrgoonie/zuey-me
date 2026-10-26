@@ -125,6 +125,24 @@ describe('Zuey Reads sync', () => {
     expect(dump).not.toContain('Alpha body');
   });
 
+  it('batches the summarize step by offset/limit and hides untagged rows only after the final batch', async () => {
+    const docs = baseDocs();
+    await syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer: countingSummarizer() });
+    docs[2].tags = 'misc'; // Gamma loses the tag
+    docs.push({ id: 'd', title: 'Delta', tags: 'zuey-reads', markdown: '# Delta body' });
+    const summarizer = countingSummarizer();
+    const run = (offset: number) =>
+      syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer, offset, limit: 1 });
+
+    const first = await run(0);
+    expect(first).toMatchObject({ tagged: 2, unchanged: 1, summarized: 0, hidden: 0, next_offset: 1 });
+    expect((await rows(d1)).find(r => r.id === 'c')?.visible).toBe(1);
+
+    const last = await run(first.next_offset ?? -1);
+    expect(last).toMatchObject({ summarized: 1, hidden: 1, next_offset: null });
+    expect((await rows(d1)).map(r => [r.id, r.visible])).toEqual([['a', 1], ['c', 0], ['d', 1]]);
+  });
+
   it('second sync with unchanged content does not call the LLM', async () => {
     const docs = baseDocs();
     await syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer: countingSummarizer() });
@@ -219,6 +237,18 @@ describe('Zuey Reads routes', () => {
     expect((await res.json()).success).toBe(false);
     const forbidden = await postReadsSync(ctx(env, { method: 'POST', path: '/api/v1/reads/sync', token: readKey }));
     expect(forbidden.status).toBe(403);
+  });
+
+  it('rejects an invalid batch limit before touching AnyMD', async () => {
+    const env: RuntimeEnv = { DB: d1, ANYMD_API_KEY: 'k', AI: fakeAi };
+    const request = new Request('http://localhost:4321/api/v1/reads/sync', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 0 }),
+    });
+    const res = await postReadsSync({ request, params: {}, locals: { runtime: { env } } } as unknown as APIContext);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('invalid_limit');
   });
 
   it('returns honest 503 errors when AnyMD key or AI binding is missing', async () => {

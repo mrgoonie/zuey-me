@@ -14,4 +14,11 @@ jobs:
         env:
           SITE_URL: ${{ vars.SITE_URL || 'https://zuey.me' }}
         run: |
-          curl -fsS --max-time 600 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer ${{ secrets.ZUEY_ADMIN_API_KEY }}" -H "Content-Type: application/json" -d '{}'
+          # Batch the sync so each request stays well under Cloudflare's ~100s origin timeout (524).
+          offset=0
+          while :; do
+            body=$(curl -fsS --max-time 120 --retry 2 --retry-all-errors -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer ${{ secrets.ZUEY_ADMIN_API_KEY }}" -H "Content-Type: application/json" -d "{\"offset\":$offset,\"limit\":5}")
+            echo "$body"
+            offset=$(echo "$body" | jq -r '.data.next_offset')
+            [ "$offset" = "null" ] && break
+          done

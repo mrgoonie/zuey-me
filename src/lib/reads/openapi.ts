@@ -57,15 +57,30 @@ export const readsOpenApi: OpenApiFragment = {
         summary: 'Sync reads from AnyMD (admin)',
         description: 'Crawls the AnyMD library, keeps items tagged `zuey-reads`, summarizes new/changed content with Workers AI and hides items that lost the tag.',
         security: adminSecurity,
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  offset: { type: 'integer', minimum: 0, default: 0, description: 'Tagged items to skip; pass the previous response `next_offset`' },
+                  limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max items to summarize per call. Omit to process everything in one request (can hit edge timeouts on large libraries).' },
+                },
+              },
+            },
+          },
+        },
         responses: {
           '200': {
-            description: 'Sync run stats',
+            description: 'Sync run stats; `next_offset` is null once the final batch ran (untagged rows are hidden only then)',
             content: {
               'application/json': {
                 schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { $ref: '#/components/schemas/ReadsSyncRun' } } },
               },
             },
           },
+          '400': { description: 'Invalid offset or limit', content: errorRef },
           '401': errorResponses['401'],
           '403': errorResponses['403'],
           '502': { description: 'AnyMD or Workers AI upstream error', content: errorRef },
@@ -119,6 +134,7 @@ export const readsOpenApi: OpenApiFragment = {
         unchanged: { type: 'integer' },
         hidden: { type: 'integer' },
         error: { type: 'string', nullable: true },
+        next_offset: { type: 'integer', nullable: true, description: 'Offset for the next batch, null when the whole tagged set is done' },
       },
     },
   },
