@@ -148,12 +148,15 @@ async function userinfo(token: string | null, method: 'GET' | 'POST' = 'GET'): P
   return { status: res.status, body: await body(res.clone()), res };
 }
 
-async function mcpStatus(token: string, method = 'tools/list'): Promise<number> {
-  const res = await mcpApi(ctx({
+async function mcpCall(token: string, method = 'tools/list'): Promise<Response> {
+  return mcpApi(ctx({
     url: MCP_URL, headers: { Authorization: `Bearer ${token}`, 'MCP-Protocol-Version': '2025-06-18' },
     json: { jsonrpc: '2.0', id: 1, method, params: {} },
   }));
-  return res.status;
+}
+
+async function mcpStatus(token: string, method = 'tools/list'): Promise<number> {
+  return (await mcpCall(token, method)).status;
 }
 
 beforeEach(() => {
@@ -184,7 +187,7 @@ describe('identity discovery', () => {
   it('has Vietnamese consent copy for the identity scopes', () => {
     expect(scopeLabel('openid')).toBe('Xác nhận bạn là ai trên zuey.me');
     expect(scopeLabel('profile')).toBe('Xem tên hiển thị, ảnh đại diện và ngôn ngữ');
-    expect(scopeLabel('email')).toBe('Xem địa chỉ email đã xác minh');
+    expect(scopeLabel('email')).toBe('Xem địa chỉ email của bạn (và email đã được xác minh hay chưa)');
   });
 });
 
@@ -208,6 +211,30 @@ describe('identity-only authorization', () => {
       expect(started.kind).toBe('redirect');
       const loc = new URL(started.kind === 'redirect' ? started.location : '', ORIGIN);
       expect(loc.searchParams.get('error')).toBe('invalid_target');
+    }
+  });
+
+  it('requires openid: it cannot be unticked, and profile/email without openid are refused', async () => {
+    const m = await member('lan@example.com');
+    // The member unticks openid on the consent page: it is still granted, so the token works at userinfo.
+    const t = await signIn({ cookie: m.cookie, scope: 'openid profile email', approve: ['email'] });
+    expect(t.scope).toBe('openid email');
+    expect((await userinfo(t.access)).body).toEqual({ sub: m.userId, email: 'lan@example.com', email_verified: true });
+    // Same on a mixed MCP request that asked for openid.
+    const mixed = await signIn({ cookie: m.cookie, scope: 'openid articles:read', resource: MCP_URL, approve: ['articles:read'] });
+    expect(mixed.scope).toBe('articles:read openid');
+
+    const clientId = await registerLoopbackClient();
+    const started = await start({ clientId, redirectUri: LOOPBACK_REDIRECT, verifier: randomVerifier(), scope: 'openid profile' });
+    const requestId = started.kind === 'redirect' ? new URL(started.location, ORIGIN).searchParams.get('request_id') ?? '' : '';
+    const consent = await loadConsent(d1, env(), new Request(`${ORIGIN}/oauth/authorize?request_id=${requestId}`, { headers: { cookie: m.cookie } }), requestId);
+    expect(consent.kind === 'consent' ? consent.view.scopes : []).toEqual([
+      { scope: 'openid', requested: true, required: true }, { scope: 'profile', requested: true, required: false },
+    ]);
+
+    for (const scope of ['profile email', 'email articles:read']) {
+      const bad = await start({ clientId, redirectUri: LOOPBACK_REDIRECT, verifier: randomVerifier(), scope });
+      expect(new URL(bad.kind === 'redirect' ? bad.location : '', ORIGIN).searchParams.get('error')).toBe('invalid_scope');
     }
   });
 
@@ -317,11 +344,13 @@ describe('identity tokens never open MCP or the REST API', () => {
     expect(rest.status).toBe(401);
   });
 
-  it('rejects at /mcp an MCP-bound token whose member unticked every MCP scope', async () => {
+  it('answers 403 insufficient_scope at /mcp for an MCP-bound token whose member unticked every MCP scope', async () => {
     const m = await member('lan@example.com');
     const t = await signIn({ cookie: m.cookie, scope: 'openid articles:read', resource: MCP_URL, approve: ['openid'] });
     expect(t.scope).toBe('openid');
-    expect(await mcpStatus(t.access)).toBe(401);
+    const res = await mcpCall(t.access);
+    expect(res.status).toBe(403);
+    expect(res.headers.get('WWW-Authenticate') ?? '').toContain('error="insufficient_scope"');
     expect((await userinfo(t.access)).status).toBe(200);
   });
 });

@@ -21,7 +21,7 @@ export interface OAuthGrantInfo {
 
 export type McpCaller =
   | { ok: true; principal: Principal; oauth: OAuthGrantInfo | null }
-  | { ok: false; error: 'missing' | 'invalid_token'; description: string };
+  | { ok: false; error: 'missing' | 'invalid_token' | 'insufficient_scope'; description: string };
 
 /** The `/mcp` endpoint is bearer-only: cookies are stripped so browser sessions can never be replayed cross-site. */
 function withoutCookies(request: Request): Request {
@@ -59,8 +59,9 @@ export async function resolveMcpCaller(request: Request, env: RuntimeEnv, audien
     return { ok: false, error: 'invalid_token', description };
   }
   // Identity scopes alone never open `/mcp`, even on a token bound to it (the member unticked every MCP scope).
+  // The token is valid, so this is 403 insufficient_scope (RFC 6750 §3.1), not a re-auth-looping 401.
   if (!check.token.scopes.some(s => !isIdentityScope(s))) {
-    return { ok: false, error: 'invalid_token', description: 'The access token was not issued for this resource' };
+    return { ok: false, error: 'insufficient_scope', description: 'The access token only carries identity scopes (openid, profile, email)' };
   }
   const user = await getUserById(d1, check.token.user_id);
   if (!user) return { ok: false, error: 'invalid_token', description: 'The access token is invalid' };
