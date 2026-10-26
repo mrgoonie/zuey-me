@@ -10,7 +10,7 @@
 --      point with `wrangler d1 time-travel info zuey_me_db` and also keep a copy of the two tables, e.g.
 --      `wrangler d1 execute zuey_me_db --remote --json --command "SELECT * FROM channel_identities"` (and the same
 --      for channel_link_nonces), saved outside the repository.
---   3. Apply: `wrangler d1 execute zuey_me_db --remote --file=./migrations/0029_drop_channel_link_tables.sql -y`.
+--   3. Apply: `wrangler d1 execute zuey_me_db --remote --file=./migrations/0033_drop_channel_link_tables.sql -y`.
 -- Existing links are not imported into Dewee: they carry no Dewee-verifiable proof, so each linked member relinks
 -- once through the bot's Dewee prompt.
 --

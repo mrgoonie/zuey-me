@@ -774,7 +774,7 @@ describe('no linking state or gateway operator token left in zuey.me', () => {
   it('drops the sender mapping and nonce tables, with the deploy-order note in the migration', async () => {
     const tables = await d1.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('channel_identities', 'channel_link_nonces')").all<{ name: string }>();
     expect(tables.results).toEqual([]);
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations', '0029_drop_channel_link_tables.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations', '0033_drop_channel_link_tables.sql'), 'utf8');
     expect(sql).toContain('DEPLOY ORDER');
     expect(sql).toContain('hosted mode first');
     expect(sql).toContain('Back up before applying');
