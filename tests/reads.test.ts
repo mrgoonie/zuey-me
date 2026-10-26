@@ -239,6 +239,28 @@ describe('Zuey Reads routes', () => {
     expect(forbidden.status).toBe(403);
   });
 
+  it('rejects an invalid batch offset and accepts a body-less call as a full sync', async () => {
+    const env: RuntimeEnv = { DB: d1, AI: fakeAi };
+    const post = (body: unknown) =>
+      postReadsSync({
+        request: new Request('http://localhost:4321/api/v1/reads/sync', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${adminKey}`, 'Content-Type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+        params: {},
+        locals: { runtime: { env } },
+      } as unknown as APIContext);
+    for (const offset of [-1, 1.5, '3']) {
+      const res = await post({ offset });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('invalid_offset');
+    }
+    // Valid/absent batch fields pass validation and reach the config check.
+    expect((await post(undefined)).status).toBe(503);
+    expect((await post({ offset: 0, limit: 3 })).status).toBe(503);
+  });
+
   it('rejects an invalid batch limit before touching AnyMD', async () => {
     const env: RuntimeEnv = { DB: d1, ANYMD_API_KEY: 'k', AI: fakeAi };
     const request = new Request('http://localhost:4321/api/v1/reads/sync', {
