@@ -71,6 +71,7 @@ export function PromoCodeForm({ initial, editing, busy, onSubmit, onCancel }: Pr
         </label>
         <label className={label}>Card (Dodo) months discounted
           <input className={field} type="number" min={1} max={24} value={f.card_cycles} onChange={e => set('card_cycles', e.target.value)} />
+          <span className="text-[11px] text-stone-500">100% codes: 1, 3, 6 or 12 (granted as a free prepaid term)</span>
         </label>
         <label className={label}>Course ids (comma separated, empty = all)
           <input className={`${field} font-mono`} value={f.course_ids} onChange={e => set('course_ids', e.target.value)} />

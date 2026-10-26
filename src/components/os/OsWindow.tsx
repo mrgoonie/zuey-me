@@ -139,6 +139,13 @@ export const OsWindow: React.FC<OsWindowProps> = ({
     prev.current = { visible, min: state.min };
     prevExpo.current = expo !== null;
     if (!el || was.visible === visible) return;
+    // While a window fades or flies it is translucent, which hides the desktop from its title bar's
+    // backdrop; `is-anim` hands the frost back to the frame until the motion ends (os.css, liquid glass).
+    const track = (anim: Animation) => {
+      el.classList.add('is-anim');
+      const done = () => el.classList.remove('is-anim');
+      anim.finished.then(done, done);
+    };
     // A minimized window leaving Exposé already flew to the dock with the Exposé transition.
     if (!visible && wasExpo) { setShown(false); return; }
     if (visible) {
@@ -149,17 +156,17 @@ export const OsWindow: React.FC<OsWindowProps> = ({
         el.animate([{ transform: 'translateY(100%)' }, { transform: 'none' }], { duration: motionMs('slower', 440), easing: ease.out() });
       } else if (was.min) {
         el.style.transformOrigin = '50% 50%';
-        el.animate(genieFrames(el, dockTarget(app.id)).reverse().map(k => ({ ...k, offset: k.offset == null ? null : 1 - Number(k.offset) })), { duration: motionMs('slower', 440), easing: ease.out() });
+        track(el.animate(genieFrames(el, dockTarget(app.id)).reverse().map(k => ({ ...k, offset: k.offset == null ? null : 1 - Number(k.offset) })), { duration: motionMs('slower', 440), easing: ease.out() }));
       } else {
         const o = lastPress && performance.now() - lastPress.t < 700 ? lastPress.r : dockTarget(app.id);
         const r = el.getBoundingClientRect();
         el.style.transformOrigin = o ? `${Math.round(o.left + o.width / 2 - r.left)}px ${Math.round(o.top + o.height / 2 - r.top)}px` : '50% 30%';
-        el.animate(
+        track(el.animate(
           o
             ? [{ opacity: 0, transform: 'scale(.16)' }, { opacity: 1, offset: 0.4 }, { opacity: 1, transform: 'none' }]
             : [{ opacity: 0, transform: 'translateY(18px) scale(.94)' }, { opacity: 1, transform: 'none' }],
           { duration: o ? motionMs('slower', 440) : motionMs('slow', 340), easing: ease.spring() },
-        );
+        ));
       }
       return;
     }
@@ -180,6 +187,7 @@ export const OsWindow: React.FC<OsWindowProps> = ({
     }
     el.style.pointerEvents = 'none';
     const anim = el.animate(frames, { ...opts, fill: 'forwards' });
+    if (!mobile) track(anim);
     anim.onfinish = () => {
       el.style.pointerEvents = '';
       el.style.transform = '';

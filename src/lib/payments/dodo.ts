@@ -391,13 +391,25 @@ export function parseDodoEvent(payload: unknown): DodoEvent | null {
   return null;
 }
 
-/** Why a payment's money went back: a completed refund, or a chargeback opened or lost. */
+/**
+ * Dispute outcomes where Dodo returned the money to the cardholder: `dispute.accepted` (not contested),
+ * `dispute.lost` (resolved for the cardholder) and `dispute.expired` (the response window lapsed, which
+ * resolves against the merchant). `dispute.opened` only holds the funds; `dispute.won` and `dispute.cancelled` keep them.
+ */
+export const DODO_DISPUTE_FUNDS_LOST: ReadonlySet<string> = new Set(['dispute.accepted', 'dispute.lost', 'dispute.expired']);
+/** Dispute outcomes where the merchant keeps the money. */
+export const DODO_DISPUTE_FUNDS_KEPT: ReadonlySet<string> = new Set(['dispute.won', 'dispute.cancelled']);
+
+/**
+ * Why a payment's money went (or may go) back: a completed refund, an opened chargeback, or a chargeback whose
+ * money was lost (any of `DODO_DISPUTE_FUNDS_LOST`, so one dispute is reported once whichever outcome arrives).
+ */
 export type DodoReversalKind = 'refund' | 'dispute_opened' | 'dispute_lost';
 
 const REVERSAL_EVENTS: Record<string, DodoReversalKind> = {
   'refund.succeeded': 'refund',
   'dispute.opened': 'dispute_opened',
-  'dispute.lost': 'dispute_lost',
+  ...Object.fromEntries([...DODO_DISPUTE_FUNDS_LOST].map(type => [type, 'dispute_lost' as const])),
 };
 
 export interface DodoReversalEvent {
@@ -412,7 +424,7 @@ export interface DodoReversalEvent {
   isPartial: boolean;
 }
 
-/** Parses refund.succeeded / dispute.opened / dispute.lost; null for any other event or a missing payment id. */
+/** Parses refund.succeeded, dispute.opened and the funds-lost dispute outcomes; null for any other event or a missing payment id. */
 export function parseDodoReversalEvent(payload: unknown): DodoReversalEvent | null {
   if (!isRecord(payload) || typeof payload.type !== 'string' || !isRecord(payload.data)) return null;
   const kind = REVERSAL_EVENTS[payload.type];

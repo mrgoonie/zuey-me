@@ -71,6 +71,10 @@ export const ANALYTICS_EVENTS = {
     version: 1, source: 'client', owner: 'growth', trigger: 'A 200lab course card (affiliate) is clicked',
     props: { slug: str, source: str },
   },
+  '200lab_learning_path_click': {
+    version: 1, source: 'client', owner: 'growth', trigger: 'A 200lab learning path card (affiliate) is clicked',
+    props: { slug: str, source: str },
+  },
   article_ask_ai_opened: {
     version: 1, source: 'client', owner: 'product', trigger: 'The Ask Zuey AI button of an article is pressed',
     props: { slug: str },
@@ -251,6 +255,10 @@ export const ANALYTICS_EVENTS = {
       plan: { kind: 'string', optional: true }, months: { kind: 'number', optional: true },
       // A card charge that was collected but held for admin review (wrong amount, discount not applied).
       flagged: { kind: 'boolean', optional: true },
+      // Opaque hash of the provider transaction (`tx_` + hex), the GA4 ecommerce `transaction_id`.
+      transaction_id: { kind: 'string', optional: true },
+      // GA ids from the member's checkout start, for GA4 attribution only (stripped before PostHog).
+      ga_client_id: { kind: 'string', optional: true }, ga_session_id: { kind: 'string', optional: true },
     },
   },
   refund: {
@@ -259,6 +267,9 @@ export const ANALYTICS_EVENTS = {
       provider: str, order_type: str, reason: str,
       amount: { kind: 'number', optional: true }, currency: { kind: 'string', optional: true },
       partial: { kind: 'boolean', optional: true }, plan: { kind: 'string', optional: true },
+      // The refunded purchase's `transaction_id`, when the refunded transaction is known.
+      transaction_id: { kind: 'string', optional: true },
+      ga_client_id: { kind: 'string', optional: true },
     },
   },
   payment_failed: {
@@ -293,7 +304,12 @@ export const ANALYTICS_EVENTS = {
   },
   subscription_expired: {
     version: 1, source: 'server', owner: 'revenue', trigger: 'Access to a plan ends (period over or access revoked)',
-    props: { plan: str, period_end: str, provider: { kind: 'string', optional: true } },
+    props: {
+      plan: str, period_end: str,
+      // Rail whose access ended (`sepay` | `dodo`), as on purchases and renewals. Left out only when the expiry
+      // sweep finds neither a card period nor a paid SePay order behind the access end.
+      provider: { kind: 'string', optional: true },
+    },
   },
 } as const satisfies Taxonomy;
 

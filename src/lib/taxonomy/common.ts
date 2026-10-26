@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { AppError } from '../http';
 import { LOCALES, isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
@@ -139,19 +139,31 @@ export function parseDate(field: string, value: unknown): string | undefined {
   return value;
 }
 
-export async function writeAuditLog(
-  db: D1DatabaseLike,
-  entry: { actor: string; action: string; targetType: string; targetId: string; before?: unknown; after?: unknown; reason?: string },
-): Promise<void> {
-  await db.prepare(`
+export interface AuditLogInput { actor: string; action: string; targetType: string; targetId: string; before?: unknown; after?: unknown; reason?: string }
+
+/** The audit row insert for a D1 batch; with `onlyIf` it inserts only while that condition holds when it runs. */
+export function auditLogStatement(db: D1DatabaseLike, entry: AuditLogInput, onlyIf?: SqlCondition): D1PreparedStatementLike {
+  return db.prepare(`
     INSERT INTO taxonomy_audit_log (id, actor, action, target_type, target_id, before_json, after_json, reason, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${onlyIf?.sql ?? '1'}
   `).bind(
     newId('alog_'), entry.actor, entry.action, entry.targetType, entry.targetId,
     entry.before === undefined ? null : JSON.stringify(entry.before),
     entry.after === undefined ? null : JSON.stringify(entry.after),
-    entry.reason ?? '', nowIso(),
-  ).run();
+    entry.reason ?? '', nowIso(), ...(onlyIf?.params ?? []),
+  );
+}
+
+/**
+ * Holds once a soft delete guarded by `expected` has applied with `deletedAt` (it moves the revision to
+ * `expected + 1`), so the detach and audit statements of the same batch run only when that delete did.
+ */
+export function softDeletedAt(table: 'knowledge_categories' | 'topic_tags', id: string, expected: number, deletedAt: string): SqlCondition {
+  return { sql: `EXISTS (SELECT 1 FROM ${table} WHERE id = ? AND revision = ? AND deleted_at = ?)`, params: [id, expected + 1, deletedAt] };
+}
+
+export async function writeAuditLog(db: D1DatabaseLike, entry: AuditLogInput): Promise<void> {
+  await auditLogStatement(db, entry).run();
 }
 
 export interface AuditLogEntry {

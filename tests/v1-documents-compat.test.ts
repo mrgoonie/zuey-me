@@ -70,7 +70,7 @@ describe('schema v1 documents render unchanged', () => {
   });
 
   it('v1 block schemas (OpenAPI and MCP block_schema) are unchanged', () => {
-    const v1 = Object.fromEntries(Object.entries(blockSchemas).filter(([name]) => !['BlockSection', 'BlockCard'].includes(name)));
+    const v1 = Object.fromEntries(Object.entries(blockSchemas).filter(([name]) => !['BlockSection', 'BlockCard', 'BlockTabs', 'BlockStat', 'BlockSteps', 'BlockComparison', 'BlockProgress'].includes(name)));
     expect(v1).toMatchSnapshot();
   });
 });

@@ -50,11 +50,16 @@ export interface AiCopy {
   you: string;
   artifact: string;
   runDemo: string;
+  stopDemo: string;
+  /** Shown on a widget that did not start by itself because enough widgets already run on the page. */
+  autoRunLimit: string;
   openFull: string;
   close: string;
   reload: string;
   sandboxNote: string;
   unresponsive: string;
+  /** Shown when a widget navigated its own frame away from the sandboxed document. */
+  leftSandbox: string;
   frameError: string;
   artifactRejected: string;
   loadFailed: string;
@@ -122,11 +127,14 @@ const vi: AiCopy = {
   you: 'Bạn',
   artifact: 'Khối tương tác',
   runDemo: 'Chạy demo',
+  stopDemo: 'Dừng',
+  autoRunLimit: 'Trang đang chạy nhiều demo; bấm Chạy demo để chạy demo này.',
   openFull: 'Mở toàn màn hình',
   close: 'Đóng',
   reload: 'Chạy lại',
   sandboxNote: 'Chạy trong sandbox cô lập; mạng chỉ qua proxy được duyệt.',
   unresponsive: 'Demo không phản hồi nên đã được dừng.',
+  leftSandbox: 'Demo đã cố rời khỏi vùng cách ly nên đã được dừng.',
   frameError: 'Demo báo lỗi',
   artifactRejected: 'Một khối tương tác không hợp lệ đã bị bỏ qua.',
   loadFailed: 'Không tải được dữ liệu. Thử lại sau.',
@@ -205,11 +213,14 @@ const en: AiCopy = {
   you: 'You',
   artifact: 'Interactive block',
   runDemo: 'Run demo',
+  stopDemo: 'Stop',
+  autoRunLimit: 'Several demos are already running on this page; press Run demo to start this one.',
   openFull: 'Open full screen',
   close: 'Close',
   reload: 'Run again',
   sandboxNote: 'Runs in an isolated sandbox; network only through the approved proxy.',
   unresponsive: 'The demo stopped responding and was halted.',
+  leftSandbox: 'The demo tried to leave its sandbox and was halted.',
   frameError: 'The demo reported an error',
   artifactRejected: 'An invalid interactive block was skipped.',
   loadFailed: 'Could not load data. Try again later.',
@@ -288,11 +299,14 @@ const zh: AiCopy = {
   you: '你',
   artifact: '交互模块',
   runDemo: '运行演示',
+  stopDemo: '停止',
+  autoRunLimit: '此页面已有多个演示在运行；点击“运行演示”即可启动这个演示。',
   openFull: '全屏打开',
   close: '关闭',
   reload: '重新运行',
   sandboxNote: '在隔离沙箱中运行；网络只能经由已批准的代理。',
   unresponsive: '演示无响应，已停止。',
+  leftSandbox: '演示试图离开沙盒，已停止。',
   frameError: '演示报告了错误',
   artifactRejected: '已跳过一个无效的交互模块。',
   loadFailed: '无法加载数据，请稍后重试。',
@@ -371,11 +385,14 @@ const ko: AiCopy = {
   you: '나',
   artifact: '인터랙티브 블록',
   runDemo: '데모 실행',
+  stopDemo: '중지',
+  autoRunLimit: '이 페이지에서 이미 여러 데모가 실행 중입니다. 이 데모를 시작하려면 데모 실행을 누르세요.',
   openFull: '전체 화면',
   close: '닫기',
   reload: '다시 실행',
   sandboxNote: '격리된 샌드박스에서 실행되며, 네트워크는 승인된 프록시로만 가능합니다.',
   unresponsive: '데모가 응답하지 않아 중지했습니다.',
+  leftSandbox: '데모가 샌드박스를 벗어나려 해서 중지했습니다.',
   frameError: '데모에서 오류가 발생했습니다',
   artifactRejected: '유효하지 않은 인터랙티브 블록을 건너뛰었습니다.',
   loadFailed: '데이터를 불러오지 못했습니다. 나중에 다시 시도하세요.',
@@ -454,11 +471,14 @@ const ja: AiCopy = {
   you: 'あなた',
   artifact: 'インタラクティブブロック',
   runDemo: 'デモを実行',
+  stopDemo: '停止',
+  autoRunLimit: 'このページではすでに複数のデモが実行中です。このデモを始めるには「デモを実行」を押してください。',
   openFull: '全画面で開く',
   close: '閉じる',
   reload: '再実行',
   sandboxNote: '隔離されたサンドボックスで実行。ネットワークは承認済みプロキシ経由のみ。',
   unresponsive: 'デモが応答しないため停止しました。',
+  leftSandbox: 'デモがサンドボックスの外へ移動しようとしたため停止しました。',
   frameError: 'デモでエラーが発生しました',
   artifactRejected: '無効なインタラクティブブロックをスキップしました。',
   loadFailed: 'データを読み込めませんでした。後でもう一度お試しください。',

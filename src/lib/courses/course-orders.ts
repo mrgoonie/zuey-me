@@ -293,11 +293,13 @@ export async function createCourseCheckout(
 
   if (free) {
     // A 100% promo: nothing to collect, so the order is paid and the course granted right away.
-    await d1.prepare("UPDATE course_orders SET status = 'paid', amount_paid = 0, currency_paid = ?, paid_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'")
-      .bind(provider === 'sepay' ? 'VND' : 'USD', iso(nowMs), iso(nowMs), id).run();
-    const paid = await getCourseOrderByCode(d1, code);
-    if (!paid) throw new AppError(500, 'internal_error', 'Order was not persisted');
-    await fulfilCourseOrder(d1, env, paid);
+    const pending = await getCourseOrderByCode(d1, code);
+    if (!pending) throw new AppError(500, 'internal_error', 'Order was not persisted');
+    const currency = provider === 'sepay' ? 'VND' : 'USD';
+    const paid: CourseOrder = { ...pending, status: 'paid', amount_paid: 0, currency_paid: currency, paid_at: iso(nowMs), updated_at: iso(nowMs) };
+    await fulfilCourseOrder(d1, env, paid, {
+      set: "status = 'paid', amount_paid = 0, currency_paid = ?, paid_at = ?, updated_at = ?", values: [currency, iso(nowMs), iso(nowMs)], when: "o.status = 'pending'",
+    });
     return { ...(await courseOrderView(d1, env, (await getCourseOrderByCode(d1, code)) ?? paid)), checkout_url: null };
   }
 

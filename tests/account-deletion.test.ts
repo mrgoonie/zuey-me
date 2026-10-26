@@ -69,3 +69,48 @@ describe('account deletion atomicity', () => {
     expect(personalData(userId)).toEqual(after);
   });
 });
+
+describe('GA4 ids on account deletion', () => {
+  const GA = { ga_client_id: '1234567890.1700000000', ga_session_id: '1700000500' };
+
+  function queueRow(id: string, distinctId: string, event: string, status: string, properties: unknown): void {
+    d1.raw.run(
+      `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      [id, `k:${id}`, event, distinctId, typeof properties === 'string' ? properties : JSON.stringify(properties), iso(T0), status, iso(T0), iso(T0), iso(T0)],
+    );
+  }
+  const props = (id: string): string => (d1.raw.query('SELECT properties FROM analytics_outbox WHERE id = ?').get(id) as { properties: string }).properties;
+
+  it('deletes the account even when the GA4 clients table does not exist', async () => {
+    const userId = await seedMember();
+    d1.raw.run('DROP TABLE analytics_ga4_clients');
+    const user = await getUserById(d1, userId);
+    if (!user) throw new Error('missing user');
+    await deleteAccount(d1, user);
+    expect(personalData(userId)).toMatchObject({ user: { deleted_at: iso(T0), name: null }, sessions: 0, identities: 0 });
+  });
+
+  it("removes the member's stored GA ids and their copies in queued events, and nobody else's", async () => {
+    const userId = await seedMember();
+    for (const [uid, client] of [[userId, '1.1'], ['usr_other', '2.2']]) {
+      d1.raw.run('INSERT INTO analytics_ga4_clients (user_id, client_id, session_id, updated_at) VALUES (?, ?, ?, ?)', [uid, client, '3', iso(T0)]);
+    }
+    const purchase = { provider: 'sepay', order_type: 'membership', amount: 1, currency: 'VND', renewal: false, ...GA };
+    queueRow('p1', userId, 'purchase', 'pending', purchase);
+    queueRow('r1', userId, 'refund', 'dead', { provider: 'sepay', order_type: 'membership', reason: 'refund', ga_client_id: GA.ga_client_id });
+    queueRow('p2', 'usr_other', 'purchase', 'pending', purchase);
+    queueRow('bad', userId, 'purchase', 'pending', '{not json');
+    const user = await getUserById(d1, userId);
+    if (!user) throw new Error('missing user');
+    await deleteAccount(d1, user);
+
+    const left = d1.raw.query('SELECT user_id FROM analytics_ga4_clients').all() as Array<{ user_id: string }>;
+    expect(left.map(r => r.user_id)).toEqual(['usr_other']);
+    expect(JSON.parse(props('p1'))).toEqual({ provider: 'sepay', order_type: 'membership', amount: 1, currency: 'VND', renewal: false });
+    expect(JSON.parse(props('r1'))).toEqual({ provider: 'sepay', order_type: 'membership', reason: 'refund' });
+    expect(JSON.parse(props('p2'))).toMatchObject(GA);
+    expect(props('bad')).toBe('{not json');
+    expect(personalData(userId)).toMatchObject({ user: { deleted_at: iso(T0) } });
+  });
+});

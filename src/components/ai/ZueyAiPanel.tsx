@@ -14,6 +14,7 @@ import { InteractiveFrame } from './InteractiveFrame';
 import type { ArticleChatContext } from './article-chat-context';
 import { MAX_CHAT_MESSAGE_CHARS, QUOTE_RESERVED_CHARS, composeQuotedQuestion, quotePreview, rememberArticleSession, sessionForArticle } from './article-chat-context';
 import { track, trackOnce } from '../../lib/analytics/client';
+import { enterSensitiveSurface } from '../../lib/analytics/destinations/posthog';
 import { aiFailureLatency, aiReplyMetrics, aiSurface } from '../../lib/analytics/engagement';
 import { failureReason } from '../../lib/analytics/funnel';
 
@@ -317,6 +318,9 @@ export function ZueyAiPanel({ locale, context, onClose }: PanelProps) {
   }, [deleteTarget]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Error reports from this page carry no message text while the panel is mounted: it may echo chat text.
+  useEffect(() => enterSensitiveSurface(), []);
 
   // At most one quota event per page load, whether the limit shows on load or is hit by a question.
   useEffect(() => {

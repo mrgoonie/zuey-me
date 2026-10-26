@@ -201,12 +201,16 @@ export function affectsSnapshot(before: SocketSession, after: SocketSession, now
   return isLive(after, now) && before.cat !== after.cat;
 }
 
-/**
- * Aggregates sockets into the public snapshot: unique counted keys (multi-tab collapsed), members and
- * a category breakdown where each key contributes its most recent heartbeat category. Groups below
- * PRESENCE_MIN_GROUP fold into `other`; with fewer than PRESENCE_MIN_GROUP active nothing is broken down.
- */
-export function computeSnapshot(sessions: readonly SocketSession[], owner: OwnerPresence, now: number): PresenceSnapshot {
+/** Counted visitors right now: one entry per unique key (multi-tab collapsed). */
+export interface PresenceAggregate {
+  /** Most recent heartbeat category of each unique counted key; its length is the `active` count. */
+  cats: ActivityCategory[];
+  /** Unique counted keys that are signed-in members. */
+  memberCount: number;
+}
+
+/** Collapses live, counted sockets to unique keys; each key contributes its most recent heartbeat category. */
+export function aggregateSessions(sessions: readonly SocketSession[], now: number): PresenceAggregate {
   const perKey = new Map<string, { cat: ActivityCategory; lastHb: number; m: boolean }>();
   for (const s of sessions) {
     if (!isCounted(s, now) || s.cat === null) continue;
@@ -214,22 +218,48 @@ export function computeSnapshot(sessions: readonly SocketSession[], owner: Owner
     if (!prev) perKey.set(s.k, { cat: s.cat, lastHb: s.lastHb, m: s.m });
     else perKey.set(s.k, { cat: s.lastHb >= prev.lastHb ? s.cat : prev.cat, lastHb: Math.max(s.lastHb, prev.lastHb), m: prev.m || s.m });
   }
-  const active = perKey.size;
   let memberCount = 0;
-  for (const v of perKey.values()) if (v.m) memberCount += 1;
+  const cats: ActivityCategory[] = [];
+  for (const v of perKey.values()) {
+    cats.push(v.cat);
+    if (v.m) memberCount += 1;
+  }
+  return { cats, memberCount };
+}
+
+/**
+ * The public snapshot for an aggregate. Groups below PRESENCE_MIN_GROUP fold into `other`; with fewer than
+ * PRESENCE_MIN_GROUP active nothing is broken down.
+ */
+export function snapshotFromAggregate(agg: PresenceAggregate, owner: OwnerPresence, now: number): PresenceSnapshot {
+  const active = agg.cats.length;
   return {
     v: PRESENCE_CONTRACT_VERSION,
     at: new Date(now).toISOString(),
     active,
-    members: memberCount >= PRESENCE_MIN_GROUP ? memberCount : null,
-    categories: active >= PRESENCE_MIN_GROUP ? foldCategories([...perKey.values()].map((v) => v.cat)) : [],
+    members: agg.memberCount >= PRESENCE_MIN_GROUP ? agg.memberCount : null,
+    categories: suppressedCategories(active, countCategories(agg.cats)),
     owner,
   };
 }
 
-function foldCategories(cats: readonly ActivityCategory[]): CategoryCount[] {
+/** Aggregates sockets into the public snapshot (see aggregateSessions and snapshotFromAggregate). */
+export function computeSnapshot(sessions: readonly SocketSession[], owner: OwnerPresence, now: number): PresenceSnapshot {
+  return snapshotFromAggregate(aggregateSessions(sessions, now), owner, now);
+}
+
+export function countCategories(cats: readonly ActivityCategory[]): Map<ActivityCategory, number> {
   const counts = new Map<ActivityCategory, number>();
   for (const c of cats) counts.set(c, (counts.get(c) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * Published breakdown for `total` visitors: empty below PRESENCE_MIN_GROUP, otherwise groups smaller than
+ * PRESENCE_MIN_GROUP fold into `other`. Shared by the snapshot and the history buckets.
+ */
+export function suppressedCategories(total: number, counts: ReadonlyMap<ActivityCategory, number>): CategoryCount[] {
+  if (total < PRESENCE_MIN_GROUP) return [];
   let other = counts.get('other') ?? 0;
   const out: CategoryCount[] = [];
   for (const id of ACTIVITY_CATEGORIES) {
@@ -238,7 +268,7 @@ function foldCategories(cats: readonly ActivityCategory[]): CategoryCount[] {
     if (count >= PRESENCE_MIN_GROUP) out.push({ id, count });
     else other += count;
   }
-  // Callers only fold when the total is >= PRESENCE_MIN_GROUP, so a small `other` remainder cannot single anyone out on its own.
+  // The total is >= PRESENCE_MIN_GROUP here, so a small `other` remainder cannot single anyone out on its own.
   if (other > 0) out.push({ id: 'other', count: other });
   return out;
 }

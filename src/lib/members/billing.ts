@@ -1,10 +1,12 @@
-import type { D1DatabaseLike } from '../../db/store';
-import { queueNeedsAttention, queuePurchase } from '../analytics/commerce-events';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
+import { needsAttentionEvent, queuePurchase } from '../analytics/commerce-events';
+import { outboxInsertStatement } from '../analytics/outbox';
 import type { WaitUntil } from '../wait-until';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';
 import { listCardSubscriptions, startCardCheckout, toCardView } from '../payments/dodo-billing';
+import { isPaymentEventConflict, paymentEventRecorded } from '../payments/payment-events';
 import type { SepayTransferInfo } from '../payments/sepay';
 import { SEPAY_BILLING_PREFIX, extractBillingCode, extractCourseOrderCode, missingSepayBankConfig, parseSepayTime, vietQrTransfer } from '../payments/sepay';
 import { bindEnteredReferral, resolveCheckoutReferral, sepayReferralAmounts } from '../referrals/checkout';
@@ -23,7 +25,7 @@ import type { Row } from './runtime';
 import { DAY_MS, iso, isUniqueViolation, membersRuntime, num, numOrNull, randomCode, randomId, siteUrl, str, strOrNull } from './runtime';
 import type { SubscriptionView } from './subscriptions';
 import { getEntitlements, listSubscriptions, recomputeSubscription } from './subscriptions';
-import { getUserById, logActivity } from './users';
+import { activityStatement, getUserById, logActivity } from './users';
 
 /** How long a pending order's VietQR stays payable. Later transfers are flagged for the admin. */
 export const ORDER_TTL_MS = 60 * 60 * 1000;
@@ -286,7 +288,10 @@ async function insertSepayOrder(d1: D1DatabaseLike, env: RuntimeEnv, userId: str
   return order;
 }
 
-/** Months granted by a 100% promo used on the card rail: its card cycles, rounded down to a prepaid term. */
+/**
+ * Months granted by a 100% promo used on the card rail: its card cycles. Admin validation keeps those a prepaid
+ * term; rounding down only guards codes saved before that rule.
+ */
 export function freeCardMonths(cardCycles: number): BillingMonths {
   return [...BILLING_MONTHS].reverse().find(m => m <= cardCycles) ?? 1;
 }
@@ -381,30 +386,78 @@ function isPayable(order: BillingOrder): boolean {
 
 export type BillingOutcome = 'duplicate_event' | 'unmatched' | 'paid' | 'already_paid' | 'needs_attention';
 
-async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: string, n: BillingPaymentNotice): Promise<void> {
-  await d1.prepare(
-    `UPDATE billing_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
-       payment_ref = COALESCE(?, payment_ref), provider_event_id = ?, updated_at = ?
-     WHERE id = ? AND status <> 'paid'`
-  ).bind(reason, n.amount, n.paymentRef, n.eventId, iso(membersRuntime.now()), order.id).run();
-  await logActivity(d1, order.user_id, 'billing.needs_attention', { code: order.code, reason, amount: n.amount });
-  await queueNeedsAttention(d1, {
-    distinctId: order.user_id, provider: 'sepay', orderType: 'membership', reference: n.eventId, reason, amountMinor: n.amount, currency: 'VND', plan: order.plan,
-  });
+/**
+ * The `payment_events` record of a transfer, built for the batch it gates: written as the batch's first statement
+ * (with `onlyIf`, only while the batch's own guard holds), so the record and what the transfer changes commit together
+ * or not at all. It throws a unique violation when the transfer was already recorded.
+ */
+type BillingEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike;
+
+function billingEventGate(d1: D1DatabaseLike, n: BillingPaymentNotice, orderId: string | null, receivedAt: string): BillingEventGate {
+  return onlyIf => {
+    const source = onlyIf ? `SELECT ?, ?, NULL, ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, NULL, ?, ?, ?, ?, ?)';
+    return d1.prepare(`INSERT INTO payment_events (provider, event_id, booking_id, billing_order_id, amount, currency, raw_type, received_at) ${source}`)
+      .bind('sepay', n.eventId, orderId, n.amount, 'VND', n.rawType, receivedAt, ...(onlyIf?.params ?? []));
+  };
 }
 
-/** Extends the plan from paid orders, then records and emails a receipt (email failure never undoes payment). */
+/**
+ * Flags the order for the admin and adds the money to it. The transfer's record (`gate`), the update, the activity log
+ * and the `payment_needs_attention` event are one D1 batch: a failure or a crash before the commit leaves nothing, so
+ * the redelivery flags the order once.
+ */
+async function markAttention(d1: D1DatabaseLike, order: BillingOrder, reason: string, n: BillingPaymentNotice, gate: BillingEventGate): Promise<void> {
+  const attention = outboxInsertStatement(d1, needsAttentionEvent({
+    distinctId: order.user_id, provider: 'sepay', orderType: 'membership', reference: n.eventId, reason, amountMinor: n.amount, currency: 'VND', plan: order.plan,
+  }));
+  await d1.batch([
+    gate(),
+    d1.prepare(
+      `UPDATE billing_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
+         payment_ref = COALESCE(?, payment_ref), provider_event_id = ?, updated_at = ?
+       WHERE id = ? AND status <> 'paid'`
+    ).bind(reason, n.amount, n.paymentRef, n.eventId, iso(membersRuntime.now()), order.id),
+    activityStatement(d1, order.user_id, 'billing.needs_attention', { code: order.code, reason, amount: n.amount }),
+    ...(attention ? [attention] : []),
+  ]);
+}
+
+function paidDetail(order: BillingOrder): Record<string, unknown> {
+  return { code: order.code, plan: order.plan, months: order.months };
+}
+
+/**
+ * Logs a paid order, extends the plan from paid orders and emails a receipt (email failure never undoes payment). For
+ * an order already marked paid by its caller (an admin activation, a 100% promo).
+ */
 export async function fulfilOrder(
   d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder, waitUntil?: WaitUntil,
 ): Promise<SubscriptionView | null> {
-  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { env, waitUntil });
+  await logActivity(d1, order.user_id, 'billing.paid', paidDetail(order));
+  return afterOrderPaid(d1, env, order, { waitUntil });
+}
+
+const receiptKey = (orderId: string) => `receipt:${orderId}`;
+
+/**
+ * The follow-ups of a paid order, each safe to run again: the plan is recomputed from every paid order (deterministic),
+ * the promo redemption and the invoice request are guarded on their status, the referral commission (`commission`) is
+ * captured once per order, the `purchase` event is queued once per order (its dedupe key; an outbox failure never
+ * blocks the payment), and the receipt is sent once per order, last, so its log marks the follow-ups done.
+ */
+async function afterOrderPaid(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: BillingOrder, opts: { waitUntil?: WaitUntil; commission?: { payerText: string | null } },
+): Promise<SubscriptionView | null> {
+  const sub = await recomputeSubscription(d1, order.user_id, order.plan, { provider: 'sepay', env, waitUntil: opts.waitUntil });
   try {
     if (order.promo_code_id) await redeemPromo(d1, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
     await activateInvoiceRequest(d1, env, 'billing_order', order.id, order.amount_paid ?? order.amount_vnd);
   } catch (err) {
     console.error(`promo/invoice bookkeeping for ${order.code} failed:`, err instanceof Error ? err.message : 'unknown');
   }
-  await logActivity(d1, order.user_id, 'billing.paid', { code: order.code, plan: order.plan, months: order.months, period_end: sub?.current_period_end ?? null });
+  if (opts.commission && order.referrer_user_id) {
+    await captureReferralCommission(d1, env, { kind: 'billing_order', id: order.id, payerText: opts.commission.payerText });
+  }
   // One verified transfer pays an order exactly once (a second one is flagged), so the order id is the transaction key.
   await queuePurchase(d1, {
     distinctId: order.user_id, provider: 'sepay', orderType: 'membership', transactionId: `billing_order:${order.id}`,
@@ -413,7 +466,7 @@ export async function fulfilOrder(
   const user = await getUserById(d1, order.user_id);
   if (user && sub) {
     const mail = await sendLoggedEmail(d1, env, {
-      key: `receipt:${order.id}`,
+      key: receiptKey(order.id),
       kind: 'payment_receipt',
       to: user.email,
       userId: user.id,
@@ -435,59 +488,92 @@ export async function fulfilOrder(
 }
 
 /**
- * Applies a verified incoming transfer to a ZSB order. The payment event is recorded first
- * (idempotency gate shared with booking); full payment of a live pending order marks it paid,
- * anything else (underpaid, late, already paid) is flagged for the admin.
+ * A redelivered transfer (already recorded) of a paid order whose receipt was never sent: the worker died after the
+ * payment batch committed. The follow-ups run again (`afterOrderPaid`, each idempotent). Nothing runs when the order
+ * is not paid or its receipt was already sent (or skipped).
+ */
+async function resumeOrderFollowUps(d1: D1DatabaseLike, env: RuntimeEnv, code: string, payerText: string | null, waitUntil?: WaitUntil): Promise<void> {
+  const current = await getOrderByCode(d1, code);
+  if (current?.status !== 'paid') return;
+  const mail = await d1.prepare('SELECT status FROM email_log WHERE idempotency_key = ?').bind(receiptKey(current.id)).first<Row>();
+  const status = mail ? str(mail, 'status') : '';
+  if (status === 'sent' || status === 'skipped') return;
+  await afterOrderPaid(d1, env, current, { waitUntil, commission: { payerText } });
+}
+
+/**
+ * Applies a verified incoming transfer to a ZSB order: full payment of a live pending order marks it paid, anything
+ * else (underpaid, late, already paid) is flagged for the admin. SePay's transaction id is the key of the transfer's
+ * `payment_events` record, which is never written up front: it is the first statement of the batch that pays or flags
+ * the order (or written alone when the transfer changes nothing), under that batch's guard. A failure or a worker
+ * crash before the commit leaves no record, so the redelivery applies the transfer once, and a record is never
+ * deleted. A redelivery after the commit is answered `duplicate_event`; if the receipt of the order it paid is still
+ * missing (the worker died after the batch), the follow-ups run again. A delivery racing this one fails on the
+ * record's unique key: its batch rolled back, so nothing was written twice.
  */
 export async function applyBillingPayment(
   d1: D1DatabaseLike, env: RuntimeEnv, n: BillingPaymentNotice, waitUntil?: WaitUntil,
 ): Promise<{ outcome: BillingOutcome; order_code: string | null }> {
   const order = await getOrderByCode(d1, n.orderCode);
+  const result = (outcome: BillingOutcome) => ({ outcome, order_code: order?.code ?? null });
+  if (await paymentEventRecorded(d1, 'sepay', n.eventId)) {
+    if (order) await resumeOrderFollowUps(d1, env, order.code, n.payerText ?? null, waitUntil);
+    return result('duplicate_event');
+  }
   const nowMs = membersRuntime.now();
   const nowIso = iso(nowMs);
+  const gate = billingEventGate(d1, n, order?.id ?? null, nowIso);
   try {
-    await d1.prepare(
-      'INSERT INTO payment_events (provider, event_id, booking_id, billing_order_id, amount, currency, raw_type, received_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)'
-    ).bind('sepay', n.eventId, order?.id ?? null, n.amount, 'VND', n.rawType, nowIso).run();
-  } catch (err) {
-    if (isUniqueViolation(err)) return { outcome: 'duplicate_event', order_code: order?.code ?? null };
-    throw err;
-  }
-
-  try {
-    if (!order) return { outcome: 'unmatched', order_code: null };
+    if (!order) {
+      await gate().run();
+      return { outcome: 'unmatched', order_code: null };
+    }
     if (order.status === 'paid') {
-      await d1.prepare("UPDATE billing_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ?")
-        .bind(nowIso, order.id).run();
-      await logActivity(d1, order.user_id, 'billing.extra_payment', { code: order.code, amount: n.amount });
-      return { outcome: 'already_paid', order_code: order.code };
+      await d1.batch([
+        gate(),
+        d1.prepare("UPDATE billing_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ?").bind(nowIso, order.id),
+        activityStatement(d1, order.user_id, 'billing.extra_payment', { code: order.code, amount: n.amount }),
+      ]);
+      return result('already_paid');
     }
     // A webhook delayed or retried past the deadline still pays an order the bank booked in time.
     const paidIso = iso(paymentTimeMs(order, n.transactedAt, nowMs));
     if (!isPayable(order) || order.expires_at < paidIso) {
-      await markAttention(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', n);
-      return { outcome: 'needs_attention', order_code: order.code };
+      await markAttention(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', n, gate);
+      return result('needs_attention');
     }
     if (n.amount < order.amount_vnd) {
-      await markAttention(d1, order, 'underpaid', n);
-      return { outcome: 'needs_attention', order_code: order.code };
+      await markAttention(d1, order, 'underpaid', n, gate);
+      return result('needs_attention');
     }
-    const res = await d1.prepare(
-      `UPDATE billing_orders SET status = 'paid', paid_at = ?, amount_paid = ?, payment_ref = ?, provider_event_id = ?, updated_at = ?
-       WHERE id = ? AND (status = 'pending' OR (status = 'expired' AND attention_reason IS NULL)) AND expires_at >= ?`
-    ).bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id, paidIso).run();
-    if (res.meta?.changes === 1) {
-      await fulfilOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount }, waitUntil);
-      if (order.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'billing_order', id: order.id, payerText: n.payerText ?? null });
-      return { outcome: 'paid', order_code: order.code };
+    // The record, the paid log and, last, the status update are one batch, each applied only while the order is still
+    // payable.
+    const payable: SqlCondition = {
+      sql: "EXISTS (SELECT 1 FROM billing_orders o WHERE o.id = ? AND (o.status = 'pending' OR (o.status = 'expired' AND o.attention_reason IS NULL)) AND o.expires_at >= ?)",
+      params: [order.id, paidIso],
+    };
+    const paid: BillingOrder = { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount };
+    const results = await d1.batch([
+      gate(payable),
+      activityStatement(d1, order.user_id, 'billing.paid', paidDetail(paid), undefined, payable),
+      d1.prepare(`UPDATE billing_orders SET status = 'paid', paid_at = ?, amount_paid = ?, payment_ref = ?, provider_event_id = ?, updated_at = ? WHERE id = ? AND ${payable.sql}`)
+        .bind(nowIso, n.amount, n.paymentRef, n.eventId, nowIso, order.id, ...payable.params),
+    ]);
+    if (results.at(-1)?.meta?.changes) {
+      await afterOrderPaid(d1, env, paid, { waitUntil, commission: { payerText: n.payerText ?? null } });
+      return result('paid');
     }
+    // The order changed since it was read; the payment batch wrote nothing, its record included.
     const current = await getOrderByCode(d1, order.code);
-    if (current?.status === 'paid') return { outcome: 'already_paid', order_code: order.code };
-    if (current) await markAttention(d1, current, 'late_payment', n);
-    return { outcome: 'needs_attention', order_code: order.code };
+    if (current?.status === 'paid') {
+      await gate().run();
+      return result('already_paid');
+    }
+    if (current) await markAttention(d1, current, 'late_payment', n, gate);
+    else await gate().run();
+    return result('needs_attention');
   } catch (err) {
-    // Release the idempotency record so the provider's retry can be processed.
-    await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('sepay', n.eventId).run().catch(() => undefined);
+    if (isPaymentEventConflict(err) && await paymentEventRecorded(d1, 'sepay', n.eventId)) return result('duplicate_event');
     throw err;
   }
 }

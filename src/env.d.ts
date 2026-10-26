@@ -45,6 +45,10 @@ export interface RuntimeEnv {
   PUBLIC_POSTHOG_HOST?: string;
   /** "1" captures on localhost/dev builds and logs analytics calls to the console (also enables the presence beacon off production hosts). */
   PUBLIC_ANALYTICS_DEBUG?: string;
+  /** GA4 web stream measurement id (`G-…`, public; inlined at build time). Absent = GA4 off. */
+  PUBLIC_GA4_MEASUREMENT_ID?: string;
+  /** GA4 Measurement Protocol API secret (server-only). Absent = server purchase/refund to GA4 skipped. */
+  GA4_API_SECRET?: string;
   // Realtime presence (workers/presence)
   /** HMAC secret signing presence connect tickets; must equal the presence Worker's secret. Missing = ticket endpoint answers 503. */
   PRESENCE_TICKET_SECRET?: string;

@@ -65,7 +65,7 @@ export function ArticleCard({ article: a, uiLocale, compact = false, headingLeve
         {!compact && a.snippet && <p className="text-sm text-stone-600 line-clamp-2"><Snippet text={a.snippet} /></p>}
         {!compact && !a.snippet && a.excerpt && <p className="text-sm text-stone-600 line-clamp-2">{a.excerpt}</p>}
         <div className="relative z-10 mt-0.5">
-          <TagBadges tags={a.topic_tags} labels={compact ? [] : a.labels} linkBase="/articles" max={compact ? 3 : 6} size="sm" />
+          <TagBadges tags={a.topic_tags} labels={compact ? [] : a.labels} linkBase="/articles" max={compact ? 3 : 6} size="sm" singleLine />
         </div>
       </div>
     </article>

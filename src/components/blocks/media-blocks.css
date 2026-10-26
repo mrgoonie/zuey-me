@@ -4,9 +4,23 @@
 
 .zb-embed-frame.zb-ratio-vertical { aspect-ratio: 9 / 16; max-width: 340px; margin-inline: auto; background: transparent; }
 
-.zb-math { margin: 0; padding: 0.9rem 1rem; border-radius: 0.9rem; background: #fff; border: 1px solid #e7e5e4; overflow-x: auto; }
-.zb-math code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92rem; white-space: pre; color: #292524; }
-.zb-math-tag { display: block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #a8a29e; margin-bottom: 0.35rem; }
+/* Math: KaTeX markup typeset on the server (its stylesheet is linked only on pages with math). A wide
+   formula scrolls inside its own row; the equation number and the toolbar stay put. */
+.zb-math-display { padding: 0.75rem 1rem; border-radius: 0.9rem; background: #fff; border: 1px solid #e7e5e4; color: #1c1917; }
+.zb-math-row { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.zb-math-formula { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-block: 0.2rem; }
+.zb-math-formula .katex-display { margin: 0; }
+.zb-math-inline .zb-math-formula { text-align: start; }
+.zb-math-number { flex: none; color: #57534e; font-variant-numeric: tabular-nums; }
+.zb-math-source {
+  display: block; flex: 1 1 auto; min-width: 0; overflow-x: auto; white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92rem; color: #292524;
+}
+.zb-math-tex summary { width: fit-content; font-size: 0.75rem; font-weight: 700; color: #78716c; cursor: pointer; }
+.zb-math-tex pre { margin: 0.35rem 0 0; padding: 0.5rem 0.65rem; overflow-x: auto; border-radius: 0.5rem; background: #fafaf9; font-size: 0.85rem; }
+.zb-surface-contrast .zb-math-inline :is(.zb-math-number, .zb-math-source, .zb-math-tex summary, figcaption) { color: #d6d3d1; }
+.zb-surface-contrast .zb-math-inline .zb-math-tex pre { background: #292524; color: #f5f5f4; }
+.zb-surface-contrast .zb-math.zb-math-display figcaption { color: #78716c; }
 
 /* Galleries wrap equal tiles and centre every row, including an incomplete last row, so the empty space
    is the same on both sides. The column count is the most tiles of at least 160px that fit the gallery's

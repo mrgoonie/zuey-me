@@ -1,9 +1,11 @@
 import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import type { MembershipProvider } from '../analytics/commerce-events';
 import { queueSubscriptionChange } from '../analytics/commerce-events';
 import { deweeIdentityConfig, reportMemberLifecycle } from '../channel-access/dewee-identity';
 import type { WaitUntil } from '../wait-until';
 import { deferBestEffort } from '../wait-until';
+import { CARD_RENEWAL_GRACE_MS } from './card-renewal-grace';
 import type { Entitlement, PlanId } from './plans';
 import { entitlementsForPlans, getPlan, isPlanId } from './plans';
 import type { Row } from './runtime';
@@ -53,12 +55,6 @@ export async function getEntitlements(d1: D1DatabaseLike, userId: string): Promi
   return { plans, entitlements: entitlementsForPlans(plans) };
 }
 
-/**
- * An auto-renewing card subscription keeps access this long past the provider's billing date, so the
- * minutes between the renewal charge and its webhook never lock a paying member out.
- */
-export const CARD_RENEWAL_GRACE_MS = 24 * 60 * 60 * 1000;
-
 /** Latest access end granted by active card (Dodo) subscriptions for a plan; 0 when none. */
 async function cardAccessEnd(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<number> {
   const { results } = await d1.prepare(
@@ -74,6 +70,11 @@ async function cardAccessEnd(d1: D1DatabaseLike, userId: string, plan: PlanId): 
 }
 
 export interface RecomputeOptions {
+  /**
+   * Rail whose record change triggers this recompute: `sepay` for a billing order, `dodo` for a card subscription.
+   * An expiry the recompute causes is reported with this `provider` (see `SubscriptionChange.changedProvider`).
+   */
+  provider: MembershipProvider;
   /**
    * When given, a flip of the plan's active status caused by this recompute (payment, reversal, card change) is
    * reported to Dewee as a `scopes_changed` lifecycle event carrying the member's current entitlements, so Dewee
@@ -103,12 +104,12 @@ async function reportScopes(d1: D1DatabaseLike, env: RuntimeEnv, userId: string)
  * resulting lifecycle analytics event (activated, renewed or expired; never throws).
  */
 export async function recomputeSubscription(
-  d1: D1DatabaseLike, userId: string, plan: PlanId, opts: RecomputeOptions = {}
+  d1: D1DatabaseLike, userId: string, plan: PlanId, opts: RecomputeOptions
 ): Promise<SubscriptionView | null> {
   const env = opts.env;
   const watch = env !== undefined && deweeIdentityConfig(env) !== null;
   const before = watch ? ((await listSubscriptions(d1, userId)).find(v => v.plan === plan)?.status ?? 'expired') : null;
-  const view = await rebuildSubscription(d1, userId, plan);
+  const view = await rebuildSubscription(d1, userId, plan, opts.provider);
   if (env && watch && (view?.status ?? 'expired') !== before) {
     // Billing never waits on or fails because of the call: errors are swallowed inside.
     await deferBestEffort(reportScopes(d1, env, userId), opts.waitUntil);
@@ -116,7 +117,9 @@ export async function recomputeSubscription(
   return view;
 }
 
-async function rebuildSubscription(d1: D1DatabaseLike, userId: string, plan: PlanId): Promise<SubscriptionView | null> {
+async function rebuildSubscription(
+  d1: D1DatabaseLike, userId: string, plan: PlanId, changedProvider: MembershipProvider,
+): Promise<SubscriptionView | null> {
   const before = await d1.prepare('SELECT status, current_period_end FROM subscriptions WHERE user_id = ? AND plan = ?').bind(userId, plan).first<Row>();
   const { results } = await d1.prepare(
     "SELECT months, paid_at FROM billing_orders WHERE user_id = ? AND plan = ? AND status = 'paid' AND paid_at IS NOT NULL ORDER BY paid_at, id"
@@ -150,7 +153,7 @@ async function rebuildSubscription(d1: D1DatabaseLike, userId: string, plan: Pla
   const view = views.find(v => v.plan === plan) ?? null;
   const previousEndMs = before ? Date.parse(str(before, 'current_period_end')) || 0 : 0;
   await queueSubscriptionChange(d1, {
-    userId, plan, provider, after: view, previousEndMs,
+    userId, plan, provider, changedProvider, after: view, previousEndMs,
     wasActive: before !== null && str(before, 'status') === 'active' && previousEndMs > now,
   });
   return view;

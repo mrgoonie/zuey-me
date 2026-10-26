@@ -34,7 +34,7 @@ import { BookingPanel } from './BookingPanel';
 import { BillingAttentionPanel } from './BillingAttentionPanel';
 import { ReferralsTab } from './ReferralsTab';
 import { InvoicesTab, PromosTab } from './PromosTab';
-import { PresenceOwnerPanel } from './PresenceOwnerPanel';
+import { PresenceStudioTab } from './PresenceStudioTab';
 import { reset as resetAnalytics } from '../../lib/analytics/client';
 import type { Profile, LinkItem, ApiKey } from '../../db/types';
 
@@ -48,13 +48,13 @@ interface StudioAppProps {
   adminEmail?: string | null;
   /** A signed-in member who is not an admin (shown on the sign-in screen). */
   deniedEmail?: string | null;
-  /** The signed-in admin is also the presence owner (decided server-side); only then the Presence tab exists. */
+  /** The signed-in admin is also the presence owner (decided server-side); only then the owner controls show in the Presence tab. */
   presenceOwner?: boolean;
 }
 
 type StudioTab = 'profile' | 'links' | 'theme' | 'keys' | 'articles' | 'reads' | 'videos' | 'courses' | 'booking' | 'billing' | 'referrals' | 'promos' | 'invoices' | 'presence';
 
-const HASH_TABS: StudioTab[] = ['promos', 'invoices', 'referrals', 'billing'];
+const HASH_TABS: StudioTab[] = ['promos', 'invoices', 'referrals', 'billing', 'presence'];
 
 export const StudioApp: React.FC<StudioAppProps> = ({
   initialProfile,
@@ -73,8 +73,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
   useEffect(() => {
     const fromHash = HASH_TABS.find(tab => `#${tab}` === window.location.hash);
     if (fromHash) setActiveTab(fromHash);
-    else if (presenceOwner && window.location.hash === '#presence') setActiveTab('presence');
-  }, [presenceOwner]);
+  }, []);
   const [profile, setProfile] = useState<Profile>(initialProfile);
   const [links, setLinks] = useState<LinkItem[]>(initialLinks);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>(initialKeys);
@@ -402,7 +401,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
             { id: 'referrals', label: 'Referrals', icon: Gift },
             { id: 'promos', label: 'Mã KM', icon: TicketPercent },
             { id: 'invoices', label: 'Hoá đơn', icon: FileSpreadsheet },
-            ...(presenceOwner ? [{ id: 'presence' as const, label: 'Presence', icon: Radio }] : []),
+            { id: 'presence', label: 'Presence', icon: Radio },
             { id: 'keys', label: 'API & Agents', icon: Key },
           ] satisfies { id: StudioTab; label: string; icon: typeof User }[]).map(({ id, label, icon: Icon }) => (
             <button
@@ -461,7 +460,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
           {activeTab === 'referrals' && <ReferralsTab />}
           {activeTab === 'promos' && <PromosTab />}
           {activeTab === 'invoices' && <InvoicesTab />}
-          {activeTab === 'presence' && presenceOwner && <PresenceOwnerPanel />}
+          {activeTab === 'presence' && <PresenceStudioTab owner={presenceOwner} />}
 
           {saveStatus && (
             <div className="mb-6 p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">

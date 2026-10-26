@@ -356,7 +356,7 @@ describe('channel access decisions (hosted mode, keyed by external_subject)', ()
     await d1.prepare(
       "INSERT INTO card_subscriptions (id, provider, provider_subscription_id, user_id, plan, status, current_period_end, cancel_at_period_end, created_at, updated_at) VALUES ('cs_1', 'dodo', 'sub_1', ?, 'ai', 'active', ?, 0, ?, ?)"
     ).bind(carol.userId, periodEnd, ts, ts).run();
-    await recomputeSubscription(d1, carol.userId, 'ai');
+    await recomputeSubscription(d1, carol.userId, 'ai', { provider: 'dodo' });
     now += 5 * HOUR; // past the provider billing date, inside the 24-hour grace
     expect(await decisionFor(v2Body(carol.userId))).toBe('allow');
     now += DAY; // grace over and no renewal webhook
@@ -377,7 +377,7 @@ describe('Dewee lifecycle on access changes', () => {
     const alice = await member('alice@example.com');
     const bob = await member('bob@example.com');
     await paidOrder(alice.userId, 'ai', now);
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: identityEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: identityEnv() });
     expect(lifecycleCalls().length).toBe(1);
     const up = assertionOf(lifecycleCalls()[0]);
     expect(field(up.header, 'typ')).toBe('dewee-lifecycle+jwt');
@@ -390,12 +390,12 @@ describe('Dewee lifecycle on access changes', () => {
 
     // No status change (re-run): no call.
     fetchLog = [];
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: identityEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: identityEnv() });
     expect(lifecycleCalls().length).toBe(0);
 
     // Downgrade: the payment is reversed, access ends now, and Dewee hears the reduced scope list for Alice only.
     await d1.prepare("UPDATE billing_orders SET status = 'needs_attention' WHERE user_id = ?").bind(alice.userId).run();
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: identityEnv() });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: identityEnv() });
     expect(lifecycleCalls().length).toBe(1);
     const down = assertionOf(lifecycleCalls()[0]);
     expect(field(down.claims, 'sub')).toBe(alice.userId);
@@ -407,7 +407,7 @@ describe('Dewee lifecycle on access changes', () => {
   it('is skipped without identity config and never breaks billing when Dewee fails or never saw the member', async () => {
     const alice = await member('alice@example.com');
     await paidOrder(alice.userId, 'ai', now);
-    await recomputeSubscription(d1, alice.userId, 'ai', { env: baseEnv({ DEWEE_GATEWAY_URL: GATEWAY }) });
+    await recomputeSubscription(d1, alice.userId, 'ai', { provider: 'sepay', env: baseEnv({ DEWEE_GATEWAY_URL: GATEWAY }) });
     expect(fetchLog.length).toBe(0);
 
     // Never linked: Dewee has no principal (404), which is a no-op.
@@ -415,18 +415,18 @@ describe('Dewee lifecycle on access changes', () => {
     expect(await reportMemberLifecycle(identityEnv(), alice.userId, 'scopes_changed', [])).toEqual({ status: 'not_linked' });
     const bob = await member('bob@example.com');
     await paidOrder(bob.userId, 'combo', now);
-    expect((await recomputeSubscription(d1, bob.userId, 'combo', { env: identityEnv() }))?.status).toBe('active');
+    expect((await recomputeSubscription(d1, bob.userId, 'combo', { provider: 'sepay', env: identityEnv() }))?.status).toBe('active');
 
     fakeDewee({ lifecycleStatus: 500 });
     const carol = await member('carol@example.com');
     await paidOrder(carol.userId, 'community', now);
-    expect((await recomputeSubscription(d1, carol.userId, 'community', { env: identityEnv() }))?.status).toBe('active');
+    expect((await recomputeSubscription(d1, carol.userId, 'community', { provider: 'sepay', env: identityEnv() }))?.status).toBe('active');
     expect((await reportMemberLifecycle(identityEnv(), carol.userId, 'scopes_changed', [])).status).toBe('failed');
 
     fetchImpl = async () => { throw new Error('network down'); };
     const dave = await member('dave@example.com');
     await paidOrder(dave.userId, 'ai', now);
-    expect((await recomputeSubscription(d1, dave.userId, 'ai', { env: identityEnv() }))?.status).toBe('active');
+    expect((await recomputeSubscription(d1, dave.userId, 'ai', { provider: 'sepay', env: identityEnv() }))?.status).toBe('active');
   });
 
   it('retries a transient lifecycle failure with backoff, at most three attempts, and never a client error', async () => {

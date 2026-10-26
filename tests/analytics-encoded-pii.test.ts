@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { postHogInitOptions, scrubCaptureResult } from '../src/lib/analytics/destinations/posthog';
 import { MAX_SCRUB_LENGTH, REDACTED, containsPii, redactString, scrubUrl, scrubValue } from '../src/lib/analytics/pii';
+import { SMOKE_CEILING_MS, elapsedMs, regexRuns } from './helpers/work-bound';
 
 const EMAIL = 'jane.doe@example.com';
 const LOCAL = 'jane.doe';
@@ -68,15 +69,15 @@ describe('percent-encoded emails', () => {
     const urls = [
       'https://zuey.me/articles/hello?utm_source=x&utm_medium=y',
       'https://www.google.com/search?q=zuey+me+review&hl=vi',
-      'https://zuey.me/search?q=100%25%20free%2Bcourse',
-      'https://zuey.me/vi/b%C3%A0i-vi%E1%BA%BFt?q=c%C3%A1ch%20h%E1%BB%8Dc',
+      'https://zuey.me/search?topic=100%25%20free%2Bcourse',
+      'https://zuey.me/vi/b%C3%A0i-vi%E1%BA%BFt?topic=c%C3%A1ch%20h%E1%BB%8Dc',
     ];
     for (const url of urls) expect(scrubUrl(url)).toBe(new URL(url).toString());
   });
 
   test('malformed escapes never throw and do not hide an email', () => {
-    expect(() => scrubUrl('https://zuey.me/?q=%E0%A4%A%zz%')).not.toThrow();
-    expect(scrubUrl('https://zuey.me/?q=%E0%A4%A%zz%')).toContain('%zz');
+    expect(() => scrubUrl('https://ref.example.org/?q=%E0%A4%A%zz%')).not.toThrow();
+    expect(scrubUrl('https://ref.example.org/?q=%E0%A4%A%zz%')).toContain('%zz');
     const out = scrubUrl('https://ref.example.org/?q=%E0%%ZZjane.doe%40example.com%');
     expect(leaksEmail(out)).toBe(false);
     expect(() => redactString('%%%40%4')).not.toThrow();
@@ -140,45 +141,51 @@ describe('scrubber accuracy', () => {
 describe('long inputs', () => {
   const MB = 1024 * 1024;
 
-  function timed<T>(run: () => T): [T, number] {
-    const start = performance.now();
-    const out = run();
-    return [out, performance.now() - start];
+  /**
+   * Work bound plus smoke ceiling: the regex runs `run` makes stay within `bound` (deterministic), and `times`
+   * calls finish inside the ceiling, which linear code clears with room to spare under load while a regex that
+   * restarts or backtracks over the 16 KB input takes seconds.
+   */
+  function expectBounded(name: string, run: () => void, bound: number, times: number) {
+    const runs = regexRuns(run, bound);
+    expect({ name, runs, withinBound: runs <= bound }).toEqual({ name, runs, withinBound: true });
+    const ms = elapsedMs(run, times);
+    expect({ name, ms, fast: ms < SMOKE_CEILING_MS }).toEqual({ name, ms, fast: true });
   }
 
-  test('a 1 MB URL is scrubbed in under 50 ms and the email inside it is redacted', () => {
+  test('a 1 MB URL is cut to the cap before scanning and the email inside it is redacted', () => {
     const url = `https://www.google.com/search?q=jane.doe%40example.com&x=${'a%40aaaa'.repeat(MB / 8)}`;
-    const [out, ms] = timed(() => scrubValue({ $referrer: url }));
-    expect(ms).toBeLessThan(50);
-    const text = JSON.stringify(out);
+    // About one run per character kept: scanning all 1 MB would decode 131 072 escape runs.
+    expectBounded('1 MB URL', () => { scrubValue({ $referrer: url }); }, 2 * MAX_SCRUB_LENGTH, 20);
+    const text = JSON.stringify(scrubValue({ $referrer: url }));
     expect(leaksEmail(text)).toBe(false);
     expect(text).toContain(REDACTED);
     expect(text.length).toBeLessThanOrEqual(MAX_SCRUB_LENGTH + 100);
   });
 
-  test('1 MB of free text with a literal email is scrubbed in under 50 ms', () => {
+  test('1 MB of free text with a literal email is cut to the cap before scanning', () => {
     const value = `contact ${EMAIL} ${'a'.repeat(MB)}`;
-    const [out, ms] = timed(() => redactString(value));
-    expect(ms).toBeLessThan(50);
+    expectBounded('1 MB text', () => { redactString(value); }, 2 * MAX_SCRUB_LENGTH, 20);
+    const out = redactString(value);
+    expect(out.length).toBeLessThanOrEqual(MAX_SCRUB_LENGTH + REDACTED.length);
     expect(leaksEmail(out)).toBe(false);
     expect(out.startsWith(`contact ${REDACTED} `)).toBe(true);
   });
 
   test('a 16 KB run of eyJ just under the cap is scrubbed in linear time', () => {
     const run = 'eyJ'.repeat(Math.floor((MAX_SCRUB_LENGTH - 40) / 3));
-    const [out, ms] = timed(() => scrubValue({ a: `https://zuey.me/?x=${run}`, b: run, c: `${run}.abcd` }));
-    expect(ms).toBeLessThan(20);
-    expect(JSON.stringify(out)).toContain(run);
-    const [jwt, jwtMs] = timed(() => redactString(`${run}.abcd.efgh`));
-    expect(jwtMs).toBeLessThan(10);
-    expect(jwt).toBe(REDACTED);
+    // A few dozen runs however many eyJ the value holds; a scan that restarts at every eyJ makes thousands.
+    expectBounded('eyJ run', () => { scrubValue({ a: `https://zuey.me/?x=${run}`, b: run, c: `${run}.abcd` }); }, 100, 60);
+    expect(JSON.stringify(scrubValue({ a: `https://zuey.me/?x=${run}`, b: run, c: `${run}.abcd` }))).toContain(run);
+    expectBounded('eyJ token', () => { redactString(`${run}.abcd.efgh`); }, 100, 60);
+    expect(redactString(`${run}.abcd.efgh`)).toBe(REDACTED);
   });
 
   test('16 KB of non-ASCII text around @ is scanned in linear time', () => {
     const shapes = [`${'ọ.'.repeat(8000)}@`, 'ü@ü.'.repeat(4000), `@${'ọ.'.repeat(126)}`.repeat(64)];
     for (const value of shapes) {
-      const [, ms] = timed(() => scrubValue({ v: value }));
-      expect(ms).toBeLessThan(20);
+      // Each @ costs a bounded walk back over at most 64 local-part characters.
+      expectBounded(value.slice(0, 8), () => { scrubValue({ v: value }); }, value.length, 20);
     }
     expect(redactString(`${'ọ'.repeat(100)}@bücher.example`)).toBe(`${'ọ'.repeat(36)}${REDACTED}`);
     expect(redactString('see \u{1D4B6}bc@example.com')).toBe(`see ${REDACTED}`);
@@ -209,6 +216,34 @@ describe('long inputs', () => {
   test('values up to the cap are kept whole', () => {
     const value = 'a'.repeat(MAX_SCRUB_LENGTH);
     expect(redactString(value)).toBe(value);
+  });
+
+  test('a 16 KB URL with thousands of sensitive parameter names is scrubbed in one pass', () => {
+    const pairs = Array.from({ length: 2000 }, (_, i) => (i % 10 === 0 ? `k${i}=y` : `token${i.toString(36)}`)).join('&');
+    const query = pairs.slice(0, pairs.lastIndexOf('&', 15_000));
+    const hash = 'access_token=x&tab=1';
+    const url = `https://zuey.me/articles?${query}#${hash}`;
+    expect(url.length).toBeLessThanOrEqual(MAX_SCRUB_LENGTH);
+    expect((query.match(/token/g) ?? []).length).toBeGreaterThan(1500);
+    // Removing names one at a time re-serialises the whole query per name (quadratic). The work bound: the
+    // number of URLSearchParams mutations stays constant however many sensitive names the URL carries.
+    const spies = (['delete', 'set', 'append', 'sort'] as const).map(method => spyOn(URLSearchParams.prototype, method));
+    let out = '';
+    let ms = 0;
+    let mutations = 0;
+    try {
+      const start = performance.now();
+      out = scrubUrl(url);
+      ms = performance.now() - start;
+      mutations = spies.reduce((sum, spy) => sum + spy.mock.calls.length, 0);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(mutations).toBeLessThanOrEqual(2);
+    expect(ms).toBeLessThan(SMOKE_CEILING_MS);
+    expect(out).not.toContain('token');
+    const kept = (query.match(/k\d+=y/g) ?? []).join('&');
+    expect(out).toBe(`https://zuey.me/articles?${kept}#tab=1`);
   });
 
   test('containsPii treats a value too long to inspect as PII', () => {

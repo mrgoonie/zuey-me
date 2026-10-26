@@ -15,9 +15,11 @@ import type { Block, BlockType } from './schema';
 import { BLOCK_TYPES } from './schema';
 import { callout, checklist, code, divider, heading, icon, list, paragraph, quote } from './definitions/text';
 import { audio, bookmark, embed, file, gallery, image, math, video } from './definitions/media';
-import { chart, diagram, survey, table } from './definitions/data';
+import { diagram, survey, table } from './definitions/data';
+import { chart } from './definitions/chart';
 import { interactive } from './definitions/interactive';
 import { card, layout, section, toggle } from './definitions/containers';
+import { comparison, progress, stat, steps, tabs } from './definitions/composition';
 
 type BlockRegistry = { readonly [K in BlockType]: BlockDefinition<BlockOf<K>> };
 
@@ -27,6 +29,7 @@ export const BLOCK_REGISTRY: BlockRegistry = {
   math, gallery, audio, video, file, bookmark, toggle,
   icon,
   section, card,
+  tabs, stat, steps, comparison, progress,
 };
 
 /** Definition for a block type (callers pass blocks of that same type). */

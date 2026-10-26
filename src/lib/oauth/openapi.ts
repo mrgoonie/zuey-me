@@ -1,5 +1,5 @@
 import type { OpenApiFragment } from '../openapi/types';
-import { OAUTH_SCOPES } from './config';
+import { IDENTITY_SCOPES, OAUTH_SCOPES } from './config';
 import { SUPPORTED_VERSIONS } from './mcp-http';
 
 const OAUTH_TAG = 'OAuth & MCP';
@@ -19,6 +19,8 @@ export const oauthOpenApi: OpenApiFragment = {
       'OAuth 2.1 authorization server for MCP clients (authorization code + PKCE S256 only, rotating refresh tokens, RFC 8707 resource indicators, RFC 9207 `iss`).',
       'Clients are identified by a Client ID Metadata Document URL or registered via RFC 7591 Dynamic Client Registration.',
       'Access tokens (`zoa_…`) are audience-bound to `<origin>/mcp` and only accepted by the `/mcp` endpoint in the `Authorization` header.',
+      `Sign in with zuey.me: identity scopes (${IDENTITY_SCOPES.join(', ')}) grant no MCP, REST or plan access, only claims at \`/oauth/userinfo\`.`,
+      'A request that asks only identity scopes is bound to the audience `<origin>/oauth/userinfo` (omit `resource` or send that URI); its token is rejected by `/mcp`.',
       `\`/mcp\` speaks MCP Streamable HTTP (JSON-RPC 2.0, JSON responses, stateless). Supported protocol versions: ${SUPPORTED_VERSIONS.join(', ')}.`,
       '`/mcp` also accepts personal `zk_` keys and admin API keys; tools are filtered per caller and scope.',
     ].join(' '),
@@ -60,7 +62,7 @@ export const oauthOpenApi: OpenApiFragment = {
           { name: 'code_challenge_method', in: 'query', required: true, schema: { type: 'string', enum: ['S256'] } },
           { name: 'state', in: 'query', schema: { type: 'string', maxLength: 500 } },
           { name: 'scope', in: 'query', schema: { type: 'string', description: `Space-separated subset of: ${OAUTH_SCOPES.join(' ')}` } },
-          { name: 'resource', in: 'query', schema: { type: 'string', example: 'https://zuey.me/mcp' } },
+          { name: 'resource', in: 'query', schema: { type: 'string', example: 'https://zuey.me/mcp', description: 'MCP requests: `<origin>/mcp`. Identity-only requests (openid, profile, email): omit or `<origin>/oauth/userinfo`.' } },
         ],
         responses: { '302': { description: 'Redirect to sign-in, consent, or the client redirect_uri' }, '400': { description: 'HTML error page' } },
       },
@@ -79,6 +81,21 @@ export const oauthOpenApi: OpenApiFragment = {
         description: clientAuth,
         requestBody: { required: true, content: form({ type: 'object', required: ['token'], properties: { token: { type: 'string' }, token_type_hint: { type: 'string' }, client_id: { type: 'string' } } }) },
         responses: { '200': { description: 'Revoked (also returned for unknown tokens)' }, '400': oauthError, '401': oauthError },
+      },
+    },
+    '/oauth/userinfo': {
+      get: {
+        tags: [OAUTH_TAG], summary: 'Signed-in member claims (Sign in with zuey.me); also accepts POST', security: [{ McpOAuth: ['openid'] }],
+        description: [
+          'Send `Authorization: Bearer <zoa_ token>`. Any live token with the `openid` scope works, whatever its audience.',
+          '`email` adds `email` + `email_verified`; `profile` adds `name`, `picture` (https or null) and `locale` (`vi`, `en` or null). `sub` is a stable opaque member id.',
+          'Missing, expired or revoked tokens, revoked consent and deleted members get 401 `invalid_token`; a token without `openid` gets 403 `insufficient_scope`.',
+        ].join(' '),
+        responses: {
+          '200': { description: 'Claims (`Cache-Control: no-store`)', content: json(ref('UserinfoClaims')) },
+          '401': { description: '`invalid_token` (WWW-Authenticate: Bearer error="invalid_token")', content: json(ref('OAuthError')) },
+          '403': { description: '`insufficient_scope` (no `openid`)', content: json(ref('OAuthError')) },
+        },
       },
     },
     '/oauth/connections': {
@@ -177,6 +194,17 @@ export const oauthOpenApi: OpenApiFragment = {
       properties: {
         access_token: { type: 'string' }, token_type: { type: 'string', enum: ['Bearer'] }, expires_in: { type: 'integer' },
         refresh_token: { type: 'string' }, scope: { type: 'string' },
+      },
+    },
+    UserinfoClaims: {
+      type: 'object', required: ['sub'],
+      properties: {
+        sub: { type: 'string', description: 'Stable opaque member id' },
+        email: { type: 'string', description: 'With the `email` scope' },
+        email_verified: { type: 'boolean', description: 'With the `email` scope' },
+        name: { type: ['string', 'null'], description: 'With the `profile` scope' },
+        picture: { type: ['string', 'null'], format: 'uri', description: 'With the `profile` scope (https only)' },
+        locale: { type: ['string', 'null'], enum: ['vi', 'en', null], description: 'With the `profile` scope' },
       },
     },
     ConnectedApp: {

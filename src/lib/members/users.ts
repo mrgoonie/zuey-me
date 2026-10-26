@@ -1,5 +1,6 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
+import { forgetGa4Client } from '../analytics/ga4-attribution';
 import { reportMemberLifecycle } from '../channel-access/dewee-identity';
 import { AppError } from '../http';
 import type { WaitUntil } from '../wait-until';
@@ -161,8 +162,24 @@ export async function insertActivity(
   detail: Record<string, unknown> | null = null,
   request?: Request,
 ): Promise<void> {
-  await d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso()).run();
+  await activityStatement(d1, userId, action, detail, request).run();
+}
+
+/**
+ * The activity insert of `insertActivity` without running it, for a caller that writes it in a D1 batch. With
+ * `onlyIf`, nothing is inserted unless it holds when the statement runs.
+ */
+export function activityStatement(
+  d1: D1DatabaseLike,
+  userId: string,
+  action: string,
+  detail: Record<string, unknown> | null = null,
+  request?: Request,
+  onlyIf?: SqlCondition,
+): D1PreparedStatementLike {
+  const source = onlyIf ? `SELECT ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, ?, ?, ?)';
+  return d1.prepare(`INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) ${source}`)
+    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso(), ...(onlyIf?.params ?? []));
 }
 
 export async function logActivity(
@@ -253,6 +270,8 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
   ]);
   // Already deleted: the cleanup above only re-ran idempotent statements on rows that were already clean.
   if (!scrub?.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');
+  // Outside the transaction and best-effort: analytics ids must never block deleting the account.
+  await forgetGa4Client(d1, user.id);
   // Outside the transaction and best-effort (never throws): Dewee revokes the member's sessions and unlinks every
   // chat account, so the agent gate stops answering them; a member who never linked one is a no-op. With
   // waitUntil the call (and its retries) runs after the response, so deletion never waits on Dewee.

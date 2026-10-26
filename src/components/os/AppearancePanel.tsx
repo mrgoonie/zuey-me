@@ -1,6 +1,6 @@
 import React, { useId, useRef } from 'react';
 import { ImagePlus, Video } from 'lucide-react';
-import { ACCENTS, ACCENT_IDS, THEME_MODES, WALLPAPERS, type Look } from './look';
+import { ACCENTS, ACCENT_IDS, THEME_MODES, WALLPAPERS, glassEnabled, type Look } from './look';
 import type { OsStrings } from './os-i18n';
 
 interface AppearancePanelProps {
@@ -13,7 +13,7 @@ interface AppearancePanelProps {
 }
 
 /**
- * Appearance window: theme mode, accent colour, wallpaper presets, photo upload and dim.
+ * Appearance window: theme mode, accent colour, the Liquid Glass switch, wallpaper presets, photo upload and dim.
  * Confirmations and upload errors are reported by the caller through the shared toast.
  */
 export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage, strings, onChange, onImage, onReset }) => {
@@ -22,6 +22,9 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage
   const modeId = useId();
   const accentId = useId();
   const wallId = useId();
+  const glassId = useId();
+  const glassHintId = useId();
+  const glassOn = glassEnabled(look);
 
   const pickImage = () => fileRef.current?.click();
 
@@ -56,6 +59,24 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage
               onClick={() => onChange({ accent: a })}
             />
           ))}
+        </div>
+      </section>
+
+      <section className="os-ap-sec" aria-labelledby={glassId}>
+        <h3 id={glassId}>{strings.glass}</h3>
+        <div className="os-ap-switch-row">
+          <p id={glassHintId} className="os-ap-hint">{strings.glassHint}</p>
+          <button
+            type="button"
+            role="switch"
+            className="os-ap-switch"
+            aria-checked={glassOn}
+            aria-labelledby={glassId}
+            aria-describedby={glassHintId}
+            onClick={() => onChange({ glass: !glassOn })}
+          >
+            <span aria-hidden="true" />
+          </button>
         </div>
       </section>
 
