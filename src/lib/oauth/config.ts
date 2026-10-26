@@ -3,11 +3,18 @@ import { USER_KEY_SCOPES } from '../members/api-keys';
 import { DAY_MS } from '../members/runtime';
 
 /**
- * OAuth scopes for the remote MCP endpoint. Member scopes are exactly the personal API key scopes so
- * one `can()` decision covers keys and OAuth tokens; `admin` is only granted to verified admin
- * identities and is re-checked against the allowlist on every request.
+ * OIDC-style identity scopes for "Sign in with zuey.me". They only unlock claims at `/oauth/userinfo`:
+ * never MCP tools, REST API or `can()` entitlements.
  */
-export const OAUTH_SCOPES = [...USER_KEY_SCOPES, 'admin'] as const;
+export const IDENTITY_SCOPES = ['openid', 'profile', 'email'] as const;
+export type IdentityScope = (typeof IDENTITY_SCOPES)[number];
+
+/**
+ * OAuth scopes. Member scopes are exactly the personal API key scopes so one `can()` decision covers
+ * keys and OAuth tokens; `admin` is only granted to verified admin identities and is re-checked against
+ * the allowlist on every request; identity scopes come last and only matter to userinfo.
+ */
+export const OAUTH_SCOPES = [...USER_KEY_SCOPES, 'admin', ...IDENTITY_SCOPES] as const;
 export type OAuthScope = (typeof OAUTH_SCOPES)[number];
 
 /** Scopes requested when a client asks for none (everything a member can grant, never admin). */
@@ -35,13 +42,23 @@ export const CLIENT_ID_PREFIX = 'zc_';
 export const CLIENT_SECRET_PREFIX = 'zcs_';
 
 export const MCP_PATH = '/mcp';
+export const USERINFO_PATH = '/oauth/userinfo';
 
 export function isOAuthScope(v: unknown): v is OAuthScope {
   return typeof v === 'string' && (OAUTH_SCOPES as readonly string[]).includes(v);
 }
 
+export function isIdentityScope(v: OAuthScope): v is IdentityScope {
+  return (IDENTITY_SCOPES as readonly string[]).includes(v);
+}
+
 export function isMemberScope(v: OAuthScope): v is UserKeyScope {
-  return v !== 'admin';
+  return v !== 'admin' && !isIdentityScope(v);
+}
+
+/** True when a non-empty scope set asks only for identity (sign-in), so its token belongs to userinfo. */
+export function isIdentityOnly(scopes: OAuthScope[]): boolean {
+  return scopes.length > 0 && scopes.every(isIdentityScope);
 }
 
 /** Issuer is the origin serving the request, so tokens are bound to the host that issued them. */
@@ -52,6 +69,14 @@ export function issuerFor(request: Request): string {
 /** Canonical resource URI (RFC 8707) of the MCP endpoint on this host — the token audience. */
 export function mcpResourceFor(issuer: string): string {
   return `${issuer}${MCP_PATH}`;
+}
+
+/**
+ * Resource URI of the userinfo endpoint: the audience of identity-only tokens, which `/mcp` therefore
+ * rejects. Userinfo itself accepts any live token carrying `openid`, whatever its audience.
+ */
+export function userinfoResourceFor(issuer: string): string {
+  return `${issuer}${USERINFO_PATH}`;
 }
 
 export function resourceMetadataUrl(issuer: string): string {

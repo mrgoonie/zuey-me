@@ -1,4 +1,4 @@
-import { DEFAULT_MEMBER_SCOPES, OAUTH_SCOPES, issuerFor, mcpResourceFor } from './config';
+import { DEFAULT_MEMBER_SCOPES, OAUTH_SCOPES, issuerFor, mcpResourceFor, userinfoResourceFor } from './config';
 
 const PUBLIC_CACHE = { 'Cache-Control': 'public, max-age=300' };
 
@@ -15,6 +15,7 @@ export function authorizationServerMetadata(request: Request): Record<string, un
     token_endpoint: `${issuer}/oauth/token`,
     registration_endpoint: `${issuer}/oauth/register`,
     revocation_endpoint: `${issuer}/oauth/revoke`,
+    userinfo_endpoint: userinfoResourceFor(issuer),
     scopes_supported: [...OAUTH_SCOPES],
     response_types_supported: ['code'],
     response_modes_supported: ['query'],
