@@ -8,7 +8,7 @@ import { resolvePrincipal } from '../members/policy';
 import { getEntitlements } from '../members/subscriptions';
 import { getUserById } from '../members/users';
 import type { OAuthScope } from './config';
-import { ACCESS_TOKEN_PREFIX, isMemberScope } from './config';
+import { ACCESS_TOKEN_PREFIX, isIdentityScope, isMemberScope } from './config';
 import { validateAccessToken } from './tokens';
 
 export interface OAuthGrantInfo {
@@ -57,6 +57,10 @@ export async function resolveMcpCaller(request: Request, env: RuntimeEnv, audien
       audience: 'The access token was not issued for this resource',
     }[check.reason];
     return { ok: false, error: 'invalid_token', description };
+  }
+  // Identity scopes alone never open `/mcp`, even on a token bound to it (the member unticked every MCP scope).
+  if (!check.token.scopes.some(s => !isIdentityScope(s))) {
+    return { ok: false, error: 'invalid_token', description: 'The access token was not issued for this resource' };
   }
   const user = await getUserById(d1, check.token.user_id);
   if (!user) return { ok: false, error: 'invalid_token', description: 'The access token is invalid' };

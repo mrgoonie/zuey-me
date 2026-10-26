@@ -10,8 +10,8 @@ import type { OAuthClient } from './clients';
 import { getClient, redirectDisplayHost, redirectUriAllowed } from './clients';
 import type { OAuthScope } from './config';
 import {
-  DEFAULT_MEMBER_SCOPES, REQUEST_TTL_MS, canonicalResource, isOAuthScope, issuerFor, mcpResourceFor, parseScopeParam,
-  parseStoredScopes, sortScopes,
+  DEFAULT_MEMBER_SCOPES, REQUEST_TTL_MS, canonicalResource, isIdentityOnly, isOAuthScope, issuerFor, mcpResourceFor, parseScopeParam,
+  parseStoredScopes, sortScopes, userinfoResourceFor,
 } from './config';
 import { OAuthError } from './errors';
 import { createAuthorizationCode, recordConsent } from './tokens';
@@ -103,10 +103,15 @@ export async function startAuthorization(d1: D1DatabaseLike, request: Request): 
   if (requested === null) return fail('invalid_scope', 'Unknown scope requested');
   const scopes = requested.length > 0 ? requested : [...DEFAULT_MEMBER_SCOPES];
 
-  const expectedResource = mcpResourceFor(issuer);
+  // Sign-in requests (only openid/profile/email) are bound to userinfo, so their tokens never open `/mcp`;
+  // any request with a member or admin scope keeps the MCP audience exactly as before.
+  const identityOnly = isIdentityOnly(scopes);
+  const expectedResource = identityOnly ? userinfoResourceFor(issuer) : mcpResourceFor(issuer);
   const rawResource = q('resource');
   if (rawResource !== null && canonicalResource(rawResource) !== expectedResource) {
-    return fail('invalid_target', `resource must be ${expectedResource}`);
+    return fail('invalid_target', identityOnly
+      ? `identity-only scopes (openid, profile, email) use resource ${expectedResource} or no resource`
+      : `resource must be ${expectedResource}`);
   }
 
   const now = membersRuntime.now();
@@ -170,7 +175,8 @@ export async function loadConsent(d1: D1DatabaseLike, env: RuntimeEnv, request: 
 }
 
 function buildView(env: RuntimeEnv, pending: PendingAuthorization, client: OAuthClient, user: UserRecord): ConsentView {
-  const admin = isAdminIdentity(user.email, user.email_verified_at, env);
+  // A sign-in request never offers `admin`: its token is bound to userinfo, where admin would mean nothing.
+  const admin = isAdminIdentity(user.email, user.email_verified_at, env) && !isIdentityOnly(pending.scopes);
   const offered = sortScopes([...pending.scopes.filter(s => s !== 'admin' || admin), ...(admin ? ['admin' as const] : [])]);
   return {
     request_id: pending.id,
