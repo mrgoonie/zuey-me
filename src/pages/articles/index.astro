@@ -2,6 +2,7 @@
 import Layout from '../../layouts/Layout.astro';
 import ArticleListItems from '../../components/knowledge/ArticleListItems.astro';
 import { knowledgeStrings } from '../../components/knowledge/strings';
+import { listArticles } from '../../lib/blocks/articles';
 import { discoverArticles } from '../../lib/blocks/discovery';
 import type { DiscoveryItem } from '../../lib/blocks/discovery';
 import { parseDiscoveryQuery } from '../../lib/blocks/params';
@@ -34,11 +35,13 @@ let total = 0;
 let hasMore = false;
 let semantic = false;
 let failed = false;
-// The facets do not depend on the list, so both load at once (each D1 round trip adds latency far from the database).
-const facetsLoad = publicTaxonomy(env.DB, listLocale).catch(() => ({ tags: [], categories: [], labels: [] }));
+// One load of the published list feeds the facet counts and, without filters, the listing itself. The facets do not
+// depend on the listing, so both start at once (each D1 round trip adds latency far from the database).
+const published = listArticles(env.DB, { locale: listLocale });
+const facetsLoad = publicTaxonomy(env.DB, listLocale, published).catch(() => ({ tags: [], categories: [], labels: [] }));
 try {
   const principal = await resolvePrincipal(Astro.request, env);
-  const result = await discoverArticles(principal, env, { ...query, locale: listLocale }, throughPageWindow(page));
+  const result = await discoverArticles(principal, env, { ...query, locale: listLocale }, throughPageWindow(page), published);
   items = result.items;
   total = result.total;
   hasMore = result.hasMore;
