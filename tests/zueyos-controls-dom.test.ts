@@ -419,7 +419,8 @@ describe('Zuey OS desktop keyboard flow', () => {
     const { about, modal, escape } = await openAbout();
     const share = about()?.querySelector<HTMLButtonElement>('button[aria-label="Share profile"]');
     if (!share) throw new Error('No share button');
-    (document.activeElement as HTMLElement | null)?.blur();
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement) focused.blur();
     expect(document.activeElement === document.body).toBe(true);
     React.act(() => { share.dispatchEvent(new Event('pointerdown', { bubbles: true })); share.click(); });
     await settle(2);
