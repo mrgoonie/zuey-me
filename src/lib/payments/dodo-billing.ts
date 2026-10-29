@@ -1,8 +1,9 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import {
-  queueCardStateChange, queueCardSubscriptionEnd, queueNeedsAttention, queuePaymentFailed, queuePurchase, queueRefund,
+  queueCardStateChange, queueCardSubscriptionEnd, queueNeedsAttention, queuePaymentFailed, queuePurchase, refundEvent,
 } from '../analytics/commerce-events';
-import type { WaitUntil } from '../channel-access/invalidate';
+import { outboxInsertStatement } from '../analytics/outbox';
+import type { WaitUntil } from '../wait-until';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { PlanId } from '../members/plans';
@@ -10,7 +11,7 @@ import { getPlan, isPlanId } from '../members/plans';
 import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, numOrNull, randomId, siteUrl, str, strOrNull } from '../members/runtime';
 import { recomputeSubscription } from '../members/subscriptions';
-import { getUserById, insertActivity, logActivity } from '../members/users';
+import { activityStatement, getUserById, logActivity } from '../members/users';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { captureReferralCommission } from '../referrals/commissions';
 import type { ReversalOutcome } from '../referrals/refunds';
@@ -295,7 +296,7 @@ export async function cancelCardSubscription(
     const updated = await cancelDodoSubscription(env, card.provider_subscription_id, membersRuntime.fetch);
     await d1.prepare('UPDATE card_subscriptions SET cancel_at_period_end = 1, current_period_end = COALESCE(?, current_period_end), updated_at = ? WHERE id = ?')
       .bind(updated?.nextBillingDate ?? null, iso(membersRuntime.now()), card.id).run();
-    if (card.plan) await recomputeSubscription(d1, userId, card.plan, { env });
+    if (card.plan) await recomputeSubscription(d1, userId, card.plan, { provider: 'dodo', env });
     await logActivity(d1, userId, 'billing.card_cancel_scheduled', { plan: card.plan, card_subscription_id: card.id }, request);
     await queueCardSubscriptionEnd(d1, 'subscription_cancel_scheduled', card);
   }
@@ -369,16 +370,27 @@ function subscriptionMismatch(
 
 /**
  * Besides one row per webhook id, `payment_events` holds prefixed rows keyed by the business fact: a collected
- * Dodo charge (`charge:<payment id>`, raw type `payment.charge`) and a refund/dispute (`<event type>:<id>`).
+ * Dodo charge (`charge:<payment id>`, raw type `payment.charge`), a refund (`refund.succeeded:<refund id>`), an
+ * opened dispute (`dispute.opened:<dispute id>`), a dispute's funds-lost outcome, whichever of accepted, lost or
+ * expired arrives first (`dispute.lost:<dispute id>`), and the money-back markers of a payment
+ * (`money_back:<payment id>:full_refund` / `:chargeback`, see `applyDodoReversal`).
  */
 const CHARGE_RAW_TYPE = 'payment.charge';
 const chargeKey = (paymentId: string): string => `charge:${paymentId}`;
+type MoneyBack = 'full_refund' | 'chargeback';
+const moneyBackKey = (paymentId: string, kind: MoneyBack): string => `money_back:${paymentId}:${kind}`;
+
+function paymentEventStatement(
+  d1: D1DatabaseLike, eventId: string, cardId: string | null, amount: number | null, currency: string | null, rawType: string, ignoreDuplicate = false,
+): D1PreparedStatementLike {
+  return d1.prepare(
+    `INSERT INTO payment_events (provider, event_id, booking_id, card_subscription_id, amount, currency, raw_type, received_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)${ignoreDuplicate ? ' ON CONFLICT DO NOTHING' : ''}`
+  ).bind('dodo', eventId, cardId, amount, currency, rawType, iso(membersRuntime.now()));
+}
 
 async function recordEvent(d1: D1DatabaseLike, eventId: string, cardId: string | null, amount: number | null, currency: string | null, rawType: string): Promise<boolean> {
   try {
-    await d1.prepare(
-      'INSERT INTO payment_events (provider, event_id, booking_id, card_subscription_id, amount, currency, raw_type, received_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)'
-    ).bind('dodo', eventId, cardId, amount, currency, rawType, iso(membersRuntime.now())).run();
+    await paymentEventStatement(d1, eventId, cardId, amount, currency, rawType).run();
     return true;
   } catch (err) {
     if (isUniqueViolation(err)) return false;
@@ -465,7 +477,7 @@ async function applySubscriptionEvent(
   await queueCardStateChange(d1, card, { status, cancelAtPeriodEnd: data.cancelAtPeriodEnd, reason }, event.occurredAt);
 
   if (card.user_id && card.plan) {
-    const sub = await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
+    const sub = await recomputeSubscription(d1, card.user_id, card.plan, { provider: 'dodo', env, waitUntil });
     if (status !== card.status || event.type === 'subscription.renewed') {
       const action = status === 'needs_attention' ? 'billing.needs_attention'
         : status === 'active' ? (event.type === 'subscription.renewed' && card.status === 'active' ? 'billing.card_renewed' : 'billing.card_active')
@@ -525,7 +537,7 @@ async function applyPaymentEvent(
   if (reason) {
     await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reason, nowIso, card.id).run();
     if (card.user_id && card.plan) {
-      await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
+      await recomputeSubscription(d1, card.user_id, card.plan, { provider: 'dodo', env, waitUntil });
       await logActivity(d1, card.user_id, 'billing.needs_attention', { plan: card.plan, card_subscription_id: card.id, reason, amount: data.totalAmount, currency: data.currency });
     }
     if (card.user_id) await queueNeedsAttention(d1, { ...analytics, reference: data.paymentId, reason });
@@ -550,7 +562,7 @@ async function applyPaymentEvent(
       const reasonText = card.promo_code_id ? 'promo_discount_not_applied' : 'referral_discount_not_applied';
       await d1.prepare("UPDATE card_subscriptions SET status = 'needs_attention', attention_reason = ?, updated_at = ? WHERE id = ?").bind(reasonText, nowIso, card.id).run();
       if (card.user_id) {
-        await recomputeSubscription(d1, card.user_id, card.plan, { env, waitUntil });
+        await recomputeSubscription(d1, card.user_id, card.plan, { provider: 'dodo', env, waitUntil });
         await logActivity(d1, card.user_id, 'billing.needs_attention', {
           plan: card.plan, card_subscription_id: card.id, reason: reasonText, amount: data.totalAmount, tax: data.tax ?? 0, currency: data.currency,
         });
@@ -650,7 +662,12 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
  * payment carries a referral commission, so only its reversal reverses the commission (idempotently); a
  * renewal reports `renewal`. Access is not changed for either: the admin reviews the logged reversal.
  * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
- * `payment_events` row keyed by the refund or dispute id gates them across webhook retries.
+ * `payment_events` row keyed by the refund or dispute id gates them across webhook retries, written in the same
+ * D1 batch as both, so a crash never leaves the gate without them.
+ * An opened dispute logs and reverses the commission but queues no `refund` (it may still be won); the funds-lost
+ * outcomes (`dispute.accepted`, `dispute.lost`, `dispute.expired`) share one gate and one analytics key per dispute,
+ * so it is reported once whichever arrives. `dispute.won` / `dispute.cancelled` are not parsed: nothing is restored,
+ * and a commission reversed on `dispute.opened` stays reversed for the admin to review.
  *
  * A payment with no recorded charge (a reversal that beats its `payment.succeeded`, or a renewal charged before
  * charge rows existed) is looked up at Dodo (`GET /payments/{id}`, with `env`) and matched to a card by its subscription id or,
@@ -669,26 +686,35 @@ export async function applyDodoReversal(
   const renewal = strOrNull(row, 'first_payment_id') !== event.paymentId;
   const outcome = renewal ? 'renewal' : (await reverseCommission(d1, { sourceKind: 'card_subscription', sourceId: cardId }, event.kind)).outcome;
   const userId = strOrNull(row, 'user_id');
-  const reversalKey = `${event.type}:${event.objectId ?? event.paymentId}`;
-  if (!userId || !(await recordEvent(d1, reversalKey, cardId, event.amount, event.currency, event.type))) {
-    return { outcome, card_subscription_id: cardId };
-  }
-  try {
-    // The analytics event is deduped by its key, so it goes first; the activity log is the last write and throws on
-    // failure, which releases the gate with nothing logged, so the retry writes it once.
-    // An opened dispute may still be won; only money that actually went back is a refund.
-    if (event.kind !== 'dispute_opened') {
-      await queueRefund(d1, {
-        distinctId: userId, provider: 'dodo', orderType: 'membership', reference: `${event.kind}:${event.objectId ?? event.paymentId}`,
-        reason: event.kind === 'refund' ? 'refund' : 'chargeback', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
-      });
+  // Every funds-lost outcome shares `dispute.lost`'s key, so a dispute accepted, lost or expired is logged once.
+  const reversalKey = `${event.kind === 'dispute_lost' ? 'dispute.lost' : event.type}:${event.objectId ?? event.paymentId}`;
+  if (!userId) return { outcome, card_subscription_id: cardId };
+  // The gate, the analytics event and the activity log land in one batch, or none of them does and the retry writes
+  // them all. The commission reversal above cannot join it, but it only moves a reversible commission, so a retry is safe.
+  const statements = [paymentEventStatement(d1, reversalKey, cardId, event.amount, event.currency, event.type)];
+  // An opened dispute may still be won; only money that actually went back is a refund.
+  if (event.kind !== 'dispute_opened') {
+    const chargeback = event.kind === 'dispute_lost';
+    // Money that went back is counted once per payment: a chargeback is not counted after a full refund of the payment
+    // (an RDR resolution refunds it too) and no refund is counted after a chargeback. Partial refunds add up.
+    if (chargeback || !event.isPartial) {
+      statements.push(paymentEventStatement(d1, moneyBackKey(event.paymentId, chargeback ? 'chargeback' : 'full_refund'), cardId, event.amount, event.currency, event.type, true));
     }
-    await insertActivity(d1, userId, 'billing.card_reversal', {
-      card_subscription_id: cardId, kind: event.kind, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
-    });
+    const refund = outboxInsertStatement(d1, await refundEvent(d1, {
+      distinctId: userId, provider: 'dodo', orderType: 'membership', reference: `${event.kind}:${event.objectId ?? event.paymentId}`,
+      reason: chargeback ? 'chargeback' : 'refund', amountMinor: event.amount, currency: event.currency, partial: event.isPartial, plan: strOrNull(row, 'plan'),
+      purchaseTransactionId: event.paymentId,
+    }), { provider: 'dodo', eventId: moneyBackKey(event.paymentId, chargeback ? 'full_refund' : 'chargeback') });
+    if (refund) statements.push(refund);
+  }
+  statements.push(activityStatement(d1, userId, 'billing.card_reversal', {
+    card_subscription_id: cardId, kind: event.kind, event: event.type, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
+  }));
+  try {
+    await d1.batch(statements);
   } catch (err) {
-    await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind('dodo', reversalKey).run().catch(() => undefined);
-    throw err;
+    // Only the gate can be a duplicate: this refund or dispute outcome is already logged and reported.
+    if (!isUniqueViolation(err)) throw err;
   }
   return { outcome, card_subscription_id: cardId };
 }

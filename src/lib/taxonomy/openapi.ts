@@ -3,8 +3,9 @@ import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
 import { SEARCH_TIERS } from '../search/indexer';
 import { JOB_STATUSES } from './audit';
-import { LABEL_KINDS, LABEL_SCOPES } from './labels';
+import { LABEL_ALIASES_DOC, LABEL_KINDS, LABEL_SCOPES, LABEL_SLUG_DOC } from './labels';
 import { DECISIONS, PROPOSAL_STATUSES } from './proposals';
+import { TAG_ALIASES_DOC, TAG_LIMITS, TAG_NAMES_DOC, TAG_SLUG_DOC } from './tags';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: unknown) => ({ 'application/json': { schema } });
@@ -14,7 +15,23 @@ const ok = (description: string, data: unknown) => ({
 });
 const err = (description: string) => ({ description, content: json(ref('Error')) });
 const notFound = err('Not found');
-const revisionConflict = err('`revision_conflict` (stale expected_revision) or a duplicate slug/alias/name');
+const revisionConflict = '`revision_conflict`: stale expected_revision; `error.current_revision` carries the stored revision';
+const tagConflict = '`tag_conflict`: the slug, an alias or a localized name is already used by another tag; `error.tag_id` names that tag';
+const slugTaken = '`slug_taken`: another category already uses this slug';
+const labelConflict = '`label_conflict`: another label of this kind already uses this slug (a deleted label keeps its slug reserved)';
+const conflicts = {
+  tag: {
+    create: err(tagConflict),
+    update: err(`${tagConflict} (a deleted tag keeps its slug reserved, so renaming onto it conflicts too), or ${revisionConflict}`),
+    delete: err(revisionConflict),
+  },
+  category: { create: err(slugTaken), update: err(`${slugTaken}, or ${revisionConflict}`), delete: err(revisionConflict) },
+  label: {
+    create: err(labelConflict),
+    update: err(`${labelConflict}, or ${revisionConflict}`),
+    delete: err(`\`label_in_use\`: articles still carry the label (\`error.articles\` is the count), or ${revisionConflict}`),
+  },
+};
 const locale = { type: 'string', enum: [...LOCALES] };
 const names = {
   type: 'object', description: 'Localized display names; at least one locale',
@@ -27,14 +44,15 @@ const deleted = ok('Deleted', { type: 'object', properties: { deleted: { type: '
 const tags = ['Knowledge taxonomy'];
 const admin = { tags, security: adminSecurity };
 
-function crud(kind: string, schema: string, inputSchema: string, note: string) {
+function crud(kind: keyof typeof conflicts, schema: string, inputSchema: string, note: string) {
+  const conflict = conflicts[kind];
   return {
     collection: {
       get: { ...admin, summary: `List ${kind}s`, responses: { '200': ok(`${kind}s`, { type: 'array', items: ref(schema) }), ...errorResponses } },
       post: {
         ...admin, summary: `Create a ${kind}. ${note}`,
         requestBody: { required: true, content: json(ref(inputSchema)) },
-        responses: { '201': ok('Created', ref(schema)), '409': revisionConflict, ...errorResponses },
+        responses: { '201': ok('Created', ref(schema)), '409': conflict.create, ...errorResponses },
       },
     },
     item: {
@@ -42,11 +60,11 @@ function crud(kind: string, schema: string, inputSchema: string, note: string) {
       put: {
         ...admin, summary: `Update a ${kind} (optimistic concurrency)`, parameters: [idParam],
         requestBody: { required: true, content: json({ allOf: [ref(inputSchema), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' } } }] }) },
-        responses: { '200': ok('Updated', ref(schema)), '404': notFound, '409': revisionConflict, ...errorResponses },
+        responses: { '200': ok('Updated', ref(schema)), '404': notFound, '409': conflict.update, ...errorResponses },
       },
       delete: {
         ...admin, summary: `Delete a ${kind}`, parameters: [idParam, expectedRevisionQuery], requestBody: deleteBody,
-        responses: { '200': deleted, '404': notFound, '409': revisionConflict, ...errorResponses },
+        responses: { '200': deleted, '404': notFound, '409': conflict.delete, ...errorResponses },
       },
     },
   };
@@ -111,7 +129,14 @@ export const taxonomyOpenApi: OpenApiFragment = {
         revision: { type: 'integer' }, article_count: { type: 'integer' }, created_at: { type: 'string' }, updated_at: { type: 'string' },
       },
     },
-    TopicTagInput: { type: 'object', properties: { names, slug: { type: 'string' }, aliases: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 40 } } } },
+    TopicTagInput: {
+      type: 'object',
+      properties: {
+        names: { ...names, description: TAG_NAMES_DOC, properties: Object.fromEntries(LOCALES.map(l => [l, { type: 'string', maxLength: TAG_LIMITS.nameLength }])) },
+        slug: { type: 'string', maxLength: TAG_LIMITS.slugLength, description: TAG_SLUG_DOC },
+        aliases: { type: 'array', maxItems: TAG_LIMITS.aliases, items: { type: 'string', maxLength: TAG_LIMITS.nameLength }, description: TAG_ALIASES_DOC },
+      },
+    },
     Category: {
       type: 'object',
       properties: {
@@ -132,8 +157,8 @@ export const taxonomyOpenApi: OpenApiFragment = {
     TaxonomyLabelInput: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: LABEL_KINDS.filter(k => k !== 'claim' && k !== 'freshness') }, slug: { type: 'string' }, names,
-        aliases: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, version: { type: ['string', 'null'] },
+        kind: { type: 'string', enum: LABEL_KINDS.filter(k => k !== 'claim' && k !== 'freshness') }, slug: { type: 'string', description: LABEL_SLUG_DOC }, names,
+        aliases: { type: 'array', items: { type: 'string' }, description: LABEL_ALIASES_DOC }, description: { type: 'string' }, version: { type: ['string', 'null'] },
         approve: { type: 'boolean', description: 'Approve an extension label' },
       },
     },

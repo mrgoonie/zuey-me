@@ -1,12 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { Root } from 'react-dom/client';
-import type { Profile } from '../src/db/types';
 import {
   GLASS_LENSES, displacementMap, glassTier, isChromiumEngine, readEngineCapabilities, type GlassCapabilities,
 } from '../src/components/os/liquid-glass';
 import { ACCENTS, DEFAULT_LOOK, LOOK_KEY, glassEnabled, parseLook } from '../src/components/os/look';
+import { FakeAnimation, profile, trackHashChanges, waitFor } from './helpers/zueyos';
 
 // Liquid Glass tiers for the Zuey OS chrome: capability tiering, the Appearance switch (persisted
 // with the look), the reduced-motion / reduced-transparency off switches, and text contrast on the
@@ -259,7 +259,6 @@ let os: typeof import('../src/components/os/ZueyOS');
 let i18n: typeof import('../src/components/os/os-i18n');
 const originalFetch = globalThis.fetch;
 const mounted: Array<{ root: Root; container: HTMLElement }> = [];
-const profile: Profile = { id: 'p', name: 'Duy', handle: 'duy', email: 'duy@example.com', avatar_url: '/avatar.png', intro_en: 'Hi', intro_vi: 'Chào', theme: 'default' };
 
 /** Media state the fake matchMedia answers from; `flip` notifies every live list, like a settings change. */
 const media = { reducedMotion: false, reducedTransparency: false };
@@ -288,28 +287,17 @@ function setChromium(on: boolean) {
   Object.defineProperty(navigator, 'userAgentData', { configurable: true, value: on ? { brands: [{ brand: 'Chromium', version: '141' }] } : undefined });
 }
 
-/** Minimal Web Animation: finishes on the next task. */
-class FakeAnimation extends EventTarget {
-  onfinish: (() => void) | null = null;
-  finished = Promise.resolve();
-  constructor() {
-    super();
-    setTimeout(() => this.onfinish?.(), 0);
-  }
-  cancel(): void {}
-}
+setDefaultTimeout(30_000);
 
-async function settle(rounds = 6) {
-  for (let i = 0; i < rounds; i++) await React.act(async () => { await new Promise(r => setTimeout(r, 20)); });
-}
 
-async function mountOs(): Promise<HTMLElement> {
+/** Mounts the desktop and waits until its root (and anything `ready` checks, named by `condition`) is on screen. */
+async function mountOs(ready: (root: HTMLElement) => boolean = () => true, condition = 'desktop'): Promise<HTMLElement> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = client.createRoot(container);
   React.act(() => root.render(React.createElement(os.ZueyOS, { locale: 'en', profile, links: [], signedIn: false })));
   mounted.push({ root, container });
-  await settle();
+  await waitFor(`mounted: ${condition}`, () => tierOf(container) != null && ready(container));
   return container;
 }
 function unmountAll() {
@@ -328,6 +316,7 @@ const storedGlass = (): unknown => {
 describe('Liquid Glass in Zuey OS', () => {
   beforeAll(async () => {
     GlobalRegistrator.register({ url: 'https://zuey.me/', width: 1440, height: 900 });
+    trackHashChanges();
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: (q: string) => new FakeMediaQueryList(q) });
     Object.defineProperty(window.CSS, 'supports', { configurable: true, value: (p: string, v?: string) => p === 'backdrop-filter' && typeof v === 'string' });
@@ -404,15 +393,16 @@ describe('Liquid Glass in Zuey OS', () => {
     setChromium(true);
     const s = i18n.osStrings('en').look;
     window.history.replaceState(null, '', '/#appearance');
-    const root = await mountOs();
-    const toggle = () => root.querySelector<HTMLButtonElement>('.osw[data-app="appearance"] [role="switch"]');
+    const switchOf = (r: HTMLElement) => r.querySelector<HTMLButtonElement>('.osw[data-app="appearance"] [role="switch"]');
+    const root = await mountOs(r => switchOf(r) !== null, 'Appearance switch');
+    const toggle = () => switchOf(root);
     expect(toggle()?.getAttribute('aria-checked')).toBe('true');
     const labelId = toggle()?.getAttribute('aria-labelledby') ?? '';
     expect(document.getElementById(labelId)?.textContent).toBe(s.glass);
     expect(tierOf(root)).toBe('liquid');
 
     React.act(() => toggle()?.click());
-    await settle(2);
+    await waitFor('glass switched off and saved', () => toggle()?.getAttribute('aria-checked') === 'false' && tierOf(root) === 'off' && storedGlass() === false);
     expect(toggle()?.getAttribute('aria-checked')).toBe('false');
     expect(tierOf(root)).toBe('off');
     expect(filtersOf(root)).toEqual([]);
@@ -420,12 +410,12 @@ describe('Liquid Glass in Zuey OS', () => {
 
     // A new visit reads the saved look and keeps the glass off.
     unmountAll();
-    const again = await mountOs();
+    const again = await mountOs(r => switchOf(r) !== null, 'Appearance switch after reload');
     expect(tierOf(again)).toBe('off');
-    const toggleAgain = again.querySelector<HTMLButtonElement>('.osw[data-app="appearance"] [role="switch"]');
+    const toggleAgain = switchOf(again);
     expect(toggleAgain?.getAttribute('aria-checked')).toBe('false');
     React.act(() => toggleAgain?.click());
-    await settle(2);
+    await waitFor('glass switched back on and saved', () => tierOf(again) === 'liquid' && storedGlass() === true);
     expect(tierOf(again)).toBe('liquid');
     expect(storedGlass()).toBe(true);
   });

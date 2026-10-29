@@ -29,18 +29,18 @@ function isCatalogQuery(filters: ListOptions): boolean {
 }
 
 /**
- * Lists published articles for discovery. Pass `catalog` (the unfiltered `listArticles(db, { locale })` result for
+ * Lists published articles for discovery. Pass `catalog` (an already started `listArticles(db, { locale })` load for
  * the same locale) to skip a second D1 load when the query adds no filter. With `q`, the authorization-first knowledge search
  * picks and orders the articles; filters (category/tag/label/access) then narrow that list.
  * `window` picks the slice to return (default: from `page`/`limit` in the query); `total` counts every match.
  */
 export async function discoverArticles(
   principal: Principal, env: RuntimeEnv, query: DiscoveryQuery, window: ListWindow = queryWindow(query),
-  catalog?: ArticleSummary[],
+  catalog?: Promise<ArticleSummary[]>,
 ): Promise<DiscoveryResult> {
   const { q, page: _page, limit: _limit, ...filters } = query;
   if (!q) {
-    const list = catalog && isCatalogQuery(filters) ? catalog : await listArticles(env.DB, filters);
+    const list = await (catalog && isCatalogQuery(filters) ? catalog : listArticles(env.DB, filters));
     return { ...applyWindow(list, window), semantic: false };
   }
   const search = await searchKnowledge(principal, q, filters.locale ?? null, 50, env);

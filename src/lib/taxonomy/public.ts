@@ -23,12 +23,14 @@ export interface PublicTaxonomy {
 /**
  * Public filter facets: only tags/categories/labels used by at least one published edition are listed,
  * with counts over published articles only (draft-only taxonomy never leaks to readers).
+ * `published` is an already started `listArticles(d1, { locale })` load; a caller that has one skips a second D1 read.
  */
 export async function publicTaxonomy(
-  d1: D1DatabaseLike | undefined, locale: Locale, loaded?: ArticleSummary[],
+  d1: D1DatabaseLike | undefined, locale: Locale, published?: Promise<ArticleSummary[]>,
 ): Promise<PublicTaxonomy> {
-  // `loaded` is an already fetched `listArticles(d1, { locale })`, so callers that have it avoid a second D1 read.
-  const articles = loaded ?? await listArticles(d1, { locale });
+  const [articles, allTags, allCategories, allLabels] = await Promise.all([
+    published ?? listArticles(d1, { locale }), listTags(d1), listCategories(d1), listLabels(d1),
+  ]);
   const tagCounts = new Map<string, number>();
   const catCounts = new Map<string, number>();
   const labelCounts = new Map<string, number>();
@@ -37,12 +39,12 @@ export async function publicTaxonomy(
     if (a.category) catCounts.set(a.category.id, (catCounts.get(a.category.id) ?? 0) + 1);
     for (const l of a.labels) labelCounts.set(l.id, (labelCounts.get(l.id) ?? 0) + 1);
   }
-  const tags = (await listTags(d1)).filter(t => tagCounts.has(t.id))
+  const tags = allTags.filter(t => tagCounts.has(t.id))
     .map(t => ({ ...toPublicTag(t, locale), published_count: tagCounts.get(t.id) ?? 0 }))
     .sort((a, b) => b.published_count - a.published_count || a.name.localeCompare(b.name, locale));
-  const categories = (await listCategories(d1)).filter(c => catCounts.has(c.id))
+  const categories = allCategories.filter(c => catCounts.has(c.id))
     .map(c => ({ ...toPublicCategory(c, locale), published_count: catCounts.get(c.id) ?? 0 }));
-  const labels = (await listLabels(d1)).filter(l => labelCounts.has(l.id))
+  const labels = allLabels.filter(l => labelCounts.has(l.id))
     .map(l => ({ ...toPublicLabel(l, locale), key: labelKey(l), published_count: labelCounts.get(l.id) ?? 0 }));
   return { tags, categories, labels };
 }

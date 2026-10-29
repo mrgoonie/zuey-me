@@ -13,13 +13,34 @@ export const LIMITS = {
   text: 20_000,
   shortText: 500,
   code: 50_000,
+  codeFilename: 200,
+  /** Ranges in a code block's `highlightLines`. */
+  codeLineRanges: 50,
+  /** Bounds of a code block's `collapseAfter` (lines). */
+  codeCollapseMin: 3,
+  codeCollapseMax: 500,
   mermaid: 20_000,
   url: 2_048,
   listItems: 200,
   tableColumns: 20,
   tableRows: 200,
+  /**
+   * Data tables (a table using any option: typed columns, sort, search, …) are read and filtered in the browser,
+   * so their cells are bounded more tightly than plain tables, which keep the original text limit.
+   */
+  dataTableCell: 1_000,
+  dataTableChars: 100_000,
+  tableTitle: 200,
+  /** Fixed decimals of a numeric column. */
+  tableDecimalsMax: 6,
   chartSeries: 12,
   chartLabels: 100,
+  /** Axis titles, units, reference labels and annotation texts of a chart. */
+  chartText: 120,
+  chartReferences: 10,
+  chartAnnotations: 10,
+  /** Fixed decimals of chart values. */
+  chartDecimalsMax: 6,
   surveyOptionsMin: 2,
   surveyOptionsMax: 10,
   layoutChildren: 12,
@@ -42,6 +63,33 @@ export const LIMITS = {
   cardChildren: 50,
   /** Section anchors become URL fragments (#anchor). */
   anchor: 64,
+  // Composition widgets (tabs, stat, steps, comparison, progress).
+  tabsMin: 2,
+  tabsMax: 8,
+  /** Tab labels, stat/progress labels, step dates, option names, badges and feature labels. */
+  widgetLabel: 120,
+  widgetAffix: 20,
+  tabChildren: 50,
+  statItems: 8,
+  sparklineMin: 2,
+  sparklineMax: 50,
+  stepItems: 20,
+  stepChildren: 20,
+  comparisonOptionsMin: 2,
+  comparisonOptionsMax: 4,
+  comparisonFeatures: 30,
+  /** Pros or cons of one comparison option. */
+  comparisonPoints: 10,
+  optionChildren: 20,
+  progressItems: 12,
+  progressSegmentsMin: 2,
+  progressSegmentsMax: 20,
+  ratingMax: 10,
+  progressThresholds: 5,
+  /** Fixed decimals of stat and progress values. */
+  widgetDecimalsMax: 4,
+  /** Largest absolute stat, sparkline or progress value. */
+  widgetNumberMax: 1e15,
 } as const;
 
 export const BLOCK_TYPES = [
@@ -52,6 +100,8 @@ export const BLOCK_TYPES = [
   'icon',
   // Composition containers
   'section', 'card',
+  // Composition widgets
+  'tabs', 'stat', 'steps', 'comparison', 'progress',
 ] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
 
@@ -61,7 +111,24 @@ export const EMBED_PROVIDERS = [
 export type EmbedProvider = (typeof EMBED_PROVIDERS)[number];
 
 export const CALLOUT_TONES = ['info', 'warn', 'tip'] as const;
-export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut'] as const;
+/** Math layout: `display` (default when absent) or `inline`. */
+export const MATH_MODES = ['display', 'inline'] as const;
+export type MathMode = (typeof MATH_MODES)[number];
+export const CHART_KINDS = ['bar', 'line', 'pie', 'doughnut', 'area', 'scatter', 'radar', 'combo'] as const;
+export type ChartKind = (typeof CHART_KINDS)[number];
+/** How one series of a `combo` chart is drawn. */
+export const CHART_SERIES_TYPES = ['bar', 'line', 'area'] as const;
+export type ChartSeriesType = (typeof CHART_SERIES_TYPES)[number];
+/** Value style of an axis; `date` is for the category labels of the x axis only. */
+export const CHART_FORMATS = ['number', 'percent', 'currency', 'date'] as const;
+export type ChartFormat = (typeof CHART_FORMATS)[number];
+export const CHART_LEGENDS = ['top', 'bottom', 'none'] as const;
+export type ChartLegend = (typeof CHART_LEGENDS)[number];
+/** Value type of a table column; cells stay strings in a canonical form per type (see ./table-data.ts). */
+export const TABLE_COLUMN_TYPES = ['text', 'number', 'currency', 'percent', 'date', 'boolean', 'link', 'badge'] as const;
+export type TableColumnType = (typeof TABLE_COLUMN_TYPES)[number];
+/** Narrow screens: `scroll` sideways (default) or stack each row as a `cards` list. */
+export const TABLE_MOBILE_MODES = ['scroll', 'cards'] as const;
 export const LAYOUT_VARIANTS = ['columns', 'grid', 'bento'] as const;
 export const LAYOUT_GAPS = ['sm', 'md', 'lg'] as const;
 export const BREAKPOINTS = ['base', 'md', 'lg'] as const;
@@ -80,6 +147,22 @@ export const DEFAULT_CARD_LEVEL = 3;
 /** Section anchors: lowercase slug, used as the element id and URL fragment. */
 export const ANCHOR_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+export const STAT_TRENDS = ['up', 'down', 'flat'] as const;
+export type StatTrend = (typeof STAT_TRENDS)[number];
+export const STAT_STATES = ['positive', 'negative', 'neutral'] as const;
+export type StatState = (typeof STAT_STATES)[number];
+export const STEP_VARIANTS = ['steps', 'timeline'] as const;
+export const STEP_ORIENTATIONS = ['vertical', 'horizontal'] as const;
+export const STEP_CONNECTORS = ['line', 'none'] as const;
+export const STEP_STATUSES = ['done', 'current', 'upcoming'] as const;
+export type StepStatus = (typeof STEP_STATUSES)[number];
+export const PROGRESS_VARIANTS = ['bar', 'segments', 'gauge', 'rating'] as const;
+export type ProgressVariant = (typeof PROGRESS_VARIANTS)[number];
+export const PROGRESS_STATES = ['positive', 'warning', 'negative', 'neutral'] as const;
+export type ProgressState = (typeof PROGRESS_STATES)[number];
+export const DEFAULT_RATING_MAX = 5;
+export const DEFAULT_PROGRESS_SEGMENTS = 5;
+
 interface BlockBase { id: string }
 
 export interface ParagraphBlock extends BlockBase { type: 'paragraph'; text: string }
@@ -95,7 +178,24 @@ export interface CalloutBlock extends BlockBase {
   /** Allowlisted icon replacing the tone's default glyph. */
   icon?: IconName;
 }
-export interface CodeBlock extends BlockBase { type: 'code'; language: string; code: string }
+/** Source code. Every option is optional, so blocks stored before they existed read and render unchanged. */
+export interface CodeBlock extends BlockBase {
+  type: 'code';
+  language: string;
+  code: string;
+  /** File name or path shown as the block's caption. */
+  filename?: string;
+  /** Line number gutter (true only; false is stored as absent). */
+  lineNumbers?: true;
+  /** Emphasised lines, 1-based: "2,4-6" (normalised without spaces). */
+  highlightLines?: string;
+  /** Each line starts with a diff marker: `+` added, `-` removed, a space for context. */
+  diff?: true;
+  /** Soft-wrap long lines by default instead of scrolling sideways (readers can switch). */
+  wrap?: true;
+  /** Code longer than this many lines starts collapsed to that height, with a button to show it all. */
+  collapseAfter?: number;
+}
 export interface DividerBlock extends BlockBase { type: 'divider' }
 /**
  * Natural pixel size of an image, recorded when the URL is entered so readers reserve its box before it loads.
@@ -104,14 +204,110 @@ export interface DividerBlock extends BlockBase { type: 'divider' }
 export interface ImageSize { width?: number; height?: number }
 export interface ImageBlock extends BlockBase, ImageSize { type: 'image'; url: string; alt: string; caption?: string }
 export interface EmbedBlock extends BlockBase { type: 'embed'; url: string; provider: EmbedProvider; caption?: string }
-export interface TableBlock extends BlockBase { type: 'table'; headers: string[]; rows: string[][] }
-export interface ChartSeries { name: string; data: number[] }
+export interface TableColumn {
+  type: TableColumnType;
+  /** number, currency and percent: fixed decimals (0–6); the value is shown as written when absent. */
+  decimals?: number;
+  /** currency: ISO 4217 code such as VND or USD. */
+  currency?: string;
+  /** Readers get a filter control for this column. */
+  filter?: true;
+}
+/**
+ * Table. Every option is optional, so tables stored before they existed read and render unchanged. A table
+ * using any option is a data table: typed, formatted cells and, when asked, sort, search, filters, a sticky
+ * header, CSV export and a stacked layout on narrow screens.
+ */
+export interface TableBlock extends BlockBase {
+  type: 'table';
+  headers: string[];
+  rows: string[][];
+  /** One per header; absent when every column is plain text. */
+  columns?: TableColumn[];
+  /** Plain-text name shown above the table (its accessible name). */
+  title?: string;
+  /** Inline text shown under the table. */
+  caption?: string;
+  sortable?: true;
+  search?: true;
+  stickyHeader?: true;
+  /** CSV download of the rows on screen. */
+  csv?: true;
+  /** `cards` stacks rows on narrow screens; absent means sideways scrolling. */
+  mobile?: 'cards';
+}
+
+/** True when the table uses any option beyond headers and rows; plain tables keep their original markup. */
+export function isDataTable(b: TableBlock): boolean {
+  return Boolean(b.columns || b.title || b.caption || b.sortable || b.search || b.stickyHeader || b.csv || b.mobile);
+}
+export interface ChartSeries {
+  name: string;
+  /** One value per label (the y values of a scatter chart). */
+  data: number[];
+  /** combo only: how this series is drawn (bar when absent). */
+  type?: ChartSeriesType;
+  /** Plot against the right-hand axis (`y2`). */
+  axis?: 'right';
+  /** scatter only: one x value per label. */
+  x?: number[];
+}
+export interface ChartAxis {
+  title?: string;
+  /** Value axes (y, y2, the x of a scatter chart): domain bounds. */
+  min?: number;
+  max?: number;
+  format?: ChartFormat;
+  /** currency format: ISO 4217 code such as VND or USD. */
+  currency?: string;
+  /** Fixed decimals of the values. */
+  decimals?: number;
+  /** Unit shown after each value, such as `kg` or `người`. */
+  unit?: string;
+}
+/** Horizontal reference line (target, average, threshold) at a value of the y (or right-hand) axis. */
+export interface ChartReference { value: number; label?: string; axis?: 'right' }
+/** Note pinned to one category: `index` of the label it marks. */
+export interface ChartAnnotation { index: number; text: string }
+/**
+ * Chart. Every option is optional, so charts stored before they existed read and render unchanged. A chart
+ * using any option (or one of the newer kinds) is drawn by the chart v2 renderer: formatted axes and tooltips,
+ * a keyboard legend that shows and hides series, reference lines, annotations, fullscreen and exports.
+ */
 export interface ChartBlock extends BlockBase {
   type: 'chart';
-  kind: (typeof CHART_KINDS)[number];
+  kind: ChartKind;
   title?: string;
   labels: string[];
   series: ChartSeries[];
+  /** Inline text under the chart (source, notes). */
+  caption?: string;
+  /** bar, line, area and combo: series stack on top of each other. */
+  stacked?: true;
+  x?: ChartAxis;
+  y?: ChartAxis;
+  /** Right-hand axis for series with `axis: 'right'`. */
+  y2?: ChartAxis;
+  /** Legend placement, or `none`; one legend entry per series (per label for pie and doughnut). */
+  legend?: ChartLegend;
+  /** Values written on the bars and points. */
+  dataLabels?: true;
+  references?: ChartReference[];
+  annotations?: ChartAnnotation[];
+  /** CSV download of the data. */
+  csv?: true;
+  /** PNG download of the drawn chart. */
+  png?: true;
+}
+
+/** Kinds the original chart renderer drew. */
+const LEGACY_CHART_KINDS: readonly string[] = ['bar', 'line', 'pie', 'doughnut'];
+
+/** True when the chart uses a newer kind or any option; charts without them keep their original markup. */
+export function isChartV2(b: ChartBlock): boolean {
+  return !LEGACY_CHART_KINDS.includes(b.kind)
+    || Boolean(b.caption || b.stacked || b.x || b.y || b.y2 || b.legend || b.dataLabels || b.references || b.annotations || b.csv || b.png)
+    || b.series.some(s => s.type || s.axis || s.x);
 }
 export interface DiagramBlock extends BlockBase { type: 'diagram'; syntax: 'mermaid'; source: string; caption?: string }
 export interface SurveyOption { id: string; label: string }
@@ -148,8 +344,12 @@ export interface LayoutBlock extends BlockBase {
   children: LayoutChild[];
 }
 
-/** TeX source; rendered as accessible source text (no math engine is bundled). */
-export interface MathBlock extends BlockBase { type: 'math'; tex: string; caption?: string }
+/**
+ * TeX formula typeset with KaTeX on the server (HTML + MathML); the TeX source stays available as the
+ * fallback. `mode` is `display` (centred, own line) unless `inline` (text-sized, in the reading flow);
+ * `numbered` display formulas get an equation number in document order.
+ */
+export interface MathBlock extends BlockBase { type: 'math'; tex: string; mode?: MathMode; numbered?: boolean; caption?: string }
 export interface GalleryImage extends ImageSize { url: string; alt: string; caption?: string }
 export interface GalleryBlock extends BlockBase { type: 'gallery'; images: GalleryImage[]; caption?: string }
 /** Direct https audio file (hosted players such as SoundCloud/Spotify use `embed`). */
@@ -213,19 +413,117 @@ export interface CardBlock extends BlockBase {
 
 export type ContainerBlock = SectionBlock | CardBlock;
 
+/** One tab: a short label, an optional deep-link anchor (#anchor) and its panel blocks. */
+export interface TabItem { label: string; anchor?: string; blocks: Block[] }
+/**
+ * Tabbed panels. Without JavaScript (and in Markdown, email and feeds) every panel is shown in order under
+ * a heading of `level`; the browser turns them into a WAI-ARIA tab list.
+ */
+export interface TabsBlock extends BlockBase {
+  type: 'tabs';
+  tabs: TabItem[];
+  /** Index of the tab selected first (default 0). */
+  defaultTab?: number;
+  /** Heading level of each panel label when all panels are shown (default 3). */
+  level?: (typeof CARD_LEVELS)[number];
+}
+
+export interface StatDelta { value: number; decimals?: number; suffix?: string; label?: string }
+export interface StatItem {
+  label: string;
+  value: number;
+  decimals?: number;
+  prefix?: string;
+  suffix?: string;
+  /** Unit word shown after the value, separated by a space. */
+  unit?: string;
+  delta?: StatDelta;
+  /** Direction arrow; defaults to the sign of the delta. */
+  trend?: StatTrend;
+  /** Colour meaning; defaults to positive for up, negative for down and neutral otherwise. */
+  state?: StatState;
+  sparkline?: number[];
+  /** Inline annotation under the value. */
+  note?: string;
+}
+/** Row of key figures (metrics, KPIs). */
+export interface StatBlock extends BlockBase { type: 'stat'; title?: string; items: StatItem[] }
+
+export interface StepItem { title: string; date?: string; icon?: IconName; status?: StepStatus; blocks: Block[] }
+/** Ordered process (`steps`) or dated sequence (`timeline`). */
+export interface StepsBlock extends BlockBase {
+  type: 'steps';
+  variant: (typeof STEP_VARIANTS)[number];
+  /** Horizontal rows fall back to vertical on narrow screens. */
+  orientation?: (typeof STEP_ORIENTATIONS)[number];
+  /** Line between markers (default `line`). */
+  connector?: (typeof STEP_CONNECTORS)[number];
+  items: StepItem[];
+}
+
+export interface ComparisonOption {
+  name: string;
+  badge?: string;
+  /** The recommended option; at most one per comparison. */
+  highlight?: true;
+  description?: string;
+  pros?: string[];
+  cons?: string[];
+  blocks: Block[];
+}
+/** One matrix row: a value per option, in option order (true/false render as yes/no marks). */
+export interface ComparisonFeature { label: string; values: Array<string | boolean> }
+/** Two to four options side by side, with an optional feature matrix. */
+export interface ComparisonBlock extends BlockBase { type: 'comparison'; title?: string; options: ComparisonOption[]; features?: ComparisonFeature[] }
+
+export interface ProgressThreshold { at: number; state: ProgressState }
+export interface ProgressItem { label: string; value: number; note?: string }
+/** Progress bars, segmented bars, gauges or star ratings for one or more values on a shared scale. */
+export interface ProgressBlock extends BlockBase {
+  type: 'progress';
+  variant: ProgressVariant;
+  title?: string;
+  /** Scale start (default 0; ratings always start at 0). */
+  min?: number;
+  /** Scale end (default 100; for ratings the number of stars, default 5). */
+  max?: number;
+  /** Number of segments of a segmented bar (default 5). */
+  segments?: number;
+  decimals?: number;
+  suffix?: string;
+  /** Ascending value thresholds: a value at or above `at` takes that state. */
+  thresholds?: ProgressThreshold[];
+  items: ProgressItem[];
+}
+
+export type CompositionBlock = TabsBlock | StatBlock | StepsBlock | ComparisonBlock | ProgressBlock;
+/** Composition widgets whose items carry nested block lists. */
+export type ItemWidgetBlock = TabsBlock | StepsBlock | ComparisonBlock;
+
 export type Block =
   | ParagraphBlock | HeadingBlock | ListBlock | ChecklistBlock | QuoteBlock | CalloutBlock | CodeBlock
   | DividerBlock | ImageBlock | EmbedBlock | TableBlock | ChartBlock | DiagramBlock | SurveyBlock | LayoutBlock
   | InteractiveBlock
   | KnowledgeMediaBlock
   | IconBlock
-  | ContainerBlock;
+  | ContainerBlock
+  | CompositionBlock;
 
-/** Block lists nested directly inside a block (layout cells, toggle, section and card bodies). */
+/** Items of a tabs, steps or comparison widget, each with its own block list. */
+export function widgetItems(block: ItemWidgetBlock): Array<{ blocks: Block[] }> {
+  switch (block.type) {
+    case 'tabs': return block.tabs;
+    case 'steps': return block.items;
+    case 'comparison': return block.options;
+  }
+}
+
+/** Block lists nested directly inside a block (layout cells, container bodies, widget items). */
 export function childBlockLists(block: Block): Block[][] {
   switch (block.type) {
     case 'layout': return block.children.map(child => child.blocks);
     case 'toggle': case 'section': case 'card': return [block.blocks];
+    case 'tabs': case 'steps': case 'comparison': return widgetItems(block).map(item => item.blocks);
     default: return [];
   }
 }

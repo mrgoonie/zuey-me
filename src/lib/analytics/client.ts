@@ -12,6 +12,7 @@ import { browserConsentEnvironment, consentState, setOptOut, type ConsentEnviron
 import {
   getPostHog, postHogClientDestination, postHogInitOptions, resolvePostHogConfig, type PostHogConfig,
 } from './destinations/posthog';
+import { deleteGaCookies, ga4Browser, resolveGa4MeasurementId } from './destinations/ga4';
 import type { ClientDestination } from './destinations/types';
 import {
   ANALYTICS_SCHEMA_VERSION, validateEvent, type ClientEventName, type EventProperties,
@@ -92,8 +93,10 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
   const once = new Set<string>();
   let attribution: Attribution | null = null;
 
+  // Destinations not loaded on this page (GA4 without a measurement id) are skipped.
+  const enabled = (): ClientDestination[] => deps.destinations.filter(d => d.active?.() ?? true);
   const each = (run: (d: ClientDestination) => void): void => {
-    for (const d of deps.destinations) {
+    for (const d of enabled()) {
       try {
         run(d);
       } catch (err) {
@@ -185,7 +188,8 @@ export function createAnalyticsClient(deps: AnalyticsClientDeps): AnalyticsClien
         }
         const previous = read(deps.local(), IDENTITY_STORAGE_KEY);
         // Only the destinations know whether they already attribute events to this member.
-        if (deps.destinations.length > 0 && deps.destinations.every(d => d.distinctId() === memberId)) {
+        const targets = enabled();
+        if (targets.length > 0 && targets.every(d => d.distinctId() === memberId)) {
           if (previous !== memberId) write(deps.local(), IDENTITY_STORAGE_KEY, memberId);
           return;
         }
@@ -286,7 +290,7 @@ async function fetchIdentityFromServer(): Promise<unknown> {
 }
 
 const browserClient = createAnalyticsClient({
-  destinations: [postHogClientDestination],
+  destinations: [postHogClientDestination, ga4Browser.destination],
   consent: browserConsentEnvironment,
   local: safeLocalStorage,
   session: safeSessionStorage,
@@ -381,10 +385,25 @@ export function bootAnalytics(): void {
     if (!config) return;
     const devBuild = import.meta.env.DEV === true;
     if (!shouldCaptureOn(window.location.hostname, config, devBuild)) return;
-    if (consentState(browserConsentEnvironment()) !== 'granted') return;
+    if (consentState(browserConsentEnvironment()) !== 'granted') {
+      // GA cookies left from before an opt-out, Do Not Track or GPC: gtag stays off, and they must not linger.
+      try {
+        deleteGaCookies({ win: window, doc: document });
+      } catch {
+        // Cookies blocked: there is nothing to delete.
+      }
+      return;
+    }
     const ph = getPostHog();
     if (!ph) return;
     ph.init(config.key, { ...postHogInitOptions(config, window.location.pathname), ...PERFORMANCE_CAPTURE_OPTIONS });
+    // GA4 runs under the same environment and consent checks; start() checks consent again before loading gtag.
+    const ga4Id = resolveGa4MeasurementId(document.getElementById(CONFIG_ELEMENT_ID)?.getAttribute('data-ga4'));
+    // The member this browser is already identified as goes on the first page view (re-checked by syncIdentity).
+    const knownMember = read(safeLocalStorage(), IDENTITY_STORAGE_KEY);
+    if (ga4Id) {
+      ga4Browser.start({ win: window, doc: document }, ga4Id, browserConsentEnvironment(), isValidDistinctId(knownMember ?? '') ? knownMember : null);
+    }
     browserClient.activate(config.debug);
     void browserClient.syncIdentity(window.location.pathname);
   } catch (err) {

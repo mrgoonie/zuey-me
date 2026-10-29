@@ -2,7 +2,7 @@ import type { OpenApiFragment } from '../openapi/types';
 import { idempotencyKeyParam } from '../idempotency/openapi';
 import { adminSecurity, errorResponses } from '../openapi/types';
 import { LOCALES } from '../i18n/locales';
-import { SORTS } from './articles';
+import { SORTS, WRITE_OPERATIONS } from './articles';
 import { MAX_ARTICLE_PAGE } from './pagination';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import { ICON_NAMES } from './icons';
@@ -11,8 +11,12 @@ import { blockId, colsInt } from './definitions/schema-fragments';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
-export { CALLOUT_ICON_EXAMPLE, ICON_BLOCK_EXAMPLE } from './definitions/text';
+export { CALLOUT_ICON_EXAMPLE, CODE_BLOCK_EXAMPLE, ICON_BLOCK_EXAMPLE } from './definitions/text';
 export { CARD_EXAMPLE, SECTION_EXAMPLE } from './definitions/containers';
+export { MATH_EXAMPLE } from './definitions/media';
+export { TABLE_EXAMPLE } from './definitions/data';
+export { CHART_EXAMPLE } from './definitions/chart';
+export { COMPARISON_EXAMPLE, PROGRESS_EXAMPLE, STAT_EXAMPLE, STEPS_EXAMPLE, TABS_EXAMPLE } from './definitions/composition';
 
 const schemaName = (type: string) => `Block${type.charAt(0).toUpperCase()}${type.slice(1)}`;
 
@@ -31,9 +35,13 @@ export const BLOCK_SCHEMA_NOTES = [
   `Layouts may nest at most ${LIMITS.layoutDepth} levels (a layout inside a layout is fine, a third level is rejected).`,
   'Object span values must be ≤ cols at that breakpoint; a numeric span must be ≤ cols.lg and is clamped per breakpoint.',
   'Each chart series must have exactly as many data points as labels.',
+  `Chart options are optional: a chart with any of them (or kind area, scatter, radar or combo) gets formatted axes and tooltips, a legend whose buttons show and hide series, fullscreen and the chosen downloads (csv, png). Scatter series need x (one per label); combo series pick type bar, line or area; series with axis 'right' use y2. x.format 'date' needs ISO-date labels. references (at most ${LIMITS.chartReferences}) are horizontal lines; annotations (at most ${LIMITS.chartAnnotations}) mark a label by index. Fields a kind cannot use are rejected.`,
+  `Table rows have one cell per header. A table with any option (columns, title, caption, sortable, search, stickyHeader, csv, mobile) is a data table: columns types its cells (text, number, currency, percent, date, boolean, link, badge; typed cells hold a canonical value such as 1234.5, 2026-01-15 or true, or are empty), cells are at most ${LIMITS.dataTableCell} characters and ${LIMITS.dataTableChars} in total. Values are formatted for readers and sort by value; search, column filters, the sticky header, CSV export and mobile cards run in the browser over the full server-rendered table.`,
   `A document may contain at most ${LIMITS.totalBlocks} blocks in total (nested blocks included).`,
   `Interactive blocks: html/css/js at most ${LIMITS.interactiveField} characters each and ${LIMITS.interactiveTotal} combined; they run only in a sandboxed iframe and are rendered as a text fallback with a link in Markdown.`,
-  'Toggle blocks may contain any block except toggle and layout.',
+  'Toggle blocks may contain any block except toggle, layout, section and tabs.',
+  `Composition widgets: tabs (${LIMITS.tabsMin}–${LIMITS.tabsMax} tabs), steps (variant steps or timeline, at most ${LIMITS.stepItems} items) and comparison (${LIMITS.comparisonOptionsMin}–${LIMITS.comparisonOptionsMax} options, at most one highlight, features with one value per option) hold nested blocks per item; an item may not contain a section, tabs, steps or comparison. Tab anchors share the namespace of section anchors and open that tab from #anchor. Without JavaScript, and in Markdown, email and feeds, every tab panel is shown in order under its label. stat (1–${LIMITS.statItems} figures with optional delta, trend, state and a ${LIMITS.sparklineMin}–${LIMITS.sparklineMax} point sparkline) and progress (bar, segments, gauge or rating; values must lie within min–max; thresholds ascending) store canonical numbers that readers format for the edition locale. The paywall counts each item's blocks one by one; a comparison keeps only the matrix columns of kept options.`,
+  `Math blocks hold TeX (KaTeX subset, at most ${LIMITS.math} characters, without surrounding $ or $$). Readers get it typeset on the server as HTML plus MathML, with the TeX source one click away and a copy-TeX button; malformed TeX is not rejected but shown as source with an error note. mode is display (default) or inline; numbered: true (display only) adds an equation number in document order; equation, align, gather and \\tag number themselves in the same sequence and get no second number. Macro definitions (\\def, \\newcommand), formulas over 2000 characters and math beyond a per-page typesetting budget show as source. Markdown exports $$…$$ (display) or $…$ (inline), or a math code block when the TeX contains the delimiter.`,
   `Section blocks are top-level only (never inside a layout, toggle or card) and may contain any block except section (at most ${LIMITS.sectionChildren}). width picks the reading lane on the article page (prose, wide or full); surface and padding style the band; anchor is an optional unique slug for #links. The paywall counts a section's children one by one, like those of cards, toggles and layout cells.`,
   `Card blocks may appear anywhere except inside another card (body at most ${LIMITS.cardChildren} blocks, no section or card). A card needs a title, an image or at least one block; level (2, 3 or 4, default 3) sets the heading level of its title; footer is inline text for links.`,
   `Icon blocks and callout.icon accept only the ${ICON_NAMES.length} curated icon names (or their aliases); block_schema returns them under icons. Add label when the icon carries meaning; omit it for decoration.`,
@@ -81,11 +89,22 @@ const articleSummary = {
     },
     snippet: { type: 'string', description: 'Search snippet (only with ?q=), from text this caller may read; ** marks matches' },
     editions: { type: 'array', items: editionSummary, description: 'Admin responses only' },
+    read_back: {
+      type: 'string', enum: ['failed'],
+      description: 'Write responses only (create, update, publish, edition delete, tags set), present when the write committed but reading the article back failed (D1 error or a concurrent delete). '
+        + 'The write landed: do not retry it (a retry gets 409, `slug_taken` for a create). The fields of the edition shown, revisions, document and `receipt` are built from the rows as written; '
+        + '`tags`, `topic_tags`, `category`, `labels`, `available_locales` and other editions are not loaded (empty, also after a tags write; `editions` lists only the edition shown), so re-read the article for them. '
+        + 'An idempotent replay of such an answer repeats the flag.',
+    },
     email_notification: {
-      description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish)',
+      description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish). '
+        + 'A publish response reports reason `notification_update_failed` when the email step failed after the publish committed; '
+        + 'the edition is published, and republishing with an explicit `notify` applies the email decision again. '
+        + 'With that reason the returned status is what is stored (e.g. still `scheduled` after a failed `notify: false`), or `failed` (send_after null) when nothing could be read back, '
+        + 'so check it before assuming no email will be sent.',
       oneOf: [{ type: 'null' }, { type: 'object', properties: {
-        status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled'] },
-        send_after: { type: 'string', format: 'date-time' }, sent_count: { type: 'integer' },
+        status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled', 'failed'] },
+        send_after: { type: ['string', 'null'], format: 'date-time' }, sent_count: { type: 'integer' },
         reason: { type: ['string', 'null'] }, updated_at: { type: 'string' },
       } }],
     },
@@ -98,6 +117,8 @@ const ok = (description: string, data: unknown) => ({
   description,
   content: json({ type: 'object', properties: { success: { type: 'boolean' }, data } }),
 });
+/** A writer's answer: the article plus the required `receipt` of the write. */
+const withReceipt = (article: unknown) => ({ allOf: [article, { type: 'object', required: ['receipt'], properties: { receipt: ref('WriteReceipt') } }] });
 const conflict = { description: 'Revision conflict or slug taken (`revision_conflict`, `slug_taken`, `already_voted`)', content: json(ref('Error')) };
 const notFound = { description: 'Not found', content: json(ref('Error')) };
 const slugParam = { name: 'slug', in: 'path', required: true, schema: { type: 'string' } };
@@ -136,15 +157,17 @@ export const articlesOpenApi: OpenApiFragment = {
     ArticleSummary: articleSummary,
     WriteReceipt: {
       type: 'object',
-      required: ['operation_success', 'locale', 'article_revision', 'edition_draft_revision', 'published_revision', 'has_unpublished_changes', 'submitted_fields', 'next_action'],
+      description: 'Outcome of a write, separate from the public `status` of the article it returns.',
+      required: ['operation_success', 'operation', 'locale', 'article_revision', 'edition_draft_revision', 'published_revision', 'has_unpublished_changes', 'submitted_fields', 'next_action'],
       properties: {
         operation_success: { type: 'boolean', const: true },
-        locale: localeEnum,
+        operation: { type: 'string', enum: [...WRITE_OPERATIONS], description: 'The writer that produced the receipt' },
+        locale: { ...localeEnum, description: 'Edition the write is about: the saved, published or deleted one; the primary edition for tags_set' },
         article_revision: { type: 'integer', description: 'Use as the next expected_revision' },
-        edition_draft_revision: { type: 'integer' },
-        published_revision: { type: ['integer', 'null'] },
+        edition_draft_revision: { type: 'integer', description: 'Revision at which this edition last changed; lower than article_revision after tags_set, which leaves the edition alone' },
+        published_revision: { type: ['integer', 'null'], description: 'null when the edition was never published or was just deleted' },
         has_unpublished_changes: { type: 'boolean' },
-        submitted_fields: { type: 'array', items: { type: 'string' }, description: 'Fields present in the request, not a diff' },
+        submitted_fields: { type: 'array', items: { type: 'string' }, description: 'Fields present in the request, not a diff (publish: published_at, notify; tags_set: tags; edition_delete: none)' },
         next_action: { type: 'string', enum: ['publish', 'none'] },
       },
     },
@@ -295,7 +318,7 @@ export const articlesOpenApi: OpenApiFragment = {
         tags, summary: 'Create a draft article', security: adminSecurity, parameters: [idempotencyKeyParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { required: ['slug', 'title'] }] }) },
         responses: {
-          '201': ok('Created draft', ref('Article')), '409': conflict,
+          '201': ok('Created draft with its `receipt`', withReceipt(ref('Article'))), '409': conflict,
           '422': { description: '`invalid_document` with `errors: [{path, message}]`', content: json(ref('Error')) }, ...errorResponses,
         },
       },
@@ -314,7 +337,7 @@ export const articlesOpenApi: OpenApiFragment = {
       put: {
         tags, summary: 'Update one edition draft (body.locale; a missing edition is created) and article metadata (optimistic concurrency)', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ allOf: [ref('ArticleInput'), { type: 'object', required: ['expected_revision'], properties: { expected_revision: { type: 'integer' }, response_mode: responseMode } }] }) },
-        responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', { allOf: [ref('Article'), { type: 'object', required: ['receipt'], properties: { receipt: ref('WriteReceipt') } }] }), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
+        responses: { '200': ok('Updated draft; `receipt` states the write outcome separately from the public `status`', withReceipt(ref('Article'))), '404': notFound, '409': conflict, '422': { description: 'invalid_document', content: json(ref('Error')) }, ...errorResponses },
       },
       delete: {
         tags, summary: 'Soft-delete an article', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
@@ -329,7 +352,7 @@ export const articlesOpenApi: OpenApiFragment = {
           published_at: { type: 'string', format: 'date-time', description: 'Backdate the publish time (not in the future), e.g. archive imports' },
           notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
         } }) },
-        responses: { '200': ok('Published', ref('Article')), '404': notFound, '409': conflict, ...errorResponses },
+        responses: { '200': ok('Published edition with its `receipt`', withReceipt(ref('Article'))), '404': notFound, '409': conflict, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/localization/prepare': {
@@ -398,7 +421,7 @@ export const articlesOpenApi: OpenApiFragment = {
       delete: {
         tags, summary: 'Delete one non-primary edition', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['locale', 'expected_revision'], properties: { locale: localeEnum, expected_revision: { type: 'integer' } } }) },
-        responses: { '200': ok('Remaining article', ref('ArticleSummary')), '404': notFound, '409': { description: '`revision_conflict` or `primary_edition`', content: json(ref('Error')) }, ...errorResponses },
+        responses: { '200': ok('Primary edition; `receipt` describes the deleted locale', withReceipt(ref('ArticleSummary'))), '404': notFound, '409': { description: '`revision_conflict` or `primary_edition`', content: json(ref('Error')) }, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/revisions': {
@@ -420,7 +443,7 @@ export const articlesOpenApi: OpenApiFragment = {
       put: {
         tags, summary: 'Replace topic tags with existing tags', security: adminSecurity, parameters: [slugParam, idempotencyKeyParam],
         requestBody: { required: true, content: json({ type: 'object', required: ['tags', 'expected_revision'], properties: { tags: { type: 'array', maxItems: 20, items: { type: 'string' } }, expected_revision: { type: 'integer' } } }) },
-        responses: { '200': ok('Article', ref('ArticleSummary')), '404': notFound, '409': conflict, ...errorResponses },
+        responses: { '200': ok('Article with its `receipt`', withReceipt(ref('ArticleSummary'))), '404': notFound, '409': conflict, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/cover': {

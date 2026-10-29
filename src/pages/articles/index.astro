@@ -35,11 +35,13 @@ let total = 0;
 let hasMore = false;
 let semantic = false;
 let failed = false;
-// One D1 load of the published list feeds both the unfiltered listing and the facet counts.
-const catalog = await listArticles(env.DB, { locale: listLocale }).catch(() => undefined);
+// One load of the published list feeds the facet counts and, without filters, the listing itself. The facets do not
+// depend on the listing, so both start at once (each D1 round trip adds latency far from the database).
+const published = listArticles(env.DB, { locale: listLocale });
+const facetsLoad = publicTaxonomy(env.DB, listLocale, published).catch(() => ({ tags: [], categories: [], labels: [] }));
 try {
   const principal = await resolvePrincipal(Astro.request, env);
-  const result = await discoverArticles(principal, env, { ...query, locale: listLocale }, throughPageWindow(page), catalog);
+  const result = await discoverArticles(principal, env, { ...query, locale: listLocale }, throughPageWindow(page), published);
   items = result.items;
   total = result.total;
   hasMore = result.hasMore;
@@ -48,7 +50,7 @@ try {
   console.error('Article discovery failed:', err instanceof Error ? err.message : 'unknown');
   failed = true;
 }
-const facets = await publicTaxonomy(env.DB, listLocale, catalog).catch(() => ({ tags: [], categories: [], labels: [] }));
+const facets = await facetsLoad;
 
 const filtering = Boolean(query.q || query.category || query.tag || query.label || query.access || (query.sort && query.sort !== 'new'));
 // Search results depend on the reader's entitlements (snippets); plain listings are public.

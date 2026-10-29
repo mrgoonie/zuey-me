@@ -223,6 +223,16 @@ export function parsePromoPatch(body: Record<string, unknown>): PromoPatch {
   return patch;
 }
 
+/**
+ * A 100% code on the card rail becomes a free prepaid order of exactly `card_cycles` months, so those cycles
+ * must be a prepaid term (1, 3, 6 or 12): no silent rounding of what the admin promised.
+ */
+function checkFreeCardCycles(percent: number, cycles: number): void {
+  if (percent >= 100 && !isBillingMonths(cycles)) {
+    throw invalid('card_cycles', `A 100% code grants its card months as a prepaid term: card_cycles must be one of ${BILLING_MONTHS.join(', ')}`);
+  }
+}
+
 function checkWindow(startsAt: string | null, endsAt: string | null): void {
   if (startsAt && endsAt && endsAt <= startsAt) throw invalid('ends_at', 'ends_at must be after starts_at');
 }
@@ -235,6 +245,7 @@ export async function createPromo(d1: D1DatabaseLike, body: Record<string, unkno
   if (!p.code) throw invalid('code', 'code is required');
   if (p.percent === undefined) throw invalid('percent', 'percent is required');
   checkWindow(p.starts_at ?? null, p.ends_at ?? null);
+  checkFreeCardCycles(p.percent, p.card_cycles ?? 1);
   if (await isReferralCodeName(d1, p.code)) throw new AppError(409, 'code_taken', 'A referral code already uses this name', { field: 'code' });
   const now = iso(membersRuntime.now());
   const id = randomId('promo');
@@ -269,6 +280,7 @@ export async function updatePromo(d1: D1DatabaseLike, id: string, body: Record<s
     if (await isReferralCodeName(d1, p.code)) throw new AppError(409, 'code_taken', 'A referral code already uses this name', { field: 'code' });
   }
   checkWindow(p.starts_at !== undefined ? p.starts_at : current.starts_at, p.ends_at !== undefined ? p.ends_at : current.ends_at);
+  checkFreeCardCycles(p.percent ?? current.percent, p.card_cycles ?? current.card_cycles);
   const sets: string[] = [];
   const binds: unknown[] = [];
   const set = (col: string, value: unknown) => { sets.push(`${col} = ?`); binds.push(value); };

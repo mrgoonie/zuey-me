@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { adminUpdateBooking, bookingRuntime, capturePaypalBooking, rescheduleBooking, setAvailability } from '../src/lib/booking/store';
 import { reconcileSepay } from '../src/lib/members/billing';
@@ -328,6 +329,170 @@ describe('Dodo commission and refunds', () => {
     expect(parseDodoReversalEvent({ type: 'refund.succeeded', data: {} })).toBeNull();
   });
 
+  // Dodo's dispute webhook object: no customer, the amount as a string.
+  const disputeData = (status: string) => ({
+    payload_type: 'Dispute', dispute_id: 'dsp_1', payment_id: 'pay_first', business_id: 'bus_test', amount: '1777', currency: 'USD',
+    created_at: new Date(T0).toISOString(), dispute_stage: 'chargeback', dispute_status: status,
+  });
+  const chargebacks = () => d1.raw.query<{ dedupe_key: string; properties: string }, []>("SELECT dedupe_key, properties FROM analytics_outbox WHERE event = 'refund'").all();
+  const reversalLogs = () => d1.raw.query<{ detail: string }, []>("SELECT detail FROM user_activity WHERE action = 'billing.card_reversal' ORDER BY id").all()
+    .map(r => JSON.parse(r.detail));
+
+  for (const outcome of ['dispute.accepted', 'dispute.lost', 'dispute.expired']) {
+    it(`reports ${outcome} as one chargeback after dispute.opened, however often it or another lost outcome is delivered`, async () => {
+      const { cardId } = await paidCard();
+      expect(await dataOf(await signedDodo('msg_open', 'dispute.opened', disputeData('dispute_opened')))).toMatchObject({ outcome: 'reversed' });
+      // An opened dispute may still be won: no chargeback yet.
+      expect(chargebacks()).toEqual([]);
+
+      const lost = await signedDodo('msg_lost', outcome, disputeData(outcome.replace('.', '_')));
+      expect(lost.status).toBe(200);
+      expect(await dataOf(lost)).toMatchObject({ outcome: 'already_reversed', card_subscription_id: cardId });
+      // The same delivery replayed, and the dispute's other funds-lost outcomes, change nothing.
+      expect(await dataOf(await signedDodo('msg_lost', outcome, disputeData(outcome.replace('.', '_'))))).toMatchObject({ outcome: 'already_reversed' });
+      for (const other of ['dispute.accepted', 'dispute.lost', 'dispute.expired']) {
+        expect(await dataOf(await signedDodo(`msg_${other}`, other, disputeData(other.replace('.', '_'))))).toMatchObject({ outcome: 'already_reversed' });
+      }
+
+      const rows = chargebacks();
+      expect(rows.map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_1']);
+      expect(JSON.parse(rows[0].properties)).toMatchObject({ provider: 'dodo', order_type: 'membership', reason: 'chargeback', amount: 17.77, currency: 'USD' });
+      expect(reversalLogs()).toEqual([
+        expect.objectContaining({ kind: 'dispute_opened', event: 'dispute.opened', payment_id: 'pay_first' }),
+        expect.objectContaining({ kind: 'dispute_lost', event: outcome, payment_id: 'pay_first', amount: 1777 }),
+      ]);
+      expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+    });
+  }
+
+  it('reverses the commission and reports the chargeback on a funds-lost outcome that arrives without dispute.opened', async () => {
+    const { cardId } = await paidCard();
+    expect(await sendDodo('dispute.accepted', disputeData('dispute_accepted'))).toBe('reversed');
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+    expect(chargebacks().map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_1']);
+  });
+
+  it('restores nothing on dispute.opened then dispute.won, and ignores challenged and cancelled disputes', async () => {
+    const { cardId } = await paidCard();
+    const purchases = () => d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM analytics_outbox WHERE event = 'purchase'").get()?.n;
+    const purchasesBefore = purchases();
+    expect(await sendDodo('dispute.opened', disputeData('dispute_opened'))).toBe('reversed');
+    for (const type of ['dispute.challenged', 'dispute.won', 'dispute.cancelled']) {
+      expect(await sendDodo(type, disputeData(type.replace('.', '_')))).toBe('ignored');
+    }
+    // The commission reversed on opening stays reversed for the admin; no chargeback and no second purchase is queued.
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+    expect(chargebacks()).toEqual([]);
+    expect(purchases()).toBe(purchasesBefore);
+    expect(reversalLogs()).toHaveLength(1);
+  });
+
+  it('reports one chargeback and logs both events when dispute.opened arrives after a funds-lost outcome', async () => {
+    const { cardId } = await paidCard();
+    expect(await sendDodo('dispute.lost', disputeData('dispute_lost'))).toBe('reversed');
+    expect(await sendDodo('dispute.opened', disputeData('dispute_opened'))).toBe('already_reversed');
+    expect(chargebacks().map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_1']);
+    expect(reversalLogs()).toEqual([
+      expect.objectContaining({ kind: 'dispute_lost', event: 'dispute.lost' }),
+      expect.objectContaining({ kind: 'dispute_opened', event: 'dispute.opened' }),
+    ]);
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+  });
+
+  it('reports a lost dispute of a renewal charge as a chargeback and leaves the first-order commission alone', async () => {
+    const { cardId } = await paidCard();
+    const renewal = { ...disputeData('dispute_lost'), dispute_id: 'dsp_renewal', payment_id: 'pay_renewal', amount: '2090' };
+    expect(await sendDodo('dispute.lost', renewal)).toBe('renewal');
+    expect(await sendDodo('dispute.expired', renewal)).toBe('renewal');
+    const rows = chargebacks();
+    expect(rows.map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_renewal']);
+    expect(JSON.parse(rows[0].properties)).toMatchObject({ reason: 'chargeback', amount: 20.9, currency: 'USD' });
+    expect(reversalLogs()).toEqual([expect.objectContaining({ kind: 'dispute_lost', payment_id: 'pay_renewal', renewal: true })]);
+    expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('pending');
+  });
+
+  it('counts the money back of a payment once when it is fully refunded and lost in a dispute, in either order', async () => {
+    await paidCard();
+    const refund = { payload_type: 'Refund', refund_id: 'rfd_full', payment_id: 'pay_first', amount: 1777, currency: 'USD', is_partial: false };
+    expect(await sendDodo('refund.succeeded', refund)).toBe('reversed');
+    // A Visa RDR resolution arrives as dispute.lost for money already refunded: logged, not counted again.
+    expect(await sendDodo('dispute.lost', disputeData('dispute_lost'))).toBe('already_reversed');
+    expect(chargebacks().map(r => r.dedupe_key)).toEqual(['refund:dodo:refund:rfd_full']);
+
+    // The other order, on the renewal charge: a refund recorded after the chargeback is the same money.
+    const lostRenewal = { ...disputeData('dispute_lost'), dispute_id: 'dsp_renewal', payment_id: 'pay_renewal', amount: '2090' };
+    expect(await sendDodo('dispute.lost', lostRenewal)).toBe('renewal');
+    expect(await sendDodo('refund.succeeded', { ...refund, refund_id: 'rfd_renewal', payment_id: 'pay_renewal', amount: 2090 })).toBe('renewal');
+    expect(chargebacks().map(r => r.dedupe_key).sort()).toEqual(['refund:dodo:dispute_lost:dsp_renewal', 'refund:dodo:refund:rfd_full']);
+    expect(reversalLogs().map(l => [l.event, l.payment_id])).toEqual([
+      ['refund.succeeded', 'pay_first'], ['dispute.lost', 'pay_first'], ['dispute.lost', 'pay_renewal'], ['refund.succeeded', 'pay_renewal'],
+    ]);
+  });
+
+  it('adds a partial refund to a later chargeback, and counts no partial refund after a chargeback', async () => {
+    await paidCard();
+    const partial = { payload_type: 'Refund', refund_id: 'rfd_part', payment_id: 'pay_first', amount: 500, currency: 'USD', is_partial: true };
+    expect(await sendDodo('refund.succeeded', partial)).toBe('reversed');
+    expect(await sendDodo('dispute.lost', disputeData('dispute_lost'))).toBe('already_reversed');
+    expect(chargebacks().map(r => r.dedupe_key).sort()).toEqual(['refund:dodo:dispute_lost:dsp_1', 'refund:dodo:refund:rfd_part']);
+
+    const lostRenewal = { ...disputeData('dispute_lost'), dispute_id: 'dsp_renewal', payment_id: 'pay_renewal', amount: '2090' };
+    expect(await sendDodo('dispute.lost', lostRenewal)).toBe('renewal');
+    expect(await sendDodo('refund.succeeded', { ...partial, refund_id: 'rfd_part_renewal', payment_id: 'pay_renewal' })).toBe('renewal');
+    expect(chargebacks().map(r => r.dedupe_key).sort()).toEqual([
+      'refund:dodo:dispute_lost:dsp_1', 'refund:dodo:dispute_lost:dsp_renewal', 'refund:dodo:refund:rfd_part',
+    ]);
+    expect(reversalLogs()).toHaveLength(4);
+  });
+
+  /**
+   * The test database as a worker that dies on the first write matching `failOn`: that write and every later
+   * statement throw (so a cleanup after the failure never runs), and a batch containing it applies nothing.
+   */
+  function dyingD1(failOn: RegExp): D1DatabaseLike {
+    const base = d1;
+    let dead = false;
+    const sources = new WeakMap<D1PreparedStatementLike, { sql: string; inner: D1PreparedStatementLike }>();
+    const die = (): never => {
+      dead = true;
+      throw new Error('worker evicted');
+    };
+    const wrap = (sql: string, inner: D1PreparedStatementLike): D1PreparedStatementLike => {
+      const statement: D1PreparedStatementLike = {
+        bind: (...values: unknown[]) => wrap(sql, inner.bind(...values)),
+        first: async <T,>() => (dead ? die() : inner.first<T>()),
+        all: async <T,>() => (dead ? die() : inner.all<T>()),
+        run: async () => (dead || failOn.test(sql) ? die() : inner.run()),
+      };
+      sources.set(statement, { sql, inner });
+      return statement;
+    };
+    return {
+      prepare: (sql: string) => wrap(sql, base.prepare(sql)),
+      batch: async (statements: D1PreparedStatementLike[]) => {
+        const parts = statements.map(s => sources.get(s));
+        if (dead || parts.some(p => !p || failOn.test(p.sql))) die();
+        return base.batch(parts.flatMap(p => (p ? [p.inner] : [])));
+      },
+    };
+  }
+
+  for (const [point, failOn] of [['the analytics outbox insert', /INSERT INTO analytics_outbox/], ['the activity log', /INSERT INTO user_activity/]] as const) {
+    it(`leaves a dispute retryable when the worker dies at ${point}: the redelivery logs and reports it once`, async () => {
+      const { cardId } = await paidCard();
+      envOverrides.DB = dyingD1(failOn);
+      expect((await signedDodo('msg_crash', 'dispute.lost', disputeData('dispute_lost'))).status).toBe(500);
+      // The commission was reversed before the crash; redoing it on the redelivery is a no-op.
+      expect((await getCommissionBySource(d1, 'card_subscription', cardId))?.status).toBe('reversed');
+
+      envOverrides.DB = d1;
+      expect(await dataOf(await signedDodo('msg_crash', 'dispute.lost', disputeData('dispute_lost')))).toMatchObject({ outcome: 'already_reversed' });
+      expect(await dataOf(await signedDodo('msg_crash', 'dispute.lost', disputeData('dispute_lost')))).toMatchObject({ outcome: 'already_reversed' });
+      expect(chargebacks().map(r => r.dedupe_key)).toEqual(['refund:dodo:dispute_lost:dsp_1']);
+      expect(reversalLogs()).toEqual([expect.objectContaining({ kind: 'dispute_lost', event: 'dispute.lost', payment_id: 'pay_first' })]);
+    });
+  }
+
   async function signedDodo(id: string, type: string, data: Record<string, unknown>): Promise<Response> {
     const body = JSON.stringify({ business_id: 'bus_test', type, timestamp: new Date(T0).toISOString(), data });
     const ts = String(Math.floor(T0 / 1000));
@@ -500,7 +665,10 @@ describe('booking commissions and PayPal refunds', () => {
     // Analytics: one refund for the redelivered webhook, with the provider's amount in USD.
     const { results } = await d1.prepare("SELECT properties FROM analytics_outbox WHERE event = 'refund'").all<{ properties: string }>();
     expect((results ?? []).map(r => JSON.parse(r.properties))).toEqual([
-      { provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 1899.05, currency: 'USD', partial: false },
+      {
+        provider: 'paypal', order_type: 'booking', reason: 'refund', amount: 1899.05, currency: 'USD', partial: false,
+        transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/),
+      },
     ]);
   });
 

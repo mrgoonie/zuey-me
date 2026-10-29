@@ -3,7 +3,9 @@
  *
  *   GET /v1/health      liveness
  *   GET /v1/snapshot    aggregated PresenceSnapshot (CORS for zuey.me origins; memo + edge cache, see snapshot-cache.ts)
+ *   GET /v1/history     24 h PresenceHistory in 5-minute buckets (same CORS; cached for a minute)
  *   GET|PUT /internal/owner  owner status control for the Pages app only (see internal-owner-route.ts)
+ *   GET /internal/diagnostics  hub diagnostics for the Pages app only (see internal-diagnostics-route.ts)
  *   GET /v1/connect     WebSocket upgrade, forwarded to the single PresenceHub Durable Object. The ticket travels
  *                       in `Sec-WebSocket-Protocol: zuey-presence.v1, <ticket>`, never in the URL (logs record URLs).
  *
@@ -11,14 +13,15 @@
  * plus a truncated HMAC of the client IP (IPv6: its /64). Raw IPs, user agents, tickets and ids are never
  * stored, forwarded or logged.
  */
-import { PRESENCE_SUBPROTOCOL, type PresenceSnapshot } from '../../../src/lib/presence/contract';
+import { PRESENCE_SUBPROTOCOL } from '../../../src/lib/presence/contract';
 import { presenceIpKey } from '../../../src/lib/presence/ip-prefix';
 import { hmacBase64Url, verifyPresenceTicket } from '../../../src/lib/presence/ticket';
+import { INTERNAL_DIAGNOSTICS_PATH, handleInternalDiagnostics } from './internal-diagnostics-route';
 import { INTERNAL_OWNER_PATH, handleInternalOwner } from './internal-owner-route';
 import { PresenceHub, SESSION_HEADER } from './presence-hub';
 import type { SessionIdentity } from './presence-state';
 import type { PresenceEnv } from './runtime-types';
-import { cachedSnapshot, isPresenceSnapshot } from './snapshot-cache';
+import { HISTORY_EDGE_CACHE_SECONDS, SNAPSHOT_EDGE_CACHE_SECONDS, cachedHistory, cachedSnapshot, isPresenceHistory, isPresenceSnapshot } from './snapshot-cache';
 
 export { PresenceHub };
 
@@ -59,19 +62,30 @@ export function isAllowedOrigin(origin: string | null, env: PresenceEnv): origin
 
 const hubStub = (env: PresenceEnv) => env.PRESENCE_HUB.get(env.PRESENCE_HUB.idFromName(HUB_NAME));
 
-async function snapshotFromHub(env: PresenceEnv): Promise<PresenceSnapshot | null> {
-  const res = await hubStub(env).fetch(new Request(`${HUB_URL}/snapshot`));
+/** Reads one public aggregate from the hub; null for a failed or malformed answer. */
+async function readHub<T>(env: PresenceEnv, path: string, isValid: (v: unknown) => v is T): Promise<T | null> {
+  const res = await hubStub(env).fetch(new Request(`${HUB_URL}${path}`));
   const body: unknown = res.ok ? await res.json() : null;
-  return isPresenceSnapshot(body) ? body : null;
+  return isValid(body) ? body : null;
 }
 
-async function snapshot(env: PresenceEnv, url: URL, origin: string | null): Promise<Response> {
-  const current = await cachedSnapshot(url.origin, () => snapshotFromHub(env));
+/** A cached public read: the aggregate with per-request CORS, or 503 when none is available. */
+function publicRead(current: unknown, origin: string | null, maxAgeSeconds: number): Response {
   if (!current) return errorResponse(503, 'unavailable', 'Presence is temporarily unavailable', corsHeaders(origin));
   return new Response(JSON.stringify(current), {
     status: 200,
-    headers: { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=5' },
+    headers: { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': `public, max-age=${maxAgeSeconds}` },
   });
+}
+
+async function snapshot(env: PresenceEnv, url: URL, origin: string | null): Promise<Response> {
+  const current = await cachedSnapshot(url.origin, () => readHub(env, '/snapshot', isPresenceSnapshot));
+  return publicRead(current, origin, SNAPSHOT_EDGE_CACHE_SECONDS);
+}
+
+async function history(env: PresenceEnv, url: URL, origin: string | null): Promise<Response> {
+  const current = await cachedHistory(url.origin, () => readHub(env, '/history', isPresenceHistory));
+  return publicRead(current, origin, HISTORY_EDGE_CACHE_SECONDS);
 }
 
 /**
@@ -115,7 +129,10 @@ export async function handleRequest(request: Request, env: PresenceEnv): Promise
   const url = new URL(request.url);
   const route = url.pathname;
   if (route === INTERNAL_OWNER_PATH) return handleInternalOwner(request, env, () => hubStub(env), HUB_URL, errorResponse);
-  if (route !== '/v1/health' && route !== '/v1/snapshot' && route !== '/v1/connect') return errorResponse(404, 'not_found', 'Not found');
+  if (route === INTERNAL_DIAGNOSTICS_PATH) return handleInternalDiagnostics(request, env, () => hubStub(env), HUB_URL, errorResponse);
+  if (route !== '/v1/health' && route !== '/v1/snapshot' && route !== '/v1/history' && route !== '/v1/connect') {
+    return errorResponse(404, 'not_found', 'Not found');
+  }
 
   const origin = request.headers.get('Origin');
   const originAllowed = isAllowedOrigin(origin, env);
@@ -125,13 +142,13 @@ export async function handleRequest(request: Request, env: PresenceEnv): Promise
     return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
   }
 
-  if (route === '/v1/snapshot') {
+  if (route === '/v1/snapshot' || route === '/v1/history') {
     // Server-to-server reads carry no Origin and get no CORS headers; browsers must come from an allowed origin.
     if (origin !== null && !originAllowed) return errorResponse(403, 'forbidden', 'Origin not allowed', { Vary: 'Origin' });
     const corsOrigin = originAllowed ? origin : null;
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(corsOrigin) });
     if (request.method !== 'GET' && request.method !== 'HEAD') return errorResponse(405, 'method_not_allowed', 'Method not allowed', corsHeaders(corsOrigin));
-    return snapshot(env, url, corsOrigin);
+    return route === '/v1/snapshot' ? snapshot(env, url, corsOrigin) : history(env, url, corsOrigin);
   }
 
   // /v1/connect: browsers always send Origin on a WebSocket handshake, so a missing one is refused too.

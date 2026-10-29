@@ -119,6 +119,106 @@ export function codeSegments(code: string, runs: unknown): CodeSegment[] | null 
 /** True when some code block (nested ones included) has a supported language, i.e. loading the highlighter pays off. */
 export function hasHighlightableCode(blocks: Block[]): boolean {
   let found = false;
-  walkBlocks(blocks, b => { if (!found && b.type === 'code' && b.code && resolveHighlightLanguage(b.language)) found = true; });
+  walkBlocks(blocks, b => { if (!found && b.type === 'code' && highlightSource(b)) found = true; });
   return found;
+}
+
+/** The fields of a code block that decide what is shown, highlighted and copied. */
+export interface CodeSource {
+  code: string;
+  language: string;
+  diff?: boolean;
+}
+
+/**
+ * How one line of a diff block reads: added (`+`), removed (`-`), context (a space, or no marker) or a patch
+ * header pasted from `git diff` (`diff --git`, `index`, the `---`/`+++` file pair, `@@` hunk lines).
+ */
+export type DiffMark = 'add' | 'del' | 'ctx' | 'head';
+
+export interface CodeDisplay {
+  /** Text shown and highlighted: the normalised code, with diff markers removed (header lines are kept whole). */
+  text: string;
+  /** Diff mark of every line of `text` (trailing empty line included); null unless the block is a diff. */
+  marks: DiffMark[] | null;
+}
+
+const DIFF_MARKS: Record<string, DiffMark> = { '+': 'add', '-': 'del', ' ': 'ctx' };
+
+/** Header lines that can never be code: context lines start with a space, so these prefixes are unambiguous. */
+const PATCH_HEAD_RE = /^(?:@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@|diff --git |index [0-9a-f]+\.\.[0-9a-f]+)/;
+const FILE_OLD_RE = /^--- \S/;
+const FILE_NEW_RE = /^\+\+\+ \S/;
+
+/**
+ * True when line `i` is a patch header. A `---`/`+++` line only counts as one of the file pair (`--- a/x` right
+ * above `+++ b/x`), so a removed `-- comment` or an added `++ i` stays a code line.
+ */
+function isPatchHead(lines: string[], i: number): boolean {
+  const line = lines[i] ?? '';
+  if (PATCH_HEAD_RE.test(line)) return true;
+  if (FILE_OLD_RE.test(line)) return FILE_NEW_RE.test(lines[i + 1] ?? '');
+  return FILE_NEW_RE.test(line) && FILE_OLD_RE.test(lines[i - 1] ?? '');
+}
+
+/** Text and diff marks of a code block. A diff line's first character is its marker and is not part of the code. */
+export function codeDisplay(block: CodeSource): CodeDisplay {
+  const text = normalizeCode(block.code);
+  if (!block.diff) return { text, marks: null };
+  const marks: DiffMark[] = [];
+  const source = text.split('\n');
+  const lines = source.map((line, i) => {
+    if (isPatchHead(source, i)) { marks.push('head'); return line; }
+    const mark = Object.hasOwn(DIFF_MARKS, line.charAt(0)) ? DIFF_MARKS[line.charAt(0)] : undefined;
+    marks.push(mark ?? 'ctx');
+    return mark ? line.slice(1) : line;
+  });
+  return { text: lines.join('\n'), marks };
+}
+
+/** Lines as a reader sees them: a final line break ends the last line instead of opening an empty one. */
+export function displayLines(text: string): string[] {
+  const lines = text.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+/** Text and grammar the highlighter tokenises for a block, or null when it renders plain. */
+export function highlightSource(block: CodeSource): { text: string; language: HighlightLanguage } | null {
+  const language = resolveHighlightLanguage(block.language);
+  // A diff block shows its own +/- colours; the diff grammar would only see the code once the markers are gone.
+  if (!language || !block.code || (block.diff && language === 'diff')) return null;
+  return { text: codeDisplay(block).text, language };
+}
+
+/**
+ * What the copy button puts on the clipboard: the code itself, never the diff markers. A diff copies the code
+ * after the change (added and context lines without their marker; removed lines and patch headers are left out).
+ */
+export function copyText(block: CodeSource): string {
+  const { text, marks } = codeDisplay(block);
+  if (!marks) return text;
+  return text.split('\n').filter((_, i) => marks[i] !== 'del' && marks[i] !== 'head').join('\n');
+}
+
+/** `highlightLines` syntax: 1-based line numbers and inclusive ranges, comma separated ("2,4-6"). */
+export const LINE_RANGES_RE = /^\d{1,6}(?:-\d{1,6})?(?:,\d{1,6}(?:-\d{1,6})?)*$/;
+
+/** Ranges of a `highlightLines` value, or null when it is not well formed. */
+export function parseLineRanges(spec: string): Array<[number, number]> | null {
+  const compact = spec.replace(/\s+/g, '');
+  if (!LINE_RANGES_RE.test(compact)) return null;
+  return compact.split(',').map(part => {
+    const [from = '0', to] = part.split('-');
+    return [Number(from), Number(to ?? from)];
+  });
+}
+
+/** Lines (1-based, at most `lineCount`) named by a `highlightLines` value; empty for a missing or invalid one. */
+export function highlightedLines(spec: string | undefined, lineCount: number): Set<number> {
+  const out = new Set<number>();
+  for (const [from, to] of (spec ? parseLineRanges(spec) : null) ?? []) {
+    for (let n = Math.max(1, from); n <= Math.min(to, lineCount); n++) out.add(n);
+  }
+  return out;
 }
