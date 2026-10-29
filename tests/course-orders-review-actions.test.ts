@@ -21,8 +21,7 @@ describe('admin course order actions', () => {
     expect(Object.keys(orderActions('expired', false))).toEqual(['grant', 'dismiss']);
   });
 
-  it('does not offer a grant of a refunded order: its money went back', () => {
-    expect(orderActions('refunded', false).grant).toBeUndefined();
-    expect(Object.keys(orderActions('refunded', false))).toEqual(['dismiss']);
+  it('offers neither a grant nor a dismiss of a refunded order: its money went back', () => {
+    expect(orderActions('refunded', false)).toEqual({});
   });
 });

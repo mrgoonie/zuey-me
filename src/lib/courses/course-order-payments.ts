@@ -426,15 +426,16 @@ function disputedOrder(verb: 'granted' | 'dismissed'): AppError {
   return new AppError(409, 'order_disputed', `A disputed (charged back) order cannot be ${verb}: the dispute outcome decides its access; record a refund instead while the dispute is open`);
 }
 
-/** A grant of a refunded order: its money went back (after a dispute too), so paying it out would give free access. */
-function refundedOrder(): AppError {
-  return new AppError(409, 'order_refunded', 'A refunded order cannot be granted: its money went back to the buyer');
+/**
+ * A grant or dismiss of a refunded order: its money went back (after a dispute too). A grant would give free access, and
+ * a dismiss would overwrite the refund with `cancelled`, which a later grant could then pay out.
+ */
+function refundedOrder(verb: 'granted' | 'dismissed'): AppError {
+  return new AppError(409, 'order_refunded', `A refunded order cannot be ${verb}: its money went back to the buyer`);
 }
 
-/** Neither paid nor charged back: what an admin dismiss may change. */
-const SETTLEABLE = "o.status NOT IN ('paid', 'charged_back')";
-/** What an admin grant may pay: neither paid, charged back nor refunded. */
-const GRANTABLE = "o.status NOT IN ('paid', 'charged_back', 'refunded')";
+/** Neither paid, charged back nor refunded: what an admin grant or dismiss may change. */
+const SETTLEABLE = "o.status NOT IN ('paid', 'charged_back', 'refunded')";
 
 /**
  * Admin decisions: `grant` pays out a flagged order (e.g. underpaid by a rounding error),
@@ -444,9 +445,10 @@ const GRANTABLE = "o.status NOT IN ('paid', 'charged_back', 'refunded')";
  * A `grant` or `dismiss` of a charged-back order answers `409 order_disputed` and changes nothing: a grant would give
  * access back while the dispute is open, and a dismissed order could no longer be restored by a won dispute. Both
  * apply only while the order is still neither paid nor charged back, so a dispute opened meanwhile is refused the same way.
- * A `grant` of a refunded order (refunded by an admin or Dodo, also while or after a dispute) answers
- * `409 order_refunded` and changes nothing: its money went back, so it is not paid out again; the grant applies only
- * while the order is not refunded either, so a refund landing meanwhile is refused the same way.
+ * A `grant` or `dismiss` of a refunded order (refunded by an admin or Dodo, also while or after a dispute) answers
+ * `409 order_refunded` and changes nothing: its money went back, so it is never paid out again, and a dismiss cannot
+ * turn it into a `cancelled` order a grant would pay. Both apply only while the order is not refunded either, so a
+ * refund landing meanwhile is refused the same way.
  * A `grant` retried on an order an admin grant already paid, whose receipt is still missing (the follow-ups after the
  * payment batch failed), runs the idempotent follow-ups again; a grant of an order paid any other way, or whose
  * follow-ups completed, answers `409 already_paid`.
@@ -460,27 +462,29 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
   const current = async () => (await getCourseOrderByCode(d1, order.code)) ?? order;
   if (action === 'grant') {
     if (order.status === 'charged_back') throw disputedOrder('granted');
-    if (order.status === 'refunded') throw refundedOrder();
+    if (order.status === 'refunded') throw refundedOrder('granted');
     const done = order.status === 'paid'
       ? (order.attention_reason ?? '').startsWith(ADMIN_GRANT) && await resumeCourseOrderFollowUps(d1, env, order)
       : await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
-        set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: GRANTABLE, reason: `${ADMIN_GRANT}${note}`,
+        set: "status = 'paid', paid_at = COALESCE(paid_at, ?), updated_at = ?", values: [now, now], when: SETTLEABLE, reason: `${ADMIN_GRANT}${note}`,
       });
     if (!done) {
       const found = (await current()).status;
       if (found === 'charged_back') throw disputedOrder('granted');
-      if (found === 'refunded') throw refundedOrder();
+      if (found === 'refunded') throw refundedOrder('granted');
       throw new AppError(409, 'already_paid', 'Order is already paid');
     }
   } else if (action === 'dismiss') {
     if (order.status === 'paid') throw new AppError(409, 'already_paid', 'Use refund for a paid order');
     if (order.status === 'charged_back') throw disputedOrder('dismissed');
+    if (order.status === 'refunded') throw refundedOrder('dismissed');
     const res = await d1.prepare(`UPDATE course_orders SET status = 'cancelled', attention_reason = ?, updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND ${SETTLEABLE})`)
       .bind(`dismissed:${note}`, now, order.id, order.id).run();
     if (!res.meta?.changes) {
-      // The status the dismiss found, not the one read before it: a grant or a dispute may have landed in between.
+      // The status the dismiss found, not the one read before it: a grant, refund or dispute may have landed in between.
       const found = (await current()).status;
       if (found === 'charged_back') throw disputedOrder('dismissed');
+      if (found === 'refunded') throw refundedOrder('dismissed');
       if (found === 'paid') throw new AppError(409, 'already_paid', 'Use refund for a paid order');
       throw new AppError(409, 'not_dismissable', `The order is ${found} and was not dismissed`);
     }

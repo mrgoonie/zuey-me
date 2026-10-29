@@ -870,6 +870,16 @@ describe('Dodo course payments, refunds and disputes', () => {
             expect(snapshot(code)).toEqual(before);
             expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
           });
+
+          it(`through ${surface} refuses a dismiss of ${name} with 409, so a later grant cannot re-open it`, async () => {
+            const { code, userId, courseId } = await setup();
+            const before = snapshot(code);
+            expect(await resolve(state.d1, code, 'dismiss')).toMatchObject({ status: 409, code: 'order_refunded', message: expect.stringMatching(/cannot be dismissed/) });
+            expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
+            expect(snapshot(code)).toEqual(before);
+            expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+            expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+          });
         }
 
         for (const from of ['pending', 'expired', 'needs_attention'] as const) {
@@ -891,6 +901,13 @@ describe('Dodo course payments, refunds and disputes', () => {
         expect(await surfaces.REST(d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
         expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'refunded', attention_reason: 'underpaid' });
         expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      });
+
+      it('refuses a dismiss of a flagged order that an admin refund refunded meanwhile', async () => {
+        const { code } = await flaggedCardOrder();
+        const d1 = landingBefore(/^UPDATE course_orders SET status = 'cancelled'/, () => resolveCourseOrder(state.d1, env(), code, 'refund', 'underpaid'));
+        expect(await surfaces.REST(d1, code, 'dismiss')).toMatchObject({ status: 409, code: 'order_refunded' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'refunded', attention_reason: 'underpaid' });
       });
 
       it('reports the dismiss 409 from the status the dismiss found: a grant that paid the order meanwhile', async () => {
