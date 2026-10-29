@@ -1,16 +1,21 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { Locale } from '../i18n/locales';
-import { isLocale } from '../i18n/locales';
+import { LOCALES } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import type { LocalizedNames, Row } from './common';
 import {
-  bad, localizedName, newId, normalizeKey, nowIso, num, parseNames, parseNamesInput, parseSlug, parseStringArray,
-  requireDb, requireRevision, safeText, slugify, str, writeAuditLog,
+  auditLogStatement, bad, localizedName, newId, normalizeKey, nowIso, num, parseNames, parseNamesInput, parseSlug, parseStringArray,
+  requireDb, requireRevision, safeText, slugify, softDeletedAt, str, writeAuditLog,
 } from './common';
 
-export const TAG_LIMITS = { perArticle: 20, nameLength: 40, aliases: 10 } as const;
+export const TAG_LIMITS = { perArticle: 20, slugLength: 60, nameLength: 40, aliases: 10 } as const;
+
+/** Field docs shared by the REST tag body and the MCP tag tools, so both describe the same contract. */
+export const TAG_SLUG_DOC = `Lowercase kebab-case of at most ${TAG_LIMITS.slugLength} characters, unique across tags; derived from the first name when omitted on create. Creating with a deleted tag's slug restores that tag (same id, new names and aliases); renaming onto it is a conflict`;
+export const TAG_NAMES_DOC = `Localized names keyed by locale (${LOCALES.join(', ')}), at least one, each up to ${TAG_LIMITS.nameLength} characters, e.g. {"vi": "Trí tuệ nhân tạo", "en": "AI"}; replaces the whole object`;
+export const TAG_ALIASES_DOC = `Alternative names, at most ${TAG_LIMITS.aliases} strings of up to ${TAG_LIMITS.nameLength} characters; duplicates collapse; replaces the whole list`;
 
 /** Public tag metadata (safe for every reader, including free and anonymous). */
 export interface PublicTag { id: string; slug: string; name: string }
@@ -42,7 +47,7 @@ export function toPublicTag(tag: Pick<TopicTag, 'id' | 'slug' | 'names'>, locale
 export function parseTagInput(body: Record<string, unknown>, mode: 'create' | 'update'): TagInput {
   const out: TagInput = {};
   if (body.names !== undefined) out.names = parseNamesInput('names', body.names, TAG_LIMITS.nameLength);
-  if (body.slug !== undefined) out.slug = parseSlug('slug', body.slug);
+  if (body.slug !== undefined) out.slug = parseSlug('slug', body.slug, TAG_LIMITS.slugLength);
   if (body.aliases !== undefined) {
     if (!Array.isArray(body.aliases) || body.aliases.length > TAG_LIMITS.aliases) bad('aliases', `must be an array of at most ${TAG_LIMITS.aliases} strings`);
     const seen = new Set<string>();
@@ -99,36 +104,76 @@ async function assertNoCollision(db: D1DatabaseLike, candidate: Pick<TopicTag, '
   }
 }
 
-/** Reindexes every article carrying the tag so search and public metadata follow renames immediately. */
-async function refreshTagged(db: D1DatabaseLike, tagId: string, env?: RuntimeEnv): Promise<void> {
-  const { results } = await db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tagId).all<Row>();
-  for (const r of results ?? []) {
-    const articleId = str(r, 'article_id');
-    await mirrorLegacyTags(db, articleId);
-    await reindexArticle(db, articleId, env);
-  }
+/** Id of the tag other than `selfId` whose row holds `slug`; soft-deleted rows count, since they keep their slug. */
+async function slugOwner(db: D1DatabaseLike, slug: string, selfId: string | null): Promise<string | null> {
+  const row = await db.prepare('SELECT id FROM topic_tags WHERE slug = ? AND id <> ?').bind(slug, selfId ?? '').first<Row>();
+  return row ? str(row, 'id') : null;
 }
 
+function slugConflict(slug: string, ownerId: string | null): AppError {
+  return new AppError(409, 'tag_conflict', `Slug "${slug}" is already used by another tag`, ownerId ? { tag_id: ownerId } : {});
+}
+
+/** The unique index on `topic_tags.slug` covers soft-deleted rows too; only that index maps to `tag_conflict`. */
+function isSlugViolation(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed: topic_tags\.slug\b/i.test(err.message);
+}
+
+/** Reindexes every article carrying the tag so search and public metadata follow renames immediately. */
+async function reindexTagged(db: D1DatabaseLike, tagId: string, env?: RuntimeEnv): Promise<void> {
+  const { results } = await db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tagId).all<Row>();
+  for (const r of results ?? []) await reindexArticle(db, str(r, 'article_id'), env);
+}
+
+/**
+ * Inserts the tag row, or restores a soft-deleted one (its slug stays reserved and its id stable).
+ * Returns false when a concurrent writer already owns the slug, instead of failing on the unique index.
+ */
+async function writeTagRow(db: D1DatabaseLike, candidate: Pick<TopicTag, 'slug' | 'aliases' | 'names'>): Promise<boolean> {
+  const now = nowIso();
+  const names = JSON.stringify(candidate.names);
+  const aliases = JSON.stringify(candidate.aliases);
+  const existing = await db.prepare('SELECT id, deleted_at FROM topic_tags WHERE slug = ?').bind(candidate.slug).first<Row>();
+  if (existing) {
+    if (existing.deleted_at == null) return false;
+    const res = await db.prepare('UPDATE topic_tags SET names = ?, aliases = ?, deleted_at = NULL, revision = revision + 1, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL')
+      .bind(names, aliases, now, str(existing, 'id')).run();
+    return Boolean(res.meta?.changes);
+  }
+  const res = await db.prepare('INSERT INTO topic_tags (id, slug, names, aliases, revision, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(slug) DO NOTHING')
+    .bind(newId('tag_'), candidate.slug, names, aliases, now, now).run();
+  return Boolean(res.meta?.changes);
+}
+
+/** Explicitly creates a tag; a slug, alias or name that is already taken (even by a concurrent create) is `409 tag_conflict`. */
 export async function createTag(d1: D1DatabaseLike | undefined, input: TagInput, actor: string): Promise<TopicTag> {
   const db = requireDb(d1);
   if (!input.slug || !input.names) throw new AppError(400, 'invalid_field', 'names are required');
   const candidate = { slug: input.slug, names: input.names, aliases: input.aliases ?? [] };
   await assertNoCollision(db, candidate, null);
-  const now = nowIso();
-  const id = newId('tag_');
-  const existing = await db.prepare('SELECT id FROM topic_tags WHERE slug = ?').bind(input.slug).first<Row>();
-  if (existing) {
-    // A soft-deleted tag keeps its slug reserved; restoring it keeps its stable id.
-    await db.prepare('UPDATE topic_tags SET names = ?, aliases = ?, deleted_at = NULL, revision = revision + 1, updated_at = ? WHERE id = ?')
-      .bind(JSON.stringify(candidate.names), JSON.stringify(candidate.aliases), now, str(existing, 'id')).run();
-  } else {
-    await db.prepare('INSERT INTO topic_tags (id, slug, names, aliases, revision, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)')
-      .bind(id, candidate.slug, JSON.stringify(candidate.names), JSON.stringify(candidate.aliases), now, now).run();
-  }
+  if (!await writeTagRow(db, candidate)) throw slugConflict(candidate.slug, await slugOwner(db, candidate.slug, null));
   const tag = await getTag(db, input.slug);
   if (!tag) throw new AppError(500, 'internal_error', 'Tag was not persisted');
   await writeAuditLog(db, { actor, action: 'tag.create', targetType: 'tag', targetId: tag.id, after: tag });
   return tag;
+}
+
+/**
+ * Creates the tag, or returns the one a concurrent write just created for the same name. A tag is reused only
+ * when it owns the slug and already resolves every requested name; a different tag that merely shares the slug
+ * (`slugify` maps "C++" and "C#" both to "c") or an alias stays a `409 tag_conflict`.
+ */
+async function ensureTag(db: D1DatabaseLike, input: Required<TagInput>, actor: string): Promise<TopicTag> {
+  try {
+    return await createTag(db, input, actor);
+  } catch (err) {
+    if (!(err instanceof AppError) || err.code !== 'tag_conflict') throw err;
+    const existing = await getTag(db, input.slug);
+    if (existing?.slug !== input.slug) throw err;
+    const keys = new Set(tagKeys(existing));
+    if (!Object.values(input.names).every(name => typeof name === 'string' && keys.has(normalizeKey(name)))) throw err;
+    return existing;
+  }
 }
 
 export async function updateTag(
@@ -139,16 +184,28 @@ export async function updateTag(
   const tag = await getTag(db, idOrSlug);
   if (!tag) throw new AppError(404, 'not_found', 'Tag not found');
   const next = { slug: input.slug ?? tag.slug, names: input.names ?? tag.names, aliases: input.aliases ?? tag.aliases };
+  if (next.slug !== tag.slug) {
+    // A soft-deleted tag keeps its slug reserved, so a rename onto it conflicts like a rename onto a live tag.
+    const owner = await slugOwner(db, next.slug, tag.id);
+    if (owner) throw slugConflict(next.slug, owner);
+  }
   await assertNoCollision(db, next, tag.id);
-  const res = await db.prepare(`
-    UPDATE topic_tags SET slug = ?, names = ?, aliases = ?, revision = revision + 1, updated_at = ?
-    WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected).run();
-  if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
+  // One batch (one transaction): the rename and the legacy tag names of its articles commit together, so a crash
+  // cannot leave the old name in `articles.tags`. When the rename does not apply, the rebuild leaves the column as it was.
+  const batch = db.batch([
+    db.prepare(`
+      UPDATE topic_tags SET slug = ?, names = ?, aliases = ?, revision = revision + 1, updated_at = ?
+      WHERE id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected),
+    legacyTagsStatement(db, 'id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)', tag.id),
+  ]);
+  // A concurrent write can take the slug after the checks above; that is a conflict, not a raw 500.
+  const [res] = await batch.catch(async (err: unknown) => { throw isSlugViolation(err) ? slugConflict(next.slug, await slugOwner(db, next.slug, tag.id)) : err; });
+  if (!res?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
   const updated = await getTag(db, tag.id);
   if (!updated) throw new AppError(500, 'internal_error', 'Tag disappeared after update');
   await writeAuditLog(db, { actor, action: 'tag.update', targetType: 'tag', targetId: tag.id, before: tag, after: updated });
-  await refreshTagged(db, tag.id, env);
+  await reindexTagged(db, tag.id, env);
   return updated;
 }
 
@@ -157,16 +214,21 @@ export async function deleteTag(d1: D1DatabaseLike | undefined, idOrSlug: string
   const expected = requireRevision(expectedRevision);
   const tag = await getTag(db, idOrSlug);
   if (!tag) throw new AppError(404, 'not_found', 'Tag not found');
-  const res = await db.prepare('UPDATE topic_tags SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
-    .bind(nowIso(), nowIso(), tag.id, expected).run();
-  if (!res.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
-  const { results } = await db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tag.id).all<Row>();
-  await db.prepare('DELETE FROM article_tags WHERE tag_id = ?').bind(tag.id).run();
-  for (const r of results ?? []) {
-    await mirrorLegacyTags(db, str(r, 'article_id'));
-    await reindexArticle(db, str(r, 'article_id'), env);
-  }
-  await writeAuditLog(db, { actor, action: 'tag.delete', targetType: 'tag', targetId: tag.id, before: tag });
+  const now = nowIso();
+  // One batch (one transaction): the tag is deleted, dropped from its articles' legacy tag names, unassigned and
+  // audited together; the unassign and the audit row apply only when this batch's own delete did. The legacy names
+  // are rewritten while the assignments still identify the articles, after the mark has hidden the tag.
+  const deleted = softDeletedAt('topic_tags', tag.id, expected, now);
+  const [mark, assigned] = await db.batch([
+    db.prepare('UPDATE topic_tags SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ? AND deleted_at IS NULL')
+      .bind(now, now, tag.id, expected),
+    db.prepare('SELECT article_id FROM article_tags WHERE tag_id = ?').bind(tag.id),
+    legacyTagsStatement(db, 'id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)', tag.id),
+    db.prepare(`DELETE FROM article_tags WHERE tag_id = ? AND ${deleted.sql}`).bind(tag.id, ...deleted.params),
+    auditLogStatement(db, { actor, action: 'tag.delete', targetType: 'tag', targetId: tag.id, before: tag }, deleted),
+  ]);
+  if (!mark?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
+  for (const r of assigned?.results ?? []) await reindexArticle(db, str(r, 'article_id'), env);
 }
 
 /**
@@ -191,7 +253,7 @@ export async function resolveTagRefs(
       if (!opts.createMissing) throw new AppError(400, 'unknown_tag', `Unknown tag "${raw}"`, { tag: raw });
       const slug = slugify(raw);
       if (!slug) bad(`tags[${i}]`, 'must contain letters or digits');
-      tag = await createTag(db, { slug, names: { [opts.locale]: raw }, aliases: [] }, opts.actor);
+      tag = await ensureTag(db, { slug, names: { [opts.locale]: raw }, aliases: [] }, opts.actor);
       byKey.set(tag.id, tag);
       for (const k of tagKeys(tag)) byKey.set(k, tag);
     }
@@ -201,27 +263,45 @@ export async function resolveTagRefs(
   return ids;
 }
 
-/** Keeps the legacy `articles.tags` JSON (read by older builds) in sync with topic tags. */
-export async function mirrorLegacyTags(db: D1DatabaseLike, articleId: string): Promise<void> {
-  const art = await db.prepare('SELECT locale FROM articles WHERE id = ?').bind(articleId).first<Row>();
-  if (!art) return;
-  const { results } = await db.prepare(`
-    SELECT t.slug, t.names FROM article_tags at JOIN topic_tags t ON t.id = at.tag_id
-    WHERE at.article_id = ? AND t.deleted_at IS NULL ORDER BY at.position
-  `).bind(articleId).all<Row>();
-  const locale = str(art, 'locale');
-  const names = (results ?? []).map(r => localizedName(parseNames(r.names), isLocale(locale) ? locale : 'vi', str(r, 'slug')));
-  await db.prepare('UPDATE articles SET tags = ? WHERE id = ?').bind(JSON.stringify(names), articleId).run();
+/** Every code point `String.prototype.trim` strips (ECMAScript WhiteSpace and LineTerminator), as SQL `char(...)` arguments. */
+const JS_TRIM_CODE_POINTS = [
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
+  0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+].join(', ');
+
+/**
+ * The value of `t.names` under `key` when it is a non-blank string, else NULL; the same check `parseNames` applies.
+ * Like `JSON.parse`, the last occurrence of a duplicated key wins (`json_each` ids follow document order), and blank
+ * means empty after stripping the characters JS `trim` strips.
+ */
+const tagNameAt = (key: string) => `(SELECT CASE WHEN j.type = 'text' AND trim(j.value, char(${JS_TRIM_CODE_POINTS})) <> '' THEN j.value END
+  FROM json_each(t.names) j WHERE j.key = ${key} ORDER BY j.id DESC LIMIT 1)`;
+
+/** SQL twin of `localizedName(parseNames(...))` for an article's live tags: its locale (unknown means vi), en, vi, any locale, the slug. */
+const LEGACY_TAG_NAME_SQL = `COALESCE(CASE WHEN json_valid(t.names) AND json_type(t.names) = 'object' THEN COALESCE(${[
+  `CASE WHEN articles.locale IN (${LOCALES.map(l => `'${l}'`).join(', ')}) THEN articles.locale ELSE 'vi' END`,
+  "'en'", "'vi'", ...LOCALES.map(l => `'${l}'`),
+].map(tagNameAt).join(', ')}) END, t.slug)`;
+
+/**
+ * Rewrites the legacy `articles.tags` JSON (read by older builds) from each matched article's live tags, in display
+ * order. It is one statement, so callers put it in the same batch as the tag change it follows; recomputing is
+ * idempotent, so running it when that change did not apply leaves the column as it was.
+ */
+function legacyTagsStatement(db: D1DatabaseLike, where: string, ...params: unknown[]): D1PreparedStatementLike {
+  return db.prepare(`
+    UPDATE articles SET tags = (
+      SELECT json_group_array(name) FROM (
+        SELECT ${LEGACY_TAG_NAME_SQL} AS name FROM article_tags at JOIN topic_tags t ON t.id = at.tag_id
+        WHERE at.article_id = articles.id AND t.deleted_at IS NULL ORDER BY at.position
+      )
+    ) WHERE ${where}
+  `).bind(...params);
 }
 
-export async function setArticleTags(db: D1DatabaseLike, articleId: string, tagIds: string[]): Promise<void> {
-  await db.prepare('DELETE FROM article_tags WHERE article_id = ?').bind(articleId).run();
-  const now = nowIso();
-  for (let i = 0; i < tagIds.length; i++) {
-    await db.prepare('INSERT OR IGNORE INTO article_tags (article_id, tag_id, position, created_at) VALUES (?, ?, ?, ?)')
-      .bind(articleId, tagIds[i], i, now).run();
-  }
-  await mirrorLegacyTags(db, articleId);
+/** Keeps the legacy `articles.tags` JSON (read by older builds) in sync with topic tags. */
+export async function mirrorLegacyTags(db: D1DatabaseLike, articleId: string): Promise<void> {
+  await legacyTagsStatement(db, 'id = ?', articleId).run();
 }
 
 /** Tags per article in display order (deleted tags excluded). */

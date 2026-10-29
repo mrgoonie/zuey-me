@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
-import { createTestD1 } from './helpers/d1';
+import { createTestD1, crashingD1 } from './helpers/d1';
 import { createApiKey, createSession } from '../src/db/store';
+import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { bookingRuntime, getBookingRow } from '../src/lib/booking/store';
 import { getArticleView, resolveViewer } from '../src/lib/blocks/articles';
@@ -10,6 +11,7 @@ import { AppError } from '../src/lib/http';
 import type { McpContext } from '../src/lib/mcp/types';
 import { createUserKey } from '../src/lib/members/api-keys';
 import type { UserKeyScope } from '../src/lib/members/api-keys';
+import { applyBillingPayment, getOrderByCode } from '../src/lib/members/billing';
 import { addMonths } from '../src/lib/members/subscriptions';
 import { membersMcpModule } from '../src/lib/members/mcp';
 import { monthlyVnd, prepayVnd } from '../src/lib/members/plans';
@@ -570,5 +572,120 @@ describe('new-order Telegram and Discord notices', () => {
     } finally {
       experienceRuntime.fetch = originalFetch;
     }
+  });
+});
+describe('a membership payment the worker dies on', () => {
+  const sqlPoint = (re: RegExp) => (sql: string) => re.test(sql);
+  const isGate = (sql: string) => sql.startsWith('INSERT INTO payment_events');
+  const count = (sql: string, ...params: string[]) => Number(d1.raw.query<{ n: number }, string[]>(sql).get(...params)?.n ?? 0);
+  const events = (eventId: string) => count("SELECT COUNT(*) AS n FROM payment_events WHERE provider = 'sepay' AND event_id = ?", eventId);
+  const activities = (action: string) => count('SELECT COUNT(*) AS n FROM user_activity WHERE action = ?', action);
+  const purchaseKeys = () => d1.raw.query<{ dedupe_key: string }, []>("SELECT dedupe_key FROM analytics_outbox WHERE event = 'purchase'").all().map(r => r.dedupe_key);
+
+  /** A pending order and its full transfer, delivered through any database. */
+  async function pendingPayment() {
+    const lan = await member('lan@example.com');
+    const o = await order(lan, 'knowledges');
+    expect(o.status).toBe(201);
+    const notice = { eventId: 'tx_crash', amount: o.amount, orderCode: o.code, paymentRef: 'FT1', rawType: 'transfer_in' };
+    return { lan, code: o.code, deliver: (db: D1DatabaseLike) => applyBillingPayment(db, env(), notice) };
+  }
+
+  const crashPoints = [
+    ['the record check before the payment batch', sqlPoint(/^SELECT 1 AS found FROM payment_events/)],
+    ['the paid log in the payment batch', sqlPoint(/^INSERT INTO user_activity/)],
+    ['the status update in the payment batch', sqlPoint(/^UPDATE billing_orders SET status = 'paid'/)],
+  ] as const;
+
+  for (const [point, at] of crashPoints) {
+    it(`pays the order once on the redelivery after the worker dies at ${point}`, async () => {
+      const p = await pendingPayment();
+      await expect(p.deliver(crashingD1(d1, at).d1)).rejects.toThrow(/crashed/);
+      expect(events('tx_crash')).toBe(0);
+      expect((await getOrderByCode(d1, p.code))?.status).toBe('pending');
+      expect((await subscription(p.lan)).active_plans).toEqual([]);
+      expect(purchaseKeys()).toEqual([]);
+
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'paid' });
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+      const paid = await getOrderByCode(d1, p.code);
+      expect(paid).toMatchObject({ status: 'paid', attention_reason: null });
+      expect((await subscription(p.lan)).active_plans).toEqual(['knowledges']);
+      expect(events('tx_crash')).toBe(1);
+      expect(activities('billing.paid')).toBe(1);
+      expect(purchaseKeys()).toEqual([`purchase:sepay:billing_order:${paid?.id}`]);
+      expect(emails).toHaveLength(1);
+    });
+  }
+
+  const pastBatch = [
+    ['the plan recompute', sqlPoint(/^SELECT months, paid_at FROM billing_orders/)],
+    ['the purchase event', sqlPoint(/FROM analytics_ga4_clients/)],
+    ['the receipt', sqlPoint(/^\s*INSERT INTO email_log/)],
+  ] as const;
+
+  for (const [point, at] of pastBatch) {
+    it(`runs the follow-ups once on the redelivery after the worker dies past the payment batch, at ${point}`, async () => {
+      const p = await pendingPayment();
+      await expect(p.deliver(crashingD1(d1, at).d1)).rejects.toThrow(/crashed/);
+      expect((await getOrderByCode(d1, p.code))?.status).toBe('paid');
+      expect(emails).toHaveLength(0);
+
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(emails).toHaveLength(1);
+      expect(await p.deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(emails).toHaveLength(1);
+      const paid = await getOrderByCode(d1, p.code);
+      expect((await subscription(p.lan)).active_plans).toEqual(['knowledges']);
+      expect(events('tx_crash')).toBe(1);
+      expect(activities('billing.paid')).toBe(1);
+      expect(purchaseKeys()).toEqual([`purchase:sepay:billing_order:${paid?.id}`]);
+    });
+  }
+
+  it('flags an underpaid order once on the redelivery after the worker dies in the flag batch', async () => {
+    const lan = await member('lan@example.com');
+    const o = await order(lan, 'knowledges');
+    const deliver = (db: D1DatabaseLike) => applyBillingPayment(db, env(), { eventId: 'tx_short', amount: o.amount - 1000, orderCode: o.code, paymentRef: 'FT2', rawType: 'transfer_in' });
+    await expect(deliver(crashingD1(d1, sqlPoint(/^UPDATE billing_orders SET status = 'needs_attention'/)).d1)).rejects.toThrow(/crashed/);
+    expect(events('tx_short')).toBe(0);
+    expect((await getOrderByCode(d1, o.code))?.status).toBe('pending');
+
+    expect(await deliver(d1)).toMatchObject({ outcome: 'needs_attention' });
+    expect(await deliver(d1)).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await getOrderByCode(d1, o.code)).toMatchObject({ status: 'needs_attention', attention_reason: 'underpaid', amount_paid: o.amount - 1000 });
+    expect(events('tx_short')).toBe(1);
+    expect(activities('billing.needs_attention')).toBe(1);
+  });
+
+  it('writes the record only as the first statement of the payment batch, and a redelivery writes nothing', async () => {
+    const p = await pendingPayment();
+    const spy = crashingD1(d1);
+    expect(await p.deliver(spy.d1)).toMatchObject({ outcome: 'paid' });
+    expect(spy.runs.filter(isGate)).toEqual([]);
+    const gated = spy.batches.filter(b => b.some(isGate));
+    expect(gated).toHaveLength(1);
+    expect(isGate(gated[0][0])).toBe(true);
+    expect(gated[0].at(-1)).toMatch(/^UPDATE billing_orders SET status = 'paid'/);
+
+    const again = crashingD1(d1);
+    expect(await p.deliver(again.d1)).toMatchObject({ outcome: 'duplicate_event' });
+    expect(again.batches).toEqual([]);
+    expect(again.runs).toEqual([]);
+  });
+
+  it('rolls the payment back when its record is already taken, and answers duplicate_event', async () => {
+    const p = await pendingPayment();
+    await d1.prepare("INSERT INTO payment_events (provider, event_id, raw_type, received_at) VALUES ('sepay', 'tx_crash', 'race', ?)").bind(new Date(now).toISOString()).run();
+    // The first record check misses it, as for a delivery that checked just before another one committed.
+    let checks = 0;
+    const blind: D1DatabaseLike = {
+      prepare: (sql: string) => d1.prepare(sql.startsWith('SELECT 1 AS found FROM payment_events') && checks++ === 0 ? 'SELECT 1 AS found WHERE 0 AND ? AND ?' : sql),
+      batch: statements => d1.batch(statements),
+    };
+    expect(await p.deliver(blind)).toMatchObject({ outcome: 'duplicate_event' });
+    expect((await getOrderByCode(d1, p.code))?.status).toBe('pending');
+    expect(activities('billing.paid')).toBe(0);
+    expect(purchaseKeys()).toEqual([]);
   });
 });

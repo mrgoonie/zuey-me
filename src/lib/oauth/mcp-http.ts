@@ -6,8 +6,9 @@ import type { Principal } from '../members/policy';
 import { can, requireCan } from '../members/policy';
 import type { McpCaller, OAuthGrantInfo } from './caller';
 import { resolveMcpCaller } from './caller';
-import { issuerFor, mcpResourceFor, resourceMetadataUrl } from './config';
+import { DEFAULT_MEMBER_SCOPES, issuerFor, mcpResourceFor, resourceMetadataUrl } from './config';
 import type { ToolAccess } from './tool-access';
+import { presenceOwnerIds } from '../presence/presence-owner-identity';
 import { toolAccess, visibleTools } from './tool-access';
 
 /**
@@ -194,6 +195,10 @@ function decorate(result: Record<string, unknown>, era: Era): Record<string, unk
 }
 
 function unauthorized(id: JsonRpcId, issuer: string, caller: Extract<McpCaller, { ok: false }>): Response {
+  if (caller.error === 'insufficient_scope') {
+    const challenge = bearerChallenge(issuer, { error: 'insufficient_scope', scope: DEFAULT_MEMBER_SCOPES.join(' '), error_description: caller.description });
+    return rpcError(id, ERR_FORBIDDEN, caller.description, 403, { code: 'insufficient_scope' }, { 'WWW-Authenticate': challenge });
+  }
   const challenge = caller.error === 'missing'
     ? bearerChallenge(issuer)
     : bearerChallenge(issuer, { error: 'invalid_token', error_description: caller.description });
@@ -240,7 +245,7 @@ export async function handleMcpPost(request: Request, env: RuntimeEnv, waitUntil
     case 'ping':
       return ok({});
     case 'tools/list': {
-      const tools = visibleTools(principal, allMcpTools());
+      const tools = visibleTools(principal, allMcpTools(), presenceOwnerIds(env));
       // 2026-07-28 list results must carry cache hints; the list depends on the caller, so it is private.
       const listMeta = { [META_CATALOG_VERSION]: await catalogVersion(tools) };
       return ok(era.modern ? { tools, ttlMs: TOOLS_LIST_TTL_MS, cacheScope: 'private', _meta: listMeta } : { tools, _meta: listMeta });

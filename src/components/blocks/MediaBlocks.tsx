@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import './media-blocks.css';
-import type { Block, FileBlock, KnowledgeMediaBlock } from '../../lib/blocks/schema';
+import type { Block, FileBlock, KnowledgeMediaBlock, MathBlock } from '../../lib/blocks/schema';
 import { imageSizeAttrs, isPdfUrl } from '../../lib/blocks/schema';
 import { formatBytes } from '../../lib/blocks/markdown-format';
+import { responsiveImage } from '../../lib/media/image-transform';
+import type { ImageTransforms } from '../../lib/media/image-transform';
+
+/** Gallery cells: two or three columns in the prose column, one on narrow phones. */
+const GALLERY_IMAGE_SIZES = '(min-width: 880px) 390px, (min-width: 520px) 50vw, 100vw';
 
 function hostOf(url: string): string {
   try {
@@ -42,25 +47,21 @@ function FileView({ block }: { block: FileBlock }) {
 }
 
 interface MediaBlockProps {
-  block: KnowledgeMediaBlock;
+  /** Math has its own view (./MathBlock.tsx). */
+  block: Exclude<KnowledgeMediaBlock, MathBlock>;
   /** Renders nested blocks (toggle content) with the parent renderer. */
   renderBlocks: (blocks: Block[]) => ReactNode;
   /** Inline Markdown renderer from the parent (keeps marks consistent). */
   renderInline: (text: string) => ReactNode;
+  /** Resized gallery images (article page only; fragments keep the original URLs). */
+  imageTransforms?: ImageTransforms | null;
+  /** The gallery's first image is the page's likely LCP element: load it eagerly at high priority. */
+  eagerFirstImage?: boolean;
 }
 
 /** Rendering for the knowledge media block family; every block has a no-JS-safe link fallback. */
-export function MediaBlockView({ block, renderBlocks, renderInline }: MediaBlockProps) {
+export function MediaBlockView({ block, renderBlocks, renderInline, imageTransforms, eagerFirstImage = false }: MediaBlockProps) {
   switch (block.type) {
-    case 'math':
-      return (
-        <figure className="zb-math">
-          <span className="zb-math-tag" aria-hidden="true">TeX</span>
-          {/* No math typesetter is bundled: show the TeX source, exposed to assistive tech as math. */}
-          <code role="math" aria-label={block.tex}>{block.tex}</code>
-          {block.caption && <figcaption className="zb-caption">{block.caption}</figcaption>}
-        </figure>
-      );
     case 'gallery':
       return (
         <figure className="zb-figure zb-figure-center zb-gallery-wrap">
@@ -70,7 +71,9 @@ export function MediaBlockView({ block, renderBlocks, renderInline }: MediaBlock
               <li key={i}>
                 <figure>
                   <a href={img.url} target="_blank" rel="noopener noreferrer nofollow">
-                    <img src={img.url} alt={img.alt} loading="lazy" decoding="async" {...imageSizeAttrs(img)} />
+                    {eagerFirstImage && i === 0
+                      ? <img {...responsiveImage(img.url, img.width, GALLERY_IMAGE_SIZES, imageTransforms)} alt={img.alt} fetchPriority="high" decoding="async" {...imageSizeAttrs(img)} />
+                      : <img {...responsiveImage(img.url, img.width, GALLERY_IMAGE_SIZES, imageTransforms)} alt={img.alt} loading="lazy" decoding="async" {...imageSizeAttrs(img)} />}
                   </a>
                   {img.caption && <figcaption>{img.caption}</figcaption>}
                 </figure>

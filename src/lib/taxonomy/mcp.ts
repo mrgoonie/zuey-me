@@ -9,17 +9,22 @@ import { cancelAuditJob, createAuditJob, getAuditJob, listAuditJobs, parseJobInp
 import { createCategory, deleteCategory, listCategories, parseCategoryInput, updateCategory } from './categories';
 import { listAuditLog, requireDb } from './common';
 import {
-  LABEL_KINDS, LABEL_SCOPES, createLabel, deleteLabel, getLabelState, listLabelHistory, listLabels, parseLabelInput, revertLabels,
+  LABEL_ALIASES_DOC, LABEL_KINDS, LABEL_SCOPES, LABEL_SLUG_DOC, createLabel, deleteLabel, getLabelState, listLabelHistory, listLabels, parseLabelInput, revertLabels,
   setArticleLabels, updateLabel,
 } from './labels';
 import { DECISIONS, PROPOSAL_STATUSES, createProposal, decideProposal, getProposal, listProposals, parseStatusFilter } from './proposals';
 import { publicTaxonomy } from './public';
-import { createTag, deleteTag, listTags, parseTagInput, updateTag } from './tags';
+import { TAG_ALIASES_DOC, TAG_NAMES_DOC, TAG_SLUG_DOC, createTag, deleteTag, listTags, parseTagInput, updateTag } from './tags';
 
 const localeProp = { locale: { type: 'string', enum: [...LOCALES] } };
 const idProp = { id: { type: 'string', description: 'Id or slug' } };
 const revProp = { expected_revision: { type: 'integer', minimum: 0 } };
 const namesProp = { names: { type: 'object', description: 'Localized names, e.g. {"vi": "Trí tuệ nhân tạo", "en": "AI"}' } };
+const tagFieldProps = {
+  slug: { type: 'string', description: TAG_SLUG_DOC },
+  names: { type: 'object', description: TAG_NAMES_DOC },
+  aliases: { type: 'array', items: { type: 'string' }, description: TAG_ALIASES_DOC },
+};
 const assignmentsProp = {
   assignments: {
     type: 'array',
@@ -48,8 +53,8 @@ export const taxonomyMcpModule: McpToolModule = {
     },
     { name: 'taxonomy_facets', description: 'Public tags, categories and approved labels used by published articles, localized.', inputSchema: { type: 'object', properties: { ...localeProp } } },
     { name: 'tag_list', description: 'Admin: all topic tags with names, aliases, revision and article counts.', inputSchema: { type: 'object', properties: {} } },
-    { name: 'tag_create', description: 'Admin: create a topic tag (stable id; slug/aliases/names must not collide).', inputSchema: { type: 'object', properties: { slug: { type: 'string' }, ...namesProp, aliases: { type: 'array', items: { type: 'string' } } }, required: ['names'] } },
-    { name: 'tag_update', description: 'Admin: rename/re-alias a tag; requires expected_revision. Reindexes tagged articles.', inputSchema: { type: 'object', properties: { ...idProp, ...revProp, slug: { type: 'string' }, ...namesProp, aliases: { type: 'array', items: { type: 'string' } } }, required: ['id', 'expected_revision'] } },
+    { name: 'tag_create', description: 'Admin: create a topic tag (stable id; slug/aliases/names must not collide).', inputSchema: { type: 'object', properties: tagFieldProps, required: ['names'] } },
+    { name: 'tag_update', description: 'Admin: rename/re-alias a tag; requires expected_revision. Reindexes tagged articles.', inputSchema: { type: 'object', properties: { ...idProp, ...revProp, ...tagFieldProps }, required: ['id', 'expected_revision'] } },
     { name: 'tag_delete', description: 'Admin: delete a tag and detach it from articles; requires expected_revision.', inputSchema: { type: 'object', properties: { ...idProp, ...revProp }, required: ['id', 'expected_revision'] } },
     { name: 'category_list', description: 'Admin: all categories.', inputSchema: { type: 'object', properties: {} } },
     { name: 'category_create', description: 'Admin: create a category.', inputSchema: { type: 'object', properties: { slug: { type: 'string' }, ...namesProp, position: { type: 'integer' } }, required: ['names'] } },
@@ -58,9 +63,9 @@ export const taxonomyMcpModule: McpToolModule = {
     { name: 'label_list', description: 'Admin: label vocabulary (claim, freshness, domain, tool, model, workflow, mindset, extension), including unapproved extensions.', inputSchema: { type: 'object', properties: {} } },
     {
       name: 'label_create', description: 'Admin: add a label to an admin-managed vocabulary; extension labels stay unapproved unless approve: true. claim/freshness are closed built-ins.',
-      inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: [...LABEL_KINDS] }, slug: { type: 'string' }, ...namesProp, aliases: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, version: { type: 'string' }, approve: { type: 'boolean' } }, required: ['kind', 'slug', 'names'] },
+      inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: [...LABEL_KINDS] }, slug: { type: 'string', description: LABEL_SLUG_DOC }, ...namesProp, aliases: { type: 'array', items: { type: 'string' }, description: LABEL_ALIASES_DOC }, description: { type: 'string' }, version: { type: 'string' }, approve: { type: 'boolean' } }, required: ['kind', 'slug', 'names'] },
     },
-    { name: 'label_update', description: 'Admin: edit or approve a label (id or <kind>:<slug>); requires expected_revision.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, ...revProp, ...namesProp, description: { type: 'string' }, version: { type: ['string', 'null'] }, approve: { type: 'boolean' } }, required: ['id', 'expected_revision'] } },
+    { name: 'label_update', description: 'Admin: edit or approve a label (id or <kind>:<slug>); requires expected_revision.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, ...revProp, slug: { type: 'string', description: LABEL_SLUG_DOC }, ...namesProp, aliases: { type: 'array', items: { type: 'string' }, description: LABEL_ALIASES_DOC }, description: { type: 'string' }, version: { type: ['string', 'null'] }, approve: { type: 'boolean' } }, required: ['id', 'expected_revision'] } },
     { name: 'label_delete', description: 'Admin: delete an unused non-built-in label; requires expected_revision.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, ...revProp }, required: ['id', 'expected_revision'] } },
     { name: 'article_labels_get', description: 'Admin: current label assignments (with evidence) and label revision history of an article.', inputSchema: { type: 'object', properties: { article_slug: { type: 'string' } }, required: ['article_slug'] } },
     {

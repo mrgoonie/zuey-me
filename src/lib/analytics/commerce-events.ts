@@ -8,11 +8,14 @@
  * VND as-is, USD cents divided by 100.
  */
 import type { D1DatabaseLike } from '../../db/store';
+import { ga4OutboxProperties } from './ga4-attribution';
 import { GUEST_ID_PREFIX } from './identity';
-import type { EnqueueOutcome } from './outbox';
+import type { EnqueueOutcome, OutboxEventInput } from './outbox';
 import { enqueueServerEvent, subscriptionExpiredKey } from './outbox';
 
 export type CommerceProvider = 'sepay' | 'dodo' | 'paypal';
+/** Rails that grant membership access: SePay prepaid orders and Dodo card subscriptions. */
+export type MembershipProvider = 'sepay' | 'dodo';
 export type OrderType = 'membership' | 'course' | 'booking';
 
 /** Currencies without a minor unit (amounts already in major units). */
@@ -36,11 +39,22 @@ function money(amountMinor: number | null | undefined, currency: string | null |
   return { amount: toMajorUnits(amountMinor, c), currency: c };
 }
 
+async function sha256Hex(value: string, bytes: number): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest).slice(0, bytes)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** Opaque, stable distinct id for a guest without a member account (bookings), derived from the record id. */
 export async function guestDistinctId(recordId: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`guest:${recordId}`));
-  const hex = Array.from(new Uint8Array(digest).slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `${GUEST_ID_PREFIX}${hex}`;
+  return `${GUEST_ID_PREFIX}${await sha256Hex(`guest:${recordId}`, 12)}`;
+}
+
+/**
+ * Opaque ecommerce `transaction_id` of a provider transaction (`tx_` + 24 hex of SHA-256): the raw id or order
+ * code never leaves the app, while a refund of the same transaction derives the same value.
+ */
+export async function ecommerceTransactionId(provider: CommerceProvider, transactionId: string): Promise<string> {
+  return `tx_${await sha256Hex(`${provider}:${transactionId}`, 12)}`;
 }
 
 export interface PurchaseInput {
@@ -62,9 +76,18 @@ export interface PurchaseInput {
 
 /** One `purchase` per verified transaction. Zero-amount grants (100% promo codes) are not purchases. */
 export async function queuePurchase(d1: D1DatabaseLike, p: PurchaseInput): Promise<EnqueueOutcome> {
+  const input = await purchaseEvent(d1, p);
+  return input ? enqueueServerEvent(d1, input) : 'rejected';
+}
+
+/**
+ * The `purchase` event of `queuePurchase`, for a caller that writes it in one D1 batch with the payment
+ * (`outboxInsertStatement`). Null when it is not a purchase (zero amount or unknown currency).
+ */
+export async function purchaseEvent(d1: D1DatabaseLike, p: PurchaseInput): Promise<OutboxEventInput<'purchase'> | null> {
   const currency = normaliseCurrency(p.currency);
-  if (currency === null || !Number.isFinite(p.amountMinor) || p.amountMinor <= 0) return 'rejected';
-  return enqueueServerEvent(d1, {
+  if (currency === null || !Number.isFinite(p.amountMinor) || p.amountMinor <= 0) return null;
+  return {
     event: 'purchase',
     distinctId: p.distinctId,
     dedupeKey: `purchase:${p.provider}:${p.transactionId}`,
@@ -74,9 +97,12 @@ export async function queuePurchase(d1: D1DatabaseLike, p: PurchaseInput): Promi
       ...(p.plan ? { plan: p.plan } : {}),
       ...(typeof p.months === 'number' ? { months: p.months } : {}),
       ...(p.flagged ? { flagged: true } : {}),
+      transaction_id: await ecommerceTransactionId(p.provider, p.transactionId),
+      // GA ids from the member's checkout start (GA4 attribution only; never sent to PostHog).
+      ...(await ga4OutboxProperties(d1, p.distinctId, !(p.renewal ?? false))),
     },
     occurredAt: p.occurredAt,
-  });
+  };
 }
 
 export interface PaymentIssueInput {
@@ -92,7 +118,12 @@ export interface PaymentIssueInput {
 }
 
 export async function queueNeedsAttention(d1: D1DatabaseLike, p: PaymentIssueInput & { reason: string }): Promise<EnqueueOutcome> {
-  return enqueueServerEvent(d1, {
+  return enqueueServerEvent(d1, needsAttentionEvent(p));
+}
+
+/** The `payment_needs_attention` event of `queueNeedsAttention`, for a caller that writes it in one D1 batch with the flag. */
+export function needsAttentionEvent(p: PaymentIssueInput & { reason: string }): OutboxEventInput<'payment_needs_attention'> {
+  return {
     event: 'payment_needs_attention',
     distinctId: p.distinctId,
     dedupeKey: `payment_needs_attention:${p.provider}:${p.reference}`,
@@ -100,7 +131,7 @@ export async function queueNeedsAttention(d1: D1DatabaseLike, p: PaymentIssueInp
       provider: p.provider, order_type: p.orderType, reason: p.reason, ...money(p.amountMinor, p.currency), ...(p.plan ? { plan: p.plan } : {}),
     },
     occurredAt: p.occurredAt,
-  });
+  };
 }
 
 export async function queuePaymentFailed(d1: D1DatabaseLike, p: PaymentIssueInput): Promise<EnqueueOutcome> {
@@ -113,17 +144,30 @@ export async function queuePaymentFailed(d1: D1DatabaseLike, p: PaymentIssueInpu
   });
 }
 
-export async function queueRefund(d1: D1DatabaseLike, p: PaymentIssueInput & { reason: string; partial?: boolean }): Promise<EnqueueOutcome> {
-  return enqueueServerEvent(d1, {
+export type RefundInput = PaymentIssueInput & {
+  reason: string; partial?: boolean;
+  /** The refunded purchase's `transactionId` (as given to `queuePurchase`), when known. */
+  purchaseTransactionId?: string | null;
+};
+
+export async function queueRefund(d1: D1DatabaseLike, p: RefundInput): Promise<EnqueueOutcome> {
+  return enqueueServerEvent(d1, await refundEvent(d1, p));
+}
+
+/** The `refund` outbox event of money that went back, keyed by `reference` (see `queueRefund`). Never throws. */
+export async function refundEvent(d1: D1DatabaseLike, p: RefundInput): Promise<OutboxEventInput<'refund'>> {
+  return {
     event: 'refund',
     distinctId: p.distinctId,
     dedupeKey: `refund:${p.provider}:${p.reference}`,
     properties: {
       provider: p.provider, order_type: p.orderType, reason: p.reason, ...money(p.amountMinor, p.currency),
       ...(typeof p.partial === 'boolean' ? { partial: p.partial } : {}), ...(p.plan ? { plan: p.plan } : {}),
+      ...(p.purchaseTransactionId ? { transaction_id: await ecommerceTransactionId(p.provider, p.purchaseTransactionId) } : {}),
+      ...(await ga4OutboxProperties(d1, p.distinctId, false)),
     },
     occurredAt: p.occurredAt,
-  });
+  };
 }
 
 /** `subscription_cancel_scheduled` / `subscription_cancelled` of a card subscription: once per card. */
@@ -178,7 +222,12 @@ export interface SubscriptionChange {
   /** State after the recompute; null when the member has no row for the plan. */
   after: { status: 'active' | 'expired'; current_period_end: string } | null;
   /** Rail that grants the (new) access end. */
-  provider: 'sepay' | 'dodo';
+  provider: MembershipProvider;
+  /**
+   * Rail whose record change (SePay order, Dodo card) triggered the recompute; the `provider` of an expiry. Only a
+   * change on the rail that granted the access end can end that access, so this is the rail whose access ended.
+   */
+  changedProvider: MembershipProvider;
 }
 
 /**
@@ -209,7 +258,7 @@ export async function queueSubscriptionChange(d1: D1DatabaseLike, c: Subscriptio
     return enqueueServerEvent(d1, {
       event: 'subscription_expired', distinctId: c.userId,
       dedupeKey: subscriptionExpiredKey(c.userId, c.plan, end),
-      properties: { plan: c.plan, period_end: end },
+      properties: { plan: c.plan, period_end: end, provider: c.changedProvider },
       occurredAt: end,
     });
   }

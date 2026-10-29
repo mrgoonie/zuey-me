@@ -344,9 +344,10 @@ export async function applyLocalization(d1: D1DatabaseLike | undefined, slug: st
   const parsed = parseArticleInput({ title: merged.title, excerpt: merged.excerpt, locale, document: merged.document }, 'update');
   const updated = await updateArticle(db, slug, parsed, expected, ctx);
   const resultHash = await sha256Hex(JSON.stringify([merged.title.trim(), merged.excerpt.trim(), parsed.document]));
-  const written = await getArticle(db, slug, { locale });
-  const actualHash = written && written.locale === locale
-    ? await contentHash({ title: written.title, excerpt: written.excerpt, document: written.draft }) : resultHash;
+  // The saved edition as updateArticle returns it (read back, or built from the rows as written when that read
+  // failed): a second read here could fail after the commit and turn a saved translation into an error.
+  const actualHash = updated.locale === locale
+    ? await contentHash({ title: updated.title, excerpt: updated.excerpt, document: updated.draft }) : resultHash;
   let recorded = true;
   try {
     const now = new Date().toISOString();

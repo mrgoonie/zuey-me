@@ -1,4 +1,5 @@
 /** Guards and text helpers shared by block definitions. */
+import type { BlockValidator, RawBlock } from '../block-definition';
 import { inlineToPlain } from '../inline';
 
 export type Obj = Record<string, unknown>;
@@ -25,4 +26,13 @@ export function plain(s: string | undefined): string {
 /** Visible length of an optional inline-Markdown field. */
 export function plainLength(s: string | undefined): number {
   return s ? inlineToPlain(s).length : 0;
+}
+
+/** Optional boolean option: true, or undefined for false/absent; null when it is not a boolean. */
+export function flag(v: BlockValidator, raw: RawBlock, key: string, path: string): true | undefined | null {
+  const value = raw[key];
+  if (value === undefined || value === null || value === false) return undefined;
+  if (value === true) return true;
+  v.err(`${path}.${key}`, 'must be a boolean');
+  return null;
 }

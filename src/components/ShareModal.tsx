@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 import { X, Link2, QrCode, Check } from 'lucide-react';
 import { BrandIcon } from './BrandIcons';
 import type { Profile } from '../db/types';
+import { showToast } from './feedback/toast-bus';
+import { useEscapeToClose } from './use-escape-to-close';
 
 interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
   profile: Profile;
   lang: 'en' | 'vi';
-  onOpenQr: () => void;
+  /** Opens the QR modal instead; receives where focus should return once that modal closes. */
+  onOpenQr: (returnFocus: HTMLElement | null) => void;
 }
 
 export const ShareModal: React.FC<ShareModalProps> = ({
@@ -18,7 +21,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   lang,
   onOpenQr,
 }) => {
-  const [copied, setCopied] = useState(false);
+  /** 'toast' when the shared toast confirmed the copy, 'inline' when this page has no Toaster. */
+  const [copied, setCopied] = useState<'toast' | 'inline' | null>(null);
+  const titleId = useId();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const returnTarget = useEscapeToClose(isOpen, onClose, { initialFocus: closeButtonRef });
+  const openQr = () => onOpenQr(returnTarget());
 
   if (!isOpen) return null;
 
@@ -29,14 +37,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
   const copyToClipboard = async () => {
     try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(currentUrl);
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      if (typeof navigator === 'undefined' || !navigator.clipboard) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(currentUrl);
     } catch {
-      // Fallback
+      showToast(lang === 'vi' ? 'Không sao chép được liên kết' : 'Could not copy the profile link', 'error');
+      return;
     }
+    const toasted = showToast(lang === 'vi' ? 'Đã sao chép liên kết vào bộ nhớ tạm!' : 'Profile link copied to clipboard!');
+    setCopied(toasted ? 'toast' : 'inline');
+    setTimeout(() => setCopied(null), 2500);
   };
 
   const shareItems = [
@@ -87,22 +96,26 @@ export const ShareModal: React.FC<ShareModalProps> = ({
       label: 'QR Code',
       icon: <QrCode className="w-6 h-6 text-stone-800" />,
       bg: 'bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900',
-      action: onOpenQr,
+      action: openQr,
     },
   ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-      <div 
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 border border-stone-200 overflow-hidden transform transition-all animate-scaleUp"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-stone-100">
-          <h2 className="text-lg font-bold text-stone-900 font-sans tracking-tight">
+          <h2 id={titleId} className="text-lg font-bold text-stone-900 font-sans tracking-tight">
             {lang === 'vi' ? 'Chia sẻ Profile' : 'Share Profile'}
           </h2>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors"
             aria-label="Close"
@@ -154,8 +167,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </div>
         </div>
 
-        {/* Copy Toast Feedback */}
-        {copied && (
+        {/* Inline copy confirmation, only when no shared Toaster shows it */}
+        {copied === 'inline' && (
           <div className="mt-4 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-center text-xs font-semibold flex items-center justify-center gap-1.5 animate-bounce">
             <Check className="w-4 h-4 text-emerald-600" />
             {lang === 'vi' ? 'Đã sao chép liên kết vào bộ nhớ tạm!' : 'Profile link copied to clipboard!'}
@@ -171,7 +184,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             {copied ? (lang === 'vi' ? '✓ Đã sao chép' : '✓ Copied!') : (lang === 'vi' ? 'Sao chép liên kết URL' : 'Copy Profile URL')}
           </button>
           <button
-            onClick={onOpenQr}
+            onClick={openQr}
             className="w-full py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-full font-medium text-xs transition-colors flex items-center justify-center gap-2"
           >
             <QrCode className="w-4 h-4 text-stone-600" />

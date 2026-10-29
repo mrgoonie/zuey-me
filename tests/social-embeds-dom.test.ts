@@ -132,6 +132,19 @@ describe('embeds load when scrolled into view', () => {
     expect(FakeIntersectionObserver.instances[0].disconnected).toBe(true);
   });
 
+  it('an embed inside a toggle or section waits for its own block to reach the viewport', () => {
+    const blocks: Block[] = [
+      { id: 't1', type: 'toggle', summary: 'Mở', blocks: [{ id: 'e1', type: 'embed', url: X_URL, provider: 'x' }] },
+      { id: 's1', type: 'section', width: 'prose', surface: 'none', blocks: [{ id: 'e2', type: 'embed', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', provider: 'youtube' }] },
+    ];
+    const view = mount(React.createElement(renderer.BlockRenderer, { doc: { version: 1, blocks }, autoRunInteractives: true }));
+    expect(FakeIntersectionObserver.instances).toHaveLength(2);
+    expect(view.querySelector('iframe')).toBeNull();
+    const sectionObserver = FakeIntersectionObserver.instances.find(io => io.targets.some(t => t.closest('.zb-toggle') === null));
+    React.act(() => sectionObserver?.fire(true));
+    expect([...view.querySelectorAll('iframe')].map(f => f.getAttribute('src'))).toEqual(['https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ']);
+  });
+
   it('keeps editor previews click-to-load', () => {
     const view = article(X_URL, 'x', false);
     expect(FakeIntersectionObserver.instances).toHaveLength(0);

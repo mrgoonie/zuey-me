@@ -29,18 +29,31 @@ function zoomAt(view: View, nextScale: number, px: number, py: number): View {
 }
 
 /**
- * SSR shows the Mermaid source as a code block. On the client Mermaid is imported lazily
- * (inside the effect only) and renders with securityLevel 'strict', which sanitizes the SVG.
+ * SSR shows the Mermaid source as a code block. On the client Mermaid (~600 KB with its layout
+ * engines) is imported lazily, only once the diagram nears the viewport, and renders with
+ * securityLevel 'strict', which sanitizes the SVG.
  * The SVG always fits the column width; readers zoom (buttons, pinch, Ctrl/⌘ + wheel) and drag to inspect.
  */
 export function DiagramBlock({ block }: { block: DiagramBlockData }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  const [near, setNear] = useState(false);
+  const figureRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const el = figureRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') { setNear(true); return; }
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) { setNear(true); io.disconnect(); }
+    }, { rootMargin: '600px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     // Statically false in the SSR bundle so the bundler drops mermaid from the edge worker.
-    if (import.meta.env.SSR) return;
+    if (import.meta.env.SSR || !near) return;
     import('mermaid')
       .then(async ({ default: mermaid }) => {
         // Natural-size SVG; CSS scales it down to the column width and keeps small diagrams unstretched.
@@ -52,10 +65,10 @@ export function DiagramBlock({ block }: { block: DiagramBlockData }) {
       })
       .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; };
-  }, [block.id, block.source]);
+  }, [block.id, block.source, near]);
 
   return (
-    <figure className="zb-figure">
+    <figure ref={figureRef} className="zb-figure">
       {svg ? (
         <ZoomableDiagram svg={svg} label={block.caption || 'Diagram'} />
       ) : (

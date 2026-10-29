@@ -41,10 +41,17 @@ jobs:
 
       - name: Build Application
         run: bun run build
+        env:
+          # Public GA4 web stream id, inlined at build time (repository variable, not a secret).
+          PUBLIC_GA4_MEASUREMENT_ID: ${{ vars.PUBLIC_GA4_MEASUREMENT_ID }}
 
       # Bundles the scheduler Worker without uploading, so a broken Worker fails the PR.
       - name: Build scheduler Worker
         run: bunx wrangler deploy --dry-run --config workers/scheduler/wrangler.toml --outdir .wrangler/scheduler-dry-run
+
+      # Same for the realtime presence Worker (Durable Object hub behind presence.zuey.me).
+      - name: Build presence Worker
+        run: bunx wrangler deploy --dry-run --config workers/presence/wrangler.toml --outdir .wrangler/presence-dry-run
 
       - name: Deploy to Cloudflare Pages (Production)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.CLOUDFLARE_API_TOKEN != ''
@@ -64,3 +71,13 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config workers/scheduler/wrangler.toml
+
+      # The realtime presence Worker (presence.zuey.me). Deploying keeps its PRESENCE_TICKET_SECRET
+      # secret; set that once with `wrangler secret put` (same value as the Pages secret).
+      - name: Deploy presence Worker (Production)
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config workers/presence/wrangler.toml

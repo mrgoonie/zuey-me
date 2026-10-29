@@ -1,4 +1,8 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
+import { Clapperboard, CloudCog, FileText, Film, KeyRound, Link as LinkIcon, PanelsTopLeft } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { ICON_COMPONENTS as SERVER_ICON_COMPONENTS, resolveIconName as serverResolveIconName } from './blocks/block-icons';
+import type { IconName } from '../lib/blocks/icons';
 
 interface IconProps {
   name: string;
@@ -6,10 +10,84 @@ interface IconProps {
   size?: number;
 }
 
+/** Product marks drawn from bundled Lucide (ISC) glyphs, so no favicon is ever fetched. */
+const PRODUCT_BADGES: Readonly<Record<string, { Icon: LucideIcon; bg: string }>> = {
+  cloud: { Icon: CloudCog, bg: 'bg-sky-600' },
+  vault: { Icon: KeyRound, bg: 'bg-emerald-700' },
+  render: { Icon: PanelsTopLeft, bg: 'bg-violet-700' },
+  multix: { Icon: Clapperboard, bg: 'bg-fuchsia-700' },
+  anymd: { Icon: FileText, bg: 'bg-teal-700' },
+  motion: { Icon: Film, bg: 'bg-orange-600' },
+};
+
+interface GlyphBadgeProps {
+  Icon: LucideIcon;
+  bg: string;
+  iconKey: string;
+  className: string;
+  style?: React.CSSProperties;
+}
+
+const GlyphBadge: React.FC<GlyphBadgeProps> = ({ Icon, bg, iconKey, className, style }) => (
+  <div className={`flex items-center justify-center rounded-full text-white ${bg} ${className}`} style={style} data-icon={iconKey}>
+    <Icon className="w-[64%] h-[64%]" strokeWidth={2.1} aria-hidden="true" focusable="false" />
+  </div>
+);
+
+interface FallbackProps {
+  name: string;
+  className: string;
+  style?: React.CSSProperties;
+}
+
+/** Neutral mark for names with no brand mark and no curated icon; also shown while the icon map loads. */
+const LinkMark: React.FC<Omit<FallbackProps, 'name'>> = ({ className, style }) => (
+  <GlyphBadge Icon={LinkIcon} bg="bg-stone-500" iconKey="link" className={className} style={style} />
+);
+
+interface CuratedResolver {
+  icons: Readonly<Record<IconName, LucideIcon>>;
+  resolve: (name: string) => IconName | null;
+}
+
+/** A curated Lucide icon by name or alias (e.g. "rocket", "database"), or the neutral link mark. */
+const CuratedOrLink: React.FC<FallbackProps & CuratedResolver> = ({ icons, resolve, name, className, style }) => {
+  const glyph = resolve(name);
+  return glyph
+    ? <GlyphBadge Icon={icons[glyph]} bg="bg-stone-700" iconKey={glyph} className={className} style={style} />
+    : <LinkMark className={className} style={style} />;
+};
+
+/**
+ * The curated icon map (~50 KB) and its name list stay out of the eagerly loaded home shell: browsers fetch
+ * them only when a link names something that is not a brand or product mark, while the server renders the
+ * SVG directly. `import.meta.env.SSR` is a build-time constant, so the static imports are dropped from client
+ * bundles (same pattern as BlockRenderer).
+ */
+const LazyCuratedOrLink = lazy(() => import('./blocks/block-icons').then(m => ({
+  default: (props: FallbackProps) => <CuratedOrLink icons={m.ICON_COMPONENTS} resolve={m.resolveIconName} {...props} />,
+})));
+
+/**
+ * The Suspense boundary exists on both sides, so hydration keeps the server SVG until the chunk resolves;
+ * client-only renders show the neutral link mark first and upgrade once the map loads.
+ */
+const CuratedSlot: React.FC<FallbackProps> = (props) => (
+  <Suspense fallback={<LinkMark className={props.className} style={props.style} />}>
+    {import.meta.env.SSR
+      ? <CuratedOrLink icons={SERVER_ICON_COMPONENTS} resolve={serverResolveIconName} {...props} />
+      : <LazyCuratedOrLink {...props} />}
+  </Suspense>
+);
+
 export const BrandIcon: React.FC<IconProps> = ({ name, className = 'w-6 h-6', size }) => {
   const style = size ? { width: size, height: size } : undefined;
+  const key = name.trim().toLowerCase();
 
-  switch (name.toLowerCase()) {
+  const product = PRODUCT_BADGES[key];
+  if (product) return <GlyphBadge {...product} iconKey={key} className={className} style={style} />;
+
+  switch (key) {
     case 'substack':
       return (
         <svg viewBox="0 0 24 24" fill="currentColor" className={className} style={style}>
@@ -212,10 +290,10 @@ export const BrandIcon: React.FC<IconProps> = ({ name, className = 'w-6 h-6', si
         </svg>
       );
     default:
-      return (
-        <div className={`flex items-center justify-center bg-stone-200 text-stone-700 font-semibold rounded-full text-xs ${className}`} style={style}>
-          {name.substring(0, 2).toUpperCase()}
-        </div>
-      );
+      // Any curated Lucide name or alias works without a code change; anything else (including an empty
+      // name) gets a neutral link mark, never text initials.
+      return key
+        ? <CuratedSlot name={key} className={className} style={style} />
+        : <LinkMark className={className} style={style} />;
   }
 };

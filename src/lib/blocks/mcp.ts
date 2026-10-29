@@ -8,7 +8,7 @@ import type { Locale } from '../i18n/locales';
 import { principalActor } from '../taxonomy/admin';
 import {
   SORTS, createArticle, deleteArticle, deleteEdition, getArticle, getArticleView, getRevisionDocument, listArticles, listRevisions,
-  parseArticleInput, publishArticle, setTagsForArticle, toSummary, toWriteReceipt, updateArticle,
+  parseArticleInput, publishArticle, setTagsForArticle, submittedArticleFields, submittedPublishFields, toSummary, toWriteReceipt, updateArticle,
 } from './articles';
 import { discoverArticles } from './discovery';
 import { applyLocalization, prepareLocalization } from './localization-service';
@@ -142,6 +142,11 @@ function discoveryFromArgs(args: Record<string, unknown>) {
   return parseDiscoveryQuery(url);
 }
 
+/** Shared wording of the write receipt in tool descriptions. */
+const RECEIPT_NOTE = 'The response carries a receipt (operation_success, operation, locale, article_revision, edition_draft_revision, published_revision, has_unpublished_changes, submitted_fields, next_action); status still describes the public edition, not this write.';
+/** Write answers when the write committed but the article could not be read back. */
+const READ_BACK_NOTE = 'read_back "failed" means the write committed but the article could not be read back: do not retry (a retry gets 409, slug_taken for article_create); the edition shown, revisions, document and receipt are exact, while tags, topic_tags, category, labels, available_locales and other editions are not loaded (empty, also after article_tags_set), so call article_get for them; an idempotent replay repeats the flag.';
+
 /** Write tools that accept an idempotency_key. */
 const IDEMPOTENT_TOOLS = new Set(['article_create', 'article_update', 'article_publish', 'article_delete', 'article_edition_delete', 'article_tags_set']);
 
@@ -189,15 +194,15 @@ export const articlesMcpModule: McpToolModule = {
       },
     },
     {
-      name: 'article_create', description: 'Admin: create a draft article; its first edition uses locale (default vi). response_mode "summary" omits the saved document from the answer.',
+      name: 'article_create', description: `Admin: create a draft article; its first edition uses locale (default vi). ${RECEIPT_NOTE} ${READ_BACK_NOTE} response_mode "summary" omits the saved document from the answer.`,
       inputSchema: { type: 'object', properties: { ...slugProp, ...metaProps, ...documentProp, ...responseModeProp, ...idempotencyKeyProp }, required: ['slug', 'title'] },
     },
     {
-      name: 'article_update', description: 'Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale; 409 slug_taken when the new slug is used). Translations are written by people, never generated. The response carries a receipt (operation_success, locale, article_revision, edition_draft_revision, published_revision, has_unpublished_changes, submitted_fields, next_action); status still describes the public edition, not this write. response_mode "summary" omits the saved document from the answer (document_blocks and content_hash instead).',
+      name: 'article_update', description: `Admin: update one edition draft (locale; a missing edition is created and needs title) and article metadata; requires expected_revision (409 revision_conflict when stale; 409 slug_taken when the new slug is used). Translations are written by people, never generated. ${RECEIPT_NOTE} ${READ_BACK_NOTE} response_mode "summary" omits the saved document from the answer (document_blocks and content_hash instead).`,
       inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, ...responseModeProp, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision'] },
     },
     {
-      name: 'article_publish', description: 'Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email).',
+      name: 'article_publish', description: `Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email). email_notification.reason "notification_update_failed" means the edition is published but the email step failed; republish with an explicit notify to apply it again. With that reason the returned status is what is stored (e.g. still "scheduled" after a failed notify: false), or "failed" when nothing could be read back, so check it before assuming no email will be sent. ${RECEIPT_NOTE} ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, ...responseModeProp, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision', 'confirm'] },
     },
     {
@@ -213,7 +218,7 @@ export const articlesMcpModule: McpToolModule = {
     { name: 'article_delete', description: 'Admin: soft-delete an article (all editions).', inputSchema: { type: 'object', properties: { ...slugProp, ...idempotencyKeyProp }, required: ['slug'] } },
     { name: 'article_editions', description: 'Admin: list every locale edition of an article with draft/published state.', inputSchema: { type: 'object', properties: { ...slugProp }, required: ['slug'] } },
     {
-      name: 'article_edition_delete', description: 'Admin: delete one non-primary locale edition. Requires expected_revision.',
+      name: 'article_edition_delete', description: `Admin: delete one non-primary locale edition. Requires expected_revision. ${RECEIPT_NOTE} The answer shows the primary edition; its receipt describes the deleted locale (published_revision null, next_action none). ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'locale', 'expected_revision'] },
     },
     {
@@ -221,7 +226,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, revision: { type: 'integer' } }, required: ['slug'] },
     },
     {
-      name: 'article_tags_set', description: 'Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision.',
+      name: 'article_tags_set', description: `Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision. ${RECEIPT_NOTE} Tags are public at once; the receipt describes the primary edition. ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'tags', 'expected_revision'] },
     },
     {
@@ -275,7 +280,7 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
       parseResponseMode(args.response_mode);
       const input = parseArticleInput(await withFetchedDocument(args), 'create');
       const rec = await createArticle(d1, input, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-      return await withSavedDocument(toSummary(rec), rec.draft, args);
+      return await withSavedDocument({ ...toSummary(rec), receipt: toWriteReceipt(rec, 'create', submittedArticleFields(input)) }, rec.draft, args);
     }
     case 'article_update': {
       const actor = await mcpAdminActor(ctx);
@@ -283,15 +288,16 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
       parseResponseMode(args.response_mode);
       const input = parseArticleInput({ ...(await withFetchedDocument(args, fetch, 'update')), slug: args.new_slug }, 'update');
       const rec = await updateArticle(d1, slug, input, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
-      return await withSavedDocument({ ...toSummary(rec), receipt: toWriteReceipt(rec, input) }, rec.draft, args);
+      return await withSavedDocument({ ...toSummary(rec), receipt: toWriteReceipt(rec, 'update', submittedArticleFields(input)) }, rec.draft, args);
     }
     case 'article_publish': {
       const actor = await mcpAdminActor(ctx);
       const responseMode = parseResponseMode(args.response_mode);
       const rec = await publishArticle(d1, requireSlug(args), args.expected_revision, args.confirm, { actor, env: ctx.env, waitUntil: ctx.waitUntil, locale: localeField(args), publishedAt: args.published_at, notify: args.notify });
+      const summary = { ...toSummary(rec), receipt: toWriteReceipt(rec, 'publish', submittedPublishFields(args)) };
       // Clients holding a stale tool schema forward unknown flags as strings.
-      if (args.summary_only === true || args.summary_only === 'true' || responseMode === 'summary') return { ...toSummary(rec), document_blocks: rec.published?.blocks.length ?? 0 };
-      return { ...toSummary(rec), document: rec.published };
+      if (args.summary_only === true || args.summary_only === 'true' || responseMode === 'summary') return { ...summary, document_blocks: rec.published?.blocks.length ?? 0 };
+      return { ...summary, document: rec.published };
     }
     case 'article_localization_prepare': {
       await ctx.requireAdmin();
@@ -316,7 +322,8 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
       const actor = await mcpAdminActor(ctx);
       const locale = localeField(args);
       if (!locale) throw new AppError(400, 'invalid_field', 'locale is required', { field: 'locale' });
-      return toSummary(await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+      const rec = await deleteEdition(d1, requireSlug(args), locale, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+      return { ...toSummary(rec), receipt: toWriteReceipt(rec, 'edition_delete', [], locale) };
     }
     case 'article_revisions': {
       await ctx.requireAdmin();
@@ -334,7 +341,8 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
     }
     case 'article_tags_set': {
       const actor = await mcpAdminActor(ctx);
-      return toSummary(await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil }));
+      const rec = await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
+      return { ...toSummary(rec), receipt: toWriteReceipt(rec, 'tags_set', ['tags']) };
     }
     case 'article_verify_public': {
       await ctx.requireAdmin();

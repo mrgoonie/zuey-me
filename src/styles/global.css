@@ -2,15 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Metric-matched local fallbacks: the web fonts load without blocking render, so the fallback must take the
+   same space or the swap shifts the layout (CLS). Each face is tuned to one local font; a face whose font is
+   missing is skipped, so Android (no Arial) gets the Roboto-tuned one. Vertical metrics come from Capsize.
+   Bold text needs its own faces: with only a regular face the browser fakes bold from it, which is far
+   narrower than the bold web fonts and made card titles and tag rows wrap differently after the swap.
+   size-adjust per weight range is the measured width ratio (web font / local font) over the /articles text
+   in English and Vietnamese; the Roboto values scale the Arial ones by the regular-weight ratio. The browser
+   scales ascent/descent-override by size-adjust, so each face divides the target metrics by its own size-adjust
+   (override = regular override × regular size-adjust ÷ this size-adjust) to keep line-height: normal identical. */
+@font-face { font-family: 'Plus Jakarta Sans Fallback'; src: local('Arial'); font-weight: 100 449; size-adjust: 104.98%; ascent-override: 98.88%; descent-override: 21.15%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback'; src: local('Arial'); font-weight: 450 549; size-adjust: 104.5%; ascent-override: 99.33%; descent-override: 21.25%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback'; src: local('Arial Bold'), local('Arial-BoldMT'); font-weight: 550 649; size-adjust: 99.3%; ascent-override: 104.54%; descent-override: 22.36%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback'; src: local('Arial Bold'), local('Arial-BoldMT'); font-weight: 650 749; size-adjust: 100.5%; ascent-override: 103.29%; descent-override: 22.09%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback'; src: local('Arial Bold'), local('Arial-BoldMT'); font-weight: 750 1000; size-adjust: 101.7%; ascent-override: 102.07%; descent-override: 21.83%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback Roboto'; src: local('Roboto'); font-weight: 100 449; size-adjust: 104.18%; ascent-override: 99.64%; descent-override: 21.31%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback Roboto'; src: local('Roboto'); font-weight: 450 549; size-adjust: 103.7%; ascent-override: 100.10%; descent-override: 21.41%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback Roboto'; src: local('Roboto Bold'), local('Roboto-Bold'); font-weight: 550 649; size-adjust: 98.5%; ascent-override: 105.39%; descent-override: 22.54%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback Roboto'; src: local('Roboto Bold'), local('Roboto-Bold'); font-weight: 650 749; size-adjust: 99.7%; ascent-override: 104.12%; descent-override: 22.27%; line-gap-override: 0%; }
+@font-face { font-family: 'Plus Jakarta Sans Fallback Roboto'; src: local('Roboto Bold'), local('Roboto-Bold'); font-weight: 750 1000; size-adjust: 100.9%; ascent-override: 102.88%; descent-override: 22.00%; line-gap-override: 0%; }
+@font-face { font-family: 'Fraunces Fallback'; src: local('Georgia'); font-weight: 100 549; size-adjust: 105.2%; ascent-override: 92.97%; descent-override: 24.24%; line-gap-override: 0%; }
+@font-face { font-family: 'Fraunces Fallback'; src: local('Georgia Bold'), local('Georgia-Bold'); font-weight: 550 649; size-adjust: 93.1%; ascent-override: 105.05%; descent-override: 27.39%; line-gap-override: 0%; }
+@font-face { font-family: 'Fraunces Fallback'; src: local('Georgia Bold'), local('Georgia-Bold'); font-weight: 650 749; size-adjust: 95.9%; ascent-override: 101.99%; descent-override: 26.59%; line-gap-override: 0%; }
+@font-face { font-family: 'Fraunces Fallback'; src: local('Georgia Bold'), local('Georgia-Bold'); font-weight: 750 849; size-adjust: 97.2%; ascent-override: 100.62%; descent-override: 26.24%; line-gap-override: 0%; }
+@font-face { font-family: 'Fraunces Fallback'; src: local('Georgia Bold'), local('Georgia-Bold'); font-weight: 850 1000; size-adjust: 98.6%; ascent-override: 99.19%; descent-override: 25.86%; line-gap-override: 0%; }
+
 @layer base {
   body {
     background-color: #F5EFEB;
     color: #1c1917;
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', system-ui, -apple-system, sans-serif;
   }
 
   h1, h2, h3, .font-serif {
-    font-family: 'Fraunces', Georgia, serif;
+    font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif;
   }
 }
 

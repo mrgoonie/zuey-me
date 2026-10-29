@@ -38,8 +38,8 @@ describe('PII guard', () => {
     expect(scrubUrl('https://user:pw@zuey.me/x')).toBe('https://zuey.me/x');
   });
 
-  test('keeps harmless parameters such as UTM and search keywords', () => {
-    expect(scrubUrl('https://zuey.me/articles?q=astro&keyword=x&utm_campaign=y')).toBe('https://zuey.me/articles?q=astro&keyword=x&utm_campaign=y');
+  test('keeps harmless parameters such as UTM but drops the site search words', () => {
+    expect(scrubUrl('https://zuey.me/articles?q=astro&keyword=x&utm_campaign=y')).toBe('https://zuey.me/articles?keyword=x&utm_campaign=y');
   });
 
   test('redacts emails, JWTs and secret tokens inside free text', () => {

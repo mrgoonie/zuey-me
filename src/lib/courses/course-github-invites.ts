@@ -3,7 +3,7 @@
  * listed on the course; revocation removes them. Work is queued in `github_invites` and processed
  * by the scheduler with exponential backoff, so a GitHub outage never blocks a payment.
  */
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import type { Row } from '../members/runtime';
 import { iso, membersRuntime, num, randomId, str, strOrNull } from '../members/runtime';
@@ -27,16 +27,22 @@ export interface GithubInviteView {
 
 /** Queues invite (or removal) of one user for every repo of the course; replaces earlier queued work. */
 export async function enqueueGithubSync(d1: D1DatabaseLike, userId: string, course: Pick<CourseRecord, 'id' | 'github_repos'>, action: GithubAction): Promise<number> {
-  const now = iso(membersRuntime.now());
-  for (const repo of course.github_repos) {
-    await d1.prepare(
-      `INSERT INTO github_invites (id, user_id, course_id, repo, action, status, attempts, next_attempt_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
-       ON CONFLICT (user_id, course_id, repo) DO UPDATE SET action = excluded.action, status = 'queued', attempts = 0,
-         last_error = NULL, next_attempt_at = excluded.next_attempt_at, updated_at = excluded.updated_at`
-    ).bind(randomId('ghi'), userId, course.id, repo, action, now, now, now).run();
-  }
+  for (const statement of githubSyncStatements(d1, userId, course, action)) await statement.run();
   return course.github_repos.length;
+}
+
+/** The writes of `enqueueGithubSync` for a D1 batch; with `onlyIf`, none applies unless it holds when the batch runs. */
+export function githubSyncStatements(
+  d1: D1DatabaseLike, userId: string, course: Pick<CourseRecord, 'id' | 'github_repos'>, action: GithubAction, onlyIf?: SqlCondition,
+): D1PreparedStatementLike[] {
+  const now = iso(membersRuntime.now());
+  // The WHERE clause also keeps SQLite from reading the upsert's ON as a join constraint.
+  return course.github_repos.map(repo => d1.prepare(
+    `INSERT INTO github_invites (id, user_id, course_id, repo, action, status, attempts, next_attempt_at, created_at, updated_at)
+     SELECT ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ? WHERE ${onlyIf?.sql ?? 'true'}
+     ON CONFLICT (user_id, course_id, repo) DO UPDATE SET action = excluded.action, status = 'queued', attempts = 0,
+       last_error = NULL, next_attempt_at = excluded.next_attempt_at, updated_at = excluded.updated_at`
+  ).bind(randomId('ghi'), userId, course.id, repo, action, now, now, now, ...(onlyIf?.params ?? [])));
 }
 
 /** Re-queues skipped/failed invites of a user (after they link GitHub in /account). */

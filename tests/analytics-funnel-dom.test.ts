@@ -26,6 +26,7 @@ const { KnowledgesPanel } = await import('../src/components/knowledge/Knowledges
 const { ReadsBrowser } = await import('../src/components/reads/ReadsBrowser');
 const { ZueyAiPanel } = await import('../src/components/ai/ZueyAiPanel');
 const { ZueyOS } = await import('../src/components/os/ZueyOS');
+const { openAppFromAgent } = await import('../src/components/os/webmcp-tools');
 const { CommunityAccess } = await import('../src/components/home/CommunityAccess');
 const { SurveyBlock } = await import('../src/components/blocks/SurveyBlock');
 const { initKnowledgeSearchAnalytics } = await import('../src/scripts/knowledge-search-analytics');
@@ -614,6 +615,46 @@ describe('ZueyOS, community and surveys', () => {
     const opened = since(start).filter(e => e.event === 'app_opened');
     // The AI window is open at boot: reopening it is reported as already open.
     expect(opened.map(plain)).toEqual([{ app: 'pricing', already_open: false }, { app: 'ai', already_open: true }]);
+    window.history.replaceState(null, '', '/');
+  });
+
+  test('app_opened from a WebMCP agent is tagged source webmcp', async () => {
+    const profile = { id: 'p', name: 'Duy', handle: 'duy', email: 'duy@example.com', avatar_url: '/avatar.png', intro_en: '', intro_vi: '', theme: 'default' };
+    await mount(createElement(ZueyOS, { locale: 'vi', profile, links: [], signedIn: false }));
+    const start = captured.length;
+    await act(async () => { openAppFromAgent('reads'); });
+    await settle();
+    const opened = since(start).filter(e => e.event === 'app_opened');
+    expect(plain(opened[0])).toEqual({ app: 'reads', already_open: false, source: 'webmcp' });
+    expect(opened.filter(e => e.props.source === 'webmcp')).toHaveLength(1);
+    // ZueyOS acknowledged the event and wrote the deep link itself. (happy-dom, unlike browsers, also fires
+    // hashchange for that replaceState, so a second, untagged already-open event may follow here.)
+    expect(window.location.hash).toBe('#reads');
+    window.history.replaceState(null, '', '/');
+  });
+
+  test('a #app deep link reopens a window that was minimized after an earlier visit to the same hash', async () => {
+    const profile = { id: 'p', name: 'Duy', handle: 'duy', email: 'duy@example.com', avatar_url: '/avatar.png', intro_en: '', intro_vi: '', theme: 'default' };
+    await mount(createElement(ZueyOS, { locale: 'en', profile, links: [], signedIn: false }));
+    const pricingOpens = (from: number) => since(from).filter(e => e.event === 'app_opened' && e.props.app === 'pricing');
+    let start = captured.length;
+    await act(async () => { window.location.hash = '#pricing'; });
+    await settle();
+    expect(pricingOpens(start).length).toBeGreaterThan(0);
+    const topOf = (wins: HTMLElement[]) => (wins.length ? wins.reduce((a, b) => (Number(b.style.zIndex) > Number(a.style.zIndex) ? b : a)) : null);
+    const visible = () => Array.from(host.querySelectorAll<HTMLElement>('section[data-app]')).filter(w => !w.hidden);
+    const nextTop = topOf(visible().filter(w => w.dataset.app !== 'pricing'))?.dataset.app;
+    const minimize = host.querySelector('[data-app="pricing"] button.mn');
+    if (!minimize) throw new Error('pricing window has no minimize button');
+    await click(minimize);
+    // The hash moves to the window now on top, so the same deep link fires hashchange again.
+    expect(window.location.hash).toBe(nextTop ? `#${nextTop}` : '');
+    start = captured.length;
+    await act(async () => { window.location.hash = '#pricing'; });
+    await settle();
+    expect(pricingOpens(start).map(plain)[0]).toEqual({ app: 'pricing', already_open: false });
+    // Pricing is visible again and stacked above every other window.
+    expect(topOf(visible())?.dataset.app).toBe('pricing');
     window.history.replaceState(null, '', '/');
   });
 
