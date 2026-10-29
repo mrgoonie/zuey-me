@@ -34,7 +34,17 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const d1 = requireMembersDb(env);
     const course = await applyDodoCourseWebhook(d1, env, headers.id, payload);
     if (course) {
-      if (course.order_code && shouldNotifyOrder(course.outcome)) {
+      const capture = course.new_capture;
+      if (course.order_code && capture) {
+        // A new capture on a refunded or disputed order: the order row still holds the closed payment, so the notice
+        // names the captured one.
+        const closed = capture.reason === 'payment_after_refund' ? 'đã hoàn tiền' : 'đang tranh chấp hoặc đã bị chargeback';
+        await announceOrder(locals.runtime, env, {
+          kind: 'course', source: 'dodo', code: course.order_code, outcome: course.outcome,
+          amount: capture.amount, currency: capture.currency ?? 'USD', paymentRef: capture.payment_id,
+          note: `Khoản thanh toán MỚI trên đơn ${closed}. Đơn giữ nguyên trạng thái, không cấp quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.`,
+        });
+      } else if (course.order_code && shouldNotifyOrder(course.outcome)) {
         const row = await d1.prepare('SELECT amount_paid, currency_paid, amount_usd_cents, provider_payment_id FROM course_orders WHERE code = ?')
           .bind(course.order_code).first<Record<string, unknown>>();
         const paid = typeof row?.amount_paid === 'number' ? row.amount_paid : null;
