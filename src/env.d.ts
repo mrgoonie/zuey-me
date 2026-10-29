@@ -37,12 +37,18 @@ export interface RuntimeEnv {
   /** Public R2 bucket `zuey-media` served at https://media.zuey.me (article images uploaded by admins). */
   MEDIA?: R2BucketLike;
   PUBLIC_SITE_URL?: string;
+  /** Cloudflare Image Transformations for article images: unset = on for the zuey.me host only, "off", or a zone origin such as "https://zuey.me". */
+  IMAGE_TRANSFORMS?: string;
   /** PostHog project API key (project "Zuey.me"); production builds fall back to the built-in key. */
   PUBLIC_POSTHOG_KEY?: string;
   /** PostHog ingestion host (default https://us.i.posthog.com). */
   PUBLIC_POSTHOG_HOST?: string;
   /** "1" captures on localhost/dev builds and logs analytics calls to the console (also enables the presence beacon off production hosts). */
   PUBLIC_ANALYTICS_DEBUG?: string;
+  /** GA4 web stream measurement id (`G-…`, public; inlined at build time). Absent = GA4 off. */
+  PUBLIC_GA4_MEASUREMENT_ID?: string;
+  /** GA4 Measurement Protocol API secret (server-only). Absent = server purchase/refund to GA4 skipped. */
+  GA4_API_SECRET?: string;
   // Realtime presence (workers/presence)
   /** HMAC secret signing presence connect tickets; must equal the presence Worker's secret. Missing = ticket endpoint answers 503. */
   PRESENCE_TICKET_SECRET?: string;
@@ -147,13 +153,18 @@ export interface RuntimeEnv {
   AI_MONTHLY_REQUEST_LIMIT?: string;
   /** Optional blended USD per million tokens used for chat cost estimates. */
   AI_EST_COST_USD_PER_MTOK?: string;
-  // Dewee Channel Access Gate (Zuey AI on Telegram): zuey.me is the external entitlement verifier.
+  // Dewee Channel Access Gate (Zuey AI on chat channels): zuey.me is the external entitlement verifier.
   /** Service credential (scope channel_access:check) dewee sends as Bearer; accepted only by the channel access check. */
   CHANNEL_ACCESS_SERVICE_KEY?: string;
-  /** HMAC-SHA256 secret shared with dewee that signs /connect?token=… account-link tokens. */
-  CHANNEL_LINK_TOKEN_SECRET?: string;
-  /** Dewee channel instance id of the gated bot; with DEWEE_GATEWAY_URL/TOKEN enables access/invalidate pushes. */
-  DEWEE_CHANNEL_INSTANCE_ID?: string;
+  // Dewee Connect (hosted account linking): the identity application zuey.me signs member assertions for.
+  /** Identity application id (UUID) from `dewee identity setup`. */
+  DEWEE_APPLICATION_ID?: string;
+  /** Issuer registered on the identity application, exactly. */
+  DEWEE_IDENTITY_ISSUER?: string;
+  /** Assertion secret of the identity application (at least 32 characters). */
+  DEWEE_ASSERTION_SECRET?: string;
+  /** Origin of Dewee's hosted /connect pages; defaults to DEWEE_GATEWAY_URL. */
+  DEWEE_CONNECT_BASE_URL?: string;
   /** Comma-separated hosts (`api.example.com` or `*.example.com`) interactive blocks may GET via /api/v1/sandbox/fetch. */
   SANDBOX_FETCH_ALLOWLIST?: string;
   // Telegram community ($29 plan): bot must be an admin of both groups with invite + ban rights.
@@ -164,6 +175,8 @@ export interface RuntimeEnv {
   TELEGRAM_GROUP_VI_ID?: string;
   /** secret_token passed to setWebhook; Telegram echoes it in X-Telegram-Bot-Api-Secret-Token. */
   TELEGRAM_WEBHOOK_SECRET?: string;
+  /** Comma-separated numeric Telegram user ids of the admins' own accounts; only these are exempt from the community plan check. */
+  ADMIN_TELEGRAM_IDS?: string;
   /** Chat id of the admin group that gets new-order notices from the SePay webhook (sent with TELEGRAM_BOT_TOKEN). */
   TELEGRAM_GROUP_ID_SEPAY_NOTI?: string;
   /** Discord channel webhook URL that also gets the new-order notices (secret: anyone holding it can post). */
@@ -177,6 +190,8 @@ declare global {
         env?: RuntimeEnv;
         /** Cloudflare execution context: work passed to waitUntil keeps running after the response. */
         ctx?: { waitUntil(promise: Promise<unknown>): void };
+        /** Cloudflare Cache API (the colo-local default cache), used for anonymous page HTML. */
+        caches?: { default: import('./lib/edge-html-cache').EdgeCache };
       };
     }
   }

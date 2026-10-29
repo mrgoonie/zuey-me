@@ -51,7 +51,7 @@ export async function readBodyLimited(request: Request, limit: number): Promise<
 }
 
 /** Copies the hub answer with no-store caching (no CORS headers, ever). */
-async function relay(res: Response): Promise<Response> {
+export async function relay(res: Response): Promise<Response> {
   return new Response(await res.text(), {
     status: res.status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },

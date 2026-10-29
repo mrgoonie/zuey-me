@@ -3,6 +3,7 @@ import type { ArticleView } from './articles';
 import { childBlockLists, findBlock, walkBlocks } from './schema';
 import type { ArticleDocument, Block } from './schema';
 import { sha256Hex, stableStringify } from './schema-view';
+import { columnOf, isProseColumn } from './table-data';
 
 /** How much of an article an agent reads; `full` (the default) is the complete document. */
 export const READ_MODES = ['summary', 'outline', 'translatables', 'section', 'full'] as const;
@@ -75,6 +76,8 @@ function outlineLabel(block: Block): string | undefined {
     case 'chart': return block.title ? trimLabel(block.title) : undefined;
     case 'survey': return trimLabel(block.question);
     case 'file': return trimLabel(block.name);
+    case 'tabs': return trimLabel(block.tabs.map(t => t.label).join(' | '));
+    case 'stat': case 'comparison': case 'progress': return block.title ? trimLabel(block.title) : undefined;
     default: return undefined;
   }
 }
@@ -117,13 +120,20 @@ function blockTexts(block: Block): TextField[] {
     case 'image': return [...text('alt', block.alt), ...text('caption', block.caption)];
     case 'embed': case 'diagram': case 'math': return text('caption', block.caption);
     case 'table': return [
+      ...text('title', block.title),
       ...block.headers.flatMap((h, i) => text(`headers.${i}`, h)),
-      ...block.rows.flatMap((row, r) => row.flatMap((cell, c) => text(`rows.${r}.${c}`, cell))),
+      ...block.rows.flatMap((row, r) => row.flatMap((cell, c) => (isProseColumn(columnOf(block, c)) ? text(`rows.${r}.${c}`, cell) : []))),
+      ...text('caption', block.caption),
     ];
     case 'chart': return [
       ...text('title', block.title),
-      ...block.labels.flatMap((l, i) => text(`labels.${i}`, l)),
+      // ISO date labels are data, not prose.
+      ...(block.x?.format === 'date' ? [] : block.labels.flatMap((l, i) => text(`labels.${i}`, l))),
       ...block.series.flatMap((s, i) => text(`series.${i}.name`, s.name)),
+      ...(['x', 'y', 'y2'] as const).flatMap(k => [...text(`${k}.title`, block[k]?.title), ...text(`${k}.unit`, block[k]?.unit)]),
+      ...(block.references ?? []).flatMap((r, i) => text(`references.${i}.label`, r.label)),
+      ...(block.annotations ?? []).flatMap((a, i) => text(`annotations.${i}.text`, a.text)),
+      ...text('caption', block.caption),
     ];
     case 'survey': return [...text('question', block.question), ...block.options.flatMap((o, i) => text(`options.${i}.label`, o.label))];
     case 'interactive': return [...text('title', block.title), ...text('caption', block.caption)];
@@ -137,6 +147,28 @@ function blockTexts(block: Block): TextField[] {
     case 'toggle': return text('summary', block.summary);
     case 'icon': return text('label', block.label);
     case 'card': return [...text('title', block.title), ...text('image.alt', block.image?.alt), ...text('footer', block.footer)];
+    case 'tabs': return block.tabs.flatMap((t, i) => text(`tabs.${i}.label`, t.label));
+    case 'stat': return [
+      ...text('title', block.title),
+      ...block.items.flatMap((s, i) => [
+        ...text(`items.${i}.label`, s.label), ...text(`items.${i}.unit`, s.unit), ...text(`items.${i}.delta.label`, s.delta?.label), ...text(`items.${i}.note`, s.note),
+      ]),
+    ];
+    case 'steps': return block.items.flatMap((s, i) => [...text(`items.${i}.title`, s.title), ...text(`items.${i}.date`, s.date)]);
+    case 'comparison': return [
+      ...text('title', block.title),
+      ...block.options.flatMap((o, i) => [
+        ...text(`options.${i}.name`, o.name), ...text(`options.${i}.badge`, o.badge), ...text(`options.${i}.description`, o.description),
+        ...(o.pros ?? []).flatMap((s, j) => text(`options.${i}.pros.${j}`, s)), ...(o.cons ?? []).flatMap((s, j) => text(`options.${i}.cons.${j}`, s)),
+      ]),
+      ...(block.features ?? []).flatMap((f, i) => [
+        ...text(`features.${i}.label`, f.label), ...f.values.flatMap((x, j) => (typeof x === 'string' ? text(`features.${i}.values.${j}`, x) : [])),
+      ]),
+    ];
+    case 'progress': return [
+      ...text('title', block.title),
+      ...block.items.flatMap((s, i) => [...text(`items.${i}.label`, s.label), ...text(`items.${i}.note`, s.note)]),
+    ];
     case 'code': case 'divider': case 'layout': case 'section': return [];
   }
 }

@@ -5,9 +5,10 @@ import type {
   CalloutBlock, ChecklistBlock, ChecklistItem, CodeBlock, DividerBlock, HeadingBlock, IconBlock, ListBlock, ParagraphBlock, QuoteBlock,
 } from '../schema';
 import { ICON_ALIGNS, ICON_PIXELS, ICON_SIZES, ICON_TONES } from '../icons';
+import { LINE_RANGES_RE, codeDisplay, displayLines, parseLineRanges } from '../code-syntax';
 import { fence, quoteLines } from '../markdown-format';
 import { iconName, inline, short } from './schema-fragments';
-import { isInt, isObj, isOneOf, plain, plainLength } from './shared';
+import { flag, isInt, isObj, isOneOf, plain, plainLength } from './shared';
 
 const T = LIMITS.text;
 const S = LIMITS.shortText;
@@ -129,19 +130,95 @@ export const callout: BlockDefinition<CalloutBlock> = {
   },
 };
 
+/** Example code block using the optional presentation fields (also returned by the block_schema MCP tool). */
+export const CODE_BLOCK_EXAMPLE = {
+  type: 'code', language: 'ts', filename: 'src/config.ts', lineNumbers: true, highlightLines: '2',
+  diff: true, code: ' export const config = {\n-  retries: 1,\n+  retries: 3,\n };',
+} as const;
+
+/** One line, no backticks or double quotes: the name also goes into the Markdown fence's info string. */
+const FILENAME_RE = /^[^\u0000-\u001f\u007f`"]+$/;
+/**
+ * Bidirectional formatting characters can make a shown path read differently from the real one. They are
+ * removed rather than rejected, so a stored block that has them keeps rendering (stored reads drop invalid blocks).
+ */
+const BIDI_CONTROLS_RE = /[؜‎‏‪-‮⁦-⁩]/g;
+
+
+/** Markdown fence info string: the language, then `title="…"`, `{lines}` and `showLineNumbers` metadata. */
+function codeInfo(b: CodeBlock): string {
+  const parts = [b.diff ? `diff${b.language ? ` lang="${b.language}"` : ''}` : b.language];
+  if (b.filename) parts.push(`title="${b.filename}"`);
+  if (b.highlightLines) parts.push(`{${b.highlightLines}}`);
+  if (b.lineNumbers) parts.push('showLineNumbers');
+  return parts.filter(Boolean).join(' ');
+}
+
 export const code: BlockDefinition<CodeBlock> = {
   type: 'code',
   validate(v, raw, { id, path }) {
     const language = v.str(raw, 'language', path, 40, { optional: true }) ?? '';
     if (language && !/^[\w+#.-]+$/.test(language)) { v.err(`${path}.language`, 'contains invalid characters'); return undefined; }
     const source = v.str(raw, 'code', path, LIMITS.code);
-    return source === undefined ? undefined : { id, type: 'code', language, code: source };
+    const filename = v.str(raw, 'filename', path, LIMITS.codeFilename, { optional: true })?.replace(BIDI_CONTROLS_RE, '').trim();
+    if (filename && !FILENAME_RE.test(filename)) { v.err(`${path}.filename`, 'must be one line without backticks or double quotes'); return undefined; }
+    const lineNumbers = flag(v, raw, 'lineNumbers', path);
+    const diff = flag(v, raw, 'diff', path);
+    const wrap = flag(v, raw, 'wrap', path);
+    const collapseAfter = raw.collapseAfter ?? undefined;
+    if (collapseAfter !== undefined && !isInt(collapseAfter, LIMITS.codeCollapseMin, LIMITS.codeCollapseMax)) {
+      v.err(`${path}.collapseAfter`, `must be an integer from ${LIMITS.codeCollapseMin} to ${LIMITS.codeCollapseMax}`);
+      return undefined;
+    }
+    const rangesRaw = v.str(raw, 'highlightLines', path, 200, { optional: true });
+    let highlightLines: string | undefined;
+    if (rangesRaw?.trim() && source !== undefined) {
+      const ranges = parseLineRanges(rangesRaw);
+      const lineCount = displayLines(codeDisplay({ code: source, language, diff: diff === true }).text).length;
+      if (!ranges) v.err(`${path}.highlightLines`, 'must list line numbers and ranges such as "2,4-6"');
+      else if (ranges.length > LIMITS.codeLineRanges) v.err(`${path}.highlightLines`, `must have at most ${LIMITS.codeLineRanges} ranges`);
+      else if (ranges.some(([from, to]) => from < 1 || to < from || to > lineCount)) {
+        v.err(`${path}.highlightLines`, `ranges must go upwards within lines 1–${lineCount}`);
+      } else highlightLines = rangesRaw.replace(/\s+/g, '');
+    }
+    if (source === undefined || lineNumbers === null || diff === null || wrap === null) return undefined;
+    return {
+      id, type: 'code', language, code: source,
+      ...(filename ? { filename } : {}),
+      ...(lineNumbers ? { lineNumbers } : {}),
+      ...(highlightLines ? { highlightLines } : {}),
+      ...(diff ? { diff } : {}),
+      ...(wrap ? { wrap } : {}),
+      ...(collapseAfter !== undefined ? { collapseAfter } : {}),
+    };
   },
-  markdown: b => fence(b.code, b.language),
-  searchText: b => [b.code],
-  aiText: b => b.code,
-  weight: b => b.code.length,
-  schema: { properties: { language: { type: 'string', maxLength: 40 }, code: { type: 'string', maxLength: LIMITS.code } }, required: ['code'] },
+  markdown: b => fence(b.code, codeInfo(b)),
+  searchText: b => (b.filename ? [b.filename, b.code] : [b.code]),
+  aiText: b => (b.filename ? `${b.filename}\n${b.code}` : b.code),
+  weight: b => b.code.length + (b.filename?.length ?? 0),
+  schema: {
+    properties: {
+      language: { type: 'string', maxLength: 40 },
+      code: { type: 'string', maxLength: LIMITS.code },
+      filename: { type: 'string', maxLength: LIMITS.codeFilename, description: 'File name or path shown above the code (one line, no backticks or double quotes)' },
+      lineNumbers: { type: 'boolean', default: false, description: 'Show a line number gutter (numbers are never copied)' },
+      highlightLines: {
+        type: 'string', maxLength: 200, pattern: LINE_RANGES_RE.source,
+        description: `Lines to emphasise, 1-based, comma-separated numbers and ranges such as "2,4-6" (at most ${LIMITS.codeLineRanges} ranges, within the code's lines)`,
+      },
+      diff: {
+        type: 'boolean', default: false,
+        description: 'Each line starts with a marker: + added, - removed, a space for context. The marker is shown in the gutter, not as code; the copy button copies the code after the change (added and context lines, markers removed). language still picks the highlighter',
+      },
+      wrap: { type: 'boolean', default: false, description: 'Soft-wrap long lines by default instead of scrolling sideways; readers can switch' },
+      collapseAfter: {
+        type: 'integer', minimum: LIMITS.codeCollapseMin, maximum: LIMITS.codeCollapseMax,
+        description: 'Code longer than this many lines starts collapsed to that height (scrollable) with a button to show it all',
+      },
+    },
+    required: ['code'],
+    extra: { examples: [CODE_BLOCK_EXAMPLE] },
+  },
 };
 
 export const divider: BlockDefinition<DividerBlock> = {

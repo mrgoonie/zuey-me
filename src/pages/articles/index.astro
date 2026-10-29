@@ -34,6 +34,8 @@ let total = 0;
 let hasMore = false;
 let semantic = false;
 let failed = false;
+// The facets do not depend on the list, so both load at once (each D1 round trip adds latency far from the database).
+const facetsLoad = publicTaxonomy(env.DB, listLocale).catch(() => ({ tags: [], categories: [], labels: [] }));
 try {
   const principal = await resolvePrincipal(Astro.request, env);
   const result = await discoverArticles(principal, env, { ...query, locale: listLocale }, throughPageWindow(page));
@@ -45,7 +47,7 @@ try {
   console.error('Article discovery failed:', err instanceof Error ? err.message : 'unknown');
   failed = true;
 }
-const facets = await publicTaxonomy(env.DB, listLocale).catch(() => ({ tags: [], categories: [], labels: [] }));
+const facets = await facetsLoad;
 
 const filtering = Boolean(query.q || query.category || query.tag || query.label || query.access || (query.sort && query.sort !== 'new'));
 // Search results depend on the reader's entitlements (snippets); plain listings are public.

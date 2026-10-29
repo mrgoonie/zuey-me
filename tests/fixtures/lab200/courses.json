@@ -1,0 +1,263 @@
+{
+  "version": 1,
+  "locale": "vi",
+  "courses": [
+    {
+      "slug": "agent-harness-foundations",
+      "url": "https://200lab.io/courses/agent-harness-foundations",
+      "jsonUrl": "https://200lab.io/courses/agent-harness-foundations.json",
+      "title": "Agent Harness Foundations",
+      "subtitle": "Build được một Agent chưa đủ, vận hành nó đáng tin mới là phần khó",
+      "summary": "Khóa học nền tảng về Harness — phần khung quanh model quyết định một Agent chạy có kiểm soát hay không. Bạn học cách phân biệt LLM Call, Workflow và Agent, tìm đúng chỗ gây lỗi (control flow, state, permission hay evidence) và kiểm chứng Agent qua những lần chạy lặp lại được, thay vì đổi model rồi cầu may.",
+      "courseType": "course",
+      "learningType": "free_form",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/7d/7d10dab27b878eeb97b71bf30112001ee144303e521c32d1aa20dd5466b2f6d8/generations/3b7588991172f063d96597212486357a0e018d60bec854c770c2a5546b206488",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/7d/7d10dab27b878eeb97b71bf30112001ee144303e521c32d1aa20dd5466b2f6d8/generations/3b7588991172f063d96597212486357a0e018d60bec854c770c2a5546b206488"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/7d/7d10dab27b878eeb97b71bf30112001ee144303e521c32d1aa20dd5466b2f6d8/generations/3b7588991172f063d96597212486357a0e018d60bec854c770c2a5546b206488"
+          }
+        ]
+      },
+      "category": {
+        "slug": "harness",
+        "name": "Harness"
+      },
+      "publishedAt": "2026-09-10T03:03:53.390241Z",
+      "featuredAt": "2026-09-18T08:54:06.15842Z",
+      "lessonCount": 25,
+      "readingMinutes": 322,
+      "kitCount": 23,
+      "ratingAvg": 0,
+      "ratingCount": 0,
+      "studentCount": 217,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 289000,
+            "currency": "VND",
+            "compareAtMinorUnits": 699000
+          }
+        ]
+      }
+    },
+    {
+      "slug": "lam-chu-tu-duy-trong-thoi-dai-ai-tu-duy-he-thong-cach-giao-viec-va-quan-ly-agent",
+      "url": "https://200lab.io/courses/lam-chu-tu-duy-trong-thoi-dai-ai-tu-duy-he-thong-cach-giao-viec-va-quan-ly-agent",
+      "jsonUrl": "https://200lab.io/courses/lam-chu-tu-duy-trong-thoi-dai-ai-tu-duy-he-thong-cach-giao-viec-va-quan-ly-agent.json",
+      "title": "Làm chủ tư duy trong thời đại AI - tư duy hệ thống, cách giao việc và quản lý agent",
+      "subtitle": "Thinking Systematically in the Age of AI",
+      "summary": "Đây là khoá nền tảng về cách nghĩ khi làm việc với AI, xoay quanh tư duy hệ thống. Bạn sẽ biết cách tìm đúng tầng của vấn đề, giao việc cho AI có ranh giới và tự động hóa từng bậc. Thay vì để AI quyết định thay mình, bạn giữ lại quyền kiểm soát bằng cách hiểu rõ cơ chế.",
+      "courseType": "course",
+      "learningType": "free_form",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/09/092dd9c43004cac7d19f1267acbd8322d5ead2f5c02fd424f8dc5a9329247dc6/generations/cbea2773e2faed86628455883c5f6f5232ca0843b18c8351b9ba5c629c615717",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/09/092dd9c43004cac7d19f1267acbd8322d5ead2f5c02fd424f8dc5a9329247dc6/generations/cbea2773e2faed86628455883c5f6f5232ca0843b18c8351b9ba5c629c615717"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/09/092dd9c43004cac7d19f1267acbd8322d5ead2f5c02fd424f8dc5a9329247dc6/generations/cbea2773e2faed86628455883c5f6f5232ca0843b18c8351b9ba5c629c615717"
+          }
+        ]
+      },
+      "category": {
+        "slug": "agent",
+        "name": "Agent"
+      },
+      "publishedAt": "2026-10-01T13:24:28.623069Z",
+      "featuredAt": "2026-10-01T13:26:41.763611Z",
+      "lessonCount": 28,
+      "readingMinutes": 312,
+      "ratingAvg": 0,
+      "ratingCount": 0,
+      "studentCount": 422,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 0,
+            "currency": "VND"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "xay-copilot-ho-tro-nguoi-truc-chat-tu-cau-chuyen-that-den-san-pham-chay-duoc",
+      "url": "https://200lab.io/courses/xay-copilot-ho-tro-nguoi-truc-chat-tu-cau-chuyen-that-den-san-pham-chay-duoc",
+      "jsonUrl": "https://200lab.io/courses/xay-copilot-ho-tro-nguoi-truc-chat-tu-cau-chuyen-that-den-san-pham-chay-duoc.json",
+      "title": "Xây copilot hỗ trợ người trực chat - từ câu chuyện thật đến sản phẩm chạy được",
+      "subtitle": "Các kỹ thuật cần thiết để từng bước xây dựng Chatbot Copilot hỗ trợ người trực chat: mockup trước khi code, khuôn kết quả JSON, BM25 không dấu, grounding, hybrid search, agent gọi tool chỉ đọc, trace, test với fake model và đo chi phí",
+      "summary": "Khóa học thực hành, trong đó bạn dựng một copilot AI soạn sẵn gợi ý để người trực chat đọc, sửa rồi tự bấm gửi cho khách. Bạn giao từng step kit cho coding agent của bạn, duyệt kế hoạch, chạy checkpoint, và cuối khóa học có trên máy một copilot chạy được ở hai chế độ: một lời gọi model và agent tự tra cứu.",
+      "courseType": "course",
+      "learningType": "free_form",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/21/21f9550438f81cd7220d837f2e224eacf24b4dd6faf32151b1ba946ae9f09728/generations/6495c7f9ffee91be9efb79edb974b6241b62c161e11c992a99ca8c7bd33b71b5",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/21/21f9550438f81cd7220d837f2e224eacf24b4dd6faf32151b1ba946ae9f09728/generations/6495c7f9ffee91be9efb79edb974b6241b62c161e11c992a99ca8c7bd33b71b5"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/21/21f9550438f81cd7220d837f2e224eacf24b4dd6faf32151b1ba946ae9f09728/generations/6495c7f9ffee91be9efb79edb974b6241b62c161e11c992a99ca8c7bd33b71b5"
+          }
+        ]
+      },
+      "category": {
+        "slug": "agent",
+        "name": "Agent"
+      },
+      "publishedAt": "2026-10-08T06:08:19.425858Z",
+      "featuredAt": "2026-10-08T06:07:42.71685Z",
+      "lessonCount": 26,
+      "readingMinutes": 426,
+      "kitCount": 20,
+      "ratingAvg": 0,
+      "ratingCount": 0,
+      "studentCount": 86,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 199000,
+            "currency": "VND",
+            "compareAtMinorUnits": 599000
+          }
+        ]
+      }
+    },
+    {
+      "slug": "tim-hieu-cac-file-du-lieu-thuong-gap-json-jsonl-csv-yaml-va-markdown-frontmatter",
+      "url": "https://200lab.io/courses/tim-hieu-cac-file-du-lieu-thuong-gap-json-jsonl-csv-yaml-va-markdown-frontmatter",
+      "jsonUrl": "https://200lab.io/courses/tim-hieu-cac-file-du-lieu-thuong-gap-json-jsonl-csv-yaml-va-markdown-frontmatter.json",
+      "title": "Hiểu chuẩn dữ liệu để \"Giao tiếp\" hiệu quả với AI",
+      "subtitle": "Reading and safely editing JSON, JSONL, CSV, YAML and Markdown frontmatter",
+      "summary": "Khoá nền tảng miễn phí cho người không lập trình về năm định dạng file văn bản hay gặp: JSON, JSONL, CSV, YAML và Markdown có frontmatter. Bạn học cách đọc cấu trúc của từng loại, sửa một chỗ nhỏ mà không làm hỏng file, rồi kiểm lại trước khi gửi đi. Vì file hợp lệ chưa chắc là file đúng.",
+      "courseType": "course",
+      "learningType": "free_form",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/8e/8e488a037d7314ae90332bf5f86baffb29afcaa8a104afe052a99824f2b65ad6/generations/34539c9cff61f4232d760cf1e2aa07e91d0d7c572c87d35a4e5ebe51b959a8c1",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/8e/8e488a037d7314ae90332bf5f86baffb29afcaa8a104afe052a99824f2b65ad6/generations/34539c9cff61f4232d760cf1e2aa07e91d0d7c572c87d35a4e5ebe51b959a8c1"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/8e/8e488a037d7314ae90332bf5f86baffb29afcaa8a104afe052a99824f2b65ad6/generations/34539c9cff61f4232d760cf1e2aa07e91d0d7c572c87d35a4e5ebe51b959a8c1"
+          }
+        ]
+      },
+      "category": {
+        "slug": "ai",
+        "name": "AI"
+      },
+      "publishedAt": "2026-09-23T03:15:37.032035Z",
+      "lessonCount": 8,
+      "readingMinutes": 129,
+      "ratingAvg": 0,
+      "ratingCount": 0,
+      "studentCount": 174,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 0,
+            "currency": "VND"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "operating-ai-agents-in-production",
+      "url": "https://200lab.io/courses/operating-ai-agents-in-production",
+      "jsonUrl": "https://200lab.io/courses/operating-ai-agents-in-production.json",
+      "title": "Vận hành AI agent ở production - trace, guardrail, prompt injection, chi phí, release và xử lý sự cố",
+      "subtitle": "Bạn vận hành agent có tool ghi dữ liệu: trace, gate và approval, prompt injection, ngân sách của run, chi phí model, release.",
+      "summary": "Khóa thực hành vận hành AI agent có tool ghi dữ liệu ở production. Bạn học cách đọc trace, đặt guardrail và bước duyệt cho mỗi tool ghi, giảm thiệt hại do prompt injection, theo dõi chi phí model, đóng gói release và xử lý sự cố. Bạn dựng chốt chặn kiểm tra được bằng code thay vì sửa prompt rồi hy vọng model làm đúng.",
+      "courseType": "course",
+      "learningType": "free_form",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/29/29f621368fe2ed03ef1e053fd8aa9df2ad5707586e89718b95d34567bbfe4082/generations/411ab6ad9116fa7f4f50f5f2c72f47feff2a462e57251a13e67459d38c42586f",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/29/29f621368fe2ed03ef1e053fd8aa9df2ad5707586e89718b95d34567bbfe4082/generations/411ab6ad9116fa7f4f50f5f2c72f47feff2a462e57251a13e67459d38c42586f"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/29/29f621368fe2ed03ef1e053fd8aa9df2ad5707586e89718b95d34567bbfe4082/generations/411ab6ad9116fa7f4f50f5f2c72f47feff2a462e57251a13e67459d38c42586f"
+          }
+        ]
+      },
+      "category": {
+        "slug": "harness",
+        "name": "Harness"
+      },
+      "publishedAt": "2026-10-21T07:09:30.236023Z",
+      "lessonCount": 37,
+      "readingMinutes": 767,
+      "kitCount": 21,
+      "ratingAvg": 0,
+      "ratingCount": 0,
+      "studentCount": 2,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 249000,
+            "currency": "VND",
+            "compareAtMinorUnits": 699000
+          }
+        ]
+      }
+    },
+    {
+      "slug": "thiet-ke-api-giua-cac-service-error-model-versioning-va-contract-test",
+      "url": "https://200lab.io/courses/thiet-ke-api-giua-cac-service-error-model-versioning-va-contract-test",
+      "jsonUrl": "https://200lab.io/courses/thiet-ke-api-giua-cac-service-error-model-versioning-va-contract-test.json",
+      "title": "Thiết kế API giữa các service - error model, versioning và contract test",
+      "subtitle": "Service-to-service API design: status codes, Problem Details error model, schema validation, keyset cursor pagination, long-running operations, OpenAPI contracts, versioning, deprecation, consumer-driven contract tests, webhooks, gRPC, GraphQL",
+      "summary": "Khoá học về thiết kế API giữa các service, xoay quanh contract: mọi thứ trong request và response mà consumer đã viết code dựa vào. Bạn chọn status code và error model, phân trang bằng cursor, nhận ra breaking change, tắt version cũ theo số liệu, chặn lỗi bằng contract test, rồi áp dụng cho gRPC và GraphQL.",
+      "courseType": "course",
+      "learningType": "free_form",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/96/966c6e24efc22027d1d101b50c194b0ee7ac82f0fa51bfbd62b8acccd9647e7e/generations/ab36e2e0191e972909a5c865ca4faa35e6e51d3fd18c699a29fe31839daeaf9b",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/96/966c6e24efc22027d1d101b50c194b0ee7ac82f0fa51bfbd62b8acccd9647e7e/generations/ab36e2e0191e972909a5c865ca4faa35e6e51d3fd18c699a29fe31839daeaf9b"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/96/966c6e24efc22027d1d101b50c194b0ee7ac82f0fa51bfbd62b8acccd9647e7e/generations/ab36e2e0191e972909a5c865ca4faa35e6e51d3fd18c699a29fe31839daeaf9b"
+          }
+        ]
+      },
+      "category": {
+        "slug": "architecture",
+        "name": "Architecture"
+      },
+      "publishedAt": "2026-10-05T02:56:08.537366Z",
+      "lessonCount": 25,
+      "readingMinutes": 498,
+      "kitCount": 4,
+      "ratingAvg": 0,
+      "ratingCount": 0,
+      "studentCount": 72,
+      "pricing": {
+        "state": "unavailable",
+        "prices": []
+      }
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import React from 'react';
 import { BookText, GraduationCap } from 'lucide-react';
 import type { Profile } from '../../db/types';
 import type { Locale } from '../../lib/i18n/locales';
+import { Skeleton } from '../feedback/Skeleton';
 import { ContributionGraph, useContributionCalendar } from '../home/ContributionGraph';
 import type { HomeStrings } from '../home/home-i18n';
 import { useMediaQuery } from '../home/motion';
@@ -67,7 +68,7 @@ export const MobileHome: React.FC<MobileHomeProps> = ({ locale, profile, strings
             strings={homeStrings.activity.calendar}
           />
         ) : (
-          <span className="os-home-skel" aria-hidden="true" />
+          <Skeleton label={homeStrings.activity.loading} rows={[96]} decorative />
         )}
       </button>
 

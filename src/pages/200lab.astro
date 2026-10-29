@@ -1,14 +1,14 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { Lab200Courses } from '../components/lab200/Lab200Courses';
+import { Lab200Catalog } from '../components/lab200/Lab200Catalog';
 import { runtimeWaitUntil } from '../lib/blocks/articles';
 import { LOCALE_LABELS, resolveLocale } from '../lib/i18n/locales';
 import { lab200Copy } from '../lib/lab200/copy';
-import { getLab200Snapshot } from '../lib/lab200/store';
+import { emptyLab200Catalog, getLab200Catalog } from '../lib/lab200/store';
 
 const runtime = Astro.locals.runtime;
-const snapshot = await getLab200Snapshot(runtime?.env?.DB, { waitUntil: runtimeWaitUntil(runtime) })
-  .catch(() => ({ courses: [], syncedAt: null }));
+const catalog = await getLab200Catalog(runtime?.env?.DB, { waitUntil: runtimeWaitUntil(runtime) })
+  .catch(() => emptyLab200Catalog());
 const locale = resolveLocale(Astro.request);
 const t = lab200Copy(locale);
 Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
@@ -22,5 +22,5 @@ Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
 >
   <!-- 200lab design tokens use Inter and JetBrains Mono. -->
   <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" />
-  <Lab200Courses client:load snapshot={snapshot} locale={locale} variant="page" />
+  <Lab200Catalog client:load catalog={catalog} locale={locale} variant="page" />
 </Layout>

@@ -4,6 +4,7 @@ import type { PublicTaxonomy } from '../../lib/taxonomy/public';
 import { ArticleCard } from './ArticleCard';
 import type { CardArticle } from './ArticleCard';
 import { knowledgeStrings } from './strings';
+import type { ImageTransforms } from '../../lib/media/image-transform';
 import { track } from '../../lib/analytics/client';
 import { filterValue } from '../../lib/analytics/engagement';
 
@@ -34,7 +35,8 @@ function toTaxonomy(data: unknown): PublicTaxonomy | null {
  * Compact "Zuey's Knowledges" panel for the homepage right column: latest articles with entitlement
  * icons, public tags and thumbnails. Search and filters stay collapsed until the visitor opens them.
  */
-export function KnowledgesPanel({ locale }: { locale: Locale }) {
+/** `imageTransforms` is resolved on the server (request host and IMAGE_TRANSFORMS) so the flag applies here too. */
+export function KnowledgesPanel({ locale, imageTransforms = null }: { locale: Locale; imageTransforms?: ImageTransforms | null }) {
   const t = knowledgeStrings(locale);
   const ids = useId();
   const [open, setOpen] = useState(false);
@@ -167,8 +169,9 @@ export function KnowledgesPanel({ locale }: { locale: Locale }) {
           <p className="text-sm text-stone-500">{active ? t.noResults : t.noArticles}</p>
         )}
         {items !== null && items.length > 0 && (
+          // Items exist only after the client fetch, so `location` is available here.
           <ul className="flex flex-col gap-2 list-none p-0 m-0">
-            {items.map(a => <li key={`${a.slug}-${a.locale}`}><ArticleCard article={a} uiLocale={locale} compact headingLevel={3} /></li>)}
+            {items.map(a => <li key={`${a.slug}-${a.locale}`}><ArticleCard article={a} uiLocale={locale} compact headingLevel={3} imageTransforms={imageTransforms} /></li>)}
           </ul>
         )}
       </div>

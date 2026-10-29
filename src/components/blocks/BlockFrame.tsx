@@ -57,6 +57,8 @@ export interface BlockFrameProps {
   copyText?: () => string;
   /** File saved by the download button (computed on click). */
   download?: () => BlockDownload;
+  /** Further download buttons, each with its own label (computed on click). */
+  downloads?: BlockFrameDownload[];
   labels?: Partial<BlockFrameLabels>;
   children?: ReactNode;
 }
@@ -73,6 +75,11 @@ export function usePrefersReducedMotion(): boolean {
     return () => query.removeEventListener('change', onChange);
   }, []);
   return reduced;
+}
+
+export interface BlockFrameDownload {
+  label: string;
+  file: () => BlockDownload;
 }
 
 interface Capabilities { fullscreen: boolean; copy: boolean; download: boolean }
@@ -99,7 +106,7 @@ function saveFile({ filename, data, type }: BlockDownload): void {
 }
 
 export function BlockFrame({
-  title, caption, className, state = 'ready', fallback, errorMessage, fullscreen = false, copyText, download, labels, children,
+  title, caption, className, state = 'ready', fallback, errorMessage, fullscreen = false, copyText, download, downloads, labels, children,
 }: BlockFrameProps) {
   const text = { ...BLOCK_FRAME_LABELS, ...labels };
   const frameRef = useRef<HTMLElement>(null);
@@ -122,7 +129,8 @@ export function BlockFrame({
 
   const showFullscreen = Boolean(caps?.fullscreen && fullscreen);
   const showCopy = Boolean(caps?.copy && copyText);
-  const showDownload = Boolean(caps?.download && download);
+  const files: BlockFrameDownload[] = caps?.download ? [...(download ? [{ label: text.download, file: download }] : []), ...(downloads ?? [])] : [];
+  const showDownload = files.length > 0;
   const hasToolbar = showFullscreen || showCopy || showDownload;
 
   const toggleFullscreen = () => {
@@ -153,9 +161,10 @@ export function BlockFrame({
               {showCopy && (
                 <button type="button" className="zb-frame-btn" onClick={copy}>{copied ? text.copied : text.copy}</button>
               )}
-              {showDownload && download && (
-                <button type="button" className="zb-frame-btn" onClick={() => saveFile(download())}>{text.download}</button>
-              )}
+              {files.map(f => (
+                <button type="button" className="zb-frame-btn" key={f.label}
+                  onClick={() => saveFile(f.file())}>{f.label}</button>
+              ))}
               {showFullscreen && (
                 <button type="button" className="zb-frame-btn" onClick={toggleFullscreen}>
                   {isFullscreen ? text.exitFullscreen : text.fullscreen}

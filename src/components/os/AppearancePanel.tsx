@@ -1,25 +1,30 @@
 import React, { useId, useRef } from 'react';
 import { ImagePlus, Video } from 'lucide-react';
-import { ACCENTS, ACCENT_IDS, THEME_MODES, WALLPAPERS, type Look } from './look';
+import { ACCENTS, ACCENT_IDS, THEME_MODES, WALLPAPERS, glassEnabled, type Look } from './look';
 import type { OsStrings } from './os-i18n';
 
 interface AppearancePanelProps {
   look: Look;
   hasImage: boolean;
-  message: string;
   strings: OsStrings['look'];
   onChange: (patch: Partial<Look>) => void;
   onImage: (file: File) => void;
   onReset: () => void;
 }
 
-/** Appearance window: theme mode, accent colour, wallpaper presets, photo upload and dim. */
-export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage, message, strings, onChange, onImage, onReset }) => {
+/**
+ * Appearance window: theme mode, accent colour, the Liquid Glass switch, wallpaper presets, photo upload and dim.
+ * Confirmations and upload errors are reported by the caller through the shared toast.
+ */
+export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage, strings, onChange, onImage, onReset }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const dimId = useId();
   const modeId = useId();
   const accentId = useId();
   const wallId = useId();
+  const glassId = useId();
+  const glassHintId = useId();
+  const glassOn = glassEnabled(look);
 
   const pickImage = () => fileRef.current?.click();
 
@@ -54,6 +59,24 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage
               onClick={() => onChange({ accent: a })}
             />
           ))}
+        </div>
+      </section>
+
+      <section className="os-ap-sec" aria-labelledby={glassId}>
+        <h3 id={glassId}>{strings.glass}</h3>
+        <div className="os-ap-switch-row">
+          <p id={glassHintId} className="os-ap-hint">{strings.glassHint}</p>
+          <button
+            type="button"
+            role="switch"
+            className="os-ap-switch"
+            aria-checked={glassOn}
+            aria-labelledby={glassId}
+            aria-describedby={glassHintId}
+            onClick={() => onChange({ glass: !glassOn })}
+          >
+            <span aria-hidden="true" />
+          </button>
         </div>
       </section>
 
@@ -96,7 +119,6 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ look, hasImage
           <button type="button" className="os-btn os-btn--ghost" onClick={onReset}>{strings.reset}</button>
         </div>
         <p className="os-ap-hint">{strings.uploadHint}</p>
-        <p className="os-ap-msg" role="status" aria-live="polite">{message}</p>
         {(look.wallpaper === 'image' || look.wallpaper === 'video') && (
           <label className="os-ap-dim" htmlFor={dimId}>
             <span>{strings.dim}<output htmlFor={dimId}>{look.dim}%</output></span>

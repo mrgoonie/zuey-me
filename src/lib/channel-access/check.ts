@@ -8,42 +8,52 @@ import { requireMembersDb, sha256Hex, siteUrl } from '../members/runtime';
 import { getEntitlements } from '../members/subscriptions';
 import { getUserById } from '../members/users';
 import { timingSafeEqualStrings } from '../payments/sepay';
-import type { ChannelType } from './link-token';
-import { LINK_TOKEN_SHAPE_RE, MAX_LINK_TOKEN_LENGTH, SENDER_ID_RE, SUPPORTED_CHANNEL_TYPES, isChannelType } from './link-token';
-import { findChannelIdentity } from './identities';
 
 /**
- * External entitlement verifier for the dewee Channel Access Gate (contract version 1). Dewee asks, per
- * inbound message (cached by dewee), whether a channel sender may talk to the Zuey AI agent:
- * - `allow`: the sender is linked to a member whose plans grant `agent_chat` (admins always);
- * - `deny` + pricing `link_url`: linked, but no active plan with `agent_chat`;
- * - `link_required` (+ `/connect` link when dewee sent `link_token` in a direct chat; never in a group): the sender
- *   is not linked to any member.
+ * External entitlement verifier for the dewee Channel Access Gate in hosted linking mode (Dewee Connect).
+ * Dewee links chat accounts itself and calls the verifier only for linked senders, with contract version 2
+ * carrying `external_subject` = the zuey.me member id. The decision is one entitlement lookup by that id:
+ * - `allow`: the member's plans grant `agent_chat` (admins always);
+ * - `deny` + pricing `link_url`: no active plan with `agent_chat`;
+ * - `deny` without a link: an unknown or deleted member, or a request without `external_subject`. A sender
+ *   id is never mapped to a member here.
  */
 
 export const CHANNEL_ACCESS_SCOPE = 'channel_access:check';
-export const CHANNEL_ACCESS_CONTRACT_VERSION = 1;
+/** Version 2 is the hosted-mode request; version 1 (partner linking) is still parsed but never allowed. */
+export const CHANNEL_ACCESS_CONTRACT_VERSIONS = [1, 2] as const;
 export const ALLOW_TTL_SECONDS = 300;
 export const DENY_TTL_SECONDS = 30;
-export const LINK_REQUIRED_TTL_SECONDS = 30;
 /** A shorter configured key is treated as missing, so a weak value never opens the verifier. */
 const MIN_SERVICE_KEY_LENGTH = 32;
+/** Dewee's canonical sender id. */
+export const SENDER_ID_RE = /^[A-Za-z0-9_.:@+-]{1,128}$/;
+const CHANNEL_TYPE_RE = /^[a-z0-9_-]{1,32}$/;
+const AUTHN_LEVELS = ['verified', 'channel'] as const;
+type AuthnLevel = (typeof AUTHN_LEVELS)[number];
 const CHAT_TYPES = ['direct', 'group'] as const;
 type ChatType = (typeof CHAT_TYPES)[number];
+type ContractVersion = (typeof CHANNEL_ACCESS_CONTRACT_VERSIONS)[number];
+/** Dewee caps a partner subject at 255 bytes. */
+const MAX_SUBJECT_LENGTH = 255;
 
-export type ChannelAccessDecision = 'allow' | 'deny' | 'link_required';
+export type ChannelAccessDecision = 'allow' | 'deny';
 
 export interface ChannelAccessCheckInput {
-  version: number;
+  version: ContractVersion;
   tenant: string | null;
   agent_key: string | null;
-  channel_type: ChannelType;
+  channel_type: string;
   channel_instance: string | null;
   sender_id: string;
   sender_username: string | null;
   chat_type: ChatType;
   chat_id: string | null;
-  link_token: string | null;
+  /** Dewee principal of the linked sender (version 2). */
+  principal_id: string | null;
+  /** zuey.me member id of the linked sender (version 2); null means no member was established. */
+  external_subject: string | null;
+  authn_level: AuthnLevel | null;
 }
 
 export interface ChannelAccessResult {
@@ -85,22 +95,35 @@ function optionalText(args: Record<string, unknown>, key: string, max: number): 
   return v;
 }
 
-/** Validates a contract-v1 request; throws AppError(400) naming the offending field. */
+function isContractVersion(v: unknown): v is ContractVersion {
+  return v === 1 || v === 2;
+}
+
+function isAuthnLevel(v: string): v is AuthnLevel {
+  return v === 'verified' || v === 'channel';
+}
+
+/** Validates a contract request; throws AppError(400) naming the offending field. */
 export function parseChannelAccessInput(args: Record<string, unknown>): ChannelAccessCheckInput {
-  if (args.version !== CHANNEL_ACCESS_CONTRACT_VERSION) {
-    throw new AppError(400, 'unsupported_version', `Only contract version ${CHANNEL_ACCESS_CONTRACT_VERSION} is supported`, { field: 'version' });
+  const version = args.version;
+  if (!isContractVersion(version)) {
+    throw new AppError(400, 'unsupported_version', `Only contract versions ${CHANNEL_ACCESS_CONTRACT_VERSIONS.join(', ')} are supported`, { field: 'version' });
   }
   const channelType = args.channel_type;
-  if (!isChannelType(channelType)) {
-    throw new AppError(400, 'unsupported_channel', `channel_type must be one of ${SUPPORTED_CHANNEL_TYPES.join(', ')}`, { field: 'channel_type' });
+  if (typeof channelType !== 'string' || !CHANNEL_TYPE_RE.test(channelType)) {
+    throw new AppError(400, 'unsupported_channel', 'channel_type must be a dewee channel type (lower-case letters, digits, _ and -)', { field: 'channel_type' });
   }
   const sender = optionalText(args, 'sender_id', 128);
   if (sender === null || !SENDER_ID_RE.test(sender)) throw invalid('sender_id', 'sender_id is required (letters, digits and _ . : @ + -)');
   const chatType = args.chat_type;
   if (chatType !== 'direct' && chatType !== 'group') throw invalid('chat_type', `chat_type must be one of ${CHAT_TYPES.join(', ')}`);
-  const linkToken = optionalText(args, 'link_token', MAX_LINK_TOKEN_LENGTH);
+  // Identity fields count only in version 2, where Dewee itself established them.
+  const v2 = version === 2;
+  const subject = v2 ? optionalText(args, 'external_subject', MAX_SUBJECT_LENGTH) : null;
+  const authn = v2 ? optionalText(args, 'authn_level', 16) : null;
+  if (authn !== null && !isAuthnLevel(authn)) throw invalid('authn_level', `authn_level must be one of ${AUTHN_LEVELS.join(', ')}`);
   return {
-    version: CHANNEL_ACCESS_CONTRACT_VERSION,
+    version,
     tenant: optionalText(args, 'tenant', 128),
     agent_key: optionalText(args, 'agent_key', 128),
     channel_type: channelType,
@@ -109,8 +132,9 @@ export function parseChannelAccessInput(args: Record<string, unknown>): ChannelA
     sender_username: optionalText(args, 'sender_username', 64),
     chat_type: chatType,
     chat_id: optionalText(args, 'chat_id', 128),
-    // A token that does not look like one is ignored rather than echoed into a URL.
-    link_token: linkToken !== null && LINK_TOKEN_SHAPE_RE.test(linkToken) ? linkToken : null,
+    principal_id: v2 ? optionalText(args, 'principal_id', 64) : null,
+    external_subject: subject !== null && subject.trim() !== '' ? subject : null,
+    authn_level: authn,
   };
 }
 
@@ -121,29 +145,16 @@ export async function subjectRef(userId: string): Promise<string> {
 
 const AGENT_PLAN_NAMES = PLANS.filter(p => p.entitlements.includes('agent_chat')).map(p => p.name).join(', ');
 
-/** Decides whether the sender may talk to the agent. Expects a validated input. */
+/** Decides whether the linked member may talk to the agent. Expects a validated input. */
 export async function checkChannelAccess(d1: D1DatabaseLike, env: RuntimeEnv, input: ChannelAccessCheckInput): Promise<ChannelAccessResult> {
-  const site = siteUrl(env);
-  const identity = await findChannelIdentity(d1, input.channel_type, input.sender_id);
-  const user = identity ? await getUserById(d1, identity.user_id) : null;
-  if (!identity || !user) {
-    // A link token names one sender: in a group anyone could open it and link that sender to their own account,
-    // so the token is only ever handed out in a direct chat with the bot.
-    if (input.chat_type !== 'direct') {
-      return {
-        decision: 'link_required',
-        reply: 'Nhắn riêng cho bot để liên kết tài khoản zuey.me và chat với Zuey AI.\nSend the bot a direct message to link your zuey.me account and chat with Zuey AI.',
-        ttl_seconds: LINK_REQUIRED_TTL_SECONDS,
-      };
-    }
-    const linkUrl = input.link_token ? `${site}/connect?token=${encodeURIComponent(input.link_token)}` : undefined;
+  // Fail closed: without a Dewee-established member there is nobody to look up, and the sender id is never
+  // used to guess one. In hosted mode Dewee does not call the verifier for unlinked senders at all.
+  const user = input.external_subject ? await getUserById(d1, input.external_subject) : null;
+  if (!user) {
     return {
-      decision: 'link_required',
-      reply: linkUrl
-        ? `Liên kết tài khoản zuey.me để chat với Zuey AI: ${linkUrl}\nLink your zuey.me account to chat with Zuey AI: ${linkUrl}`
-        : 'Hãy liên kết tài khoản zuey.me để chat với Zuey AI.\nLink your zuey.me account to chat with Zuey AI.',
-      ...(linkUrl ? { link_url: linkUrl } : {}),
-      ttl_seconds: LINK_REQUIRED_TTL_SECONDS,
+      decision: 'deny',
+      reply: 'Tài khoản chat này chưa được liên kết với tài khoản zuey.me. Hãy làm theo lời nhắc liên kết của bot.\nThis chat account is not linked to a zuey.me account. Follow the bot\'s link prompt.',
+      ttl_seconds: DENY_TTL_SECONDS,
     };
   }
   const ref = await subjectRef(user.id);
@@ -151,10 +162,10 @@ export async function checkChannelAccess(d1: D1DatabaseLike, env: RuntimeEnv, in
   const entitled = isAdminIdentity(user.email, user.email_verified_at, env)
     || (await getEntitlements(d1, user.id)).entitlements.includes('agent_chat');
   if (entitled) return { decision: 'allow', ttl_seconds: ALLOW_TTL_SECONDS, subject_ref: ref };
-  const pricing = `${site}/pricing`;
+  const pricing = `${siteUrl(env)}/pricing`;
   return {
     decision: 'deny',
-    reply: `Zuey AI trên Telegram dành cho thành viên có gói ${AGENT_PLAN_NAMES} còn hạn. Đăng ký hoặc gia hạn: ${pricing}\nZuey AI on Telegram is for members with an active plan (${AGENT_PLAN_NAMES}): ${pricing}`,
+    reply: `Zuey AI dành cho thành viên có gói ${AGENT_PLAN_NAMES} còn hạn. Đăng ký hoặc gia hạn: ${pricing}\nZuey AI is for members with an active plan (${AGENT_PLAN_NAMES}): ${pricing}`,
     link_url: pricing,
     ttl_seconds: DENY_TTL_SECONDS,
     subject_ref: ref,

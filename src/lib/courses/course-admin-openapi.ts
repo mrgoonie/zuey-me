@@ -52,10 +52,17 @@ export const coursesAdminOpenApi: OpenApiFragment = {
       get: admin('Default subscriber discount % per plan'),
       put: admin('Set default subscriber discount % per plan', { body: { plan_discounts: { type: 'object' } }, required: ['plan_discounts'] }),
     },
-    '/api/v1/admin/course-orders': { get: admin('Course orders (filter by status)', { params: [{ name: 'status', in: 'query', schema: { type: 'string' } }] }) },
+    '/api/v1/admin/course-orders': {
+      get: admin('Course orders (filter by status)', {
+        description: 'Each order carries `dispute_lost`: true for a `charged_back` order whose dispute was lost (it can no longer be granted, dismissed or refunded).',
+        params: [{ name: 'status', in: 'query', schema: { type: 'string' } }],
+      }),
+    },
     '/api/v1/admin/course-orders/{code}/resolve': {
       post: admin('Resolve a flagged order: grant, dismiss or refund', {
+        description: '`refund` records a manual refund of a paid, flagged or disputed (`charged_back`) order and revokes access. A disputed order becomes `refunded`: its access and commission were already revoked when the dispute opened, and a later won dispute does not restore it. `grant` and `dismiss` of a disputed order are refused and change nothing: the dispute outcome decides its access.',
         params: [pathParam('code', 'Order code')], body: { action: { type: 'string', enum: ['grant', 'dismiss', 'refund'] }, reason: { type: 'string' } }, required: ['action'],
+        extra: { '404': 'Order not found', '409': '`already_paid` (grant or dismiss of a paid order), `order_disputed` (grant or dismiss of a `charged_back` order) or `not_refundable` (refund of another state, or after a lost dispute)' },
       }),
     },
     '/api/v1/admin/account-flags': { get: admin('Anti-abuse review queue', { params: [{ name: 'status', in: 'query', schema: { type: 'string', enum: ['open', 'dismissed', 'locked', 'all'] } }] }) },

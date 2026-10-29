@@ -2,6 +2,7 @@ import { ExternalLink } from 'lucide-react';
 import type { DiscoveryItem } from '../../lib/blocks/discovery';
 import type { Locale } from '../../lib/i18n/locales';
 import { articlePath } from '../../lib/blocks/seo';
+import type { ImageTransforms } from '../../lib/media/image-transform';
 import { BrandedThumbnail } from './BrandedThumbnail';
 import { EntitlementIcon } from './EntitlementIcon';
 import { TagBadges } from './TagBadges';
@@ -19,6 +20,8 @@ interface Props {
   uiLocale: Locale;
   compact?: boolean;
   headingLevel?: 2 | 3;
+  /** Resize the cover thumbnail (see `imageTransformsFor`). */
+  imageTransforms?: ImageTransforms | null;
 }
 
 /** Renders a `**match**` search snippet safely (React escapes text; only <mark> is added). */
@@ -27,7 +30,7 @@ function Snippet({ text }: { text: string }) {
   return <>{parts.map((p, i) => (i % 2 === 1 ? <mark key={i} className="bg-amber-100 text-inherit rounded px-0.5">{p}</mark> : <span key={i}>{p}</span>))}</>;
 }
 
-export function ArticleCard({ article: a, uiLocale, compact = false, headingLevel = 2 }: Props) {
+export function ArticleCard({ article: a, uiLocale, compact = false, headingLevel = 2, imageTransforms }: Props) {
   const t = knowledgeStrings(uiLocale);
   const H = headingLevel === 2 ? 'h2' : 'h3';
   const href = articlePath(a.slug, a.locale);
@@ -35,7 +38,7 @@ export function ArticleCard({ article: a, uiLocale, compact = false, headingLeve
     .filter(Boolean).join(' · ');
   return (
     <article className={`relative flex gap-3 ${compact ? 'p-2.5' : 'p-3 sm:p-4'} rounded-2xl bg-white/70 border border-stone-200 hover:bg-white hover:shadow-card-hover transition-all focus-within:ring-2 focus-within:ring-amber-600`}>
-      <BrandedThumbnail seed={a.slug} coverUrl={a.cover_url} width={compact ? 56 : 80} height={compact ? 64 : 92} />
+      <BrandedThumbnail seed={a.slug} coverUrl={a.cover_url} width={compact ? 56 : 80} height={compact ? 64 : 92} imageTransforms={imageTransforms} />
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wider text-stone-500">
           <span className="truncate">{meta}</span>
@@ -62,7 +65,7 @@ export function ArticleCard({ article: a, uiLocale, compact = false, headingLeve
         {!compact && a.snippet && <p className="text-sm text-stone-600 line-clamp-2"><Snippet text={a.snippet} /></p>}
         {!compact && !a.snippet && a.excerpt && <p className="text-sm text-stone-600 line-clamp-2">{a.excerpt}</p>}
         <div className="relative z-10 mt-0.5">
-          <TagBadges tags={a.topic_tags} labels={compact ? [] : a.labels} linkBase="/articles" max={compact ? 3 : 6} size="sm" />
+          <TagBadges tags={a.topic_tags} labels={compact ? [] : a.labels} linkBase="/articles" max={compact ? 3 : 6} size="sm" singleLine />
         </div>
       </div>
     </article>

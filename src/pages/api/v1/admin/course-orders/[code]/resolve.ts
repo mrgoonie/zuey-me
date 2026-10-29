@@ -4,7 +4,8 @@ import { requireCan } from '../../../../../../lib/members/policy';
 import { courseOrderView } from '../../../../../../lib/courses/course-orders';
 import { resolveCourseOrder } from '../../../../../../lib/courses/course-order-payments';
 
-/** Admin: { action: 'grant'|'dismiss'|'refund', reason? }. Refund records a manual refund and revokes access. */
+/** Admin: { action: 'grant'|'dismiss'|'refund', reason? }. Refund records a manual refund and revokes access
+ * (paid, flagged or disputed orders; a disputed order is not restored by a later won dispute). */
 export const POST = memberRoute(async ({ request, params }, { d1, env, principal }) => {
   requireCan(principal, 'admin');
   const body = await requireJsonBody(request);

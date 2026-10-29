@@ -3,7 +3,9 @@ import '../styles/global.css';
 import { REF_REDIRECT_SCRIPT } from '../components/referral/ref-redirect';
 import { CONFIG_ELEMENT_ID } from '../lib/analytics/constants';
 import { analyticsEnvFrom, isProductionBuild, isTruthyFlag, resolvePostHogConfig } from '../lib/analytics/destinations/posthog';
+import { resolveGa4MeasurementId } from '../lib/analytics/destinations/ga4';
 import { PRESENCE_CONFIG_ELEMENT_ID } from '../lib/presence/presence-beacon-boot';
+import { AMBIENT_VIDEO_SCRIPT, FONT_LOADER_SCRIPT, FONTS_URL } from '../lib/page/deferred-asset-scripts';
 
 interface Props {
   title?: string;
@@ -37,6 +39,8 @@ const {
 // Null when analytics must stay off (no key outside production builds, or a malformed key/host).
 const analyticsEnv = analyticsEnvFrom(Astro.locals.runtime?.env);
 const analytics = resolvePostHogConfig(analyticsEnv, { production: isProductionBuild() });
+// GA4 web stream (public id); gtag loads only after bootAnalytics() passed the same checks as PostHog.
+const ga4MeasurementId = resolveGa4MeasurementId(analyticsEnv.PUBLIC_GA4_MEASUREMENT_ID);
 // Lets the presence beacon run (and log) off the production hostnames while debugging.
 const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
 ---
@@ -48,7 +52,7 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- ?ref=CODE → /r/CODE (the only route that sets the referral cookie) -->
     <script is:inline set:html={REF_REDIRECT_SCRIPT} />
-    <link rel="icon" type="image/png" href="https://cdn.zuey.me/avatar.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="canonical" href={url} />
 
     <!-- SEO Meta Tags -->
@@ -85,13 +89,12 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     <link rel="alternate" type="text/markdown" href="/index.md" title="Markdown representation" />
     <slot name="head" />
 
-    <!-- Fonts: Fraunces & Plus Jakarta Sans -->
+    <!-- Fonts: Fraunces & Plus Jakarta Sans, added after the page loads (see FONT_LOADER_SCRIPT);
+         the noscript copy covers visitors without JavaScript. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap"
-      rel="stylesheet"
-    />
+    <script is:inline set:html={FONT_LOADER_SCRIPT} />
+    <noscript><link rel="stylesheet" href={FONTS_URL} /></noscript>
 
     <!-- Analytics: PostHog snippet stub (queues calls; loads nothing until init). bootAnalytics() checks
          the environment, Do Not Track/GPC and the local opt-out before calling init. -->
@@ -101,6 +104,7 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
       data-key={analytics.key}
       data-host={analytics.host}
       data-debug={analytics.debug ? '1' : undefined}
+      data-ga4={ga4MeasurementId ?? undefined}
     />}
     {analytics && <script is:inline>
       !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getLoadedAmplitudes".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
@@ -124,11 +128,11 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     <!-- Ambient Dimmed Background Video Loop with Tiled Pattern Overlay -->
     {ambient && <div class="fixed inset-0 pointer-events-none -z-10 overflow-hidden" aria-hidden="true">
       <video
-        autoplay
+        data-ambient
         loop
         muted
         playsinline
-        preload="auto"
+        preload="none"
         class="absolute inset-0 w-full h-full object-cover opacity-35 sm:opacity-40 filter brightness-[0.72] contrast-[1.1] scale-105 transition-opacity duration-1000"
       >
         <source src="/loop.mp4" type="video/mp4" />
@@ -139,5 +143,6 @@ const presenceDebug = isTruthyFlag(analyticsEnv.PUBLIC_ANALYTICS_DEBUG);
     </div>}
 
     <slot />
+    {ambient && <script is:inline set:html={AMBIENT_VIDEO_SCRIPT} />}
   </body>
 </html>

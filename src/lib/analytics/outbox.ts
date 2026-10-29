@@ -7,17 +7,26 @@
  * - One row per business fact: every row has a `dedupe_key` built from the provider transaction or event id
  *   (unique index), so a repeated webhook, a reconciliation or a recompute inserts nothing.
  * - Delivery is at-least-once with an idempotent id: the row id is the event `uuid` sent on every attempt,
- *   so PostHog de-duplicates a retried send (eventually, at merge time).
+ *   so PostHog de-duplicates a retried send (eventually, at merge time). A row counts as sent once PostHog
+ *   (the primary destination) accepted it; GA4 gets a single best-effort copy after that and never decides
+ *   whether a row is sent, retried or dead.
  * - Analytics never affects payment: enqueueing validates and inserts inside a catch-all and returns an
  *   outcome; it never throws. The insert is a separate statement after the state change (not a D1 batch
- *   with it) so a missing table or a failed insert can never roll a payment back.
+ *   with it) so a missing table or a failed insert can never roll a payment back. The one exception is
+ *   `outboxInsertStatement`, for an event that must land together with the fact it reports: the Dodo
+ *   refund/dispute gate row and log (no payment state), a course order payment or flag (webhook record, status,
+ *   access and log), and a course order reversal (status, access and log).
+ *   A failure there rolls the whole fact back and makes the webhook (or the admin) retry it, so the event is
+ *   never lost and never written twice.
  * - A drain run is bounded: at most MAX_DRAIN_QUERIES D1 statements and DEFAULT_DRAIN_LIMIT deliveries by
  *   default, so it fits the per-invocation limits of the Workers free plan.
  */
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
+import { CARD_RENEWAL_GRACE_MS } from '../members/card-renewal-grace';
 import { iso, membersRuntime } from '../members/runtime';
 import type { EventProperties, ServerEventName } from './events';
 import { validateEvent } from './events';
+import { GA4_OUTBOX_ID_PATHS, purgeExpiredGa4Clients } from './ga4-attribution';
 import { isValidDistinctId } from './identity';
 import type { DestinationResult, ServerDestination } from './destinations/types';
 import { sendServerEvent } from './server';
@@ -42,7 +51,8 @@ export const DEFAULT_DRAIN_BUDGET_MS = 20 * 1000;
 /** Rows delivered concurrently per batch. */
 export const DRAIN_BATCH_SIZE = 10;
 /**
- * Most D1 statements one drain run issues (sweep, claims, grouped settles, retention purge, pending count).
+ * Most D1 statements one drain run issues (sweep, claims, grouped settles, retention purge, pending count,
+ * and the GA id purge when there is room).
  * A batch is claimed only when its worst case (one claim plus one settle per row) still fits.
  */
 export const MAX_DRAIN_QUERIES = 20;
@@ -80,6 +90,53 @@ function resolveOccurredAt(value: string | null | undefined, nowMs: number): str
   return iso(Number.isFinite(parsed) ? parsed : nowMs);
 }
 
+/** A `payment_events` row whose presence, when the statement runs, means the event must not be queued. */
+export interface PaymentEventGuard {
+  provider: string;
+  eventId: string;
+}
+
+/**
+ * Validates the event against the taxonomy and PII guard and returns its outbox insert (once per `dedupeKey`)
+ * without running it, for a caller that writes the event in one D1 batch with the fact it reports. With
+ * `unlessPaymentEvent`, nothing is inserted when that row exists at the time the batch runs; with `onlyIf`,
+ * nothing is inserted unless it holds then. Null when the event is invalid (logged). Throws only if the
+ * statement cannot be prepared.
+ */
+export function outboxInsertStatement<E extends ServerEventName>(
+  d1: D1DatabaseLike, input: OutboxEventInput<E>, unlessPaymentEvent?: PaymentEventGuard, onlyIf?: SqlCondition,
+): D1PreparedStatementLike | null {
+  if (!DEDUPE_KEY_RE.test(input.dedupeKey) || !isValidDistinctId(input.distinctId)) {
+    console.warn(`analytics outbox: rejected ${input.event} (invalid dedupe key or distinct id)`);
+    return null;
+  }
+  const checked = validateEvent(input.event, input.properties, 'server');
+  if (!checked.ok) {
+    const where = 'property' in checked.error ? ` ${checked.error.property}` : '';
+    console.warn(`analytics outbox: rejected ${input.event} (${checked.error.reason}${where})`);
+    return null;
+  }
+  const nowMs = membersRuntime.now();
+  const now = iso(nowMs);
+  const values = [
+    crypto.randomUUID(), input.dedupeKey, input.event, input.distinctId, JSON.stringify(checked.properties),
+    resolveOccurredAt(input.occurredAt, nowMs), now, now, now,
+  ];
+  const row = "?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?";
+  const conditions: SqlCondition[] = [
+    ...(unlessPaymentEvent ? [{
+      sql: 'NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = ? AND event_id = ?)', params: [unlessPaymentEvent.provider, unlessPaymentEvent.eventId],
+    }] : []),
+    ...(onlyIf ? [onlyIf] : []),
+  ];
+  const source = conditions.length ? `SELECT ${row} WHERE ${conditions.map(c => `(${c.sql})`).join(' AND ')}` : `VALUES (${row})`;
+  const guard = conditions.flatMap(c => c.params);
+  return d1.prepare(
+    `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
+     ${source} ON CONFLICT (dedupe_key) DO NOTHING`
+  ).bind(...values, ...guard);
+}
+
 /**
  * Validates the event against the taxonomy and PII guard, then inserts it once per `dedupeKey`.
  * Never throws: returns `rejected` (invalid event, logged), `duplicate`, `queued` or `failed` (logged).
@@ -89,26 +146,9 @@ export async function enqueueServerEvent<E extends ServerEventName>(
 ): Promise<EnqueueOutcome> {
   try {
     if (!d1) return 'failed';
-    if (!DEDUPE_KEY_RE.test(input.dedupeKey) || !isValidDistinctId(input.distinctId)) {
-      console.warn(`analytics outbox: rejected ${input.event} (invalid dedupe key or distinct id)`);
-      return 'rejected';
-    }
-    const checked = validateEvent(input.event, input.properties, 'server');
-    if (!checked.ok) {
-      const where = 'property' in checked.error ? ` ${checked.error.property}` : '';
-      console.warn(`analytics outbox: rejected ${input.event} (${checked.error.reason}${where})`);
-      return 'rejected';
-    }
-    const nowMs = membersRuntime.now();
-    const now = iso(nowMs);
-    const res = await d1.prepare(
-      `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-       ON CONFLICT (dedupe_key) DO NOTHING`
-    ).bind(
-      crypto.randomUUID(), input.dedupeKey, input.event, input.distinctId, JSON.stringify(checked.properties),
-      resolveOccurredAt(input.occurredAt, nowMs), now, now, now,
-    ).run();
+    const statement = outboxInsertStatement(d1, input);
+    if (!statement) return 'rejected';
+    const res = await statement.run();
     return res.meta?.changes === 0 ? 'duplicate' : 'queued';
   } catch (err) {
     console.warn(`analytics outbox: could not queue ${input.event}: ${errorMessage(err)}`);
@@ -252,16 +292,19 @@ async function settleBatch(d1: D1DatabaseLike, leaseToken: string, deliveries: D
     group.ids.push(d.row.id);
     groups.set(key, group);
   }
+  // A sent or dead row no longer needs the GA ids, so no copy of them outlives delivery (a requeued dead row
+  // falls back to the hashed client id).
+  const dropGaIds = `properties = CASE WHEN json_valid(properties) THEN json_remove(properties, ${GA4_OUTBOX_ID_PATHS}) ELSE properties END`;
   for (const g of groups.values()) {
     const ids = g.ids.map(() => '?').join(', ');
     if (g.outcome === 'sent') {
       await d1.prepare(
-        `UPDATE analytics_outbox SET status = 'sent', sent_at = ?, last_error = NULL, lease_token = NULL, lease_until = NULL, updated_at = ?
+        `UPDATE analytics_outbox SET status = 'sent', sent_at = ?, last_error = NULL, lease_token = NULL, lease_until = NULL, updated_at = ?, ${dropGaIds}
          WHERE lease_token = ? AND id IN (${ids})`
       ).bind(now, now, leaseToken, ...g.ids).run();
     } else if (g.outcome === 'dead') {
       await d1.prepare(
-        `UPDATE analytics_outbox SET status = 'dead', last_error = ?, lease_token = NULL, lease_until = NULL, updated_at = ?
+        `UPDATE analytics_outbox SET status = 'dead', last_error = ?, lease_token = NULL, lease_until = NULL, updated_at = ?, ${dropGaIds}
          WHERE lease_token = ? AND id IN (${ids})`
       ).bind(g.error, now, leaseToken, ...g.ids).run();
     } else {
@@ -279,21 +322,41 @@ async function settleBatch(d1: D1DatabaseLike, leaseToken: string, deliveries: D
  * `INSERT … SELECT`. The dedupe key (member, plan, period end) is the one `recomputeSubscription` uses when
  * it revokes access, so each end of access is reported once, whichever path sees it first. Ends already in
  * the outbox are skipped by the select, so the LIMIT only counts new ones.
+ *
+ * `provider` is the rail that granted the access end: `dodo` when a card subscription of the member's plan has a
+ * period end equal to it (with or without the renewal grace, as `recomputeSubscription` computes it), otherwise
+ * `sepay` when the member has a paid SePay order for the plan. With neither, the property is left out.
  */
 export async function sweepExpiredSubscriptions(d1: D1DatabaseLike): Promise<number> {
   const nowMs = membersRuntime.now();
   const now = iso(nowMs);
-  // The row id is a random v4 UUID (PostHog requires a UUID as event id).
+  // The row id is a random v4 UUID (PostHog requires a UUID as event id). Period ends are compared in
+  // milliseconds within a second, so ISO strings of the same instant in another format still match.
   const res = await d1.prepare(
     `INSERT INTO analytics_outbox (id, dedupe_key, event, distinct_id, properties, occurred_at, status, attempts, next_attempt_at, created_at, updated_at)
      SELECT
        lower(substr(h, 1, 8) || '-' || substr(h, 9, 4) || '-4' || substr(h, 14, 3) || '-'
          || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(h, 18, 3) || '-' || substr(h, 21, 12)),
        'subscription_expired:' || user_id || ':' || plan || ':' || current_period_end,
-       'subscription_expired', user_id, json_object('plan', plan, 'period_end', current_period_end), current_period_end,
+       'subscription_expired', user_id,
+       CASE WHEN provider IS NULL THEN json_object('plan', plan, 'period_end', current_period_end)
+         ELSE json_object('plan', plan, 'period_end', current_period_end, 'provider', provider) END,
+       current_period_end,
        'pending', 0, ?, ?, ?
      FROM (
-       SELECT hex(randomblob(16)) AS h, s.user_id, s.plan, s.current_period_end FROM subscriptions s
+       SELECT hex(randomblob(16)) AS h, s.user_id, s.plan, s.current_period_end,
+         CASE
+           WHEN EXISTS (
+             SELECT 1 FROM card_subscriptions c
+             WHERE c.user_id = s.user_id AND c.plan = s.plan AND c.current_period_end IS NOT NULL
+               AND (abs((julianday(s.current_period_end) - julianday(c.current_period_end)) * 86400000.0) < 1000
+                 OR abs((julianday(s.current_period_end) - julianday(c.current_period_end)) * 86400000.0 - ?) < 1000)
+           ) THEN 'dodo'
+           WHEN EXISTS (
+             SELECT 1 FROM billing_orders b WHERE b.user_id = s.user_id AND b.plan = s.plan AND b.status = 'paid' AND b.paid_at IS NOT NULL
+           ) THEN 'sepay'
+         END AS provider
+       FROM subscriptions s
        WHERE s.status IN ('active', 'expired') AND s.current_period_end <= ? AND s.current_period_end > ?
          AND NOT EXISTS (
            SELECT 1 FROM analytics_outbox o
@@ -303,7 +366,7 @@ export async function sweepExpiredSubscriptions(d1: D1DatabaseLike): Promise<num
      )
      WHERE true
      ON CONFLICT (dedupe_key) DO NOTHING`
-  ).bind(now, now, now, now, iso(nowMs - EXPIRY_SWEEP_LOOKBACK_MS), SWEEP_LIMIT).run();
+  ).bind(now, now, now, CARD_RENEWAL_GRACE_MS, now, iso(nowMs - EXPIRY_SWEEP_LOOKBACK_MS), SWEEP_LIMIT).run();
   return res.meta?.changes ?? 0;
 }
 
@@ -322,6 +385,16 @@ async function purgeSent(d1: D1DatabaseLike): Promise<number> {
   return res.meta?.changes ?? 0;
 }
 
+/**
+ * Enforces the 30-day retention of stored GA ids on the drain's schedule, not only at the next checkout.
+ * Best-effort and only when the query budget has room; a busy run leaves it to the next one (every 5 min).
+ */
+async function purgeGa4ClientsIfBudget(d1: D1DatabaseLike, out: DrainResult): Promise<void> {
+  if (out.queries + 1 > MAX_DRAIN_QUERIES) return;
+  await purgeExpiredGa4Clients(d1);
+  out.queries += 1;
+}
+
 async function countPending(d1: D1DatabaseLike): Promise<number> {
   const row = await d1.prepare("SELECT COUNT(*) AS n FROM analytics_outbox WHERE status IN ('pending', 'sending')").first<{ n: number }>();
   return Number(row?.n ?? 0);
@@ -337,7 +410,9 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   const clock = options.clock ?? Date.now;
   const started = clock();
   const budget = options.budgetMs ?? DEFAULT_DRAIN_BUDGET_MS;
-  const limit = clampLimit(options.limit);
+  // Each row may cost one request per destination (GA4 on purchases and refunds): keep the run's worst case
+  // at MAX_DRAIN_LIMIT requests, under the Workers free plan's subrequest limit.
+  const limit = Math.min(clampLimit(options.limit), Math.max(1, Math.floor(MAX_DRAIN_LIMIT / Math.max(1, options.destinations.length))));
   const out: DrainResult = {
     status: 'ok', claimed: 0, sent: 0, retried: 0, dead: 0, expired_queued: 0, purged: 0, pending: 0, queries: 0,
     budget_exhausted: false,
@@ -347,6 +422,7 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   if (options.destinations.length === 0) {
     out.pending = await countPending(d1);
     out.queries += 1;
+    await purgeGa4ClientsIfBudget(d1, out);
     return { ...out, status: 'skipped' };
   }
 
@@ -376,5 +452,6 @@ export async function drainAnalyticsOutbox(d1: D1DatabaseLike, options: DrainOpt
   out.purged = await purgeSent(d1);
   out.pending = await countPending(d1);
   out.queries += TAIL_QUERIES;
+  await purgeGa4ClientsIfBudget(d1, out);
   return out;
 }

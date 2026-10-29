@@ -22,7 +22,7 @@ export const PROMO_INPUT_PROPERTIES: Record<string, unknown> = {
   plans: nullable({ type: 'array', items: { type: 'string', enum: PLAN_IDS }, description: 'Membership plans; null = every plan' }),
   course_ids: nullable({ type: 'array', items: { type: 'string' }, description: 'Courses; null = every course' }),
   min_months: nullable({ type: 'integer', enum: BILLING_MONTHS, description: 'Shortest SePay prepaid term' }),
-  card_cycles: { type: 'integer', minimum: 1, maximum: MAX_CARD_CYCLES, description: 'Monthly card (Dodo) charges the discount covers (default 1)' },
+  card_cycles: { type: 'integer', minimum: 1, maximum: MAX_CARD_CYCLES, description: 'Monthly card (Dodo) charges the discount covers (default 1). A 100% code must use 1, 3, 6 or 12: it is granted as a free prepaid term of that many months' },
 };
 
 export const INVOICE_STATUS_FILTER = { type: 'string', enum: [...INVOICE_STATUSES, 'all'] };

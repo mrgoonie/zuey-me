@@ -12,6 +12,7 @@
 import { parseInline } from './inline';
 import type { ArticleDocument, Block } from './schema';
 import { childBlockLists } from './schema';
+import { columnOf, isProseColumn } from './table-data';
 
 export type EntryKind = 'text' | 'inline' | 'diagram_label' | 'widget_text' | 'meta';
 
@@ -59,13 +60,21 @@ function stringFields(block: Block): FieldSpec[] {
     case 'image': plainText('alt', block.alt); inline('caption', block.caption); break;
     case 'embed': inline('caption', block.caption); break;
     case 'table':
+      plainText('title', block.title);
       block.headers.forEach((t, i) => inline(`headers[${i}]`, t));
-      block.rows.forEach((row, r) => row.forEach((t, c) => inline(`rows[${r}][${c}]`, t)));
+      // Numbers, dates, booleans and links are data, not prose: only text and badge cells are translated.
+      block.rows.forEach((row, r) => row.forEach((t, c) => { if (isProseColumn(columnOf(block, c))) inline(`rows[${r}][${c}]`, t); }));
+      inline('caption', block.caption);
       break;
     case 'chart':
       plainText('title', block.title);
-      block.labels.forEach((t, i) => plainText(`labels[${i}]`, t));
+      // ISO date labels are data, not prose; annotations point at labels by index, so they survive translation.
+      if (block.x?.format !== 'date') block.labels.forEach((t, i) => plainText(`labels[${i}]`, t));
       block.series.forEach((s, i) => plainText(`series[${i}].name`, s.name));
+      for (const key of ['x', 'y', 'y2'] as const) { plainText(`${key}.title`, block[key]?.title); plainText(`${key}.unit`, block[key]?.unit); }
+      block.references?.forEach((r, i) => plainText(`references[${i}].label`, r.label));
+      block.annotations?.forEach((a, i) => plainText(`annotations[${i}].text`, a.text));
+      inline('caption', block.caption);
       break;
     case 'diagram': inline('caption', block.caption); break;
     case 'survey':
@@ -84,6 +93,30 @@ function stringFields(block: Block): FieldSpec[] {
     case 'toggle': inline('summary', block.summary); break;
     case 'icon': plainText('label', block.label); break;
     case 'card': plainText('title', block.title); plainText('image.alt', block.image?.alt); inline('footer', block.footer); break;
+    case 'tabs': block.tabs.forEach((t, i) => plainText(`tabs[${i}].label`, t.label)); break;
+    case 'stat':
+      plainText('title', block.title);
+      block.items.forEach((s, i) => {
+        plainText(`items[${i}].label`, s.label); plainText(`items[${i}].unit`, s.unit); plainText(`items[${i}].delta.label`, s.delta?.label); inline(`items[${i}].note`, s.note);
+      });
+      break;
+    case 'steps': block.items.forEach((s, i) => { inline(`items[${i}].title`, s.title); plainText(`items[${i}].date`, s.date); }); break;
+    case 'comparison':
+      plainText('title', block.title);
+      block.options.forEach((o, i) => {
+        plainText(`options[${i}].name`, o.name); plainText(`options[${i}].badge`, o.badge); inline(`options[${i}].description`, o.description);
+        o.pros?.forEach((s, j) => inline(`options[${i}].pros[${j}]`, s));
+        o.cons?.forEach((s, j) => inline(`options[${i}].cons[${j}]`, s));
+      });
+      block.features?.forEach((f, i) => {
+        plainText(`features[${i}].label`, f.label);
+        f.values.forEach((x, j) => { if (typeof x === 'string') plainText(`features[${i}].values[${j}]`, x); });
+      });
+      break;
+    case 'progress':
+      plainText('title', block.title);
+      block.items.forEach((s, i) => { plainText(`items[${i}].label`, s.label); inline(`items[${i}].note`, s.note); });
+      break;
     default: break;
   }
   return out;

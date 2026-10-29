@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getProfile, getLinks } from '../db/store';
+import { zueyOsAgentGuideMarkdown } from '../components/os/agent-surfaces';
 
 export const GET: APIRoute = async ({ locals }) => {
   const d1 = locals.runtime?.env?.DB;
@@ -15,6 +16,7 @@ export const GET: APIRoute = async ({ locals }) => {
 
 Official profile, links, ventures, products, and developer APIs for Duy Nguyen (/zuey/).
 
+${zueyOsAgentGuideMarkdown()}
 ## Contact & Links
 - Website: https://zuey.me
 - Email: ${profile.email}
@@ -47,7 +49,7 @@ ${products.map(p => `- [${p.title_en}](${p.url}): ${p.subtitle_en || 'Product'}`
 - Courses (Markdown catalog; trial lessons only): https://zuey.me/courses.md
 - Articles: https://zuey.me/articles (each article also at /articles/<slug>.md)
 - Zuey for Business (1:1 consultation booking): https://zuey.me/business
-- 200lab courses Duy recommends (links carry referral code T2CWW3D7, 20% off for buyers): https://zuey.me/200lab.md
+- 200lab courses and learning paths Duy recommends (links carry referral code T2CWW3D7, 20% off for buyers): https://zuey.me/200lab.md
 - Checkout guide for agent-assisted purchases (membership, courses, consultation; the human pays): https://zuey.me/checkout.md
 - Full LLM Context: https://zuey.me/llms-full.txt
 `;

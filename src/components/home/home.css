@@ -40,7 +40,7 @@ html.home-motion-pending .home-reveal {
   font-weight: 700;
   font-size: 14px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  transition: top 0.15s ease;
+  transition: top var(--motion-dur-fast, 150ms) var(--motion-ease-standard, ease);
 }
 .home-skip:focus { top: 12px; outline: 3px solid var(--home-focus); outline-offset: 2px; }
 
@@ -65,7 +65,7 @@ html.home-motion-pending .home-reveal {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif;
   font-weight: 800;
   font-size: 20px;
   letter-spacing: -0.02em;
@@ -74,7 +74,7 @@ html.home-motion-pending .home-reveal {
   padding: 4px 6px;
 }
 .home-wordmark small {
-  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', system-ui, sans-serif;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -101,7 +101,7 @@ html.home-motion-pending .home-reveal {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-  transition: background-color 0.18s ease, border-color 0.18s ease;
+  transition: background-color var(--motion-dur-fast, 150ms) var(--motion-ease-standard, ease), border-color var(--motion-dur-fast, 150ms) var(--motion-ease-standard, ease), transform var(--motion-dur-fast, 150ms) var(--motion-ease-out, ease-out);
 }
 .home-chip:hover { background: rgba(255, 255, 255, 0.15); border-color: rgba(255, 255, 255, 0.28); }
 .home-chip[aria-expanded='true'] { background: rgba(255, 255, 255, 0.2); }
@@ -213,7 +213,7 @@ html.home-motion-pending .home-reveal {
   font-size: 14px;
   font-weight: 700;
   color: rgba(253, 248, 243, 0.78);
-  transition: color 0.2s ease;
+  transition: color var(--motion-dur-base, 200ms) var(--motion-ease-standard, ease);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -229,7 +229,7 @@ html.home-motion-pending .home-reveal {
   border-radius: 999px;
   background: #fffaf5;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--motion-dur-slow, 340ms) var(--motion-ease-out, ease-out);
 }
 html[data-home-tab='ai'] .home-tab-indicator { transform: translateX(0); }
 html:not([data-home-tab]) .home-tab-indicator, html[data-home-tab='profile'] .home-tab-indicator { transform: translateX(100%); }
@@ -300,7 +300,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   color: #fffaf5;
   font-size: 14px;
   font-weight: 700;
-  transition: background-color 0.18s ease;
+  transition: background-color var(--motion-dur-fast, 150ms) var(--motion-ease-standard, ease);
 }
 .home-cta:hover { background: #44403c; }
 .home-cta--ghost { background: transparent; color: #1c1917; border: 1px solid rgba(28, 25, 23, 0.25); }
@@ -323,7 +323,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
 @media (max-width: 1279px) { .home-below { max-width: 740px; } }
 .home-card { padding: 24px; }
 @media (min-width: 640px) { .home-card { padding: 28px; } }
-.home-card h2 { font-family: 'Fraunces', Georgia, serif; font-size: clamp(22px, 2.6vw, 30px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
+.home-card h2 { font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif; font-size: clamp(22px, 2.6vw, 30px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
 .home-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0 20px; }
 @media (min-width: 640px) { .home-plans { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .home-plan {
@@ -336,8 +336,8 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   border: 1px solid var(--home-line);
 }
 .home-plan strong { font-size: 13px; }
-.home-plan .home-price { font-family: 'Fraunces', Georgia, serif; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
-.home-plan .home-price small { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-size: 12px; font-weight: 600; color: var(--home-muted); }
+.home-plan .home-price { font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+.home-plan .home-price small { font-family: 'Plus Jakarta Sans', 'Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', system-ui, sans-serif; font-size: 12px; font-weight: 600; color: var(--home-muted); }
 .home-plan span:last-child { font-size: 12px; color: var(--home-muted); line-height: 1.4; }
 .home-business { background: linear-gradient(160deg, #f1ece1, #e9e2d3); }
 .home-business .home-credit { border-left: 3px solid #6d8267; padding-left: 12px; margin: 14px 0 18px; font-size: 14px; line-height: 1.6; color: #3f3a33; }
@@ -376,7 +376,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   border-radius: 4px 4px 0 0;
   background: #d6c3ae;
   transform-origin: bottom;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--motion-dur-fast, 150ms) var(--motion-ease-standard, ease);
 }
 .home-bar[data-zero='true'] span { background: rgba(120, 100, 80, 0.14); }
 .home-bar:hover span { background: #b45309; }
@@ -410,6 +410,14 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
 }
 .home-skeleton { border-radius: 10px; background: linear-gradient(90deg, rgba(120, 100, 80, 0.08), rgba(120, 100, 80, 0.16), rgba(120, 100, 80, 0.08)); background-size: 200% 100%; animation: home-shimmer 1.4s linear infinite; }
 @keyframes home-shimmer { to { background-position: -200% 0; } }
+/* Shared panel skeleton (src/components/feedback/Skeleton.tsx): a column of shimmering bars. */
+.zf-skel { display: grid; gap: 12px; padding: 4px 0; }
+.zf-skel-bar { display: block; width: 100%; border-radius: 12px; }
+.zf-skel-bar:nth-child(3n + 2) { width: 86%; }
+.zf-skel-bar:nth-child(3n) { width: 64%; }
+/* On the dark stage windows (Reads, Zueytube, 200lab), light bars on the dark surface. */
+.zf-skel--dark { padding: 16px; }
+.zf-skel--dark .zf-skel-bar { border-radius: 16px; background-image: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)); }
 .home-notice-line { margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: #fdf2e3; color: #7c2d12; font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
 
 /* ---------- Dialogs ---------- */
@@ -432,7 +440,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   .home-dialog--palette { margin-top: 12px; max-height: calc(100dvh - 24px); }
 }
 .home-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--home-line); }
-.home-dialog-head h2 { font-family: 'Fraunces', Georgia, serif; font-size: 20px; font-weight: 800; }
+.home-dialog-head h2 { font-family: 'Fraunces', 'Fraunces Fallback', Georgia, serif; font-size: 20px; font-weight: 800; }
 .home-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: var(--home-muted); flex-shrink: 0; }
 .home-icon-btn:hover { background: #f3e8dc; color: var(--home-ink); }
 .home-palette-input { display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 18px; border-bottom: 1px solid var(--home-line); }
@@ -526,7 +534,7 @@ html[data-home-tab='knowledges'] .home-tab-indicator { transform: translateX(200
   transform: translateX(-50%);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.18s ease;
+  transition: opacity var(--motion-dur-fast, 150ms) var(--motion-ease-standard, ease);
 }
 .zm-tools button { width: 40px; height: 36px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: #1c1917; }
 .zm-tools button:hover { background: #f3e8dc; }

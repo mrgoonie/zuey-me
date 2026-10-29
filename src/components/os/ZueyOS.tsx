@@ -11,20 +11,23 @@ import { GithubActivity } from '../home/GithubActivity';
 import { homeStrings } from '../home/home-i18n';
 import { Mascot } from '../home/Mascot';
 import { McpGuide } from '../home/McpGuide';
-import { useMediaQuery, useReducedMotion } from '../home/motion';
+import { motionEase, motionMs, useMediaQuery, useReducedMotion } from '../home/motion';
 import { addDismissed, nextNoticeChange, parseDismissed, pickNotice } from '../home/notice-queue';
 import { STORAGE_KEYS, readStored, writeStored } from '../home/storage';
 import { WeatherBackdrop } from '../home/WeatherBackdrop';
-import { APPS, DOCK_APPS, SLOT_APPS, appFromHash, type AppId, type Rect, type SlotAppId } from './apps';
+import { APPS, DOCK_APPS, OPEN_APP_EVENT, SLOT_APPS, appFromHash, isAppId, type AppId, type OpenAppEventDetail, type Rect, type SlotAppId } from './apps';
 import { ZUEYTUBE_OPEN_EVENT } from '../../lib/videos/types';
 import { track } from '../../lib/analytics/client';
 import { ActivityMonitorPanel } from '../activity-monitor/ActivityMonitorPanel';
+import { Toaster } from '../feedback/Toaster';
+import { showToast } from '../feedback/toast-bus';
 import { AppGlyph } from './AppGlyph';
 import { AppearancePanel } from './AppearancePanel';
 import { Dock } from './Dock';
 import {
-  DEFAULT_LOOK, applyLook, imageFileToWallpaper, readLook, readWallImage, resolvedTheme, writeLook, writeWallImage, type Look,
+  DEFAULT_LOOK, applyLook, glassEnabled, imageFileToWallpaper, readLook, readWallImage, resolvedTheme, writeLook, writeWallImage, type Look,
 } from './look';
+import { LiquidGlass } from './liquid-glass-filters';
 import { MenuBar, type MenuItem } from './MenuBar';
 import { MobileHome } from './MobileHome';
 import { osStrings } from './os-i18n';
@@ -38,7 +41,12 @@ import './os.css';
 
 const PHONE_QUERY = '(max-width: 767px)';
 const NOTICE_REFRESH_MS = 5 * 60 * 1000;
-const EXPO_MS = 420;
+
+/** True when the browser asks for reduced data use (Network Information API; absent in most browsers). */
+function saveData(): boolean {
+  const c: unknown = Reflect.get(navigator, 'connection');
+  return typeof c === 'object' && c !== null && 'saveData' in c && c.saveData === true;
+}
 
 type Slots = Partial<Record<SlotAppId, React.ReactNode>>;
 
@@ -74,7 +82,6 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const [area, setArea] = useState<Area | null>(null);
   const [look, setLook] = useState<Look>(DEFAULT_LOOK);
   const [wallImage, setWallImage] = useState<string | null>(null);
-  const [lookMsg, setLookMsg] = useState('');
   const [dropping, setDropping] = useState(false);
   const [expo, setExpo] = useState<ExpoState | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -124,9 +131,20 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     setWallImage(readWallImage());
     setMascotHidden(readStored(STORAGE_KEYS.mascotHidden) === true);
     if (/Mac|iPhone|iPad/.test(navigator.userAgent)) setShortcut('⌘K');
-    document.documentElement.setAttribute('data-os-ready', '');
     setReady(true);
   }, []);
+
+  // Until data-os-ready is set, phones hide every window (the server renders the desktop boot windows).
+  // On a phone the restore above closes those windows with a slide-out; revealing them before a window
+  // is actually open would flash the profile sheet over the home screen after hydration (and make it the
+  // page's largest paint), so the attribute waits for the first open window there.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!ready || root.hasAttribute('data-os-ready')) return;
+    if (!window.matchMedia(PHONE_QUERY).matches || Object.values(wins).some(w => w.open)) {
+      root.setAttribute('data-os-ready', '');
+    }
+  }, [ready, wins]);
 
   useEffect(() => {
     if (!ready) return;
@@ -168,30 +186,41 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       const url = await imageFileToWallpaper(file);
       const kept = writeWallImage(url);
       setWallImage(url);
-      setLookMsg(kept ? '' : s.look.tooLarge);
       changeLook({ wallpaper: 'image' });
+      showToast(kept ? s.look.wallpaperSet : s.look.tooLarge, kept ? 'success' : 'info');
     } catch (err) {
-      setLookMsg(err instanceof Error && err.message === 'not_image' ? s.look.notImage : s.look.unreadable);
+      showToast(err instanceof Error && err.message === 'not_image' ? s.look.notImage : s.look.unreadable, 'error');
     }
   }, [changeLook, s.look]);
 
   const resetLook = useCallback(() => {
     writeWallImage(null);
     setWallImage(null);
-    setLookMsg('');
-    changeLook({ ...DEFAULT_LOOK });
-  }, [changeLook]);
+    changeLook({ ...DEFAULT_LOOK, glass: true });
+    showToast(s.look.resetDone);
+  }, [changeLook, s.look]);
 
   const dark = ready ? resolvedTheme(look.mode) === 'dark' : true;
   const toggleTheme = useCallback(() => changeLook({ mode: dark ? 'light' : 'dark' }), [changeLook, dark]);
+
+  // The video wallpaper (~3 MB) is attached once the page has loaded, so it never competes with first paint,
+  // and not at all under Save-Data.
+  const [pageLoaded, setPageLoaded] = useState(false);
+  useEffect(() => {
+    if (document.readyState === 'complete') { setPageLoaded(true); return; }
+    const onLoad = () => setPageLoaded(true);
+    window.addEventListener('load', onLoad, { once: true });
+    return () => window.removeEventListener('load', onLoad);
+  }, []);
+  const videoWallpaper = pageLoaded && look.wallpaper === 'video' && !saveData();
 
   // Video wallpaper: plays only when chosen and motion is allowed.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (look.wallpaper === 'video' && !reduced) void v.play().catch(() => undefined);
+    if (videoWallpaper && !reduced) void v.play().catch(() => undefined);
     else v.pause();
-  }, [look.wallpaper, reduced]);
+  }, [videoWallpaper, reduced]);
 
   // Drop an image anywhere on the desktop to make it the wallpaper.
   useEffect(() => {
@@ -227,14 +256,39 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     window.history.replaceState(window.history.state, '', url.hash ? url : url.pathname + url.search);
   }, []);
 
-  const openApp = useCallback((id: AppId) => {
+  /** Moves keyboard focus to a window's title bar once it is shown (it may still be hidden this frame). */
+  const focusWindow = useCallback((id: AppId) => {
+    let tries = 0;
+    const go = () => {
+      const win = screenRef.current?.querySelector<HTMLElement>(`.osw[data-app="${id}"]`);
+      if (win && !win.hidden) {
+        if (!win.contains(document.activeElement)) win.querySelector<HTMLElement>('.osw-bar')?.focus({ preventScroll: true });
+      } else if (++tries < 4) requestAnimationFrame(go);
+    };
+    requestAnimationFrame(go);
+  }, []);
+
+  /** After a window hides, hand focus to the next window (or the desktop) if focus was inside it. */
+  const refocusAfterHide = useCallback((id: AppId) => {
+    const win = screenRef.current?.querySelector<HTMLElement>(`.osw[data-app="${id}"]`);
+    const active = document.activeElement;
+    if (!win || !(active === document.body || active === null || win.contains(active))) return;
+    requestAnimationFrame(() => {
+      const next = topId(winsRef.current);
+      if (next && next !== id) focusWindow(next);
+      else screenRef.current?.focus({ preventScroll: true });
+    });
+  }, [focusWindow]);
+
+  const openApp = useCallback((id: AppId, source?: OpenAppEventDetail['source']) => {
     // Opening a window never changes the pathname, so pageviews alone miss it.
     const w = winsRef.current[id];
-    track('app_opened', { app: id, already_open: w.open && !w.min });
+    track('app_opened', { app: id, already_open: w.open && !w.min, ...(source ? { source } : {}) });
     setExpo(null);
     dispatch({ type: 'open', id });
     setHash(id);
-  }, [setHash]);
+    focusWindow(id);
+  }, [setHash, focusWindow]);
 
   /** Opens Zueytube on one video: ?v= covers a window that has not hydrated yet, the event one that has. */
   const openVideo = useCallback((youtubeId: string) => {
@@ -246,14 +300,16 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   }, [openApp]);
 
   const closeApp = useCallback((id: AppId) => {
+    refocusAfterHide(id);
     dispatch({ type: 'close', id });
     if (appFromHash(window.location.hash) === id) setHash(null);
-  }, [setHash]);
+  }, [setHash, refocusAfterHide]);
 
   const minimizeApp = useCallback((id: AppId) => {
-    if (window.matchMedia(PHONE_QUERY).matches) closeApp(id);
-    else dispatch({ type: 'minimize', id });
-  }, [closeApp]);
+    if (window.matchMedia(PHONE_QUERY).matches) { closeApp(id); return; }
+    refocusAfterHide(id);
+    dispatch({ type: 'minimize', id });
+  }, [closeApp, refocusAfterHide]);
 
   const toggleMax = useCallback((id: AppId) => {
     if (window.matchMedia(PHONE_QUERY).matches) return;
@@ -276,13 +332,36 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
 
   // Hash navigation (#ai, #knowledges, legacy #profile / #activity) opens the matching window.
   useEffect(() => {
-    const onHash = () => {
-      const id = appFromHash(window.location.hash);
+    // Read the event's target URL: a render queued before this hashchange may already have rewritten the hash.
+    const onHash = (e: HashChangeEvent) => {
+      const id = appFromHash(new URL(e.newURL).hash);
       if (id) openApp(id);
     };
+    // WebMCP tools open windows through an event so analytics can tag them; cancelling acknowledges it.
+    const onAgentOpen = (e: Event) => {
+      const detail: unknown = e instanceof CustomEvent ? e.detail : null;
+      if (typeof detail !== 'object' || detail === null || !('id' in detail) || !isAppId(detail.id)) return;
+      e.preventDefault();
+      openApp(detail.id, 'webmcp');
+    };
     window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    window.addEventListener(OPEN_APP_EVENT, onAgentOpen);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener(OPEN_APP_EVENT, onAgentOpen);
+    };
   }, [openApp]);
+
+  // A hash naming a window that is no longer on top (focus moved, minimized, closed) is stale: setting
+  // the same hash again fires no hashchange, so the deep link would do nothing. Keep it on the top window.
+  // A clean URL or a non-app hash is left alone.
+  useEffect(() => {
+    if (!ready) return;
+    const current = appFromHash(window.location.hash);
+    if (!current) return;
+    const top = topId(wins);
+    if (top !== current) setHash(top);
+  }, [wins, ready, setHash]);
 
   /* ---------- Exposé ---------- */
   const enterExpo = useCallback(() => {
@@ -324,6 +403,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       if (pick) {
         dispatch({ type: 'open', id: pick });
         setHash(pick);
+        focusWindow(pick);
       }
       const placements: ExpoState['placements'] = {};
       for (const id of prev.order) {
@@ -334,8 +414,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       }
       return { ...prev, placements, leaving: true };
     });
-    window.setTimeout(() => setExpo(prev => (prev?.leaving ? null : prev)), reduced ? 0 : EXPO_MS);
-  }, [reduced, setHash]);
+    window.setTimeout(() => setExpo(prev => (prev?.leaving ? null : prev)), reduced ? 0 : motionMs('slower', 440));
+  }, [reduced, setHash, focusWindow]);
 
   const toggleExpo = useCallback(() => {
     if (expo) exitExpo(null);
@@ -458,7 +538,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const fadeOut = useCallback(async () => {
     const el = rootRef.current;
     if (!el || reduced) return;
-    await el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-in', fill: 'forwards' }).finished.catch(() => undefined);
+    await el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motionMs('base', 200), easing: motionEase('in', 'ease-in'), fill: 'forwards' }).finished.catch(() => undefined);
   }, [reduced]);
   useEffect(() => {
     const onShow = (e: PageTransitionEvent) => {
@@ -517,7 +597,6 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
           <AppearancePanel
             look={look}
             hasImage={wallImage !== null}
-            message={lookMsg}
             strings={s.look}
             onChange={changeLook}
             onImage={f => void setImage(f)}
@@ -535,11 +614,16 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     <div
       ref={rootRef}
       className={`os-root${anyVisible ? ' has-sheet' : ''}${expo && !expo.leaving ? ' is-expo' : ''}`}
+      // Server and first paint are the plain chrome. The value never changes here, so React never
+      // rewrites it; <LiquidGlass> updates the attribute itself.
+      data-glass="off"
     >
+      {/* Writes the Liquid Glass tier onto this root itself, so a tier change never re-renders the desktop. */}
+      <LiquidGlass target={rootRef} enabled={ready && glassEnabled(look)} reducedMotion={reduced} />
       <a href="#os-screen" className="os-skip">{s.skip}</a>
 
       <div className="os-desk" aria-hidden="true">
-        <video ref={videoRef} muted loop playsInline preload="none" src={look.wallpaper === 'video' ? '/loop.mp4' : undefined} />
+        <video ref={videoRef} muted loop playsInline preload="none" src={videoWallpaper ? '/loop.mp4' : undefined} />
         <span className="os-wordmark">zuey</span>
       </div>
       <WeatherBackdrop report={weather} reduced={reduced} />
@@ -630,6 +714,8 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
       {!mascotHidden && (
         <Mascot strings={hs.mascot} locale={locale} weather={weather} notice={notice} onDismissNotice={dismissNotice} onHide={hideMascot} />
       )}
+
+      <Toaster label={s.notifications} />
 
       <CommandPalette
         open={paletteOpen}
