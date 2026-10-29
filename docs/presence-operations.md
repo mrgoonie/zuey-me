@@ -24,7 +24,13 @@ CI is the only deploy path ([`.github/workflows/deploy.yml`](../.github/workflow
 
 **Custom domain.** `workers/presence/wrangler.toml` declares `presence.zuey.me` as a Workers custom domain (`custom_domain = true`, `workers_dev = false`); the deploy creates the DNS record and certificate on the `zuey.me` zone, so the zone must be in the same account as the deploy token.
 
-**Service binding.** The root `wrangler.toml` binds `PRESENCE` → `zuey-me-presence` for every Pages environment. Pages reaches `/internal/*` only through it, with the time-bound `X-Presence-Internal` header, whose HMAC covers the request method and path (`src/lib/presence/internal-auth.ts`, `presence-internal-client.ts`). Pages and the Worker must agree on the signing format: CI deploys Pages before the presence Worker, so after a format change the owner status and diagnostics answer `503 presence_unavailable` until the presence step finishes (re-run the workflow if it failed). Visitor counting and public snapshots are unaffected.
+**Service binding.** The root `wrangler.toml` binds `PRESENCE` → `zuey-me-presence` for every Pages environment. Pages reaches `/internal/*` only through it, with the time-bound `X-Presence-Internal` header, whose HMAC covers the request method and path (`src/lib/presence/internal-auth.ts`, `presence-internal-client.ts`). Pages and the Worker must agree on the signing format: CI deploys Pages before the presence Worker, so after a format change the owner status and diagnostics answer `503 presence_unavailable` until the presence step finishes. Re-run the workflow (it redeploys Pages and both Workers from `main`) whenever the two sides can be left on different formats:
+
+- the presence step failed;
+- the scheduler step failed: the steps run in sequence, so the presence step is skipped and the Worker stays on the old build;
+- Pages was rolled back on its own (Cloudflare dashboard) to a build that signs another format, for example `v1` while the Worker requires `v2`.
+
+Until the re-run finishes, owner status and admin diagnostics answer `503 presence_unavailable`. Visitor counting and public snapshots are unaffected.
 
 **First deploy of a fresh account or Worker:**
 
