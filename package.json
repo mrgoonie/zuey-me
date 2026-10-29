@@ -20,6 +20,7 @@
     "@astrojs/cloudflare": "^12.2.0",
     "@astrojs/react": "^4.2.0",
     "@astrojs/tailwind": "^5.1.5",
+    "@dewee/identity": "file:./vendor/dewee-identity-0.1.0-beta.0.tgz",
     "@resvg/resvg-wasm": "^2.6.2",
     "canvas-confetti": "^1.9.4",
     "chart.js": "^4.5.1",

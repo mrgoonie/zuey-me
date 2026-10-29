@@ -2,8 +2,9 @@ import type { D1DatabaseLike } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import type { MembershipProvider } from '../analytics/commerce-events';
 import { queueSubscriptionChange } from '../analytics/commerce-events';
-import { channelAccessPushConfigured, deferChannelAccessPush, invalidateUserChannelAccess } from '../channel-access/invalidate';
-import type { WaitUntil } from '../channel-access/invalidate';
+import { deweeIdentityConfig, reportMemberLifecycle } from '../channel-access/dewee-identity';
+import type { WaitUntil } from '../wait-until';
+import { deferBestEffort } from '../wait-until';
 import { CARD_RENEWAL_GRACE_MS } from './card-renewal-grace';
 import type { Entitlement, PlanId } from './plans';
 import { entitlementsForPlans, getPlan, isPlanId } from './plans';
@@ -75,13 +76,25 @@ export interface RecomputeOptions {
    */
   provider: MembershipProvider;
   /**
-   * When given, a flip of the plan's active status caused by this recompute (payment, reversal, card change) on a plan
-   * that grants `agent_chat` is pushed to dewee so the channel gate re-checks the member at once (best effort; skipped
-   * when the push env is incomplete). Plain clock expiry needs no push: dewee re-checks live once its cache expires.
+   * When given, a flip of the plan's active status caused by this recompute (payment, reversal, card change) is
+   * reported to Dewee as a `scopes_changed` lifecycle event carrying the member's current entitlements, so Dewee
+   * re-checks the member on every replica at once (best effort; skipped when the identity env is incomplete, a
+   * no-op for a member who never linked a chat account). Plain clock expiry needs no call: Dewee re-checks live
+   * once its cache expires.
    */
   env?: RuntimeEnv;
-  /** Cloudflare `ctx.waitUntil`: the push runs after the response; without it the push runs inline (bounded). */
+  /** Cloudflare `ctx.waitUntil`: the call runs after the response; without it the call runs inline (bounded). */
   waitUntil?: WaitUntil;
+}
+
+/** Tells Dewee the member's scopes changed. Never throws: billing has already committed. */
+async function reportScopes(d1: D1DatabaseLike, env: RuntimeEnv, userId: string): Promise<void> {
+  try {
+    const { entitlements } = await getEntitlements(d1, userId);
+    await reportMemberLifecycle(env, userId, 'scopes_changed', [...new Set(entitlements)]);
+  } catch (err) {
+    console.warn('dewee scopes_changed skipped:', err instanceof Error ? err.message : 'unknown');
+  }
 }
 
 /**
@@ -94,12 +107,12 @@ export async function recomputeSubscription(
   d1: D1DatabaseLike, userId: string, plan: PlanId, opts: RecomputeOptions
 ): Promise<SubscriptionView | null> {
   const env = opts.env;
-  const watch = env !== undefined && getPlan(plan).entitlements.includes('agent_chat') && channelAccessPushConfigured(env);
+  const watch = env !== undefined && deweeIdentityConfig(env) !== null;
   const before = watch ? ((await listSubscriptions(d1, userId)).find(v => v.plan === plan)?.status ?? 'expired') : null;
   const view = await rebuildSubscription(d1, userId, plan, opts.provider);
   if (env && watch && (view?.status ?? 'expired') !== before) {
-    // Billing never waits on or fails because of the push: errors are swallowed inside.
-    await deferChannelAccessPush(invalidateUserChannelAccess(d1, env, userId), opts.waitUntil);
+    // Billing never waits on or fails because of the call: errors are swallowed inside.
+    await deferBestEffort(reportScopes(d1, env, userId), opts.waitUntil);
   }
   return view;
 }

@@ -3,7 +3,7 @@ import {
   queueCardStateChange, queueCardSubscriptionEnd, queueNeedsAttention, queuePaymentFailed, queuePurchase, refundEvent,
 } from '../analytics/commerce-events';
 import { outboxInsertStatement } from '../analytics/outbox';
-import type { WaitUntil } from '../channel-access/invalidate';
+import type { WaitUntil } from '../wait-until';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { PlanId } from '../members/plans';
