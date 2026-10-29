@@ -31,12 +31,15 @@ export interface CourseTransferNotice {
   payerText?: string | null;
 }
 
-/** A Dodo payment other than the order's own, captured on an order already refunded or charged back. */
+/**
+ * A Dodo payment other than the order's own, captured on an order already paid, refunded, charged back or dismissed by
+ * an admin.
+ */
 export interface NewCourseCapture {
   payment_id: string;
   amount: number | null;
   currency: string | null;
-  reason: 'payment_after_refund' | 'payment_after_dispute';
+  reason: 'payment_after_paid' | 'payment_after_refund' | 'payment_after_dispute' | 'payment_after_dismiss';
 }
 
 export interface CoursePaymentResult {
@@ -161,6 +164,27 @@ async function orderByPaymentId(d1: D1DatabaseLike, paymentId: string): Promise<
   return row ? rowToCourseOrder(row) : null;
 }
 
+/** The `payment_events` key that keeps a refund of a Dodo payment no course order held when the refund arrived. */
+const refundBeforePaymentKey = (paymentId: string) => `refund_before_payment:${paymentId}`;
+
+/** The Dodo payment was refunded before any course order held it. */
+const refundedBeforePayment = (paymentId: string): SqlCondition => ({
+  sql: "EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND event_id = ?)", params: [refundBeforePaymentKey(paymentId)],
+});
+
+/**
+ * A refund of a payment no course order holds yet: its `payment.succeeded` may still come, delivered late or out of
+ * order. The refund is kept under its payment id, so that payment flags its order instead of paying it. A membership
+ * refund leaves an unused marker, and the membership handler still processes the event. The order is read again after
+ * the marker is written: a payment that committed in between is refunded now, and one committing later sees the marker
+ * in its own batch guard.
+ */
+async function keepRefundBeforePayment(d1: D1DatabaseLike, paymentId: string, amount: number | null, currency: string | null): Promise<CourseOrder | null> {
+  await d1.prepare("INSERT OR IGNORE INTO payment_events (provider, event_id, amount, currency, raw_type, received_at) VALUES ('dodo', ?, ?, ?, 'refund.succeeded', ?)")
+    .bind(refundBeforePaymentKey(paymentId), amount, currency, iso(membersRuntime.now())).run();
+  return orderByPaymentId(d1, paymentId);
+}
+
 /**
  * Handles a verified Dodo webhook if it concerns a course order: payments carrying
  * `metadata.course_order`, and refunds or disputes of a course payment. Returns null otherwise so
@@ -171,6 +195,8 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   const type = payload.type;
   const d = payload.data;
   const paymentId = text(d, 'payment_id');
+  const amount = typeof d.total_amount === 'number' ? d.total_amount : minorUnitsOrNull(d.amount);
+  const currency = text(d, 'currency')?.toUpperCase() ?? null;
   let order: CourseOrder | null = null;
   let userMismatch = false;
   if (type === 'payment.succeeded' || type === 'payment.failed') {
@@ -182,13 +208,12 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   } else if (type.startsWith('refund.') || type.startsWith('dispute.')) {
     if (!paymentId) return null;
     order = await orderByPaymentId(d1, paymentId);
+    if (!order && type === 'refund.succeeded') order = await keepRefundBeforePayment(d1, paymentId, amount, currency);
     if (!order) return null;
   } else {
     return null;
   }
 
-  const amount = typeof d.total_amount === 'number' ? d.total_amount : minorUnitsOrNull(d.amount);
-  const currency = text(d, 'currency')?.toUpperCase() ?? null;
   if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type) || DODO_DISPUTE_FUNDS_KEPT.has(type))) {
     return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type });
   }
@@ -263,91 +288,139 @@ type DodoCoursePayment = { paymentId: string | null; amount: number | null; curr
 const isSettled = (order: CourseOrder) => order.status === 'refunded' || order.status === 'charged_back';
 const SETTLED_SQL = "o.status IN ('refunded', 'charged_back')";
 
+/** A flag of the order, or of a capture on it once closed, logged the Dodo payment (under an event other than `exceptEvent`). */
+function paymentLogged(order: CourseOrder, paymentId: string, exceptEvent?: string): SqlCondition {
+  return {
+    sql: `EXISTS (SELECT 1 FROM user_activity WHERE user_id = ? AND action = 'courses.order_attention' AND json_extract(detail, '$.payment_id') = ?${
+      exceptEvent === undefined ? '' : " AND json_extract(detail, '$.event_id') IS NOT ?"})`,
+    params: exceptEvent === undefined ? [order.user_id, paymentId] : [order.user_id, paymentId, exceptEvent],
+  };
+}
+
 /**
- * A `payment.succeeded` for an order already refunded or charged back: Dodo delivered it late, out of order, or again
- * under a new event id. Nothing is paid or granted, and the order keeps its status, so the refund and dispute flows
- * still find it as they left it. The event is recorded once. A payment id other than the order's is a new capture on
- * a closed order: the record, the activity log and the `payment_needs_attention` event are one batch, and the result
- * carries the capture so the admin notice names it; the admin refunds it in Dodo or decides otherwise.
+ * The Dodo payment is already counted on the order: it is the payment the order holds, or a flag logged it. A payment
+ * id is counted once, whatever event id Dodo delivers it under.
+ */
+function paymentCounted(order: CourseOrder, paymentId: string): SqlCondition {
+  const logged = paymentLogged(order, paymentId);
+  return {
+    sql: `(EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.provider_payment_id = ?) OR ${logged.sql})`,
+    params: [order.id, paymentId, ...logged.params],
+  };
+}
+
+async function holds(d1: D1DatabaseLike, condition: SqlCondition): Promise<boolean> {
+  return (await d1.prepare(`SELECT 1 AS found WHERE ${condition.sql}`).bind(...condition.params).first()) !== null;
+}
+
+/**
+ * A `payment.succeeded` for an order already paid, refunded or charged back: Dodo delivered it late, out of order, again
+ * under a new event id, or the customer was charged twice. Nothing is paid or granted, and the order keeps its status,
+ * so the refund and dispute flows still find it as they left it. The event is recorded once (`gate`; null when the
+ * caller's batch already recorded it). A payment id other than the order's is a new capture on a closed order: the
+ * record, the activity log and the `payment_needs_attention` event are one batch, and the result carries the capture so
+ * the admin notice names it; the admin refunds it in Dodo or decides otherwise.
  *
  * The capture is flagged once per payment id, not per event: its activity log is the durable marker (the analytics event
  * shares the payment id as its dedupe key), so a redelivery under another event id is only recorded and announced to
  * nobody. Two such deliveries racing each other can both pass the read; the batch guard still logs the capture once,
  * but both may announce it.
  */
-async function settledCoursePayment(d1: D1DatabaseLike, order: CourseOrder, p: DodoCoursePayment, gate: CourseEventGate): Promise<AppliedCoursePayment> {
-  // Without a payment id the event cannot name another capture: it is taken as the order's own payment.
-  if (!p.paymentId || p.paymentId === order.provider_payment_id) {
-    await gate().run();
-    return 'ignored';
-  }
-  const unflagged: SqlCondition = {
-    sql: "NOT EXISTS (SELECT 1 FROM user_activity WHERE user_id = ? AND action = 'courses.order_attention' AND json_extract(detail, '$.payment_id') = ?)",
-    params: [order.user_id, p.paymentId],
+async function closedOrderCapture(d1: D1DatabaseLike, order: CourseOrder, p: DodoCoursePayment, gate: CourseEventGate | null): Promise<AppliedCoursePayment> {
+  const recorded = async (outcome: CoursePaymentOutcome): Promise<CoursePaymentOutcome> => {
+    if (gate) await gate().run();
+    return outcome;
   };
-  if (await d1.prepare(`SELECT 1 AS flagged WHERE NOT (${unflagged.sql})`).bind(...unflagged.params).first()) {
-    await gate().run();
-    return 'ignored';
-  }
-  const reason = order.status === 'refunded' ? 'payment_after_refund' : 'payment_after_dispute';
+  // Without a payment id the event cannot name another capture: it is taken as the order's own payment.
+  if (!p.paymentId || p.paymentId === order.provider_payment_id) return recorded(order.status === 'paid' ? 'already_paid' : 'ignored');
+  const counted = paymentCounted(order, p.paymentId);
+  if (await holds(d1, counted)) return recorded('ignored');
+  const reason = order.status === 'paid' ? 'payment_after_paid' : order.status === 'refunded' ? 'payment_after_refund' : 'payment_after_dispute';
   const attention = outboxInsertStatement(d1, needsAttentionEvent({
     distinctId: order.user_id, provider: 'dodo', orderType: 'course', reference: p.paymentId, reason, amountMinor: p.amount ?? undefined, currency: p.currency,
   }));
   await d1.batch([
-    gate(),
+    ...(gate ? [gate()] : []),
     ...(attention ? [attention] : []),
-    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: p.amount, payment_id: p.paymentId }, undefined, unflagged),
+    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: p.amount, payment_id: p.paymentId }, undefined, {
+      sql: `NOT ${counted.sql}`, params: counted.params,
+    }),
   ]);
   return { outcome: 'needs_attention', new_capture: { payment_id: p.paymentId, amount: p.amount, currency: p.currency, reason } };
 }
 
-async function applyDodoCoursePayment(d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, p: DodoCoursePayment, gate: CourseEventGate): Promise<AppliedCoursePayment> {
-  if (order.status === 'paid') {
+/**
+ * A Dodo `payment.succeeded` of a course order. A full payment pays a pending, expired or flagged order and grants the
+ * course. A payment counted on the order already is only recorded. Card money captured on an order that cannot simply
+ * be paid flags the order for the admin, with the payment id on it so a later refund finds it: a payment Dodo refunded
+ * before it arrived here, an order an admin dismissed (the notice names this payment), another account's checkout, a
+ * SePay order, an underpayment or a deleted course. Orders already paid, refunded or charged back are never paid again
+ * (`closedOrderCapture`).
+ *
+ * The order is read before the batch that pays or flags it runs. When that batch applies nothing, the order changed
+ * meanwhile and the event is applied once more to the order as it is now (`retried`); the record is written exactly once.
+ */
+async function applyDodoCoursePayment(
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, p: DodoCoursePayment, gate: CourseEventGate, retried = false,
+): Promise<AppliedCoursePayment> {
+  if (order.status === 'paid' || isSettled(order)) return closedOrderCapture(d1, order, p, gate);
+  // Already counted on this order (a redelivery under a new event id): the amount is not added again.
+  if (p.paymentId && await holds(d1, paymentCounted(order, p.paymentId))) {
     await gate().run();
-    return 'already_paid';
+    return 'ignored';
   }
-  if (isSettled(order)) return settledCoursePayment(d1, order, p, gate);
-  /** The order as it is after a batch that wrote nothing: a refund or a dispute may have closed it meanwhile. */
-  const settledMeanwhile = async () => {
+  /** The batch applied nothing: the event is applied to the order as it is now. */
+  const changedMeanwhile = async (): Promise<AppliedCoursePayment> => {
     const current = await getCourseOrderByCode(d1, order.code);
-    return current && isSettled(current) ? current : null;
+    // A flag batch skips its update on an order paid meanwhile but still writes its record, guarded by `open` alone;
+    // a payment batch, or a flag batch whose `open` guard failed, wrote nothing.
+    const recorded = await coursePaymentEventRecorded(d1, 'dodo', p.eventId);
+    if (current && (current.status === 'paid' || isSettled(current))) return closedOrderCapture(d1, current, p, recorded ? null : gate);
+    if (current && !recorded && !retried) return applyDodoCoursePayment(d1, env, current, p, gate, true);
+    if (!recorded) await gate().run();
+    return 'ignored';
   };
-  const extra = { amount: p.amount ?? 0, currency: p.currency ?? undefined, ref: p.paymentId, eventId: p.eventId };
+  const extra = { amount: p.amount ?? 0, currency: p.currency ?? undefined, ref: p.paymentId, eventId: p.eventId, paymentId: p.paymentId };
   // Another account's checkout, a SePay order, a USD charge below the quote (tampered or misconfigured checkout), or a
   // course deleted since checkout: the card money is captured, so the order is flagged with its payment id for a grant
-  // or a Dodo refund.
-  const reason = p.userMismatch ? 'user_mismatch'
-    : order.provider !== 'dodo' ? 'provider_mismatch'
-      : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid'
-        : !(await getCourseById(d1, order.course_id)) ? 'course_missing' : null;
+  // or a Dodo refund. A payment refunded before it arrived, or one on an order an admin dismissed, grants nothing either.
+  const reason = p.paymentId && await holds(d1, refundedBeforePayment(p.paymentId)) ? 'refunded_before_payment'
+    : order.status === 'cancelled' ? 'payment_after_dismiss'
+      : p.userMismatch ? 'user_mismatch'
+        : order.provider !== 'dodo' ? 'provider_mismatch'
+          : p.currency === 'USD' && (p.amount ?? 0) < order.amount_usd_cents ? 'underpaid'
+            : !(await getCourseById(d1, order.course_id)) ? 'course_missing' : null;
   if (reason) {
-    // The payment id lands in the same batch as the flag, so a later refund always finds the order.
-    // A refund or a dispute closing the order meanwhile makes the flag batch write nothing, its record included.
-    const open: SqlCondition = { sql: `NOT EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND ${SETTLED_SQL})`, params: [order.id] };
+    // The payment id lands in the same batch as the flag, so a later refund always finds the order. A refund or a
+    // dispute closing the order meanwhile, or a racing delivery of the same payment under another event id flagging it
+    // first, makes the flag batch write nothing, its record included. The guard skips this batch's own log, which
+    // statements after it would otherwise see.
+    const counted = p.paymentId ? paymentLogged(order, p.paymentId, p.eventId) : null;
+    const open: SqlCondition = {
+      sql: `NOT EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND ${SETTLED_SQL})${counted ? ` AND NOT ${counted.sql}` : ''}`,
+      params: [order.id, ...(counted?.params ?? [])],
+    };
     const paymentId = p.paymentId
       ? [d1.prepare(`UPDATE course_orders SET provider_payment_id = COALESCE(provider_payment_id, ?) WHERE id = ? AND ${open.sql}`).bind(p.paymentId, order.id, ...open.params)]
       : [];
-    if (!(await markCourseOrderAttention(d1, order, reason, extra, gate, paymentId, open))) {
-      // A closed order made the whole batch write nothing, its record included: that path records it. An order paid
-      // meanwhile (by another delivery, or a dispute opened and won) only skipped the flag: the record, guarded by
-      // `open` alone, is already written, so it is not written again.
-      const settled = await settledMeanwhile();
-      if (settled) return settledCoursePayment(d1, settled, p, gate);
-    }
-    return 'needs_attention';
+    if (!(await markCourseOrderAttention(d1, order, reason, extra, gate, paymentId, open))) return changedMeanwhile();
+    // A dismissed order may hold an earlier payment: the admin notice names this one.
+    return reason === 'payment_after_dismiss' && p.paymentId
+      ? { outcome: 'needs_attention', new_capture: { payment_id: p.paymentId, amount: p.amount, currency: p.currency, reason } }
+      : 'needs_attention';
   }
   const nowIso = iso(membersRuntime.now());
   // Card money is captured: pay even an expired or flagged order rather than lose the payment, but never one refunded
-  // or charged back, also when the refund or the dispute lands while this batch runs.
+  // or charged back, nor a payment refunded before it arrived, also when the refund or the dispute lands while this
+  // batch runs.
+  const refunded = p.paymentId ? refundedBeforePayment(p.paymentId) : null;
   const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: p.amount, currency_paid: p.currency, provider_payment_id: p.paymentId }, {
     set: "status = 'paid', paid_at = ?, amount_paid = ?, currency_paid = ?, provider_payment_id = ?, payment_ref = ?, provider_event_id = ?, updated_at = ?",
     values: [nowIso, p.amount, p.currency, p.paymentId, p.paymentId, p.eventId, nowIso],
-    when: `o.status <> 'paid' AND NOT (${SETTLED_SQL})`,
+    when: `o.status <> 'paid' AND NOT (${SETTLED_SQL})${refunded ? ` AND NOT ${refunded.sql}` : ''}`,
+    whenParams: refunded?.params,
   }, null, gate);
   if (paid) return 'paid';
   // Paid by another delivery, refunded or disputed meanwhile: the payment batch wrote nothing, its record included.
-  const settled = await settledMeanwhile();
-  if (settled) return settledCoursePayment(d1, settled, p, gate);
-  await gate().run();
-  return 'already_paid';
+  return changedMeanwhile();
 }

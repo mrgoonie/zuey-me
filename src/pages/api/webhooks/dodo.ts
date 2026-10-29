@@ -7,6 +7,15 @@ import { runtimeWaitUntil } from '../../../lib/blocks/articles';
 import { standardWebhookHeaders } from '../../../lib/payments/standard-webhooks';
 import { applyDodoCourseWebhook } from '../../../lib/courses/course-payment-webhooks';
 import { announceOrder, shouldNotifyOrder } from '../../../lib/notifications/order-notify';
+import type { NewCourseCapture } from '../../../lib/courses/course-payment-webhooks';
+
+/** The admin notice of a new card capture on a course order that a payment cannot simply pay. */
+const CAPTURE_NOTES: Record<NewCourseCapture['reason'], string> = {
+  payment_after_paid: 'Khoản thanh toán MỚI trên đơn đã thanh toán (khách có thể bị trừ tiền hai lần). Đơn giữ nguyên trạng thái và quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.',
+  payment_after_refund: 'Khoản thanh toán MỚI trên đơn đã hoàn tiền. Đơn giữ nguyên trạng thái, không cấp quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.',
+  payment_after_dispute: 'Khoản thanh toán MỚI trên đơn đang tranh chấp hoặc đã bị chargeback. Đơn giữ nguyên trạng thái, không cấp quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.',
+  payment_after_dismiss: 'Khoản thanh toán MỚI trên đơn đã huỷ (admin dismiss). Đơn chuyển sang cần xử lý, chưa cấp quyền truy cập; hãy cấp quyền hoặc hoàn tiền thủ công trên Dodo.',
+};
 
 /**
  * Dodo Payments webhook (Standard Webhooks signature, 5-minute replay window). Subscription and
@@ -36,13 +45,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
     if (course) {
       const capture = course.new_capture;
       if (course.order_code && capture) {
-        // A new capture on a refunded or disputed order: the order row still holds the closed payment, so the notice
-        // names the captured one.
-        const closed = capture.reason === 'payment_after_refund' ? 'đã hoàn tiền' : 'đang tranh chấp hoặc đã bị chargeback';
+        // A new capture on a paid, refunded, disputed or dismissed order: the order row may hold another payment, so the
+        // notice names the captured one.
         await announceOrder(locals.runtime, env, {
           kind: 'course', source: 'dodo', code: course.order_code, outcome: course.outcome,
-          amount: capture.amount, currency: capture.currency ?? 'USD', paymentRef: capture.payment_id,
-          note: `Khoản thanh toán MỚI trên đơn ${closed}. Đơn giữ nguyên trạng thái, không cấp quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.`,
+          amount: capture.amount, currency: capture.currency ?? 'USD', paymentRef: capture.payment_id, note: CAPTURE_NOTES[capture.reason],
         });
       } else if (course.order_code && shouldNotifyOrder(course.outcome)) {
         const row = await d1.prepare('SELECT amount_paid, currency_paid, amount_usd_cents, provider_payment_id FROM course_orders WHERE code = ?')
