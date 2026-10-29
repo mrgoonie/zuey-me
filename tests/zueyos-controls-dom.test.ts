@@ -423,15 +423,14 @@ describe('Zuey OS desktop keyboard flow', () => {
     if (focused instanceof HTMLElement) focused.blur();
     expect(document.activeElement === document.body).toBe(true);
     React.act(() => { share.dispatchEvent(new Event('pointerdown', { bubbles: true })); share.click(); });
-    await settle(2);
+    await waitFor('share modal focused', () => modal()?.contains(document.activeElement) === true);
     expect(modal()).not.toBeNull();
 
-    await escape();
+    await escape('modal closed onto the share button', () => modal() === null && document.activeElement === share);
     expect(modal()).toBeNull();
     expect(document.activeElement === share).toBe(true);
 
-    await escape();
-    await settle();
+    await escape('About window hidden', () => about()?.hidden === true);
     expect(about()?.hidden).toBe(true);
   });
 
@@ -443,15 +442,14 @@ describe('Zuey OS desktop keyboard flow', () => {
     section.focus();
     expect(document.activeElement === section).toBe(true);
     React.act(() => { share.dispatchEvent(new Event('pointerdown', { bubbles: true })); share.click(); });
-    await settle(2);
+    await waitFor('share modal focused', () => modal()?.contains(document.activeElement) === true);
     expect(modal()).not.toBeNull();
 
-    await escape();
+    await escape('modal closed onto the share button', () => modal() === null && document.activeElement === share);
     expect(modal()).toBeNull();
     expect(document.activeElement === share).toBe(true);
 
-    await escape();
-    await settle();
+    await escape('About window hidden', () => about()?.hidden === true);
     expect(about()?.hidden).toBe(true);
   });
 
