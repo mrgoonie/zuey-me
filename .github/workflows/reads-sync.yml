@@ -5,13 +5,31 @@ on:
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: reads-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
-      - name: Trigger /api/v1/reads/sync
+      - name: Trigger /api/v1/reads/sync in batches
         env:
           SITE_URL: ${{ vars.SITE_URL || 'https://zuey.me' }}
+          ZUEY_ADMIN_API_KEY: ${{ secrets.ZUEY_ADMIN_API_KEY }}
         run: |
-          curl -fsS --max-time 600 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer ${{ secrets.ZUEY_ADMIN_API_KEY }}" -H "Content-Type: application/json" -d '{}'
+          # Batch the sync so each request stays well under Cloudflare's ~100s origin timeout (524).
+          # curl --retry also replays timeouts and transient 408/429/5xx answers (524 included). Replaying a batch is
+          # safe: rows are upserted by id and unchanged content hashes skip the summarizer.
+          # set -e stops the job on a failed curl; the advance check and timeout-minutes bound the loop.
+          offset=0
+          while :; do
+            body=$(curl -fsS --max-time 120 --retry 2 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer $ZUEY_ADMIN_API_KEY" -H "Content-Type: application/json" -d "{\"offset\":$offset,\"limit\":3}")
+            echo "$body"
+            echo "$body" | jq -e '.data | has("next_offset")' >/dev/null || { echo "unexpected response shape"; exit 1; }
+            next=$(echo "$body" | jq -r '.data.next_offset')
+            [ "$next" = "null" ] && break
+            [ "$next" -gt "$offset" ] || { echo "next_offset did not advance"; exit 1; }
+            offset=$next
+          done
