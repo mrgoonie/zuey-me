@@ -343,9 +343,17 @@ describe('Dodo course payments, refunds and disputes', () => {
         const before = await getCourseOrderByCode(state.d1, code);
 
         const reason = r.status === 'refunded' ? 'payment_after_refund' : 'payment_after_dispute';
-        expect(await dodo('evt_new', 'payment.succeeded', latePayment(code, userId, 'pay_second'))).toMatchObject({ outcome: 'needs_attention' });
-        expect(await dodo('evt_new', 'payment.succeeded', latePayment(code, userId, 'pay_second'))).toMatchObject({ outcome: 'duplicate_event' });
+        const second = { ...latePayment(code, userId, 'pay_second'), total_amount: 5900 };
+        // The result names the new capture, not the order's refunded or disputed payment.
+        expect(await dodo('evt_new', 'payment.succeeded', second)).toEqual({
+          outcome: 'needs_attention', order_code: code, new_capture: { payment_id: 'pay_second', amount: 5900, currency: 'USD', reason },
+        });
+        expect(await dodo('evt_new', 'payment.succeeded', second)).toMatchObject({ outcome: 'duplicate_event' });
+        // Redelivered under another event id: recorded, but neither logged, counted nor announced again.
+        expect(await dodo('evt_new_again', 'payment.succeeded', second)).toEqual({ outcome: 'ignored', order_code: code });
         expect(gateRows('evt_new')).toBe(1);
+        expect(gateRows('evt_new_again')).toBe(1);
+        expect(count("SELECT COUNT(*) AS n FROM analytics_outbox WHERE dedupe_key = 'payment_needs_attention:dodo:pay_second'")).toBe(1);
         // The order keeps its terminal status and payment id, so the refund and dispute flows still find it.
         expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({
           status: r.status, attention_reason: before?.attention_reason, amount_paid: 4900, provider_payment_id: `pay_${code}`,
@@ -355,9 +363,75 @@ describe('Dodo course payments, refunds and disputes', () => {
         expect(purchases()).toBe(1);
         expect(paidLogs()).toBe(1);
         expect(attentionEvents()).toBe(1);
-        expect(attentionLogs()).toEqual([{ code, reason, amount: 4900, payment_id: 'pay_second' }]);
+        expect(attentionLogs()).toEqual([{ code, reason, amount: 5900, payment_id: 'pay_second' }]);
+      });
+
+      it(`announces a new payment on an order reversed by ${r.name} with its own payment id and amount, once`, async () => {
+        const { code, userId } = await referredCardOrder();
+        expect(await r.reverse(code)).toMatchObject({ outcome: 'reversed' });
+        const notifyEnv: RuntimeEnv = { ...env(), TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_GROUP_ID_SEPAY_NOTI: '-1009' };
+        const texts: string[] = [];
+        const originalFetch = experienceRuntime.fetch;
+        experienceRuntime.fetch = async (input, init) => {
+          if (!String(input).startsWith('https://api.telegram.org/')) return originalFetch(input, init);
+          const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+          texts.push(String(field(body, 'text')));
+          return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+        };
+        try {
+          const body = JSON.stringify({ type: 'payment.succeeded', data: { ...latePayment(code, userId, 'pay_second'), total_amount: 5900 } });
+          const deliver = async (eventId: string) => {
+            const ts = String(Math.floor(state.now / 1000));
+            const signature = await signDodoPayload('whsec_dGVzdA==', eventId, ts, body);
+            return field(await read(await dodoWebhook(ctx({
+              env: notifyEnv, method: 'POST', rawBody: body, headers: { 'webhook-id': eventId, 'webhook-timestamp': ts, 'webhook-signature': signature },
+            }))), 'data', 'outcome');
+          };
+          expect(await deliver('evt_route_new')).toBe('needs_attention');
+          expect(texts).toHaveLength(1);
+          expect(texts[0]).toContain(code);
+          expect(texts[0]).toContain('pay_second');
+          expect(texts[0]).toContain('59.00 USD');
+          expect(texts[0]).not.toContain(`pay_${code}`);
+          expect(texts[0]).not.toContain('49.00 USD');
+          expect(texts[0]).toContain(r.status === 'refunded' ? 'đã hoàn tiền' : 'tranh chấp');
+          expect(texts[0]).toContain('hoàn tiền thủ công trên Dodo');
+          expect(await deliver('evt_route_new')).toBe('duplicate_event');
+          expect(await deliver('evt_route_new_again')).toBe('ignored');
+          expect(texts).toHaveLength(1);
+        } finally {
+          experienceRuntime.fetch = originalFetch;
+        }
       });
     }
+
+    it('records a flagged redelivery once when a dispute opens and is won between the read and the flag batch', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = String(field((await read(await checkout(lan, { provider: 'dodo', accept_terms: true }))).data, 'code'));
+      const low = { ...latePayment(code, lan.userId, 'pay_low'), total_amount: 100 };
+      let fired = false;
+      const d1: D1DatabaseLike = {
+        prepare: sql => state.d1.prepare(sql),
+        async batch(statements) {
+          if (!fired) {
+            fired = true;
+            expect(await dodo('evt_first', 'payment.succeeded', latePayment(code, lan.userId))).toMatchObject({ outcome: 'paid' });
+            expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
+            expect(await dodo('evt_won', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'restored' });
+          }
+          return state.d1.batch(statements);
+        },
+      };
+      expect(await applyDodoCourseWebhook(d1, env(), 'evt_low', { type: 'payment.succeeded', data: low })).toMatchObject({ outcome: 'needs_attention' });
+      // Recorded once by the flag batch, whose flag, log and analytics event the paid order skipped.
+      expect(gateRows('evt_low')).toBe(1);
+      expect(attentionEvents()).toBe(0);
+      expect(attentionLogs()).toEqual([]);
+      expect(await dodo('evt_low', 'payment.succeeded', low)).toMatchObject({ outcome: 'duplicate_event' });
+      expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'paid', provider_payment_id: `pay_${code}` });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+    });
 
     it('still restores a disputed order that a late payment.succeeded left charged back when the dispute is won', async () => {
       const { code, userId, courseId } = await referredCardOrder();
