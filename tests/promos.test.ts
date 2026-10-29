@@ -403,8 +403,21 @@ describe('Dodo card checkout with a promo code', () => {
     expect(res.status).toBe(201);
     expect(field(res.data, 'provider')).toBe('sepay');
     expect(field(res.data, 'status')).toBe('paid');
-    expect(field(res.data, 'months')).toBe(freeCardMonths(3));
+    expect(field(res.data, 'months')).toBe(3);
+    expect(freeCardMonths(3)).toBe(3);
     expect(calls.some(c => c.url.startsWith(DODO_BASE))).toBe(false);
+  });
+
+  it('only accepts a prepaid term as the card months of a 100% code', async () => {
+    const bad = await read(await promoCreate(ctx({ method: 'POST', body: { code: 'FREETWO', percent: 100, card_cycles: 2 }, headers: admin() })));
+    expect(bad.status).toBe(400);
+    expect(bad.code).toBe('invalid_field');
+    // A partial code may keep 2 cycles, but cannot then be raised to 100% without fixing them.
+    const partial = await createPromo({ code: 'HALFTWO', percent: 50, card_cycles: 2 });
+    const raise = await read(await promoPatch(ctx({ method: 'PATCH', body: { percent: 100 }, headers: admin(), params: { id: partial.id } })));
+    expect(raise.status).toBe(400);
+    const fixed = await read(await promoPatch(ctx({ method: 'PATCH', body: { percent: 100, card_cycles: 3 }, headers: admin(), params: { id: partial.id } })));
+    expect(fixed.status).toBe(200);
   });
 
   it('does not apply the prepaid minimum term to monthly card subscriptions', async () => {

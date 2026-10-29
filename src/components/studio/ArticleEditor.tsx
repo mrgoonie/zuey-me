@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { BlockRenderer } from '../blocks/BlockRenderer';
+import { MathView } from '../blocks/MathBlock';
+import { mathNumbers } from '../../lib/blocks/math';
 import { parseSurveyResults } from '../blocks/SurveyBlock';
 import {
-  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, CHART_KINDS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, SECTION_PADDINGS,
-  SECTION_SURFACES, SECTION_WIDTHS, emptyDocument,
+  BLOCK_TYPES, CALLOUT_TONES, CARD_ACCENTS, CARD_ALIGNS, CARD_VARIANTS, DEFAULT_CARD_LEVEL, LAYOUT_GAPS, LAYOUT_VARIANTS, LIMITS, MATH_MODES, SECTION_PADDINGS,
+  SECTION_SURFACES, SECTION_WIDTHS, TABLE_COLUMN_TYPES, TABLE_MOBILE_MODES, emptyDocument,
 } from '../../lib/blocks/schema';
+import { NUMERIC_COLUMN_TYPES, headerSources } from '../../lib/blocks/table-data';
 import type {
-  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, ParagraphBlock,
-  ResponsiveSpan, SectionBlock, SurveyBlock, ToggleBlock,
+  ArticleAccess, ArticleDocument, Block, BlockType, Breakpoint, CardBlock, CodeBlock, EmbedProvider, GalleryImage, LayoutBlock, LayoutChild, MathMode, ParagraphBlock,
+  ResponsiveSpan, SectionBlock, SurveyBlock, TableBlock, TableColumn, TableColumnType, ToggleBlock,
 } from '../../lib/blocks/schema';
 import { canContain, childContext } from '../../lib/blocks/nesting';
-import type { NestContext } from '../../lib/blocks/nesting';
+import type { ContainerKind, NestContext } from '../../lib/blocks/nesting';
 import { embedFromPastedText, embedSrc, recognizeEmbed } from '../../lib/blocks/embed';
 import { formatBytes } from '../../lib/blocks/markdown';
 import { validateDocument } from '../../lib/blocks/validate';
@@ -28,6 +31,8 @@ import { ArticleLabelsPanel } from './ArticleLabelsPanel';
 import { TaxonomyReviewPanel } from './TaxonomyReviewPanel';
 import { TaxonomyManager } from './TaxonomyManager';
 import { IconPicker } from './IconPicker';
+import { ChartFields } from './ChartFields';
+import { CompositionFields } from './CompositionFields';
 import { ImageSizeProbe, hasImageSize, withoutImageSize } from './image-size-probe';
 import { latestDraftFrom, parseDraftRecovery, recoveryWarning, restoredRevisionWarning, saveConfirmMessage } from './recovered-draft';
 import type { DraftRecovery, LatestDraft, RestoredRevision } from './recovered-draft';
@@ -46,6 +51,7 @@ const TYPE_LABELS: Partial<Record<BlockType, string>> = {
   math: 'Công thức (TeX)', gallery: 'Bộ sưu tập ảnh', audio: 'Âm thanh (file)', video: 'Video (file)', file: 'Tệp đính kèm',
   bookmark: 'Thẻ liên kết', toggle: 'Mục thu gọn', icon: 'Biểu tượng (icon)',
   interactive: 'Tương tác (HTML/JS)', section: 'Khu vực (section)', card: 'Thẻ (card)',
+  tabs: 'Tab (nhiều thẻ)', stat: 'Chỉ số (stat)', steps: 'Các bước / dòng thời gian', comparison: 'So sánh', progress: 'Tiến độ / thang đo',
 };
 
 /** Extra search words for the slash menu (unaccented). */
@@ -57,9 +63,13 @@ const TYPE_HINTS: Partial<Record<BlockType, string>> = {
   gallery: 'images album', audio: 'mp3 podcast sound', video: 'mp4', file: 'pdf download attachment', bookmark: 'link card url',
   toggle: 'details collapse accordion', icon: 'icon symbol lucide bieu tuong',
   section: 'section band wide full width lane khu vuc', card: 'card box panel the',
+  tabs: 'tabs tab panels', stat: 'metric kpi number figure chi so', steps: 'steps timeline process roadmap buoc dong thoi gian',
+  comparison: 'compare versus vs pricing plans pros cons so sanh', progress: 'progress meter gauge rating score bar tien do thang do sao',
 };
 
 const typeLabel = (t: BlockType): string => TYPE_LABELS[t] ?? t;
+
+const MATH_MODE_LABELS: Record<MathMode, string> = { display: 'Khối (căn giữa, dòng riêng)', inline: 'Trong dòng (cỡ chữ thường)' };
 
 const ICON_SIZE_LABELS: Record<IconSize, string> = {
   sm: `sm (${ICON_PIXELS.sm}px)`, md: `md (${ICON_PIXELS.md}px)`, lg: `lg (${ICON_PIXELS.lg}px)`, xl: `xl (${ICON_PIXELS.xl}px)`,
@@ -94,6 +104,11 @@ function newBlock(type: BlockType): Block | null {
     case 'icon': return { id, type, name: 'sparkles', size: 'lg', tone: 'accent' };
     case 'section': return { id, type, width: 'wide', surface: 'none', blocks: [] };
     case 'card': return { id, type, title: 'Tiêu đề thẻ', variant: 'outline', blocks: [] };
+    case 'tabs': return { id, type, tabs: [{ label: 'Tab 1', blocks: [] }, { label: 'Tab 2', blocks: [] }] };
+    case 'stat': return { id, type, items: [{ label: 'Chỉ số', value: 0 }] };
+    case 'steps': return { id, type, variant: 'steps', items: [{ title: 'Bước 1', blocks: [] }, { title: 'Bước 2', blocks: [] }] };
+    case 'comparison': return { id, type, options: [{ name: 'Lựa chọn A', blocks: [] }, { name: 'Lựa chọn B', blocks: [] }] };
+    case 'progress': return { id, type, variant: 'bar', items: [{ label: 'Tiến độ', value: 50 }] };
     default: return null;
   }
 }
@@ -106,15 +121,15 @@ function embedBlockFrom(text: string, id: string = newId()): Block | null {
 
 const CREATABLE: BlockType[] = BLOCK_TYPES.filter(t => TYPE_LABELS[t] !== undefined);
 
-/** Where a block list sits; `inCard` and `nested` default to false (the document's own top-level list). */
-interface ListCtx { layoutDepth: number; inToggle: boolean; inCard?: boolean; nested?: boolean; slug: string }
+/** Where a block list sits; `inCard`, `inWidget` and `nested` default to false (the document's own top-level list). */
+interface ListCtx { layoutDepth: number; inToggle: boolean; inCard?: boolean; inWidget?: boolean; nested?: boolean; slug: string }
 
 const nestOf = (ctx: ListCtx): NestContext => ({
-  layoutDepth: ctx.layoutDepth, inToggle: ctx.inToggle, inCard: ctx.inCard ?? false, nested: ctx.nested ?? false,
+  layoutDepth: ctx.layoutDepth, inToggle: ctx.inToggle, inCard: ctx.inCard ?? false, inWidget: ctx.inWidget ?? false, nested: ctx.nested ?? false,
 });
 
-/** Context for the body of a container block, following the validator's nesting rules. */
-const bodyCtx = (ctx: ListCtx, type: 'layout' | 'toggle' | 'section' | 'card'): ListCtx => ({ ...ctx, ...childContext(nestOf(ctx), type) });
+/** Context for the body of a container block (or a widget item), following the validator's nesting rules. */
+const bodyCtx = (ctx: ListCtx, type: ContainerKind): ListCtx => ({ ...ctx, ...childContext(nestOf(ctx), type) });
 
 function allowedTypes(ctx: ListCtx): BlockType[] {
   const nest = nestOf(ctx);
@@ -416,6 +431,131 @@ export function EmbedFields({ block, onChange }: { block: Extract<Block, { type:
   );
 }
 
+/** Code block: source plus the optional caption, gutter, emphasis, diff, wrap and collapse settings. */
+function CodeFields({ block, onChange }: { block: CodeBlock; onChange: (b: Block) => void }) {
+  // Unchecked options are removed rather than stored as false, like the validator normalises them.
+  const setFlag = (key: 'lineNumbers' | 'diff' | 'wrap', on: boolean) => {
+    const next: CodeBlock = { ...block };
+    if (on) next[key] = true;
+    else delete next[key];
+    onChange(next);
+  };
+  const flag = (key: 'lineNumbers' | 'diff' | 'wrap', label: string) => (
+    <label className="text-[11px] text-stone-300 flex items-center gap-1.5">
+      <input type="checkbox" checked={block[key] === true} onChange={e => setFlag(key, e.target.checked)} />
+      {label}
+    </label>
+  );
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-[8rem_1fr] gap-2">
+        <Text label="Ngôn ngữ" value={block.language} onChange={language => onChange({ ...block, language })} />
+        <Text label="Tên file (tuỳ chọn)" value={block.filename ?? ''} placeholder="src/app.ts"
+          onChange={filename => { const { filename: _old, ...rest } = block; onChange(filename ? { ...rest, filename } : rest); }} />
+      </div>
+      <Area label={block.diff ? 'Code (mỗi dòng bắt đầu bằng +, - hoặc dấu cách)' : 'Code'} value={block.code} onChange={code => onChange({ ...block, code })} rows={6} mono />
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {flag('lineNumbers', 'Số dòng')}
+        {flag('diff', 'Diff (+/-)')}
+        {flag('wrap', 'Xuống dòng sẵn')}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Text label="Nhấn mạnh dòng (vd. 2,4-6)" value={block.highlightLines ?? ''}
+          onChange={v => { const { highlightLines: _old, ...rest } = block; onChange(v.trim() ? { ...rest, highlightLines: v } : rest); }} />
+        <Text label={`Thu gọn khi dài hơn (${LIMITS.codeCollapseMin}–${LIMITS.codeCollapseMax} dòng)`} type="number" value={block.collapseAfter === undefined ? '' : String(block.collapseAfter)}
+          onChange={v => { const { collapseAfter: _old, ...rest } = block; const n = Number(v); onChange(v.trim() && Number.isFinite(n) ? { ...rest, collapseAfter: n } : rest); }} />
+      </div>
+    </div>
+  );
+}
+
+const TABLE_TYPE_LABELS: Record<TableColumnType, string> = {
+  text: 'Chữ', number: 'Số', currency: 'Tiền tệ', percent: 'Phần trăm', date: 'Ngày', boolean: 'Có/Không', link: 'Liên kết', badge: 'Nhãn',
+};
+type TableFlag = 'sortable' | 'search' | 'stickyHeader' | 'csv';
+type TableOption = TableFlag | 'columns' | 'title' | 'caption' | 'mobile';
+
+/** Table: headers and rows, plus the optional data-table settings (typed columns, reader tools, mobile layout). */
+function TableFields({ block, onChange }: { block: TableBlock; onChange: (b: Block) => void }) {
+  const columns = block.headers.map((_, i) => block.columns?.[i] ?? { type: 'text' as const });
+  // Unset options are removed rather than stored as false or empty, like the validator normalises them.
+  const without = (key: TableOption): TableBlock => { const next = { ...block }; delete next[key]; return next; };
+  const setColumns = (next: TableColumn[]) => {
+    onChange(next.every(c => c.type === 'text' && !c.filter) ? without('columns') : { ...block, columns: next });
+  };
+  const setColumn = (i: number, col: TableColumn) => setColumns(columns.map((c, j) => (j === i ? col : c)));
+  const setType = (i: number, type: TableColumnType) => {
+    const prev = columns[i];
+    const col: TableColumn = { type };
+    if (NUMERIC_COLUMN_TYPES.includes(type) && prev?.decimals !== undefined) col.decimals = prev.decimals;
+    if (type === 'currency') col.currency = prev?.currency ?? 'VND';
+    if (prev?.filter) col.filter = true;
+    setColumn(i, col);
+  };
+  const setFlag = (key: TableFlag, on: boolean) => onChange(on ? { ...block, [key]: true } : without(key));
+  const flagBox = (key: TableFlag, label: string) => (
+    <label className="text-[11px] text-stone-300 flex items-center gap-1.5">
+      <input type="checkbox" checked={block[key] === true} onChange={e => setFlag(key, e.target.checked)} />
+      {label}
+    </label>
+  );
+  const setHeaders = (headers: string[]) => {
+    // Column settings and cells follow their header; new columns are empty plain text.
+    const sources = headerSources(block.headers, headers);
+    const resized = sources.map(s => columns[s] ?? { type: 'text' as const });
+    const rows = block.rows.map(row => sources.map(s => row[s] ?? ''));
+    const { columns: _old, ...rest } = block;
+    onChange(resized.every(c => c.type === 'text' && !c.filter) ? { ...rest, headers, rows } : { ...rest, headers, rows, columns: resized });
+  };
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <Text label="Tiêu đề bảng (tuỳ chọn)" value={block.title ?? ''} onChange={title => onChange(title.trim() ? { ...block, title } : without('title'))} />
+        <Text label="Chú thích (tuỳ chọn)" value={block.caption ?? ''} onChange={caption => onChange(caption.trim() ? { ...block, caption } : without('caption'))} />
+      </div>
+      <CsvInput label="Tiêu đề cột (phân cách bằng dấu phẩy)" initial={block.headers.join(', ')} onCommit={raw => setHeaders(splitCsv(raw))} />
+      <Area label="Hàng: mỗi dòng một hàng, các ô phân cách bằng |" value={block.rows.map(r => r.join(' | ')).join('\n')} rows={4}
+        onChange={v => onChange({ ...block, rows: lines(v).map(l => l.split('|').map(c => c.trim())) })} />
+      <details className="rounded-lg border border-stone-800 p-2">
+        <summary className="text-[11px] text-stone-300 cursor-pointer">Kiểu cột và công cụ cho người đọc</summary>
+        <p className="text-[11px] text-stone-500 mt-2">
+          Ô số ghi dạng 1234.5 (không dấu phân cách), ngày dạng 2026-01-15, Có/Không là true/false, liên kết là https://… hoặc [nhãn](https://…).
+        </p>
+        <div className="space-y-2 mt-2">
+          {columns.map((col, i) => (
+            <div key={i} className="grid grid-cols-[1fr_8rem_6rem_5rem_auto] gap-2 items-end">
+              <span className="text-[11px] text-stone-300 truncate pb-2">{block.headers[i] || `Cột ${i + 1}`}</span>
+              <Select label="Kiểu" value={col.type} options={TABLE_COLUMN_TYPES} labels={TABLE_TYPE_LABELS} onChange={type => setType(i, type)} />
+              {col.type === 'currency'
+                ? <Text label="Mã tiền" value={col.currency ?? ''} placeholder="VND" onChange={currency => setColumn(i, { ...col, currency: currency.toUpperCase() })} />
+                : <span />}
+              {NUMERIC_COLUMN_TYPES.includes(col.type)
+                ? <NumberSelect label="Số lẻ" value={col.decimals} min={0} max={LIMITS.tableDecimalsMax} allowEmpty
+                  onChange={decimals => { const { decimals: _old, ...rest } = col; setColumn(i, decimals === undefined ? rest : { ...rest, decimals }); }} />
+                : <span />}
+              <label className="text-[11px] text-stone-300 flex items-center gap-1.5 pb-2">
+                <input type="checkbox" checked={col.filter === true}
+                  onChange={e => { const { filter: _old, ...rest } = col; setColumn(i, e.target.checked ? { ...rest, filter: true } : rest); }} />
+                Bộ lọc
+              </label>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+          {flagBox('sortable', 'Sắp xếp theo cột')}
+          {flagBox('search', 'Ô tìm kiếm')}
+          {flagBox('stickyHeader', 'Ghim hàng tiêu đề')}
+          {flagBox('csv', 'Tải CSV')}
+        </div>
+        <div className="mt-2 max-w-xs">
+          <Select label="Trên điện thoại" value={block.mobile ?? 'scroll'} options={TABLE_MOBILE_MODES} labels={{ scroll: 'Cuộn ngang', cards: 'Thẻ xếp chồng' }}
+            onChange={mobile => onChange(mobile === 'cards' ? { ...block, mobile } : without('mobile'))} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
 function ToggleFields({ block, onChange, ctx }: { block: ToggleBlock; onChange: (b: Block) => void; ctx: ListCtx }) {
   return (
     <div className="space-y-2">
@@ -535,12 +675,7 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
         </div>
       );
     case 'code':
-      return (
-        <div className="space-y-2">
-          <Text label="Ngôn ngữ" value={block.language} onChange={language => onChange({ ...block, language })} />
-          <Area label="Code" value={block.code} onChange={code => onChange({ ...block, code })} rows={6} mono />
-        </div>
-      );
+      return <CodeFields block={block} onChange={onChange} />;
     case 'divider':
       return <p className="text-[11px] text-stone-500">Đường kẻ ngang.</p>;
     case 'image':
@@ -555,34 +690,9 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
     case 'embed':
       return <EmbedFields block={block} onChange={onChange} />;
     case 'table':
-      return (
-        <div className="space-y-2">
-          <CsvInput label="Tiêu đề cột (phân cách bằng dấu phẩy)" initial={block.headers.join(', ')} onCommit={raw => onChange({ ...block, headers: splitCsv(raw) })} />
-          <Area label="Hàng: mỗi dòng một hàng, các ô phân cách bằng |" value={block.rows.map(r => r.join(' | ')).join('\n')} rows={4}
-            onChange={v => onChange({ ...block, rows: lines(v).map(l => l.split('|').map(c => c.trim())) })} />
-        </div>
-      );
+      return <TableFields block={block} onChange={onChange} />;
     case 'chart':
-      return (
-        <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
-            <Select label="Loại" value={block.kind} options={CHART_KINDS} onChange={kind => onChange({ ...block, kind })} />
-            <Text label="Tiêu đề" value={block.title ?? ''} onChange={title => onChange({ ...block, title: opt(title) })} />
-          </div>
-          <CsvInput label="Nhãn (phân cách bằng dấu phẩy)" initial={block.labels.join(', ')} onCommit={raw => onChange({ ...block, labels: splitCsv(raw) })} />
-          {block.series.map((s, i) => (
-            <div key={i} className="grid grid-cols-[1fr_2fr_auto] gap-2 items-end">
-              <Text label={`Series ${i + 1}`} value={s.name} onChange={name => onChange({ ...block, series: block.series.map((x, j) => (j === i ? { ...x, name } : x)) })} />
-              <CsvInput label={`Số liệu (${block.labels.length} giá trị)`} initial={s.data.join(', ')}
-                onCommit={raw => onChange({ ...block, series: block.series.map((x, j) => (j === i ? { ...x, data: splitCsv(raw).map(Number) } : x)) })} />
-              <button type="button" className={btnCls} disabled={block.series.length <= 1}
-                onClick={() => onChange({ ...block, series: block.series.filter((_, j) => j !== i) })}>Xoá</button>
-            </div>
-          ))}
-          <button type="button" className={btnCls} disabled={block.series.length >= LIMITS.chartSeries}
-            onClick={() => onChange({ ...block, series: [...block.series, { name: `Series ${block.series.length + 1}`, data: block.labels.map(() => 0) }] })}>+ Series</button>
-        </div>
-      );
+      return <ChartFields block={block} onChange={onChange} />;
     case 'diagram':
       return (
         <div className="space-y-2">
@@ -632,8 +742,22 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
     case 'math':
       return (
         <div className="space-y-2">
-          <Area label="Công thức TeX (hiển thị nguyên văn, có thể đọc bằng trình đọc màn hình)" value={block.tex} onChange={tex => onChange({ ...block, tex })} rows={3} mono />
+          <Area label="Công thức TeX (KaTeX, không cần $ hay $$)" value={block.tex} onChange={tex => onChange({ ...block, tex })} rows={3} mono />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
+            <Select label="Kiểu hiển thị" value={block.mode ?? 'display'} options={MATH_MODES} labels={MATH_MODE_LABELS}
+              onChange={mode => onChange(mode === 'inline' ? { ...block, mode, numbered: undefined } : { ...block, mode: undefined })} />
+            <label className="text-[11px] text-stone-300 flex items-center gap-1.5 min-h-[34px]">
+              <input type="checkbox" checked={block.numbered === true} disabled={block.mode === 'inline'}
+                onChange={e => onChange({ ...block, numbered: e.target.checked || undefined })} />
+              Đánh số phương trình (chỉ kiểu khối)
+            </label>
+          </div>
           <Text label="Chú thích" value={block.caption ?? ''} onChange={caption => onChange({ ...block, caption: opt(caption) })} />
+          {block.tex.trim() && (
+            <div className="rounded-2xl bg-[#F5EFEB] p-3 text-stone-900 min-w-0" role="group" aria-label="Xem trước công thức">
+              <MathView block={block} html={null} number={mathNumbers([block]).get(block.id)} live />
+            </div>
+          )}
         </div>
       );
     case 'gallery':
@@ -693,6 +817,15 @@ function BlockFields({ block, onChange, ctx, allowed }: FieldsProps) {
       return <SectionFields block={block} onChange={onChange} ctx={ctx} />;
     case 'card':
       return <CardFields block={block} onChange={onChange} ctx={ctx} />;
+    case 'tabs':
+    case 'stat':
+    case 'steps':
+    case 'comparison':
+    case 'progress':
+      return (
+        <CompositionFields block={block} onChange={onChange}
+          renderBody={(blocks, change) => <BlockListEditor blocks={blocks} onChange={change} ctx={bodyCtx(ctx, 'widget')} />} />
+      );
     default:
       return <p className="text-[11px] text-stone-400">Block này được chỉnh trong tab JSON.</p>;
   }
@@ -703,7 +836,7 @@ function BlockPreview({ block, slug }: { block: Block; slug: string }) {
   return (
     <div className="rounded-2xl bg-[#F5EFEB] p-3 sm:p-4 min-w-0 overflow-hidden">
       {res.ok
-        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight autoLoadEmbeds={false} />
+        ? <BlockRenderer doc={res.doc} articleSlug={slug || undefined} interactive={false} liveHighlight liveMath autoLoadEmbeds={false} />
         : <ul className="text-[11px] text-rose-700 font-mono">{res.errors.slice(0, 5).map((e, i) => <li key={i}>{e.path}: {e.message}</li>)}</ul>}
     </div>
   );
@@ -1025,7 +1158,7 @@ function HistoryView({ slug, locale, onRestore }: {
             </p>
           )}
           <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight autoLoadEmbeds={false} />
+            <BlockRenderer doc={viewing.doc} interactive={false} liveHighlight liveMath autoLoadEmbeds={false} />
           </div>
         </div>
       )}
@@ -1205,8 +1338,9 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     setBusy(false);
     if (res.ok) {
       await load(editing.originalSlug, editing.draft.locale);
-      const scheduled = isObj(res.data) ? parseEmailNotification(res.data.email_notification) : null;
-      const emailNote = scheduled?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(scheduled.sendAfter)}.` : '';
+      const email = isObj(res.data) ? parseEmailNotification(res.data.email_notification) : null;
+      const emailNote = email?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(email.sendAfter)}.`
+        : email?.status === 'failed' ? ' Không cập nhật được email cho thành viên; xuất bản lại để thử lại.' : '';
       setStatus({ text: `Đã xuất bản bản ${editing.draft.locale}.${emailNote}`, error: false });
       onListChanged();
     } else if (res.code === 'revision_conflict') {
@@ -1354,7 +1488,7 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       )}
       {tab === 'preview' && (
         <div className="rounded-3xl bg-[#F5EFEB] p-4 sm:p-6 min-w-0 overflow-hidden">
-          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight autoLoadEmbeds={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
+          {validation?.ok ? <BlockRenderer doc={validation.doc} interactive={false} liveHighlight liveMath autoLoadEmbeds={false} /> : <p className="text-sm text-rose-700">Sửa lỗi bên dưới để xem trước.</p>}
         </div>
       )}
       {tab === 'json' && (

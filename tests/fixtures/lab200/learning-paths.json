@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "locale": "vi",
+  "learningPaths": [
+    {
+      "slug": "thiet-ke-he-thong-qua-bai-toan-thuc-te-saas-realtime-va-video",
+      "url": "https://200lab.io/learning-paths/thiet-ke-he-thong-qua-bai-toan-thuc-te-saas-realtime-va-video",
+      "jsonUrl": "https://200lab.io/learning-paths/thiet-ke-he-thong-qua-bai-toan-thuc-te-saas-realtime-va-video.json",
+      "title": "Thiết kế hệ thống qua bài toán thực tế: SaaS, realtime và video",
+      "subtitle": "Áp dụng nền tảng thiết kế hệ thống vào ba loại sản phẩm phổ biến",
+      "summary": "Lộ trình 5 khóa đi từ nền tảng thiết kế hệ thống và cách giữ dữ liệu đúng khi có sự cố, rồi áp dụng vào ba bài toán thực tế: nền tảng SaaS nhiều tenant, ứng dụng realtime và offline-first, và hệ thống video từ upload tới livestream.",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/f7/f7511298c50ef93eef1fea85b10a8ed8a335671c5b7d1aed7cebd3c4d0918c76/generations/126352e761bbcdc87ccee06d0373556bcb5487803c02f59e5ea45af91d782a38",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/f7/f7511298c50ef93eef1fea85b10a8ed8a335671c5b7d1aed7cebd3c4d0918c76/generations/126352e761bbcdc87ccee06d0373556bcb5487803c02f59e5ea45af91d782a38"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/f7/f7511298c50ef93eef1fea85b10a8ed8a335671c5b7d1aed7cebd3c4d0918c76/generations/126352e761bbcdc87ccee06d0373556bcb5487803c02f59e5ea45af91d782a38"
+          }
+        ]
+      },
+      "publishedAt": "2026-10-13T15:52:03.112343Z",
+      "courseCount": 5,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 859000,
+            "currency": "VND",
+            "compareAtMinorUnits": 965000
+          }
+        ]
+      }
+    },
+    {
+      "slug": "thiet-ke-he-thong-chiu-tai-va-mo-rong-du-lieu",
+      "url": "https://200lab.io/learning-paths/thiet-ke-he-thong-chiu-tai-va-mo-rong-du-lieu",
+      "jsonUrl": "https://200lab.io/learning-paths/thiet-ke-he-thong-chiu-tai-va-mo-rong-du-lieu.json",
+      "title": "Thiết kế hệ thống chịu tải và mở rộng dữ liệu",
+      "subtitle": "Khi lượng truy cập và dữ liệu tăng, chọn thành phần nào và vì sao",
+      "summary": "Lộ trình 5 khóa về thiết kế hệ thống khi app lớn dần. Bạn ước lượng tải và chọn cache, queue, replica cho đúng workload, giữ hệ thống ổn định khi tải vượt capacity, tách việc bằng event, rồi xử lý dữ liệu có nhiều bản sao và chia database ra nhiều shard.",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/d3/d3fac93d5453553cee5f8608ee3f9e96ea1e303fe15d4464854d51e723aa1a4e/generations/d76de8691904690cfabd40054a8e306a38ca565ce6947af74e584bc5b4f8c95a",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/d3/d3fac93d5453553cee5f8608ee3f9e96ea1e303fe15d4464854d51e723aa1a4e/generations/d76de8691904690cfabd40054a8e306a38ca565ce6947af74e584bc5b4f8c95a"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/d3/d3fac93d5453553cee5f8608ee3f9e96ea1e303fe15d4464854d51e723aa1a4e/generations/d76de8691904690cfabd40054a8e306a38ca565ce6947af74e584bc5b4f8c95a"
+          }
+        ]
+      },
+      "publishedAt": "2026-10-13T15:51:58.663851Z",
+      "courseCount": 5,
+      "pricing": {
+        "state": "available",
+        "prices": [
+          {
+            "minorUnits": 949000,
+            "currency": "VND",
+            "compareAtMinorUnits": 1055000
+          }
+        ]
+      }
+    },
+    {
+      "slug": "backend-vung-vang-to-chuc-code-thiet-ke-api-va-giu-du-lieu-dung-khi-co-su-co",
+      "url": "https://200lab.io/learning-paths/backend-vung-vang-to-chuc-code-thiet-ke-api-va-giu-du-lieu-dung-khi-co-su-co",
+      "jsonUrl": "https://200lab.io/learning-paths/backend-vung-vang-to-chuc-code-thiet-ke-api-va-giu-du-lieu-dung-khi-co-su-co.json",
+      "title": "Backend vững vàng: tổ chức code, thiết kế API và giữ dữ liệu đúng khi có sự cố",
+      "subtitle": "Code dễ thay đổi, API giữ được contract, dữ liệu không sai khi service gặp lỗi",
+      "summary": "Lộ trình 4 khóa cho backend developer. Bạn tổ chức code theo pattern và kiến trúc kiểm tra lại được, thiết kế API giữa các service, giữ dữ liệu đúng khi gặp timeout, retry hay crash, rồi chuyển sang hệ thống event-driven với queue, saga và CQRS.",
+      "cover": {
+        "url": "https://assets.200lab.io/sha256/1b/1b6c91ffaac0b8752e44633372336fe60f4f111319e0f30716a488f836ed61bd/generations/bdef8440fda7a0826ec56691ef1c8ad4ee870667f5ce073419d226471333b4cc",
+        "variants": [
+          {
+            "width": 640,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=640,fit=scale-down,quality=82,format=auto/sha256/1b/1b6c91ffaac0b8752e44633372336fe60f4f111319e0f30716a488f836ed61bd/generations/bdef8440fda7a0826ec56691ef1c8ad4ee870667f5ce073419d226471333b4cc"
+          },
+          {
+            "width": 960,
+            "url": "https://assets.200lab.io/cdn-cgi/image/width=960,fit=scale-down,quality=82,format=auto/sha256/1b/1b6c91ffaac0b8752e44633372336fe60f4f111319e0f30716a488f836ed61bd/generations/bdef8440fda7a0826ec56691ef1c8ad4ee870667f5ce073419d226471333b4cc"
+          }
+        ]
+      },
+      "publishedAt": "2026-10-13T15:51:55.948241Z",
+      "courseCount": 4,
+      "pricing": {
+        "state": "unavailable",
+        "prices": []
+      }
+    }
+  ]
+}

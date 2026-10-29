@@ -101,13 +101,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
         >
           {/* Left Icon (42x42px circle) */}
           <div className="flex-shrink-0 w-11 h-11 rounded-full overflow-hidden flex items-center justify-center bg-stone-100 border border-stone-200 shadow-xs">
-            {item.icon ? (
-              <BrandIcon name={item.icon} className="w-7 h-7" />
-            ) : (
-              <span className="font-bold text-xs text-stone-600">
-                {title.substring(0, 2).toUpperCase()}
-              </span>
-            )}
+            <BrandIcon name={item.icon ?? ''} className="w-7 h-7" />
           </div>
 
           {/* Center Content */}

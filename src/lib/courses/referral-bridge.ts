@@ -9,7 +9,7 @@
  * - Paid orders capture a commission on what was actually collected; refunds, chargebacks and disputes
  *   reverse it. Course orders snapshot the referrer, the discount and the commission percent at checkout.
  */
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { Row } from '../members/runtime';
@@ -20,7 +20,7 @@ import { captureReferralCommission } from '../referrals/commissions';
 import { getReferralSettings } from '../referrals/config';
 import { isActiveReferrer, isEligibleBoundReferee, isSelfReferral } from '../referrals/eligibility';
 import { effectiveRate, membershipSplit } from '../referrals/rates';
-import { reverseCommission } from '../referrals/refunds';
+import { reverseCommissionStatements } from '../referrals/refunds';
 import type { CheckoutReferral } from '../referrals/resolve-checkout-referral';
 
 export interface CourseReferral {
@@ -84,8 +84,11 @@ export async function onCourseOrderPaid(d1: D1DatabaseLike, env: RuntimeEnv, ord
   await captureReferralCommission(d1, env, { kind: 'course_order', id: order.id, payerText });
 }
 
-/** Called after a paid course order is refunded, charged back or disputed. */
-export async function onCourseOrderReversed(d1: D1DatabaseLike, order: CourseOrderRef, reason: string): Promise<void> {
-  if (!order.referrer_user_id) return;
-  await reverseCommission(d1, { sourceKind: 'course_order', sourceId: order.id }, reason);
+/**
+ * The commission reversal of a refunded, charged back or disputed course order, as statements for the order's reversal
+ * batch (applied only while `onlyIf` holds). An order without a referral snapshot has no commission and gets no
+ * marker, so they change nothing for it.
+ */
+export function courseCommissionReversalStatements(d1: D1DatabaseLike, orderId: string, reason: string, onlyIf: SqlCondition): D1PreparedStatementLike[] {
+  return reverseCommissionStatements(d1, { sourceKind: 'course_order', sourceId: orderId }, reason, 'system', onlyIf);
 }

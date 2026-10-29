@@ -14,6 +14,21 @@ export interface ArticleNotification {
   updated_at: string;
 }
 
+/**
+ * Publish-response marker for an email step that failed after the publish committed when no stored email
+ * row could be read back; republishing with an explicit `notify` applies the email decision again.
+ */
+export interface ArticleNotificationFailure {
+  status: 'failed';
+  send_after: null;
+  sent_count: 0;
+  reason: 'notification_update_failed';
+  updated_at: string;
+}
+
+/** The `email_notification` of a publish response. */
+export type PublishEmailNotification = ArticleNotification | ArticleNotificationFailure;
+
 type Row = Record<string, unknown>;
 
 const STATUSES: readonly ArticleNotificationStatus[] = ['scheduled', 'sending', 'sent', 'skipped', 'cancelled'];
@@ -73,6 +88,17 @@ export async function applyPublishNotification(
       .bind(sendAfter, opts.actor, now, articleId).run();
   }
   return getArticleNotification(db, articleId);
+}
+
+/**
+ * The `email_notification` to report when `applyPublishNotification` threw after the publish committed: the row
+ * that is actually stored (e.g. still `scheduled` when an opt-out failed), tagged `notification_update_failed`.
+ * Falls back to the `failed` marker when no row exists or the re-read fails too. Never throws.
+ */
+export async function notificationAfterFailure(db: D1DatabaseLike, articleId: string, nowMs: number): Promise<PublishEmailNotification> {
+  const stored = await getArticleNotification(db, articleId).catch(() => null);
+  if (stored) return { ...stored, reason: 'notification_update_failed' };
+  return { status: 'failed', send_after: null, sent_count: 0, reason: 'notification_update_failed', updated_at: new Date(nowMs).toISOString() };
 }
 
 /** Stops a pending or in-progress email when its article is deleted. */

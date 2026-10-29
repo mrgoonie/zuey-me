@@ -4,7 +4,8 @@
  */
 import { canTrack } from '../consent';
 import { isGuestDistinctId } from '../identity';
-import { hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
+import { REDACTED, hasPrivateIdentifier, isSensitivePath, scrubValue } from '../pii';
+import type { ScrubCache } from '../pii';
 import type { ClientDestination, DestinationResult, ServerAnalyticsEvent, ServerDestination } from './types';
 
 /** Project "Zuey.me". Used only by production builds that have no PUBLIC_POSTHOG_KEY configured. */
@@ -15,6 +16,10 @@ export interface AnalyticsEnv {
   PUBLIC_POSTHOG_KEY?: string;
   PUBLIC_POSTHOG_HOST?: string;
   PUBLIC_ANALYTICS_DEBUG?: string;
+  /** GA4 web stream measurement id (`G-…`, public). Absent: GA4 is off in the browser and on the server. */
+  PUBLIC_GA4_MEASUREMENT_ID?: string;
+  /** GA4 Measurement Protocol API secret, server-only (runtime binding). Absent: the server GA4 path is skipped. */
+  GA4_API_SECRET?: string;
 }
 
 export interface PostHogConfig {
@@ -61,13 +66,18 @@ function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
-/** Merges runtime bindings (Cloudflare) over build-time `import.meta.env`. */
+/**
+ * Merges runtime bindings (Cloudflare) over build-time `import.meta.env`. The GA4 API secret is read from the
+ * runtime only, so it is never inlined into a build.
+ */
 export function analyticsEnvFrom(runtime: AnalyticsEnv | undefined): AnalyticsEnv {
   const build: Record<string, unknown> = import.meta.env ?? {};
   return {
     PUBLIC_POSTHOG_KEY: stringOrUndefined(runtime?.PUBLIC_POSTHOG_KEY) ?? stringOrUndefined(build.PUBLIC_POSTHOG_KEY),
     PUBLIC_POSTHOG_HOST: stringOrUndefined(runtime?.PUBLIC_POSTHOG_HOST) ?? stringOrUndefined(build.PUBLIC_POSTHOG_HOST),
     PUBLIC_ANALYTICS_DEBUG: stringOrUndefined(runtime?.PUBLIC_ANALYTICS_DEBUG) ?? stringOrUndefined(build.PUBLIC_ANALYTICS_DEBUG),
+    PUBLIC_GA4_MEASUREMENT_ID: stringOrUndefined(runtime?.PUBLIC_GA4_MEASUREMENT_ID) ?? stringOrUndefined(build.PUBLIC_GA4_MEASUREMENT_ID),
+    GA4_API_SECRET: stringOrUndefined(runtime?.GA4_API_SECRET),
   };
 }
 
@@ -110,6 +120,7 @@ export function getPostHog(): PostHogLike | null {
 
 /** posthog-js `before_send` payload (only the members the scrubber touches). */
 export interface CaptureResultLike {
+  event?: string;
   properties?: Record<string, unknown>;
   $set?: Record<string, unknown>;
   $set_once?: Record<string, unknown>;
@@ -117,6 +128,49 @@ export interface CaptureResultLike {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Longest exception message kept (`$exception_message`, `$exception_list[].value`), measured after scrubbing. */
+export const MAX_EXCEPTION_TEXT_LENGTH = 200;
+
+let openSensitiveSurfaces = 0;
+
+/**
+ * Marks a surface where visitors type private free text (the Zuey AI panel on any page, an open lesson AI tutor). While one
+ * is open, exception events carry no message text. Returns the function that unmarks it (a React effect cleanup).
+ */
+export function enterSensitiveSurface(): () => void {
+  openSensitiveSurfaces++;
+  let left = false;
+  return () => {
+    if (left) return;
+    left = true;
+    openSensitiveSurfaces--;
+  };
+}
+
+function shortenText(text: string): string {
+  if (text.length <= MAX_EXCEPTION_TEXT_LENGTH) return text;
+  const last = text.charCodeAt(MAX_EXCEPTION_TEXT_LENGTH - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? MAX_EXCEPTION_TEXT_LENGTH - 1 : MAX_EXCEPTION_TEXT_LENGTH;
+  return `${text.slice(0, end)}…`;
+}
+
+/**
+ * Exception messages are free text and can echo what the visitor typed. Applied to already-scrubbed
+ * `$exception` properties: each message is cut to `MAX_EXCEPTION_TEXT_LENGTH`, or replaced by `[redacted]`
+ * when `dropText` is set (private pages and open sensitive surfaces). The error type and the scrubbed stack
+ * frames (file, line, column, function) are kept.
+ */
+export function hardenExceptionProperties(properties: Record<string, unknown>, dropText: boolean): Record<string, unknown> {
+  const text = (value: unknown): unknown => (typeof value === 'string' ? (dropText ? REDACTED : shortenText(value)) : value);
+  const out: Record<string, unknown> = { ...properties };
+  if ('$exception_message' in out) out.$exception_message = text(out.$exception_message);
+  const list = out.$exception_list;
+  if (Array.isArray(list)) {
+    out.$exception_list = list.map(item => (isRecord(item) && 'value' in item ? { ...item, value: text(item.value) } : item));
+  }
+  return out;
 }
 
 function pathOf(value: unknown): string | null {
@@ -132,17 +186,19 @@ function pathOf(value: unknown): string | null {
  * `before_send` hook: strips sensitive URL parameters (the whole query on account, billing and booking
  * pages), replaces order codes and booking ids in paths, and redacts emails, JWTs and secret tokens
  * from every property PostHog attaches automatically (current URL, referrer, `$initial_*`, autocapture
- * element chain). The page title is blanked on order and booking pages. Drops the event if scrubbing
+ * element chain). The page title is blanked on order and booking pages, and `$exception` messages are
+ * shortened or dropped (`hardenExceptionProperties`). Drops the event if scrubbing
  * itself fails, so an unexpected shape can never leak raw data.
  */
 export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null): T | null {
   if (!result) return result;
   try {
     const scrubbed = { ...result };
+    const cache: ScrubCache = new Map();
     for (const field of ['properties', '$set', '$set_once'] as const) {
       const value = result[field];
       if (value === undefined) continue;
-      const clean = scrubValue(value);
+      const clean = scrubValue(value, cache);
       if (!isRecord(clean)) return null;
       scrubbed[field] = clean;
     }
@@ -150,6 +206,10 @@ export function scrubCaptureResult<T extends CaptureResultLike>(result: T | null
     const path = raw ? pathOf(raw.$current_url) ?? pathOf(raw.$pathname) : null;
     if (path && hasPrivateIdentifier(path) && scrubbed.properties) {
       scrubbed.properties = { ...scrubbed.properties, title: '' };
+    }
+    if (result.event === '$exception' && scrubbed.properties) {
+      const dropText = (path !== null && isSensitivePath(path)) || openSensitiveSurfaces > 0;
+      scrubbed.properties = hardenExceptionProperties(scrubbed.properties, dropText);
     }
     return scrubbed;
   } catch {
@@ -235,6 +295,13 @@ export const SERVER_EVENT_FLAGS = { $lib: 'zuey-me-server', $geoip_disable: true
 /** Booking guests are one-off hashed ids: their events never create a PostHog person profile. */
 export const GUEST_EVENT_FLAGS = { $process_person_profile: false } as const;
 
+/** GA4-only attribution properties of server events (the GA client and session ids); never sent to PostHog. */
+export const GA4_ONLY_PROPERTIES: readonly string[] = ['ga_client_id', 'ga_session_id'];
+
+function withoutGa4Only(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(properties).filter(([key]) => !GA4_ONLY_PROPERTIES.includes(key)));
+}
+
 /** Server adapter posting one event to PostHog's capture endpoint. Resolves with a result, never rejects. */
 export function createPostHogServerDestination(config: PostHogConfig, fetchImpl: FetchLike = fetch): ServerDestination {
   return {
@@ -250,7 +317,7 @@ export function createPostHogServerDestination(config: PostHogConfig, fetchImpl:
             distinct_id: event.distinctId,
             uuid: event.uuid,
             timestamp: event.occurredAt,
-            properties: { ...event.properties, ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
+            properties: { ...withoutGa4Only(event.properties), ...SERVER_EVENT_FLAGS, ...(isGuestDistinctId(event.distinctId) ? GUEST_EVENT_FLAGS : {}) },
           }),
           signal,
         });

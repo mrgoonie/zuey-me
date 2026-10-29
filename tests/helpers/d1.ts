@@ -29,16 +29,26 @@ class Statement implements D1PreparedStatementLike {
     return this.runSync();
   }
   runSync(): D1RunResultLike {
-    const res = this.db.query(this.sql).run(...this.params);
+    const query = this.db.query(this.sql);
+    // Like D1 in a batch: a SELECT answers with its rows.
+    if (/^\s*SELECT\b/i.test(this.sql)) {
+      const rows: unknown[] = query.all(...this.params);
+      return { meta: { changes: 0 }, results: rows as Record<string, unknown>[] };
+    }
+    const res = query.run(...this.params);
     return { meta: { changes: res.changes, last_row_id: Number(res.lastInsertRowid) } };
   }
 }
 
-/** Real SQLite database with every migration in /migrations applied, exposed through the D1 interface. */
-export function createTestD1(): D1DatabaseLike & { raw: Database } {
+/**
+ * Real SQLite database with every migration in /migrations applied, exposed through the D1 interface.
+ * `beforeMigration` runs before each migration file, so a test can seed data an upgrade must preserve.
+ */
+export function createTestD1(opts: { beforeMigration?: (file: string, db: Database) => void } = {}): D1DatabaseLike & { raw: Database } {
   const db = new Database(':memory:');
   const dir = path.join(import.meta.dir, '..', '..', 'migrations');
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()) {
+    opts.beforeMigration?.(file, db);
     db.run(fs.readFileSync(path.join(dir, file), 'utf8'));
   }
   return {
@@ -54,4 +64,49 @@ export function createTestD1(): D1DatabaseLike & { raw: Database } {
       }))();
     },
   };
+}
+
+/**
+ * `base`, except that the worker dies at the first statement matching `at` (a read, a write alone or a write in a
+ * batch): that write never commits, and every later call fails too, so no cleanup runs. It also records each batch's
+ * SQL and each write run alone.
+ */
+export function crashingD1(base: D1DatabaseLike, at: (sql: string) => boolean = () => false) {
+  let dead = false;
+  const batches: string[][] = [];
+  const runs: string[] = [];
+  const alive = () => { if (dead) throw new Error('worker crashed'); };
+  const crash = (): never => { dead = true; throw new Error('worker crashed'); };
+  const read = (sql: string) => { alive(); if (at(sql)) crash(); };
+  const sources = new WeakMap<D1PreparedStatementLike, { sql: string; inner: D1PreparedStatementLike }>();
+  const wrap = (sql: string, inner: D1PreparedStatementLike): D1PreparedStatementLike => {
+    const statement: D1PreparedStatementLike = {
+      bind: (...v: unknown[]) => wrap(sql, inner.bind(...v)),
+      first: async <T,>() => { read(sql); return inner.first<T>(); },
+      all: async <T,>() => { read(sql); return inner.all<T>(); },
+      run: async () => {
+        alive();
+        runs.push(sql);
+        if (at(sql)) crash();
+        return inner.run();
+      },
+    };
+    sources.set(statement, { sql, inner });
+    return statement;
+  };
+  const d1: D1DatabaseLike = {
+    prepare: (sql: string) => wrap(sql, base.prepare(sql)),
+    batch: async (statements: D1PreparedStatementLike[]) => {
+      alive();
+      const list = statements.map(s => {
+        const source = sources.get(s);
+        if (!source) throw new Error('foreign statement');
+        return source;
+      });
+      batches.push(list.map(s => s.sql));
+      if (list.some(s => at(s.sql))) crash();
+      return base.batch(list.map(s => s.inner));
+    },
+  };
+  return { d1, batches, runs };
 }

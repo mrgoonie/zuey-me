@@ -3,6 +3,7 @@ import type { Locale } from '../../lib/i18n/locales';
 import { isFeedStale } from '../../lib/presence/presence-feed';
 import { activityMonitorStrings } from './activity-monitor-i18n';
 import { CategoryBars } from './CategoryBars';
+import { HistorySection } from './HistorySection';
 import { KpiCards } from './KpiCards';
 import { LiveStatus } from './LiveStatus';
 import { useActivityFeed, useNow, useThrottled } from './use-activity-feed';
@@ -38,6 +39,7 @@ export const ActivityMonitorPanel: React.FC<ActivityMonitorPanelProps> = ({ loca
 
       <KpiCards snapshot={snapshot} dimmed={dimmed} strings={strings} locale={locale} />
       <CategoryBars snapshot={snapshot} dimmed={dimmed} strings={strings} locale={locale} />
+      <HistorySection locale={locale} active={active} categoryNames={strings.categories.names} />
 
       <p className="am-sr" aria-live="polite" aria-atomic="true">{announced === null ? '' : strings.announce(announced)}</p>
 

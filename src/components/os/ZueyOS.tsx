@@ -25,8 +25,9 @@ import { AppGlyph } from './AppGlyph';
 import { AppearancePanel } from './AppearancePanel';
 import { Dock } from './Dock';
 import {
-  DEFAULT_LOOK, applyLook, imageFileToWallpaper, readLook, readWallImage, resolvedTheme, writeLook, writeWallImage, type Look,
+  DEFAULT_LOOK, applyLook, glassEnabled, imageFileToWallpaper, readLook, readWallImage, resolvedTheme, writeLook, writeWallImage, type Look,
 } from './look';
+import { LiquidGlass } from './liquid-glass-filters';
 import { MenuBar, type MenuItem } from './MenuBar';
 import { MobileHome } from './MobileHome';
 import { osStrings } from './os-i18n';
@@ -130,9 +131,20 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     setWallImage(readWallImage());
     setMascotHidden(readStored(STORAGE_KEYS.mascotHidden) === true);
     if (/Mac|iPhone|iPad/.test(navigator.userAgent)) setShortcut('⌘K');
-    document.documentElement.setAttribute('data-os-ready', '');
     setReady(true);
   }, []);
+
+  // Until data-os-ready is set, phones hide every window (the server renders the desktop boot windows).
+  // On a phone the restore above closes those windows with a slide-out; revealing them before a window
+  // is actually open would flash the profile sheet over the home screen after hydration (and make it the
+  // page's largest paint), so the attribute waits for the first open window there.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!ready || root.hasAttribute('data-os-ready')) return;
+    if (!window.matchMedia(PHONE_QUERY).matches || Object.values(wins).some(w => w.open)) {
+      root.setAttribute('data-os-ready', '');
+    }
+  }, [ready, wins]);
 
   useEffect(() => {
     if (!ready) return;
@@ -184,7 +196,7 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
   const resetLook = useCallback(() => {
     writeWallImage(null);
     setWallImage(null);
-    changeLook({ ...DEFAULT_LOOK });
+    changeLook({ ...DEFAULT_LOOK, glass: true });
     showToast(s.look.resetDone);
   }, [changeLook, s.look]);
 
@@ -602,7 +614,12 @@ export const ZueyOS: React.FC<ZueyOSProps> = ({ locale, profile, links, signedIn
     <div
       ref={rootRef}
       className={`os-root${anyVisible ? ' has-sheet' : ''}${expo && !expo.leaving ? ' is-expo' : ''}`}
+      // Server and first paint are the plain chrome. The value never changes here, so React never
+      // rewrites it; <LiquidGlass> updates the attribute itself.
+      data-glass="off"
     >
+      {/* Writes the Liquid Glass tier onto this root itself, so a tier change never re-renders the desktop. */}
+      <LiquidGlass target={rootRef} enabled={ready && glassEnabled(look)} reducedMotion={reduced} />
       <a href="#os-screen" className="os-skip">{s.skip}</a>
 
       <div className="os-desk" aria-hidden="true">

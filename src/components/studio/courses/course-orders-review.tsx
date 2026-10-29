@@ -12,11 +12,27 @@ const CONFIRM: Record<Action, string> = {
   dismiss: 'Dismiss this order (cancelled, no access)?',
   refund: 'Record a manual refund? This revokes course access, GitHub access and any referral commission. Send the money back yourself in SePay/Dodo.',
 };
+/** A dispute already revoked access and the commission; the refund only closes the order so a won dispute cannot restore it. */
+const CONFIRM_DISPUTED_REFUND = 'Record a manual refund of this disputed order? Access and commission were already revoked when the dispute opened; the order becomes refunded and a won dispute will not restore access. Send the money back yourself in Dodo.';
+
+/**
+ * The actions the server accepts for an order, each with its confirm text. A charged-back order (dispute open, or lost)
+ * cannot be granted or dismissed: the dispute outcome decides its access. It can be refunded only while its dispute is
+ * open; after a lost dispute the chargeback already returned the money, so nothing is offered.
+ */
+export function orderActions(status: string, disputeLost: boolean): Partial<Record<Action, string>> {
+  if (status === 'charged_back') return disputeLost ? {} : { refund: CONFIRM_DISPUTED_REFUND };
+  const actions: Partial<Record<Action, string>> = {};
+  if (status !== 'paid') actions.grant = CONFIRM.grant;
+  if (status !== 'paid' && status !== 'cancelled') actions.dismiss = CONFIRM.dismiss;
+  if (status === 'paid' || status === 'needs_attention') actions.refund = CONFIRM.refund;
+  return actions;
+}
 
 interface OrderRow {
   code: string; provider: string; status: string; course_title: string; user_id: string; user_email: string | null; list_usd_cents: number; amount_usd_cents: number;
   applied_pct: number; amount_vnd: number | null; amount_paid: number | null; currency_paid: string | null; attention_reason: string | null;
-  created_at: string; paid_at: string | null;
+  created_at: string; paid_at: string | null; dispute_lost: boolean;
 }
 
 function toRow(o: Obj): OrderRow {
@@ -24,16 +40,17 @@ function toRow(o: Obj): OrderRow {
     code: str(o, 'code'), provider: str(o, 'provider'), status: str(o, 'status'), course_title: isObj(o.course) ? str(o.course, 'title') : '(deleted course)',
     user_id: str(o, 'user_id'), user_email: typeof o.user_email === 'string' ? o.user_email : null, list_usd_cents: num(o, 'list_usd_cents'), amount_usd_cents: num(o, 'amount_usd_cents'), applied_pct: num(o, 'applied_pct'),
     amount_vnd: typeof o.amount_vnd === 'number' ? o.amount_vnd : null, amount_paid: typeof o.amount_paid === 'number' ? o.amount_paid : null,
-    currency_paid: strOrNull(o, 'currency_paid'), attention_reason: strOrNull(o, 'attention_reason'), created_at: str(o, 'created_at'), paid_at: strOrNull(o, 'paid_at'),
+    currency_paid: strOrNull(o, 'currency_paid'), attention_reason: strOrNull(o, 'attention_reason'), created_at: str(o, 'created_at'), paid_at: strOrNull(o, 'paid_at'), dispute_lost: o.dispute_lost === true,
   };
 }
 
 function OrderCard({ order, busy, onResolve }: { order: OrderRow; busy: boolean; onResolve: (action: Action, reason: string) => void }) {
   const [reason, setReason] = useState('');
-  const canGrant = order.status !== 'paid';
-  const canDismiss = order.status !== 'paid' && order.status !== 'cancelled';
-  const canRefund = order.status === 'paid' || order.status === 'needs_attention';
-  const go = (a: Action) => { if (window.confirm(`${order.code}: ${CONFIRM[a]}`)) onResolve(a, reason.trim()); };
+  const actions = orderActions(order.status, order.dispute_lost);
+  const canGrant = actions.grant !== undefined;
+  const canDismiss = actions.dismiss !== undefined;
+  const canRefund = actions.refund !== undefined;
+  const go = (a: Action) => { if (window.confirm(`${order.code}: ${actions[a] ?? CONFIRM[a]}`)) onResolve(a, reason.trim()); };
   return (
     <li className="rounded-xl border border-stone-800 bg-stone-950/60 p-3 space-y-1.5">
       <div className="flex flex-wrap items-center gap-2 text-xs">

@@ -10,8 +10,8 @@ import type { OAuthClient } from './clients';
 import { getClient, redirectDisplayHost, redirectUriAllowed } from './clients';
 import type { OAuthScope } from './config';
 import {
-  DEFAULT_MEMBER_SCOPES, REQUEST_TTL_MS, canonicalResource, isOAuthScope, issuerFor, mcpResourceFor, parseScopeParam,
-  parseStoredScopes, sortScopes,
+  DEFAULT_MEMBER_SCOPES, REQUEST_TTL_MS, canonicalResource, isIdentityOnly, isOAuthScope, issuerFor, mcpResourceFor, parseScopeParam,
+  isIdentityScope, parseStoredScopes, sortScopes, userinfoResourceFor,
 } from './config';
 import { OAuthError } from './errors';
 import { createAuthorizationCode, recordConsent } from './tokens';
@@ -102,11 +102,20 @@ export async function startAuthorization(d1: D1DatabaseLike, request: Request): 
   const requested = parseScopeParam(q('scope'));
   if (requested === null) return fail('invalid_scope', 'Unknown scope requested');
   const scopes = requested.length > 0 ? requested : [...DEFAULT_MEMBER_SCOPES];
+  // `profile`/`email` are only readable at userinfo, which needs `openid`: without it the token would be useless.
+  if (scopes.some(isIdentityScope) && !scopes.includes('openid')) {
+    return fail('invalid_scope', 'profile and email require the openid scope');
+  }
 
-  const expectedResource = mcpResourceFor(issuer);
+  // Sign-in requests (only openid/profile/email) are bound to userinfo, so their tokens never open `/mcp`;
+  // any request with a member or admin scope keeps the MCP audience exactly as before.
+  const identityOnly = isIdentityOnly(scopes);
+  const expectedResource = identityOnly ? userinfoResourceFor(issuer) : mcpResourceFor(issuer);
   const rawResource = q('resource');
   if (rawResource !== null && canonicalResource(rawResource) !== expectedResource) {
-    return fail('invalid_target', `resource must be ${expectedResource}`);
+    return fail('invalid_target', identityOnly
+      ? `identity-only scopes (openid, profile, email) use resource ${expectedResource} or no resource`
+      : `resource must be ${expectedResource}`);
   }
 
   const now = membersRuntime.now();
@@ -128,6 +137,8 @@ export async function loadPendingAuthorization(d1: D1DatabaseLike, id: string): 
 export interface ScopeChoice {
   scope: OAuthScope;
   requested: boolean;
+  /** Cannot be unticked: `openid` on a sign-in request (without it userinfo rejects the token). */
+  required: boolean;
 }
 
 export interface ConsentView {
@@ -170,7 +181,8 @@ export async function loadConsent(d1: D1DatabaseLike, env: RuntimeEnv, request: 
 }
 
 function buildView(env: RuntimeEnv, pending: PendingAuthorization, client: OAuthClient, user: UserRecord): ConsentView {
-  const admin = isAdminIdentity(user.email, user.email_verified_at, env);
+  // A sign-in request never offers `admin`: its token is bound to userinfo, where admin would mean nothing.
+  const admin = isAdminIdentity(user.email, user.email_verified_at, env) && !isIdentityOnly(pending.scopes);
   const offered = sortScopes([...pending.scopes.filter(s => s !== 'admin' || admin), ...(admin ? ['admin' as const] : [])]);
   return {
     request_id: pending.id,
@@ -182,7 +194,7 @@ function buildView(env: RuntimeEnv, pending: PendingAuthorization, client: OAuth
     redirect_host: redirectDisplayHost(pending.redirect_uri),
     resource: pending.resource,
     user_email: user.email,
-    scopes: offered.map(scope => ({ scope, requested: pending.scopes.includes(scope) })),
+    scopes: offered.map(scope => ({ scope, requested: pending.scopes.includes(scope), required: scope === 'openid' })),
     expires_at: pending.expires_at,
   };
 }
@@ -207,7 +219,10 @@ export async function decideConsent(d1: D1DatabaseLike, env: RuntimeEnv, request
   const issuer = issuerFor(request);
   const view = buildView(env, pending, client, session.user);
   const offered = view.scopes.map(s => s.scope);
-  const chosen = sortScopes(form.getAll('scope').filter(isOAuthScope).filter(s => offered.includes(s)));
+  // Required scopes (openid on a sign-in request) are granted even if the form omits them.
+  const required = view.scopes.filter(s => s.required).map(s => s.scope);
+  const ticked = form.getAll('scope').filter(isOAuthScope).filter(s => offered.includes(s));
+  const chosen = sortScopes([...new Set([...ticked, ...required])]);
   if (decision === 'approve' && chosen.length === 0) {
     return { kind: 'redirect', location: `/oauth/authorize?request_id=${encodeURIComponent(pending.id)}&error=no_scope` };
   }

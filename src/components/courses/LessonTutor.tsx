@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { enterSensitiveSurface } from '../../lib/analytics/destinations/posthog';
 import type { SubmitLike } from '../members/member-ui';
 import { btnGhost, btnPrimary, callApi, input, isRecord, jsonBody, loginUrl, str } from '../members/member-ui';
 import { readSse, tutorErrorCopy } from './course-sse';
@@ -28,6 +29,10 @@ export function LessonTutor({ courseSlug, lessonSlug, lessonTitle, signedIn }: P
     try { sessionRef.current = window.sessionStorage.getItem(storageKey); } catch { sessionRef.current = null; }
     return () => abortRef.current?.abort();
   }, [storageKey]);
+
+  // While the tutor is open or still answering, exception events carry no message text: it can echo the question.
+  const sensitive = open || busy;
+  useEffect(() => (sensitive ? enterSensitiveSurface() : undefined), [sensitive]);
 
   async function ensureSession(): Promise<string | null> {
     if (sessionRef.current) return sessionRef.current;
@@ -92,7 +97,8 @@ export function LessonTutor({ courseSlug, lessonSlug, lessonTitle, signedIn }: P
   }
 
   return (
-    <section className="rounded-2xl border border-stone-300 bg-white/70 text-stone-900" aria-label="Zuey AI trợ giảng">
+    // ph-no-capture: autocapture must never record the question or the answers.
+    <section className="ph-no-capture rounded-2xl border border-stone-300 bg-white/70 text-stone-900" aria-label="Zuey AI trợ giảng">
       <button
         type="button" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(o => !o)}
         className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-2xl px-4 py-3 text-left text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
