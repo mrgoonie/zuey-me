@@ -70,7 +70,13 @@ interface LibrarySnapshot {
 
 /** Loads the crawl saved by this pass's first batch, or null when absent, stale or unreadable. */
 async function loadLibrarySnapshot(d1: D1DatabaseLike, nowMs: number): Promise<LibrarySnapshot | null> {
-  const row = await d1.prepare('SELECT cursor FROM job_cursors WHERE job = ?').bind(SNAPSHOT_JOB).first<Record<string, unknown>>();
+  let row: Record<string, unknown> | null;
+  try {
+    row = await d1.prepare('SELECT cursor FROM job_cursors WHERE job = ?').bind(SNAPSHOT_JOB).first<Record<string, unknown>>();
+  } catch (err) {
+    console.warn('reads sync: library cache read failed:', describeError(err));
+    return null;
+  }
   if (!row || typeof row.cursor !== 'string') return null;
   let parsed: unknown;
   try {
@@ -91,16 +97,24 @@ async function loadLibrarySnapshot(d1: D1DatabaseLike, nowMs: number): Promise<L
   return { crawled_at, fetched, items: tagged };
 }
 
+/**
+ * Saves (or, with null, deletes) the pass's library list. Best-effort: the list is only an optimisation, so a
+ * failed write is logged and the batch goes on; a later batch that finds no usable list re-crawls.
+ */
 async function saveLibrarySnapshot(d1: D1DatabaseLike, snapshot: LibrarySnapshot | null, nowIso: string): Promise<void> {
-  const json = snapshot ? JSON.stringify(snapshot) : '';
-  if (!snapshot || json.length > MAX_SNAPSHOT_BYTES) {
-    await d1.prepare('DELETE FROM job_cursors WHERE job = ?').bind(SNAPSHOT_JOB).run();
-    return;
+  try {
+    const json = snapshot ? JSON.stringify(snapshot) : '';
+    if (!snapshot || new TextEncoder().encode(json).length > MAX_SNAPSHOT_BYTES) {
+      await d1.prepare('DELETE FROM job_cursors WHERE job = ?').bind(SNAPSHOT_JOB).run();
+      return;
+    }
+    await d1
+      .prepare('INSERT INTO job_cursors (job, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT (job) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at')
+      .bind(SNAPSHOT_JOB, json, nowIso)
+      .run();
+  } catch (err) {
+    console.warn('reads sync: library cache write failed:', describeError(err));
   }
-  await d1
-    .prepare('INSERT INTO job_cursors (job, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT (job) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at')
-    .bind(SNAPSHOT_JOB, json, nowIso)
-    .run();
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -164,6 +178,7 @@ export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncBatch>
     } catch (err) {
       errors.push(`library page ${page + 1}: ${describeError(err)}`);
       if (page === 0) {
+        await saveLibrarySnapshot(opts.d1, null, now().toISOString());
         await finish('failed');
         throw err;
       }
@@ -184,9 +199,11 @@ export async function syncReads(opts: SyncReadsOptions): Promise<ReadsSyncBatch>
   // A bounded batch keeps each HTTP request under the edge timeout; the caller loops on next_offset.
   const end = opts.limit === undefined ? tagged.length : Math.min(tagged.length, offset + Math.max(1, opts.limit));
   nextOffset = end < tagged.length ? end : null;
-  // Keep a complete fresh crawl for the next batches; the final batch clears it so the next pass crawls again.
-  if (nextOffset === null) await saveLibrarySnapshot(opts.d1, null, now().toISOString());
-  else if (library === 'crawled' && crawlComplete) {
+  // A fresh crawl always replaces the cached list: a complete one is kept for the next batches, an incomplete
+  // one (page failure or page cap) deletes it, so a later final batch can never hide rows based on an older
+  // pass's list. The final batch clears it so the next pass crawls again.
+  if (nextOffset === null || (library === 'crawled' && !crawlComplete)) await saveLibrarySnapshot(opts.d1, null, now().toISOString());
+  else if (library === 'crawled') {
     await saveLibrarySnapshot(opts.d1, { crawled_at: now().getTime(), fetched: run.fetched, items: tagged }, now().toISOString());
   }
   for (const item of tagged.slice(offset, end)) {

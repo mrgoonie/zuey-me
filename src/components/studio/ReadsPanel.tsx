@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type { ReadItem } from '../../lib/reads/store';
-import { isRecord, readEnvelope, runReadsSyncBatches } from './reads-sync-loop';
+import { isRecord, readEnvelope, runReadsSyncBatches, syncAndReload } from './reads-sync-loop';
 import type { ReadsSyncLoopResult, ReadsSyncProgress } from './reads-sync-loop';
 
 function isReadItem(v: unknown): v is ReadItem {
@@ -46,19 +46,12 @@ export const ReadsPanel: React.FC = () => {
 
   const syncNow = async () => {
     setSyncing(true);
-    setError(null);
     setProgress(null);
-    try {
-      // One request per small batch, so no single request outlives Cloudflare's ~100 s origin timeout (524).
-      setLastRun(await runReadsSyncBatches({ onProgress: setProgress }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sync failed');
-    } finally {
-      setSyncing(false);
-      setProgress(null);
-      // Earlier batches are saved even when a later one fails, so always refresh the list.
-      await load();
-    }
+    // One request per small batch, so no single request outlives Cloudflare's ~100 s origin timeout (524).
+    const run = await syncAndReload({ sync: () => runReadsSyncBatches({ onProgress: setProgress }), reload: load, setError });
+    if (run) setLastRun(run);
+    setSyncing(false);
+    setProgress(null);
   };
 
   const visibleCount = items.filter(i => i.visible).length;

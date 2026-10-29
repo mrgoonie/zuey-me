@@ -63,13 +63,14 @@ export interface ReadsSyncLoopOptions {
   /** Tagged items per request; keeps each request under Cloudflare's ~100 s origin timeout. */
   limit?: number;
   onProgress?: (p: ReadsSyncProgress) => void;
-  /** Safety stop against a server that never reports the end. */
+  /** Safety stop against a server that never reports the end; defaults to the batches the reported total needs plus a margin. */
   maxBatches?: number;
 }
 
 /** Same as the server's DEFAULT_SYNC_BATCH_LIMIT (not imported to keep server code out of the Studio bundle). */
 const DEFAULT_LIMIT = 3;
-const DEFAULT_MAX_BATCHES = 500;
+/** Extra batches allowed beyond `ceil(tagged / limit)`, for items tagged while a pass runs. */
+const BATCH_CAP_MARGIN = 20;
 
 /**
  * Studio's manual Reads sync: posts `{ offset, limit }` to `/api/v1/reads/sync` until `next_offset` is null.
@@ -78,7 +79,7 @@ const DEFAULT_MAX_BATCHES = 500;
 export async function runReadsSyncBatches(opts: ReadsSyncLoopOptions = {}): Promise<ReadsSyncLoopResult> {
   const fetchImpl = opts.fetchImpl ?? ((input: string, init?: RequestInit) => fetch(input, init));
   const limit = opts.limit ?? DEFAULT_LIMIT;
-  const maxBatches = opts.maxBatches ?? DEFAULT_MAX_BATCHES;
+  let maxBatches = opts.maxBatches ?? BATCH_CAP_MARGIN;
   let offset = 0;
   let summarized = 0;
   let unchanged = 0;
@@ -105,6 +106,7 @@ export async function runReadsSyncBatches(opts: ReadsSyncLoopOptions = {}): Prom
       throw new Error(`${where}: ${reason}.${hint}`);
     }
     const run = env.data;
+    if (opts.maxBatches === undefined) maxBatches = Math.ceil(run.tagged / limit) + BATCH_CAP_MARGIN;
     summarized += run.summarized;
     unchanged += run.unchanged;
     if (run.status !== 'success') partial = true;
@@ -129,4 +131,30 @@ export async function runReadsSyncBatches(opts: ReadsSyncLoopOptions = {}): Prom
     offset = run.next_offset;
   }
   throw new Error(`Sync stopped after ${maxBatches} batches without reaching the end; press Sync now to run again.`);
+}
+
+export interface SyncAndReloadOptions<T> {
+  sync: () => Promise<T>;
+  /** Reloads the list; it may clear the error state, so the sync error is set again afterwards. */
+  reload: () => Promise<void>;
+  setError: (message: string | null) => void;
+}
+
+/**
+ * Runs the sync, always reloads the list (earlier batches are saved even when a later one fails), then
+ * shows the sync error last so the reload cannot wipe the "Sync stopped at batch N" message.
+ * Returns the sync result, or null when it failed.
+ */
+export async function syncAndReload<T>(opts: SyncAndReloadOptions<T>): Promise<T | null> {
+  opts.setError(null);
+  let result: T | null = null;
+  let failure: string | null = null;
+  try {
+    result = await opts.sync();
+  } catch (e) {
+    failure = e instanceof Error ? e.message : 'Sync failed';
+  }
+  await opts.reload();
+  if (failure) opts.setError(failure);
+  return result;
 }

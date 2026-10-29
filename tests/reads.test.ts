@@ -6,7 +6,7 @@ import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { AppError } from '../src/lib/http';
 import { DEFAULT_SYNC_BATCH_LIMIT, syncReads } from '../src/lib/reads/sync';
-import { runReadsSyncBatches } from '../src/components/studio/reads-sync-loop';
+import { runReadsSyncBatches, syncAndReload } from '../src/components/studio/reads-sync-loop';
 import type { Summarizer, SummaryInput } from '../src/lib/reads/summarizer';
 import { WorkersAiSummarizer } from '../src/lib/reads/summarizer';
 import { readsMcpModule } from '../src/lib/reads/mcp';
@@ -100,6 +100,8 @@ async function rows(d1: ReturnType<typeof createTestD1>) {
     content_hash: string | null;
   }>;
 }
+
+const isRecordBody = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
 const manyTaggedDocs = (n: number): FakeDoc[] =>
   Array.from({ length: n }, (_, i) => ({ id: `doc-${i}`, title: `Doc ${i}`, tags: 'zuey-reads', markdown: `# Doc ${i} body` }));
@@ -287,6 +289,45 @@ describe('Zuey Reads sync', () => {
     expect(libraryCalls()).toBe(4);
     expect((await run(0)).library).toBe('crawled'); // offset 0 always starts a fresh pass
     expect(libraryCalls()).toBe(6);
+  });
+
+  it('an incomplete offset-0 crawl drops the cached list so a later final batch never hides from it', async () => {
+    const withNew: FakeDoc[] = [{ id: 'n', title: 'New', tags: 'zuey-reads', markdown: '# New' }, ...manyTaggedDocs(4)];
+    const summarizer = countingSummarizer();
+    // Every item is synced and visible, then a pass is abandoned after batch 0 with a list that lacks `n`.
+    await syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(withNew).fetchImpl, summarizer });
+    await syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(withNew.slice(1)).fetchImpl, summarizer, offset: 0, limit: 1 });
+    const good = fakeAnyMd(withNew).fetchImpl;
+    const flaky = async (input: string, init?: RequestInit) =>
+      input.includes('before=') ? new Response('boom', { status: 500 }) : good(input, init);
+    const first = await syncReads({ d1, apiKey: 'test-key', fetchImpl: flaky, summarizer, offset: 0, limit: 1 });
+    expect(first).toMatchObject({ status: 'partial', next_offset: 1 });
+    expect(d1.raw.query("SELECT count(*) AS n FROM job_cursors WHERE job = 'reads_sync'").get()).toEqual({ n: 0 });
+
+    const last = await syncReads({ d1, apiKey: 'test-key', fetchImpl: good, summarizer, offset: 1, limit: 10 });
+    expect(last).toMatchObject({ library: 'crawled', next_offset: null, hidden: 0 });
+    expect((await rows(d1)).find(r => r.id === 'n')?.visible).toBe(1);
+  });
+
+  it('treats the library cache as best-effort when job_cursors writes fail', async () => {
+    const flakyCache: D1DatabaseLike = {
+      prepare: (sql: string) => {
+        if (/job_cursors/.test(sql) && !sql.startsWith('SELECT')) throw new Error('D1 write failed');
+        return d1.prepare(sql);
+      },
+      batch: statements => d1.batch(statements),
+    };
+    const run = await syncReads({ d1: flakyCache, apiKey: 'test-key', fetchImpl: fakeAnyMd(manyTaggedDocs(3)).fetchImpl, summarizer: countingSummarizer(), offset: 0, limit: 1 });
+    expect(run).toMatchObject({ status: 'success', summarized: 1, next_offset: 1 });
+    expect(d1.raw.query('SELECT status FROM reads_sync_runs').get()).toEqual({ status: 'success' });
+  });
+
+  it('does not cache a library list whose UTF-8 size exceeds the limit', async () => {
+    const docs = manyTaggedDocs(2);
+    docs[0].title = 'ạ'.repeat(400_000); // 400k characters, 1.2 MB in UTF-8
+    const run = await syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer: countingSummarizer(), offset: 0, limit: 1 });
+    expect(run.next_offset).toBe(1);
+    expect(d1.raw.query("SELECT count(*) AS n FROM job_cursors WHERE job = 'reads_sync'").get()).toEqual({ n: 0 });
   });
 
   it('WorkersAiSummarizer parses { response } and rejects other shapes', async () => {
@@ -495,6 +536,39 @@ describe('Studio Reads sync loop', () => {
   it('stops when the server returns a next_offset that does not advance', async () => {
     const stuck = async () =>
       Response.json({ success: true, data: { id: 'r', started_at: 'x', status: 'success', tagged: 9, summarized: 0, unchanged: 3, hidden: 0, fetched: 9, finished_at: 'x', error: null, next_offset: 0 } });
-    await expect(runReadsSyncBatches({ fetchImpl: stuck, limit: 3 })).rejects.toThrow(/did not advance/);
+    const caught = await runReadsSyncBatches({ fetchImpl: stuck, limit: 3 }).then(() => null, (e: unknown) => e);
+    expect(caught instanceof Error ? caught.message : '').toMatch(/did not advance/);
+  });
+
+  it('scales the batch cap with the reported total so large libraries finish', async () => {
+    const total = 1600;
+    const batch = async (_input: string, init?: RequestInit) => {
+      const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+      const offset = isRecordBody(body) && typeof body.offset === 'number' ? body.offset : 0;
+      const next = offset + 3 < total ? offset + 3 : null;
+      return Response.json({ success: true, data: { id: 'r', started_at: 'x', finished_at: 'x', status: 'success', fetched: total, tagged: total, summarized: 0, unchanged: Math.min(3, total - offset), hidden: 0, error: null, next_offset: next } });
+    };
+    const result = await runReadsSyncBatches({ fetchImpl: batch, limit: 3 });
+    expect(result).toMatchObject({ batches: Math.ceil(total / 3), unchanged: total });
+  });
+
+  it('keeps the stop message visible after the list reloads', async () => {
+    let error: string | null = 'old';
+    let reloaded = 0;
+    const result = await syncAndReload({
+      sync: async () => {
+        throw new Error('Sync stopped at batch 2 (offset 3): anymd_rate_limited: retry later.');
+      },
+      reload: async () => {
+        reloaded++;
+        error = null; // the panel's load() clears errors on success
+      },
+      setError: e => {
+        error = e;
+      },
+    });
+    expect(reloaded).toBe(1);
+    expect(result).toBeNull();
+    expect(error).toBe('Sync stopped at batch 2 (offset 3): anymd_rate_limited: retry later.');
   });
 });
