@@ -34,7 +34,7 @@ class FakeWorker implements ServiceBindingLike {
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
     const request = new Request(input, init);
     this.paths.push(`${request.method} ${new URL(request.url).pathname}`);
-    if (!(await verifyPresenceInternal(SECRET, request.headers.get(PRESENCE_INTERNAL_HEADER)))) return new Response('Not found', { status: 404 });
+    if (!(await verifyPresenceInternal(SECRET, request.headers.get(PRESENCE_INTERNAL_HEADER), request.method, new URL(request.url).pathname))) return new Response('Not found', { status: 404 });
     return this.answer();
   }
 }
