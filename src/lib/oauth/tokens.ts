@@ -271,8 +271,11 @@ export type AccessTokenCheck =
   | { ok: true; token: AccessTokenRecord }
   | { ok: false; reason: 'invalid' | 'expired' | 'revoked' | 'audience' };
 
-/** Resource-server validation: known hash, not revoked/expired, live consent + user, exact audience. */
-export async function validateAccessToken(d1: D1DatabaseLike, token: string, audience: string): Promise<AccessTokenCheck> {
+/**
+ * Resource-server validation: known hash, not revoked/expired, live consent + user, exact audience.
+ * `audience: null` skips only the audience check; userinfo uses it and gates on the `openid` scope instead.
+ */
+export async function validateAccessToken(d1: D1DatabaseLike, token: string, audience: string | null): Promise<AccessTokenCheck> {
   if (!token.startsWith(ACCESS_TOKEN_PREFIX) || token.length > 200) return { ok: false, reason: 'invalid' };
   const row = await d1.prepare(
     `SELECT t.*, c.revoked_at AS consent_revoked_at, c.id AS consent_id
@@ -285,7 +288,7 @@ export async function validateAccessToken(d1: D1DatabaseLike, token: string, aud
   if (strOrNull(row, 'revoked_at') || !strOrNull(row, 'consent_id') || strOrNull(row, 'consent_revoked_at')) return { ok: false, reason: 'revoked' };
   const now = membersRuntime.now();
   if (Date.parse(str(row, 'access_expires_at')) <= now) return { ok: false, reason: 'expired' };
-  if (str(row, 'audience') !== audience) return { ok: false, reason: 'audience' };
+  if (audience !== null && str(row, 'audience') !== audience) return { ok: false, reason: 'audience' };
 
   const lastUsed = strOrNull(row, 'last_used_at');
   if (!lastUsed || now - Date.parse(lastUsed) > LAST_USED_INTERVAL_MS) {

@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { needsAttentionEvent, queuePurchase } from '../analytics/commerce-events';
 import { outboxInsertStatement } from '../analytics/outbox';
-import type { WaitUntil } from '../channel-access/invalidate';
+import type { WaitUntil } from '../wait-until';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { CardCheckout, CardSubscriptionView } from '../payments/dodo-billing';
