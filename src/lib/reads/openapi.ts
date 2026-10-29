@@ -65,7 +65,7 @@ export const readsOpenApi: OpenApiFragment = {
                 type: 'object',
                 properties: {
                   offset: { type: 'integer', minimum: 0, default: 0, description: 'Tagged items to skip; pass the previous response `next_offset`' },
-                  limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max items to summarize per call. Omit to process everything in one request (can hit edge timeouts on large libraries).' },
+                  limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max tagged items to process (summarize or confirm unchanged) per call. Omit to process everything in one request (can hit edge timeouts on large libraries).' },
                 },
               },
             },

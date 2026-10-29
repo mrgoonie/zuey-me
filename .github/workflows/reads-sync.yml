@@ -20,7 +20,9 @@ jobs:
           ZUEY_ADMIN_API_KEY: ${{ secrets.ZUEY_ADMIN_API_KEY }}
         run: |
           # Batch the sync so each request stays well under Cloudflare's ~100s origin timeout (524).
-          # Retry only connection errors: a timed-out batch may still be running on the server.
+          # curl --retry also replays timeouts and transient 408/429/5xx answers (524 included). Replaying a batch is
+          # safe: rows are upserted by id and unchanged content hashes skip the summarizer.
+          # set -e stops the job on a failed curl; the advance check and timeout-minutes bound the loop.
           offset=0
           while :; do
             body=$(curl -fsS --max-time 120 --retry 2 -X POST "$SITE_URL/api/v1/reads/sync" -H "Authorization: Bearer $ZUEY_ADMIN_API_KEY" -H "Content-Type: application/json" -d "{\"offset\":$offset,\"limit\":3}")

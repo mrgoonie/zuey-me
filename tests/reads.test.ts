@@ -77,10 +77,15 @@ function countingSummarizer(): Summarizer & { calls: SummaryInput[] } {
   };
 }
 
-function ctx(env: RuntimeEnv, opts: { method?: string; path?: string; token?: string } = {}): APIContext {
+function ctx(env: RuntimeEnv, opts: { method?: string; path?: string; token?: string; body?: unknown } = {}): APIContext {
   const headers: Record<string, string> = {};
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
-  const request = new Request(`http://localhost:4321${opts.path ?? '/'}`, { method: opts.method ?? 'GET', headers });
+  let body: string | undefined;
+  if (opts.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(opts.body);
+  }
+  const request = new Request(`http://localhost:4321${opts.path ?? '/'}`, { method: opts.method ?? 'GET', headers, body });
   // Route handlers only read `request` and `locals.runtime.env`; the rest of APIContext is unused here.
   const partial = { request, params: {}, locals: { runtime: { env } } };
   return partial as unknown as APIContext;
@@ -141,6 +146,13 @@ describe('Zuey Reads sync', () => {
     const last = await run(first.next_offset ?? -1);
     expect(last).toMatchObject({ summarized: 1, hidden: 1, next_offset: null });
     expect((await rows(d1)).map(r => [r.id, r.visible])).toEqual([['a', 1], ['c', 0], ['d', 1]]);
+
+    // A retried batch (e.g. after a 524 the client could not see) is a no-op: no LLM call, same rows.
+    const before = await rows(d1);
+    const replay = await run(first.next_offset ?? -1);
+    expect(replay).toMatchObject({ summarized: 0, unchanged: 1, next_offset: null });
+    expect(summarizer.calls).toHaveLength(1);
+    expect(await rows(d1)).toEqual(before);
   });
 
   it('second sync with unchanged content does not call the LLM', async () => {
@@ -241,16 +253,8 @@ describe('Zuey Reads routes', () => {
 
   it('rejects an invalid batch offset and accepts a body-less call as a full sync', async () => {
     const env: RuntimeEnv = { DB: d1, AI: fakeAi };
-    const post = (body: unknown) =>
-      postReadsSync({
-        request: new Request('http://localhost:4321/api/v1/reads/sync', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${adminKey}`, 'Content-Type': 'application/json' },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        }),
-        params: {},
-        locals: { runtime: { env } },
-      } as unknown as APIContext);
+    const post = (body?: unknown) =>
+      postReadsSync(ctx(env, { method: 'POST', path: '/api/v1/reads/sync', token: adminKey, body }));
     for (const offset of [-1, 1.5, '3']) {
       const res = await post({ offset });
       expect(res.status).toBe(400);
@@ -263,14 +267,11 @@ describe('Zuey Reads routes', () => {
 
   it('rejects an invalid batch limit before touching AnyMD', async () => {
     const env: RuntimeEnv = { DB: d1, ANYMD_API_KEY: 'k', AI: fakeAi };
-    const request = new Request('http://localhost:4321/api/v1/reads/sync', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${adminKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: 0 }),
-    });
-    const res = await postReadsSync({ request, params: {}, locals: { runtime: { env } } } as unknown as APIContext);
-    expect(res.status).toBe(400);
-    expect((await res.json()).error.code).toBe('invalid_limit');
+    for (const limit of [0, 101, 2.5]) {
+      const res = await postReadsSync(ctx(env, { method: 'POST', path: '/api/v1/reads/sync', token: adminKey, body: { limit } }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('invalid_limit');
+    }
   });
 
   it('returns honest 503 errors when AnyMD key or AI binding is missing', async () => {
