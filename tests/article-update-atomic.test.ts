@@ -236,15 +236,17 @@ describe('updateArticle race and post-commit errors (real SQLite)', () => {
     expect(paragraphText(await getArticle(d1, 'moved'))).toBe('original');
   });
 
-  it('a failed legacy tag mirror after commit still returns the saved article', async () => {
+  it('a failed legacy tag names update fails the save and commits none of it, and a retry succeeds', async () => {
     d1.raw.run("CREATE TRIGGER fail_mirror BEFORE UPDATE OF tags ON articles BEGIN SELECT RAISE(ABORT, 'mirror failed'); END");
+    const unchanged = state();
+    const outcome = await settle(updateArticle(d1, 'post', { document: doc('saved'), tags: ['kept'] }, 1));
+    expect(outcome.ok).toBe(false);
+    expect(state()).toEqual(unchanged);
+    expect(d1.raw.query('SELECT COUNT(*) AS n FROM article_tags').get()).toEqual({ n: 0 });
+    d1.raw.run('DROP TRIGGER fail_mirror');
     const saved = await updateArticle(d1, 'post', { document: doc('saved'), tags: ['kept'] }, 1);
     expect(saved.revision).toBe(2);
     expect(paragraphText(saved)).toBe('saved');
-    expect(saved.tag_ids.length).toBe(1);
-    // The derived column catches up on the next save once the mirror works again.
-    d1.raw.run('DROP TRIGGER fail_mirror');
-    await updateArticle(d1, 'post', { tags: ['kept'] }, 2);
     expect(d1.raw.query("SELECT tags FROM articles WHERE slug = 'post'").get()).toEqual({ tags: JSON.stringify(['kept']) });
   });
 
@@ -396,14 +398,16 @@ describe('post-commit failures and renames never turn a committed write into an 
     });
   }
 
-  it('setTagsForArticle: a failed legacy tag mirror after commit still returns the committed tags', async () => {
+  it('setTagsForArticle: a failed legacy tag names update fails the write and commits none of it, and a retry succeeds', async () => {
     d1.raw.run("CREATE TRIGGER fail_mirror BEFORE UPDATE OF tags ON articles BEGIN SELECT RAISE(ABORT, 'mirror failed'); END");
+    const err = await setTagsForArticle(d1, 'post', ['spare'], R).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/mirror failed/);
+    expect(storedRevision(d1)).toBe(R);
+    expect(d1.raw.query('SELECT tags FROM articles').get()).toEqual({ tags: JSON.stringify(['kept']) });
+    d1.raw.run('DROP TRIGGER fail_mirror');
     const rec = await setTagsForArticle(d1, 'post', ['spare'], R);
     expect(rec.revision).toBe(R + 1);
     expect(rec.tags).toEqual(['spare']);
-    // The derived column catches up on the next tag write once the mirror works again.
-    d1.raw.run('DROP TRIGGER fail_mirror');
-    await setTagsForArticle(d1, 'post', ['spare'], R + 1);
     expect(d1.raw.query('SELECT tags FROM articles').get()).toEqual({ tags: JSON.stringify(['spare']) });
   });
 
