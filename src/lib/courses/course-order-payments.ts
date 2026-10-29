@@ -76,10 +76,11 @@ export type CourseEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike
  * the event apply only while the order is not paid (and while `onlyIf` holds): an order paid meanwhile (a payment
  * racing this one) stays paid, and no flag that never took effect is logged or counted. The record is still written,
  * so the redelivery is a duplicate; with `onlyIf` it is written only while that holds. The update runs last, so the
- * statements before it still see the order it read. Returns whether the order was flagged.
+ * statements before it still see the order it read. A card payment's id (`paymentId`), with the event that flagged it,
+ * is kept in the activity log, which marks that payment as counted on the order. Returns whether the order was flagged.
  */
 export async function markCourseOrderAttention(
-  d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string },
+  d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string; paymentId?: string | null },
   gate: CourseEventGate, also: D1PreparedStatementLike[] = [], onlyIf?: SqlCondition,
 ): Promise<boolean> {
   const unpaidSql = "EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status <> 'paid')";
@@ -93,7 +94,9 @@ export async function markCourseOrderAttention(
   const results = await d1.batch([
     gate(onlyIf),
     ...also,
-    activityStatement(d1, order.user_id, 'courses.order_attention', { code: order.code, reason, amount: extra.amount ?? null }, undefined, unpaid),
+    activityStatement(d1, order.user_id, 'courses.order_attention', {
+      code: order.code, reason, amount: extra.amount ?? null, ...(extra.paymentId ? { payment_id: extra.paymentId, event_id: extra.eventId ?? null } : {}),
+    }, undefined, unpaid),
     ...(attention ? [attention] : []),
     d1.prepare(
       `UPDATE course_orders SET status = 'needs_attention', attention_reason = ?, amount_paid = COALESCE(amount_paid, 0) + ?,
@@ -124,6 +127,8 @@ export function isPartialCourseReversal(order: CourseOrder, amountMinor: number 
  */
 export interface CoursePayment {
   set: string; values: unknown[]; when: string;
+  /** Values bound to the `?` placeholders of `when`, in order. */
+  whenParams?: unknown[];
   /** The order's `attention_reason` once paid (an admin grant names itself); `set` must not assign it. */
   reason?: string;
 }
@@ -143,7 +148,7 @@ export async function fulfilCourseOrder(
 ): Promise<boolean> {
   const course = await getCourseById(d1, order.course_id);
   if (!course) throw new AppError(404, 'course_not_found', 'Course not found');
-  const payable: SqlCondition = { sql: `EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND (${payment.when}))`, params: [order.id] };
+  const payable: SqlCondition = { sql: `EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND (${payment.when}))`, params: [order.id, ...(payment.whenParams ?? [])] };
   // A course order is paid by one verified payment, so the order id is the transaction.
   const paid = paidAmount(order);
   const purchase = paid.amountMinor === null ? null : await purchaseEvent(d1, {
