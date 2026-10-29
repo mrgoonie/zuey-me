@@ -34,6 +34,14 @@ function trackPointer(): void {
   }, true);
   document.addEventListener('keydown', () => { pointerTarget = null; }, true);
 }
+// Install before any popup mounts, so the press that opens the first popup is already recorded.
+if (typeof document !== 'undefined') trackPointer();
+
+/** The last pressed control, unless it has left the DOM since (then it is forgotten). */
+function pressedTarget(): HTMLElement | null {
+  if (pointerTarget && !pointerTarget.isConnected) pointerTarget = null;
+  return pointerTarget;
+}
 /** Focus fell out of the page (the focused popup content unmounted), so it is safe to move it back. */
 function focusIsLost(): boolean {
   const active = document.activeElement;
@@ -58,12 +66,13 @@ export function useEscapeToClose(active: boolean, onClose: () => void, options: 
   const openerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!active) return;
+    // Idempotent; also covers a document created after this module loaded (inactive popups mount early).
     trackPointer();
+    if (!active) return;
     const token = Symbol('popup');
     openPopups.push(token);
     const opener = document.activeElement;
-    const pressed = pointerTarget?.isConnected ? pointerTarget : null;
+    const pressed = pressedTarget();
     const focused = opener instanceof HTMLElement && opener !== document.body ? opener : null;
     // A mouse press on a button Safari will not focus leaves focus on the window or body around it.
     openerRef.current = pressed && (!focused || (focused !== pressed && focused.contains(pressed))) ? pressed : focused;
