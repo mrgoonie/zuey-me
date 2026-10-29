@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { createTestD1, crashingD1 } from './helpers/d1';
 import type { D1DatabaseLike } from '../src/db/store';
 import { createArticle, setTagsForArticle } from '../src/lib/blocks/articles';
 import { createCategory, deleteCategory, getCategory } from '../src/lib/taxonomy/categories';
-import { createTag, deleteTag, getTag, mirrorLegacyTags, updateTag } from '../src/lib/taxonomy/tags';
+import { createTag, deleteTag, articleLegacyTagsStatement, getTag, updateTag } from '../src/lib/taxonomy/tags';
 import type { Row } from '../src/lib/taxonomy/common';
 import { isObj, localizedName, num, parseNames, parseStringArray, str, strOrNull } from '../src/lib/taxonomy/common';
 import { isLocale } from '../src/lib/i18n/locales';
@@ -221,22 +221,33 @@ describe('tag rename is atomic with the legacy tag names (real SQLite)', () => {
   const rename = (db: D1DatabaseLike, revision = tag.revision) =>
     updateTag(db, tag.id, { names: { vi: 'Renamed' } }, revision, 'admin');
   const liveName = () => parseNames(rowOf(d1, 'SELECT names FROM topic_tags WHERE id = ?', tag.id).names).vi;
+  const audits = () => rowsOf(d1, "SELECT before_json, after_json FROM taxonomy_audit_log WHERE action = 'tag.update'");
   const unrenamed = () => {
     expect(liveName()).toBe('kept');
     expect(legacyTags(d1)).toEqual({ one: ['kept', 'other'], two: ['kept'] });
+    expect(audits()).toEqual([]);
   };
   const renamed = () => {
     expect(liveName()).toBe('Renamed');
     expect(legacyTags(d1)).toEqual({ one: ['Renamed', 'other'], two: ['Renamed'] });
+    // Exactly one audit row, recording the tag as it was and as it is stored now.
+    const rows = audits();
+    expect(rows).toHaveLength(1);
+    const live = rowOf(d1, 'SELECT * FROM topic_tags WHERE id = ?', tag.id);
+    const after: unknown = JSON.parse(str(rows[0] ?? {}, 'after_json'));
+    const before: unknown = JSON.parse(str(rows[0] ?? {}, 'before_json'));
+    expect(after).toMatchObject({ id: tag.id, slug: live.slug, revision: live.revision, updated_at: live.updated_at, names: { vi: 'Renamed' } });
+    expect(before).toMatchObject({ id: tag.id, revision: tag.revision, names: { vi: 'kept' } });
   };
 
   const beforeCommit: Array<[string, RegExp]> = [
     ['the rename', /^UPDATE topic_tags SET slug/],
     ['the legacy tag names update', /^UPDATE articles SET tags/],
+    ['the audit row', /^INSERT INTO taxonomy_audit_log/],
   ];
 
   for (const [name, re] of beforeCommit) {
-    it(`a crash at ${name} renames nothing and leaves every legacy tag list as it was`, async () => {
+    it(`a crash at ${name} renames nothing, audits nothing and leaves every legacy tag list as it was`, async () => {
       expect(String(await settle(rename(crashingD1(d1, sqlPoint(re)).d1)))).toMatch(/crashed/);
       unrenamed();
       await rename(d1);
@@ -244,18 +255,34 @@ describe('tag rename is atomic with the legacy tag names (real SQLite)', () => {
     });
   }
 
-  it('a crash after the commit keeps the new name in the tag and in every legacy tag list', async () => {
-    expect(String(await settle(rename(crashingD1(d1, sqlPoint(/^INSERT INTO taxonomy_audit_log/)).d1)))).toMatch(/crashed/);
+  it('a crash while reindexing after the commit keeps the new name, its audit row and every legacy tag list', async () => {
+    expect(String(await settle(rename(crashingD1(d1, sqlPoint(/^DELETE FROM knowledge_fts/)).d1)))).toMatch(/crashed/);
     renamed();
   });
 
-  it('renames and updates the legacy tag names in one batch', async () => {
+  it('renames, updates the legacy tag names and audits in one batch', async () => {
     const spy = crashingD1(d1);
     await rename(spy.d1);
     renamed();
     const batch = spy.batches.find(b => b.some(s => /UPDATE topic_tags SET slug/.test(s))) ?? [];
     expect(batch.some(s => /UPDATE articles SET tags/.test(s))).toBe(true);
-    expect(spy.runs.some(s => /UPDATE topic_tags|SET tags/.test(s))).toBe(false);
+    expect(batch.some(s => /INSERT INTO taxonomy_audit_log/.test(s))).toBe(true);
+    expect(spy.runs.some(s => /UPDATE topic_tags|SET tags|taxonomy_audit_log/.test(s))).toBe(false);
+  });
+
+  describe('two renames from the same revision in the same millisecond', () => {
+    beforeEach(() => { setSystemTime(new Date('2026-10-29T12:00:00.000Z')); });
+    afterEach(() => { setSystemTime(); });
+
+    it('the losing rename is a 409 that writes no audit row', async () => {
+      const outcomes = await Promise.all([
+        settle(updateTag(d1, tag.id, { names: { vi: 'Renamed' } }, tag.revision, 'admin')),
+        settle(updateTag(d1, tag.id, { names: { vi: 'Second' } }, tag.revision, 'admin')),
+      ]);
+      expect(outcomes.filter(o => o instanceof AppError && o.code === 'revision_conflict')).toHaveLength(1);
+      // Exactly one audit row, and it records the rename that is stored.
+      renamed();
+    });
   });
 
   it('a stale revision is a 409 that changes no legacy tag list', async () => {
@@ -290,7 +317,7 @@ describe('legacy tag names (real SQLite)', () => {
     for (const locale of ['vi', 'en', 'ja', 'ko', 'zh', 'xx']) {
       d1.raw.query("UPDATE articles SET locale = ? WHERE slug = 'one'").run(locale);
       const id = str(rowOf(d1, "SELECT id FROM articles WHERE slug = 'one'"), 'id');
-      await mirrorLegacyTags(d1, id);
+      await articleLegacyTagsStatement(d1, id).run();
       const stored = parseStringArray(rowOf(d1, 'SELECT tags FROM articles WHERE id = ?', id).tags);
       const expected = Object.entries(shapes).map(([slug, names]) => localizedName(parseNames(names), isLocale(locale) ? locale : 'vi', slug));
       expect([locale, stored]).toEqual([locale, expected]);

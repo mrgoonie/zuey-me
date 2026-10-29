@@ -55,7 +55,10 @@ export const readsOpenApi: OpenApiFragment = {
       post: {
         tags: [TAG],
         summary: 'Sync reads from AnyMD (admin)',
-        description: 'Crawls the AnyMD library, keeps items tagged `zuey-reads`, summarizes new/changed content with Workers AI and hides items that lost the tag.',
+        description:
+          'Crawls the AnyMD library, keeps items tagged `zuey-reads`, summarizes new/changed content with Workers AI and hides items that lost the tag. ' +
+          'Batched callers (Studio, the scheduled workflow, MCP `reads_sync`) loop `{offset, limit}` until `next_offset` is null. The first batch (`offset` 0) crawls the library and saves the tagged list; ' +
+          'later batches of the same pass reuse it instead of re-reading the whole library, which also keeps their offsets stable if items are tagged mid-pass.',
         security: adminSecurity,
         requestBody: {
           required: false,
@@ -135,6 +138,11 @@ export const readsOpenApi: OpenApiFragment = {
         hidden: { type: 'integer' },
         error: { type: 'string', nullable: true },
         next_offset: { type: 'integer', nullable: true, description: 'Offset for the next batch, null when the whole tagged set is done' },
+        library: {
+          type: 'string',
+          enum: ['crawled', 'cached'],
+          description: '`crawled`: this call read the AnyMD library. `cached`: a follow-up batch (`offset` > 0) reused the library list saved by the first batch of the pass (kept up to 15 minutes; `fetched`/`tagged` are that crawl\'s counts).',
+        },
       },
     },
   },

@@ -18,10 +18,12 @@ const CONFIRM_DISPUTED_REFUND = 'Record a manual refund of this disputed order? 
 /**
  * The actions the server accepts for an order, each with its confirm text. A charged-back order (dispute open, or lost)
  * cannot be granted or dismissed: the dispute outcome decides its access. It can be refunded only while its dispute is
- * open; after a lost dispute the chargeback already returned the money, so nothing is offered.
+ * open; after a lost dispute the chargeback already returned the money, so nothing is offered. A refunded order is
+ * final: its money went back, so it is neither granted nor dismissed.
  */
 export function orderActions(status: string, disputeLost: boolean): Partial<Record<Action, string>> {
   if (status === 'charged_back') return disputeLost ? {} : { refund: CONFIRM_DISPUTED_REFUND };
+  if (status === 'refunded') return {};
   const actions: Partial<Record<Action, string>> = {};
   if (status !== 'paid') actions.grant = CONFIRM.grant;
   if (status !== 'paid' && status !== 'cancelled') actions.dismiss = CONFIRM.dismiss;
