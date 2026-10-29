@@ -23,9 +23,12 @@ function article(slug: string): { slug: string; title: string; excerpt: string; 
   return { slug, title: `Bài ${slug}`, excerpt: 'Tóm tắt', document: doc(slug), tags: ['gamma'] };
 }
 
-/** Wraps a database so `hook` runs before matching statements; batches are passed through unwrapped. */
-function intercept(inner: D1DatabaseLike, hooks: { beforeRun?: (sql: string) => Promise<void>; afterAll?: (sql: string) => Promise<void> }): D1DatabaseLike {
+/** Wraps a database so the hooks run around matching statements; batches are unwrapped after `beforeBatch` sees their SQL. */
+function intercept(inner: D1DatabaseLike, hooks: {
+  beforeRun?: (sql: string) => Promise<void>; afterAll?: (sql: string) => Promise<void>; beforeBatch?: (sql: string[]) => Promise<void>;
+}): D1DatabaseLike {
   const unwrap = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
+  const sqlOf = new WeakMap<D1PreparedStatementLike, string>();
   const wrap = (stmt: D1PreparedStatementLike, sql: string): D1PreparedStatementLike => {
     const wrapped: D1PreparedStatementLike = {
       bind: (...values: unknown[]) => wrap(stmt.bind(...values), sql),
@@ -41,11 +44,15 @@ function intercept(inner: D1DatabaseLike, hooks: { beforeRun?: (sql: string) => 
       },
     };
     unwrap.set(wrapped, stmt);
+    sqlOf.set(wrapped, sql);
     return wrapped;
   };
   return {
     prepare: (sql: string) => wrap(inner.prepare(sql), sql),
-    batch: (statements: D1PreparedStatementLike[]) => inner.batch(statements.map(s => unwrap.get(s) ?? s)),
+    batch: async (statements: D1PreparedStatementLike[]) => {
+      await hooks.beforeBatch?.(statements.map(s => sqlOf.get(s) ?? ''));
+      return inner.batch(statements.map(s => unwrap.get(s) ?? s));
+    },
   };
 }
 
@@ -205,10 +212,10 @@ describe('a tag rename that loses the slug race (real SQLite)', () => {
 
   it('a concurrent write taking the slug after the pre-checks is 409 tag_conflict naming the owner, not a raw 500', async () => {
     const mover = await createTag(d1, { slug: 'mover', names: { vi: 'Mover' }, aliases: [] }, 'admin');
-    // Another writer inserts (and soft-deletes) a tag with the target slug right before this rename runs.
+    // Another writer inserts (and soft-deletes) a tag with the target slug right before the batch holding this rename runs.
     const racing = intercept(d1, {
-      beforeRun: async sql => {
-        if (TAG_RENAME.test(sql)) d1.raw.run("INSERT INTO topic_tags (id, slug, created_at, updated_at, deleted_at) VALUES ('tag_race', 'taken', '2026-10-25', '2026-10-25', '2026-10-25')");
+      beforeBatch: async sqls => {
+        if (sqls.some(sql => TAG_RENAME.test(sql))) d1.raw.run("INSERT INTO topic_tags (id, slug, created_at, updated_at, deleted_at) VALUES ('tag_race', 'taken', '2026-10-25', '2026-10-25', '2026-10-25')");
       },
     });
     const err = await updateTag(racing, mover.id, { slug: 'taken' }, mover.revision, 'admin').catch((e: unknown) => e);
@@ -217,20 +224,12 @@ describe('a tag rename that loses the slug race (real SQLite)', () => {
 
   it('a unique violation on another index is not reported as tag_conflict', async () => {
     const mover = await createTag(d1, { slug: 'mover', names: { vi: 'Mover' }, aliases: [] }, 'admin');
-    const failing: D1DatabaseLike = {
-      prepare: sql => {
-        const stmt = d1.prepare(sql);
-        if (!TAG_RENAME.test(sql)) return stmt;
-        const wrap = (inner: D1PreparedStatementLike): D1PreparedStatementLike => ({
-          bind: (...values: unknown[]) => wrap(inner.bind(...values)),
-          first: <T = Record<string, unknown>>() => inner.first<T>(),
-          all: <T = Record<string, unknown>>() => inner.all<T>(),
-          run: () => Promise.reject(new Error('D1_ERROR: UNIQUE constraint failed: topic_tags.id: SQLITE_CONSTRAINT')),
-        });
-        return wrap(stmt);
+    // The rename runs in a batch, so the batch holding it is the write that fails.
+    const failing = intercept(d1, {
+      beforeBatch: async sqls => {
+        if (sqls.some(sql => TAG_RENAME.test(sql))) throw new Error('D1_ERROR: UNIQUE constraint failed: topic_tags.id: SQLITE_CONSTRAINT');
       },
-      batch: statements => d1.batch(statements),
-    };
+    });
     const err = await updateTag(failing, mover.id, { slug: 'renamed' }, mover.revision, 'admin').catch((e: unknown) => e);
     expect(err instanceof AppError).toBe(false);
     expect(err instanceof Error ? err.message : err).toContain('topic_tags.id');

@@ -12,7 +12,7 @@ import { countEventsByDay } from '../src/lib/experience/activity-days';
 import { sanitizeEvent } from '../src/lib/experience/github-activity';
 import { conditionFromCode } from '../src/lib/experience/weather';
 import { experienceMcpModule } from '../src/lib/experience/mcp';
-import { SWEEP_DEFAULT_LIMIT, SWEEP_MAX_LIMIT, SWEEP_TELEGRAM_BUDGET, parseSweepOptions } from '../src/lib/experience/community';
+import { SWEEP_DEFAULT_LIMIT, SWEEP_MAX_LIMIT, SWEEP_TELEGRAM_BUDGET, adminTelegramIds, parseSweepOptions } from '../src/lib/experience/community';
 import { experienceOpenApi } from '../src/lib/experience/openapi';
 import { MCP_FEATURE_MODULES } from '../src/lib/mcp/registry';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
@@ -540,12 +540,6 @@ describe('Telegram community', () => {
   });
   const invite = (env: RuntimeEnv, headers: Record<string, string>, chat = 'vi') =>
     communityInviteApi(ctx({ env, method: 'POST', path: '/api/v1/community/invite', headers, body: { chat } }));
-  /** Links a Telegram account to a member, as /connect does. */
-  const linkTelegram = async (userId: string, tg: string) => {
-    await d1.prepare("INSERT INTO channel_identities (provider, external_id, user_id, linked_at, source) VALUES ('telegram', ?, ?, ?, 'link_token')")
-      .bind(tg, userId, new Date(now).toISOString()).run();
-  };
-
   beforeEach(() => {
     let n = 0;
     routes.push((url, init) => {
@@ -647,9 +641,8 @@ describe('Telegram community', () => {
     const unverified = await memberCookie('boss2@example.com');
     await d1.prepare('UPDATE users SET email_verified_at = NULL WHERE id = ?').bind(unverified.userId).run();
     const reader = await memberCookie('reader@example.com');
-    await linkTelegram(admin.userId, '401');
-    await linkTelegram(unverified.userId, '402');
-    const env = tgEnv({ ADMIN_EMAILS: 'boss@example.com,boss2@example.com' });
+    // 402 is allowlisted but its member is not a verified admin: the allowlist alone exempts nobody.
+    const env = tgEnv({ ADMIN_EMAILS: 'boss@example.com,boss2@example.com', ADMIN_TELEGRAM_IDS: '401,402' });
     const ts = new Date(now).toISOString();
     const expires = new Date(now + HOUR).toISOString();
     for (const [id, userId] of [['cm_j1', admin.userId], ['cm_j2', unverified.userId], ['cm_j3', reader.userId]]) {
@@ -676,11 +669,10 @@ describe('Telegram community', () => {
     ]);
   });
 
-  it('exempts an admin only on their own linked Telegram account, not whoever uses a forwarded link', async () => {
+  it('exempts an admin only on an allowlisted Telegram account, not whoever uses a forwarded admin invite', async () => {
     const admin = await memberCookie('boss@example.com');
     const unlinked = await memberCookie('boss2@example.com');
-    await linkTelegram(admin.userId, '451');
-    const env = tgEnv({ ADMIN_EMAILS: 'boss@example.com,boss2@example.com', CRON_SECRET: 'cron-secret' });
+    const env = tgEnv({ ADMIN_EMAILS: 'boss@example.com,boss2@example.com', ADMIN_TELEGRAM_IDS: ' 451 , not-a-number', CRON_SECRET: 'cron-secret' });
     const ts = new Date(now).toISOString();
     const expires = new Date(now + HOUR).toISOString();
     for (const [id, userId] of [['cm_f1', admin.userId], ['cm_f2', unlinked.userId], ['cm_f3', admin.userId]]) {
@@ -697,12 +689,12 @@ describe('Telegram community', () => {
     // A stranger joining through the admin's forwarded link is removed at once.
     expect(await join('cm_f1', 999)).toBe('joined_then_removed');
     expect([field(await row('cm_f1'), 'status'), field(await row('cm_f1'), 'telegram_user_id')]).toEqual(['removed', '999']);
-    // An admin with no linked Telegram account gets the normal check; joining does not link one.
+    // An admin whose Telegram id is not allowlisted gets the normal check; joining does not allowlist it.
     expect(await join('cm_f2', 452)).toBe('joined_then_removed');
     expect(telegramCalls().map(c => [c.method, field(c.body, 'user_id')])).toEqual([
       ['banChatMember', 999], ['unbanChatMember', 999], ['banChatMember', 452], ['unbanChatMember', 452],
     ]);
-    // The admin's own linked account stays.
+    // The admin's own allowlisted account stays.
     expect(await join('cm_f3', 451)).toBe('joined');
     expect(field(await row('cm_f3'), 'status')).toBe('joined');
 
@@ -718,6 +710,33 @@ describe('Telegram community', () => {
     expect(telegramCalls().map(c => field(c.body, 'user_id'))).toEqual([998, 998]);
   });
 
+  it('exempts nobody while ADMIN_TELEGRAM_IDS is unset or empty, not even a verified admin on their own account', async () => {
+    const admin = await memberCookie('boss@example.com');
+    const ts = new Date(now).toISOString();
+    const expires = new Date(now + HOUR).toISOString();
+    for (const id of ['cm_e1', 'cm_e2']) {
+      await d1.prepare(
+        "INSERT INTO community_memberships (id, user_id, chat, invite_link, invite_expires_at, status, created_at, updated_at) VALUES (?, ?, 'en', ?, ?, 'invited', ?, ?)"
+      ).bind(id, admin.userId, `https://t.me/+${id}`, expires, ts, ts).run();
+    }
+    const join = async (env: RuntimeEnv, id: string) => field((await read(await telegramWebhookApi(ctx({
+      env, method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': 'hook-secret' },
+      body: { chat_member: { chat: { id: -1001 }, new_chat_member: { status: 'member', user: { id: 461 } }, invite_link: { invite_link: `https://t.me/+${id}` } } },
+    })))).data, 'outcome');
+    expect(await join(tgEnv(), 'cm_e1')).toBe('joined_then_removed');
+    expect(await join(tgEnv({ ADMIN_TELEGRAM_IDS: ' , ' }), 'cm_e2')).toBe('joined_then_removed');
+    expect(adminTelegramIds(tgEnv()).size).toBe(0);
+    expect([...adminTelegramIds(tgEnv({ ADMIN_TELEGRAM_IDS: '461, -5, abc,462 ,' }))]).toEqual(['461', '462']);
+
+    // The sweep exempts nobody either.
+    const ts2 = new Date(now).toISOString();
+    await d1.prepare(
+      "INSERT INTO community_memberships (id, user_id, chat, invite_link, invite_expires_at, telegram_user_id, status, created_at, updated_at, joined_at) VALUES ('cm_e3', ?, 'vi', 'https://t.me/+cm_e3', ?, '461', 'joined', ?, ?, ?)"
+    ).bind(admin.userId, expires, ts2, ts2, ts2).run();
+    const sweep = await read(await communitySweepApi(ctx({ env: tgEnv({ CRON_SECRET: 'cron-secret' }), method: 'POST', headers: { Authorization: 'Bearer cron-secret' } })));
+    expect([field(sweep.data, 'removed'), field(sweep.data, 'exempt_admins')]).toEqual([1, 0]);
+  });
+
   it('never leaks the bot token in errors', async () => {
     routes.unshift(url => (url.includes('createChatInviteLink') ? json({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }, 400) : null));
     const reader = await memberCookie('reader@example.com');
@@ -729,7 +748,8 @@ describe('Telegram community', () => {
 
   describe('sweep safeguards', () => {
     const CRON = 'cron-secret';
-    const cron = async (query = '', env: RuntimeEnv = tgEnv({ CRON_SECRET: CRON })) => read(await communitySweepApi(ctx({
+    // 501 and 802 are the admin's own Telegram accounts in these tests.
+    const cron = async (query = '', env: RuntimeEnv = tgEnv({ CRON_SECRET: CRON, ADMIN_TELEGRAM_IDS: '501,802' })) => read(await communitySweepApi(ctx({
       env, method: 'POST', path: `/api/v1/community/sweep${query}`, headers: { Authorization: `Bearer ${CRON}` },
     })));
     const addMembership = async (id: string, userId: string, status: 'invited' | 'joined', opts: { tg?: string; expiresMs?: number } = {}) => {
@@ -744,7 +764,6 @@ describe('Telegram community', () => {
     it('never removes admins or revokes their live invites, even without a plan', async () => {
       const admin = await memberCookie('boss@example.com');
       const reader = await memberCookie('reader@example.com');
-      await linkTelegram(admin.userId, '501');
       await addMembership('cm_a1', admin.userId, 'joined', { tg: '501' });
       await addMembership('cm_a2', admin.userId, 'invited', { expiresMs: now + HOUR });
       await addMembership('cm_a3', admin.userId, 'invited');
@@ -803,7 +822,6 @@ describe('Telegram community', () => {
       await addMembership('cm_d1', reader.userId, 'joined', { tg: '801' });
       await addMembership('cm_d2', reader.userId, 'invited', { expiresMs: now + HOUR });
       await addMembership('cm_d3', reader.userId, 'invited');
-      await linkTelegram(admin.userId, '802');
       await addMembership('cm_d4', admin.userId, 'joined', { tg: '802' });
 
       const dry = await cron('?dry_run=1');
