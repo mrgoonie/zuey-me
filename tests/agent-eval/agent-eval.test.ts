@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { decodeEntities, extractLinks, htmlToText } from './lib/extract';
 import { checkExpectation, evidenceFromPages } from './lib/expect';
 import { cachedFetcher, crawl, type PageFetcher } from './lib/crawl';
