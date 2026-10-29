@@ -189,6 +189,24 @@ describe('/internal/owner authentication', () => {
     expect(state.data.has('ownerSetting')).toBe(false);
   });
 
+  it('refuses the v1 header still sent by a Pages build from before the v2 format, on every internal route', async () => {
+    // v1 signed only `presence-internal:v1:<seconds>`, with no method or path (the format before #226).
+    const seconds = Math.floor(now / 1000);
+    const v1Header = `${seconds}.${await hmacBase64Url(SECRET, `presence-internal:v1:${seconds}`)}`;
+    const diagUrl = 'https://presence.zuey.me/internal/diagnostics';
+    for (const method of ['GET', 'PUT'] as const) {
+      const res = await handleRequest(ownerRequest(method, method === 'PUT' ? { mode: 'busy', text: 'old build' } : undefined, { [PRESENCE_INTERNAL_HEADER]: v1Header }), env);
+      expect(res.status).toBe(404);
+      expect(await errorCode(res)).toBe('not_found');
+    }
+    expect((await handleRequest(new Request(diagUrl, { headers: { [PRESENCE_INTERNAL_HEADER]: v1Header } }), env)).status).toBe(404);
+    expect(state.data.has('ownerSetting')).toBe(false);
+    // The same requests signed in the current format succeed, so the 404s above come from the format alone.
+    expect((await handleRequest(ownerRequest('GET'), env)).status).toBe(200);
+    const v2Diag = await signPresenceInternal(SECRET, 'GET', '/internal/diagnostics', now);
+    expect((await handleRequest(new Request(diagUrl, { headers: { [PRESENCE_INTERNAL_HEADER]: v2Diag } }), env)).status).toBe(200);
+  });
+
   it('accepts the header only within the allowed clock skew, in either direction', async () => {
     const at = async (offsetMs: number) => {
       const headers = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, 'GET', OWNER_PATH, now + offsetMs) };
