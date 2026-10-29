@@ -309,7 +309,7 @@ async function restConverge(expected: number, sinceMs: number, timeoutMs: number
 
 async function readDiagnostics(): Promise<PresenceDiagnostics> {
   const res = await fetch(`${config.base}/internal/diagnostics`, {
-    headers: { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret) },
+    headers: { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret, 'GET', '/internal/diagnostics') },
   });
   if (!res.ok) throw new Error(`GET /internal/diagnostics returned ${res.status}`);
   const body: PresenceDiagnostics = await res.json();

@@ -12,7 +12,7 @@
   --os-paper: #f5efeb; --os-paper-2: #ebe3dc; --os-ink: #231f1c; --os-ink-muted: #6a5f57; --os-hair: #ddd2c8;
   --os-stage: #181513;
   --os-acc-fg: var(--accent-hi);
-  --os-glass: rgba(32, 27, 24, .8); --os-glass-2: rgba(24, 20, 18, .92);
+  --os-glass: rgba(32, 27, 24, .8); --os-glass-2: rgba(24, 20, 18, .92); --os-sheet: rgb(24, 20, 18);
   --os-bar-bg: rgba(18, 15, 13, .6);
   --os-hover: rgba(255, 255, 255, .08); --os-hover-2: rgba(255, 255, 255, .12);
   --os-tip-bg: #f5efeb; --os-tip-fg: #231f1c;
@@ -38,7 +38,7 @@
   --os-fg: #231f1c; --os-muted: #62574f;
   --os-line: rgba(35, 31, 28, .12); --os-line-2: rgba(35, 31, 28, .2);
   --os-acc-fg: var(--accent-ink);
-  --os-glass: rgba(252, 248, 244, .84); --os-glass-2: rgba(253, 250, 247, .96);
+  --os-glass: rgba(252, 248, 244, .84); --os-glass-2: rgba(253, 250, 247, .96); --os-sheet: rgb(253, 250, 247);
   --os-bar-bg: rgba(252, 248, 244, .72);
   --os-hover: rgba(35, 31, 28, .06); --os-hover-2: rgba(35, 31, 28, .1);
   --os-tip-bg: #231f1c; --os-tip-fg: #f5efeb;
@@ -159,8 +159,9 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 .osw-lights:hover button, .osw-lights button:focus-visible { color: rgba(0, 0, 0, .6); }
 .osw-lights button:active { transform: scale(.86); }
 .osw:not(.is-focus) .osw-lights:not(:hover) button { background: rgba(128, 118, 110, .35); box-shadow: none; }
-.osw-title { flex: 1; min-width: 0; margin: 0 0 0 0; text-align: center; font: 600 12px var(--os-mono); color: inherit; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.osw:not(.is-focus) .osw-title { opacity: .45; }
+.osw-title { flex: 1; min-width: 0; margin: 0 0 0 0; text-align: center; font: 600 12px var(--os-mono); color: inherit; opacity: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Unfocused titles stay >= 4.5:1 (WCAG AA) on every window surface, glass included (tests/zueyos-liquid-glass.test.ts). */
+.osw:not(.is-focus) .osw-title { opacity: .7; }
 .osw-page { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; opacity: .65; }
 .osw-page:hover { opacity: 1; background: rgba(128, 118, 110, .16); }
 .osw-page svg { width: 15px; height: 15px; }
@@ -326,7 +327,7 @@ html.os-page body { overflow: hidden; background: var(--os-wall-2); color: var(-
 
   .os-screen { inset: 0; z-index: 1200; }
   .osw { position: fixed; left: 0 !important; top: calc(env(safe-area-inset-top, 0px) + 10px) !important; width: 100% !important; height: calc(100% - 10px - env(safe-area-inset-top, 0px)) !important; border-radius: 18px 18px 0 0; border: 0; border-top: 1px solid var(--os-line-2); box-shadow: 0 -20px 50px -10px rgba(0, 0, 0, .6); backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .osw--glass { background: var(--os-glass-2); }
+  .osw--glass { background: var(--os-sheet); }
   .osw[data-app='ai'] { background: #f5efeb; }
   .osw-rz, .osw-lights { display: none; }
   /* Sheets stack on phones with backdrop-filter off, so the last few percent of alpha would let the sheet below bleed through. */

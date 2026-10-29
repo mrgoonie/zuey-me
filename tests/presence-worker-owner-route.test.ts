@@ -61,6 +61,8 @@ let state: FakeState;
 let hub: PresenceHub;
 let env: PresenceEnv;
 let internalToken: string;
+const OWNER_PATH = '/internal/owner';
+const tokens: Record<string, string> = {};
 
 function tick(ms: number): void {
   now += ms;
@@ -91,7 +93,7 @@ async function fireAlarm(): Promise<void> {
   await hub.alarm();
 }
 
-function ownerRequest(method: 'GET' | 'PUT' | 'POST' | 'OPTIONS', body?: unknown, headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: internalToken }): Request {
+function ownerRequest(method: 'GET' | 'PUT' | 'POST' | 'OPTIONS', body?: unknown, headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: tokens[method] ?? '' }): Request {
   return new Request(URL_OWNER, {
     method,
     headers: { 'Content-Type': 'application/json', ...headers },
@@ -142,7 +144,8 @@ beforeEach(async () => {
   state = new FakeState();
   env = makeEnv();
   hub = new PresenceHub(state, env);
-  internalToken = await signPresenceInternal(SECRET, now);
+  for (const m of ['GET', 'PUT', 'POST', 'OPTIONS']) tokens[m] = await signPresenceInternal(SECRET, m, OWNER_PATH, now);
+  internalToken = tokens.GET ?? '';
 });
 
 afterEach(() => {
@@ -152,12 +155,13 @@ afterEach(() => {
 describe('/internal/owner authentication', () => {
   it('answers 404 without the internal header, with a wrong one, or one signed with another secret; state stays unchanged', async () => {
     const seconds = Math.floor(now / 1000);
-    const forged = await signPresenceInternal('another-secret', now);
-    const wrongLabel = `${seconds}.${await hmacBase64Url(SECRET, `presence-internal:v0:${seconds}`)}`;
+    const forged = await signPresenceInternal('another-secret', 'GET', OWNER_PATH, now);
+    const wrongLabel = `${seconds}.${await hmacBase64Url(SECRET, `presence-internal:v1:GET:${OWNER_PATH}:${seconds}`)}`;
     const legacyStatic = await hmacBase64Url(SECRET, PRESENCE_INTERNAL_LABEL);
+    const legacyUnbound = `${seconds}.${await hmacBase64Url(SECRET, `${PRESENCE_INTERNAL_LABEL}:${seconds}`)}`;
     const sig = internalToken.split('.')[1] ?? '';
     const attempts: Record<string, string>[] = [{}, { [PRESENCE_INTERNAL_HEADER]: forged }, { [PRESENCE_INTERNAL_HEADER]: wrongLabel },
-      { [PRESENCE_INTERNAL_HEADER]: legacyStatic }, { [PRESENCE_INTERNAL_HEADER]: `${seconds + 1}.${sig}` },
+      { [PRESENCE_INTERNAL_HEADER]: legacyStatic }, { [PRESENCE_INTERNAL_HEADER]: legacyUnbound }, { [PRESENCE_INTERNAL_HEADER]: `${seconds + 1}.${sig}` },
       { [PRESENCE_INTERNAL_HEADER]: `${internalToken}x` }, { [PRESENCE_INTERNAL_HEADER]: internalToken.slice(0, -1) },
       { [PRESENCE_INTERNAL_HEADER]: `-${internalToken}` }, { [PRESENCE_INTERNAL_HEADER]: `${seconds}.${sig}.x` },
       { [PRESENCE_INTERNAL_HEADER]: 'x'.repeat(5000) }, { Authorization: `Bearer ${internalToken}` }];
@@ -175,9 +179,19 @@ describe('/internal/owner authentication', () => {
     expect(s.text).toBeNull();
   });
 
+  it('refuses a header signed for another method or path', async () => {
+    const wrongPath = await signPresenceInternal(SECRET, 'PUT', '/internal/diagnostics', now);
+    const getToken = tokens.GET ?? '';
+    for (const [method, header] of [['PUT', getToken], ['GET', tokens.PUT ?? ''], ['GET', wrongPath], ['PUT', wrongPath]] as const) {
+      const res = await handleRequest(ownerRequest(method, method === 'PUT' ? { mode: 'busy', text: 'pwned' } : undefined, { [PRESENCE_INTERNAL_HEADER]: header }), env);
+      expect(res.status).toBe(404);
+    }
+    expect(state.data.has('ownerSetting')).toBe(false);
+  });
+
   it('accepts the header only within the allowed clock skew, in either direction', async () => {
     const at = async (offsetMs: number) => {
-      const headers = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, now + offsetMs) };
+      const headers = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, 'GET', OWNER_PATH, now + offsetMs) };
       return (await handleRequest(ownerRequest('GET', undefined, headers), env)).status;
     };
     expect(await at(0)).toBe(200);
@@ -186,7 +200,7 @@ describe('/internal/owner authentication', () => {
     expect(await at(-PRESENCE_INTERNAL_MAX_SKEW_MS - 1_000)).toBe(404);
     expect(await at(PRESENCE_INTERNAL_MAX_SKEW_MS + 1_000)).toBe(404);
     // A once-valid header replayed after the window is refused.
-    const captured = await signPresenceInternal(SECRET, now);
+    const captured = await signPresenceInternal(SECRET, 'GET', OWNER_PATH, now);
     setSystemTime(new Date(now + PRESENCE_INTERNAL_MAX_SKEW_MS + 2_000));
     expect((await handleRequest(ownerRequest('GET', undefined, { [PRESENCE_INTERNAL_HEADER]: captured }), env)).status).toBe(404);
   });

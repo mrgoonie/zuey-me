@@ -206,6 +206,28 @@ describe('text contrast on glass', () => {
     }
   });
 
+  test('unfocused window titles stay AA on every window surface, glass included, in both themes', () => {
+    const focused = Number(prop(block('.osw-title'), 'opacity'));
+    const unfocused = Number(prop(block('.osw:not(.is-focus) .osw-title'), 'opacity'));
+    expect(unfocused).toBeLessThanOrEqual(focused);
+    // Glass windows (Appearance, Activity Monitor) take the theme's text and tint; the rest are fixed surfaces.
+    const surfaces = [
+      { name: 'paper', text: hex('#231f1c'), bg: rgba(prop(block('.osw--paper'), '--osw-bg')) },
+      { name: 'stage', text: hex('#f5efeb'), bg: rgba(prop(block('.osw--stage'), '--osw-bg')) },
+      { name: 'ai dark', text: hex('#1c1917'), bg: rgba(prop(block(".osw[data-app='ai']"), '--os-glass')) },
+      { name: 'ai light', text: hex('#1c1917'), bg: rgba(prop(block(":root[data-zt='light'] .osw[data-app='ai']"), '--os-glass')) },
+      { name: 'glass dark', text: hex(prop(tokens.dark, '--os-fg')), bg: rgba(prop(tokens.dark, '--os-glass')) },
+      { name: 'glass light', text: hex(prop(tokens.light, '--os-fg')), bg: rgba(prop(tokens.light, '--os-glass')) },
+    ];
+    // Whatever shows through the tint (blurred wallpaper or windows), bounded by black and white.
+    for (const s of surfaces) {
+      for (const behind of [[0, 0, 0], [255, 255, 255]] satisfies Rgb[]) {
+        const bg = over(s.bg.rgb, s.bg.a, behind);
+        expect({ surface: s.name, aa: contrast(over(s.text, unfocused, bg), bg) >= 4.5 }).toEqual({ surface: s.name, aa: true });
+      }
+    }
+  });
+
   test('the Appearance switch reads at 3:1 when off and when on', () => {
     const track = block('.os-ap-switch');
     const thumb = block('.os-ap-switch > span');
