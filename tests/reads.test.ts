@@ -5,7 +5,8 @@ import { createApiKey } from '../src/db/store';
 import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { AppError } from '../src/lib/http';
-import { syncReads } from '../src/lib/reads/sync';
+import { DEFAULT_SYNC_BATCH_LIMIT, syncReads } from '../src/lib/reads/sync';
+import { runReadsSyncBatches } from '../src/components/studio/reads-sync-loop';
 import type { Summarizer, SummaryInput } from '../src/lib/reads/summarizer';
 import { WorkersAiSummarizer } from '../src/lib/reads/summarizer';
 import { readsMcpModule } from '../src/lib/reads/mcp';
@@ -98,6 +99,21 @@ async function rows(d1: ReturnType<typeof createTestD1>) {
     summary: string | null;
     content_hash: string | null;
   }>;
+}
+
+const manyTaggedDocs = (n: number): FakeDoc[] =>
+  Array.from({ length: n }, (_, i) => ({ id: `doc-${i}`, title: `Doc ${i}`, tags: 'zuey-reads', markdown: `# Doc ${i} body` }));
+
+/** Routes the app's global `fetch` (AnyMD client default) to a fake AnyMD for the duration of `fn`. */
+async function withGlobalAnyMd<T>(docs: FakeDoc[], fn: () => Promise<T>): Promise<T> {
+  const original = globalThis.fetch;
+  const anymd = fakeAnyMd(docs);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => anymd.fetchImpl(String(input), init)) as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = original;
+  }
 }
 
 const baseDocs = (): FakeDoc[] => [
@@ -222,6 +238,57 @@ describe('Zuey Reads sync', () => {
     expect(run.status).toBe('failed');
   });
 
+  it('follow-up batches reuse the library snapshot instead of re-crawling, and the final batch drops it', async () => {
+    const docs = manyTaggedDocs(5);
+    const anymd = fakeAnyMd(docs);
+    const summarizer = countingSummarizer();
+    const libraryCalls = () => anymd.calls.filter(c => c.includes('/library?')).length;
+    const run = (offset: number) => syncReads({ d1, apiKey: 'test-key', fetchImpl: anymd.fetchImpl, summarizer, offset, limit: 2 });
+
+    const first = await run(0);
+    expect(first).toMatchObject({ fetched: 5, tagged: 5, summarized: 2, next_offset: 2, library: 'crawled' });
+    expect(libraryCalls()).toBe(3);
+    expect(d1.raw.query("SELECT count(*) AS n FROM job_cursors WHERE job = 'reads_sync'").get()).toEqual({ n: 1 });
+
+    const second = await run(2);
+    expect(second).toMatchObject({ fetched: 5, tagged: 5, summarized: 2, next_offset: 4, library: 'cached' });
+    expect(libraryCalls()).toBe(3);
+
+    const last = await run(4);
+    expect(last).toMatchObject({ summarized: 1, next_offset: null, library: 'cached' });
+    expect(libraryCalls()).toBe(3);
+    expect(summarizer.calls.map(c => c.title)).toEqual(['Doc 0', 'Doc 1', 'Doc 2', 'Doc 3', 'Doc 4']);
+    expect(d1.raw.query("SELECT count(*) AS n FROM job_cursors WHERE job = 'reads_sync'").get()).toEqual({ n: 0 });
+  });
+
+  it('keeps batch offsets stable when a tagged item is added mid-pass', async () => {
+    const docs = manyTaggedDocs(4);
+    const summarizer = countingSummarizer();
+    const run = (offset: number) =>
+      syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer, offset, limit: 2 });
+    await run(0);
+    docs.unshift({ id: 'new', title: 'New', tags: 'zuey-reads', markdown: '# New' }); // newest item lands first
+    const last = await run(2);
+    expect(last.next_offset).toBeNull();
+    expect(summarizer.calls.map(c => c.title)).toEqual(['Doc 0', 'Doc 1', 'Doc 2', 'Doc 3']);
+  });
+
+  it('re-crawls when the snapshot is stale or the pass starts over', async () => {
+    const docs = manyTaggedDocs(4);
+    const anymd = fakeAnyMd(docs);
+    const libraryCalls = () => anymd.calls.filter(c => c.includes('/library?')).length;
+    let clock = Date.parse('2026-10-01T00:00:00Z');
+    const run = (offset: number) =>
+      syncReads({ d1, apiKey: 'test-key', fetchImpl: anymd.fetchImpl, summarizer: countingSummarizer(), offset, limit: 1, now: () => new Date(clock) });
+    await run(0);
+    expect(libraryCalls()).toBe(2);
+    clock += 30 * 60_000;
+    expect((await run(1)).library).toBe('crawled');
+    expect(libraryCalls()).toBe(4);
+    expect((await run(0)).library).toBe('crawled'); // offset 0 always starts a fresh pass
+    expect(libraryCalls()).toBe(6);
+  });
+
   it('WorkersAiSummarizer parses { response } and rejects other shapes', async () => {
     const ok = new WorkersAiSummarizer({ run: async () => ({ response: '  Hello.  ' }) });
     expect(await ok.summarize({ title: 't', url: 'u', language: 'vi', markdown: 'x' })).toBe('Hello.');
@@ -336,5 +403,98 @@ describe('Zuey Reads MCP module', () => {
       caught = e;
     }
     expect(caught instanceof AppError && caught.code === 'anymd_unconfigured').toBe(true);
+  });
+
+  it('reads_sync documents offset/limit and runs one bounded batch by default', async () => {
+    const tool = readsMcpModule.tools.find(t => t.name === 'reads_sync');
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(['offset', 'limit']);
+    expect(tool?.description).toContain('next_offset');
+
+    const d1 = createTestD1();
+    const env: RuntimeEnv = { ANYMD_API_KEY: 'test-key', AI: { run: async () => ({ response: 'ok' }) } };
+    await withGlobalAnyMd(manyTaggedDocs(5), async () => {
+      const first = await readsMcpModule.call('reads_sync', {}, mcpCtx(d1, true, env));
+      expect(first).toMatchObject({ tagged: 5, summarized: DEFAULT_SYNC_BATCH_LIMIT, next_offset: DEFAULT_SYNC_BATCH_LIMIT });
+      const rest = await readsMcpModule.call('reads_sync', { offset: DEFAULT_SYNC_BATCH_LIMIT, limit: 10 }, mcpCtx(d1, true, env));
+      expect(rest).toMatchObject({ summarized: 5 - DEFAULT_SYNC_BATCH_LIMIT, next_offset: null });
+    });
+    expect(d1.raw.query('SELECT count(*) AS n FROM reads WHERE visible = 1').get()).toEqual({ n: 5 });
+  });
+
+  it('reads_sync rejects invalid offset/limit before touching AnyMD', async () => {
+    const d1 = createTestD1();
+    const env: RuntimeEnv = { ANYMD_API_KEY: 'test-key', AI: { run: async () => ({ response: 'ok' }) } };
+    for (const [args, code] of [
+      [{ offset: -1 }, 'invalid_offset'],
+      [{ offset: '2' }, 'invalid_offset'],
+      [{ limit: 0 }, 'invalid_limit'],
+      [{ limit: 101 }, 'invalid_limit'],
+    ] as const) {
+      let caught: unknown;
+      try {
+        await readsMcpModule.call('reads_sync', { ...args }, mcpCtx(d1, true, env));
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught instanceof AppError && caught.status === 400 && caught.code === code).toBe(true);
+    }
+    expect(d1.raw.query('SELECT count(*) AS n FROM reads_sync_runs').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('Studio Reads sync loop', () => {
+  let d1: ReturnType<typeof createTestD1>;
+  let adminKey: string;
+  beforeEach(async () => {
+    d1 = createTestD1();
+    adminKey = (await createApiKey('t', 'admin', d1)).key;
+  });
+
+  const env = (): RuntimeEnv => ({ DB: d1, ANYMD_API_KEY: 'test-key', AI: { run: async () => ({ response: 'ok' }) } });
+
+  /** Studio's same-origin fetch, served by the real sync route with an admin key. */
+  function studioFetch(bodies: unknown[]) {
+    return async (input: string, init?: RequestInit): Promise<Response> => {
+      expect(input).toBe('/api/v1/reads/sync');
+      const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : 'null');
+      bodies.push(body);
+      return postReadsSync(ctx(env(), { method: 'POST', path: input, token: adminKey, body }));
+    };
+  }
+
+  it('walks every batch through the endpoint until next_offset is null and reports progress', async () => {
+    const bodies: unknown[] = [];
+    const progress: Array<[number, number]> = [];
+    const result = await withGlobalAnyMd(manyTaggedDocs(7), () =>
+      runReadsSyncBatches({ fetchImpl: studioFetch(bodies), limit: 3, onProgress: p => progress.push([p.done, p.total]) }),
+    );
+    expect(bodies).toEqual([{ offset: 0, limit: 3 }, { offset: 3, limit: 3 }, { offset: 6, limit: 3 }]);
+    expect(progress).toEqual([[3, 7], [6, 7], [7, 7]]);
+    expect(result).toMatchObject({ status: 'success', batches: 3, tagged: 7, summarized: 7, unchanged: 0 });
+    expect(d1.raw.query('SELECT count(*) AS n FROM reads WHERE visible = 1').get()).toEqual({ n: 7 });
+  });
+
+  it('stops on the first failed batch with a clear message', async () => {
+    const bodies: unknown[] = [];
+    const real = studioFetch(bodies);
+    let calls = 0;
+    const failing = async (input: string, init?: RequestInit) =>
+      ++calls === 2 ? Response.json({ success: false, error: { code: 'anymd_rate_limited', message: 'retry later' } }, { status: 503 }) : real(input, init);
+    let caught: unknown;
+    await withGlobalAnyMd(manyTaggedDocs(7), async () => {
+      try {
+        await runReadsSyncBatches({ fetchImpl: failing, limit: 3 });
+      } catch (e) {
+        caught = e;
+      }
+    });
+    expect(calls).toBe(2);
+    expect(caught instanceof Error ? caught.message : '').toMatch(/batch 2 \(offset 3\).*anymd_rate_limited: retry later/);
+  });
+
+  it('stops when the server returns a next_offset that does not advance', async () => {
+    const stuck = async () =>
+      Response.json({ success: true, data: { id: 'r', started_at: 'x', status: 'success', tagged: 9, summarized: 0, unchanged: 3, hidden: 0, fetched: 9, finished_at: 'x', error: null, next_offset: 0 } });
+    await expect(runReadsSyncBatches({ fetchImpl: stuck, limit: 3 })).rejects.toThrow(/did not advance/);
   });
 });

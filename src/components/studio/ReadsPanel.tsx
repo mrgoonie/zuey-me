@@ -1,40 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import type { ReadItem, ReadsSyncRun } from '../../lib/reads/store';
-
-interface Envelope {
-  success: boolean;
-  data?: unknown;
-  error?: { code?: string; message?: string };
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-async function readEnvelope(res: Response): Promise<Envelope> {
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    return { success: false, error: { message: `HTTP ${res.status}` } };
-  }
-  if (!isRecord(body)) return { success: false, error: { message: `HTTP ${res.status}` } };
-  const err = isRecord(body.error) ? body.error : undefined;
-  return {
-    success: body.success === true && res.ok,
-    data: body.data,
-    error: err
-      ? { code: typeof err.code === 'string' ? err.code : undefined, message: typeof err.message === 'string' ? err.message : undefined }
-      : undefined,
-  };
-}
+import type { ReadItem } from '../../lib/reads/store';
+import { isRecord, readEnvelope, runReadsSyncBatches } from './reads-sync-loop';
+import type { ReadsSyncLoopResult, ReadsSyncProgress } from './reads-sync-loop';
 
 function isReadItem(v: unknown): v is ReadItem {
   return isRecord(v) && typeof v.id === 'string' && typeof v.url === 'string' && typeof v.visible === 'boolean';
-}
-
-function isSyncRun(v: unknown): v is ReadsSyncRun {
-  return isRecord(v) && typeof v.id === 'string' && typeof v.status === 'string' && typeof v.started_at === 'string';
 }
 
 function fmt(ts: string | null): string {
@@ -47,7 +17,8 @@ function fmt(ts: string | null): string {
 export const ReadsPanel: React.FC = () => {
   const [items, setItems] = useState<ReadItem[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const [lastRun, setLastRun] = useState<ReadsSyncRun | null>(null);
+  const [lastRun, setLastRun] = useState<ReadsSyncLoopResult | null>(null);
+  const [progress, setProgress] = useState<ReadsSyncProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,18 +47,17 @@ export const ReadsPanel: React.FC = () => {
   const syncNow = async () => {
     setSyncing(true);
     setError(null);
+    setProgress(null);
     try {
-      const res = await fetch('/api/v1/reads/sync', { method: 'POST', credentials: 'same-origin' });
-      const env = await readEnvelope(res);
-      if (!env.success || !isSyncRun(env.data)) {
-        throw new Error(env.error ? `${env.error.code ?? 'error'}: ${env.error.message ?? ''}` : 'Sync failed');
-      }
-      setLastRun(env.data);
-      await load();
+      // One request per small batch, so no single request outlives Cloudflare's ~100 s origin timeout (524).
+      setLastRun(await runReadsSyncBatches({ onProgress: setProgress }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sync failed');
     } finally {
       setSyncing(false);
+      setProgress(null);
+      // Earlier batches are saved even when a later one fails, so always refresh the list.
+      await load();
     }
   };
 
@@ -108,14 +78,14 @@ export const ReadsPanel: React.FC = () => {
           disabled={syncing}
           className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-stone-950 text-sm font-semibold transition-colors"
         >
-          {syncing ? 'Syncing…' : 'Sync now'}
+          {syncing ? (progress ? `Syncing… ${progress.done}/${progress.total}` : 'Syncing…') : 'Sync now'}
         </button>
       </div>
 
       {lastRun && (
         <div className="mb-4 rounded-2xl border border-stone-800 bg-stone-900/70 p-3 text-xs text-stone-300">
           <div className="font-semibold text-white mb-1">
-            Run {lastRun.status} · {fmt(lastRun.finished_at)}
+            Run {lastRun.status} · {lastRun.batches} {lastRun.batches === 1 ? 'batch' : 'batches'} · {fmt(lastRun.finished_at)}
           </div>
           <div>
             fetched {lastRun.fetched} · tagged {lastRun.tagged} · summarized {lastRun.summarized} · unchanged {lastRun.unchanged} · hidden {lastRun.hidden}

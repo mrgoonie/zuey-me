@@ -34,7 +34,7 @@ Khi cần quay lại: `wrangler d1 time-travel restore zuey_me_db --bookmark=<bo
 ## 2. Zuey Reads
 
 1. Trong AnyMD, tạo API key có quyền đọc thư viện. Lưu key vào secret `ANYMD_API_KEY`.
-2. Gắn tag `zuey-reads` cho những bài muốn hiển thị. AnyMD không có bộ lọc tag phía server, nên mỗi lần sync sẽ đọc cả thư viện rồi lọc ở phía zuey.me.
+2. Gắn tag `zuey-reads` cho những bài muốn hiển thị. AnyMD không có bộ lọc tag phía server, nên mỗi lần sync sẽ đọc cả thư viện rồi lọc ở phía zuey.me. Sync chạy theo từng đợt nhỏ (3 bài mỗi request) để không request nào vượt giới hạn ~100 giây của Cloudflare (lỗi 524): nút *Sync now* trong Studio tự lặp các đợt và hiện tiến độ, MCP `reads_sync` nhận `offset`/`limit` và trả về `next_offset` để agent gọi tiếp. Chỉ đợt đầu đọc cả thư viện; các đợt sau dùng lại danh sách đó trong tối đa 15 phút.
 3. Binding Workers AI `AI` đã được khai báo trong `wrangler.toml`. Trên Pages, kiểm tra thêm ở *Settings → Bindings → Workers AI* (tên biến `AI`).
 4. Tùy chọn: đặt `READS_SUMMARY_MODEL` để đổi model. Mặc định là `@cf/meta/llama-3.1-8b-instruct-fp8`.
 5. Cấu hình cron sync trong GitHub, mục *Settings → Secrets and variables → Actions*:
