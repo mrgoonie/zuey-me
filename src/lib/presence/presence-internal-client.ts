@@ -81,7 +81,7 @@ export async function callPresenceInternal<T>(env: RuntimeEnv, call: PresenceInt
   if (!secret) throw new AppError(503, 'presence_unavailable', 'Realtime presence is not configured');
   const transport = presenceInternalTransport(env, call.path);
   const hasBody = call.body !== undefined;
-  const headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret), Accept: 'application/json' };
+  const headers: Record<string, string> = { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(secret, call.method, call.path), Accept: 'application/json' };
   if (hasBody) headers['Content-Type'] = 'application/json';
 
   let res: Response;

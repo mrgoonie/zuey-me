@@ -24,7 +24,7 @@ CI is the only deploy path ([`.github/workflows/deploy.yml`](../.github/workflow
 
 **Custom domain.** `workers/presence/wrangler.toml` declares `presence.zuey.me` as a Workers custom domain (`custom_domain = true`, `workers_dev = false`); the deploy creates the DNS record and certificate on the `zuey.me` zone, so the zone must be in the same account as the deploy token.
 
-**Service binding.** The root `wrangler.toml` binds `PRESENCE` → `zuey-me-presence` for every Pages environment. Pages reaches `/internal/*` only through it, with the time-bound `X-Presence-Internal` header (`src/lib/presence/internal-auth.ts`, `presence-internal-client.ts`).
+**Service binding.** The root `wrangler.toml` binds `PRESENCE` → `zuey-me-presence` for every Pages environment. Pages reaches `/internal/*` only through it, with the time-bound `X-Presence-Internal` header, whose HMAC covers the request method and path (`src/lib/presence/internal-auth.ts`, `presence-internal-client.ts`). Pages and the Worker must agree on the signing format: CI deploys Pages before the presence Worker, so after a format change the owner status and diagnostics answer `503 presence_unavailable` until the presence step finishes (re-run the workflow if it failed). Visitor counting and public snapshots are unaffected.
 
 **First deploy of a fresh account or Worker:**
 

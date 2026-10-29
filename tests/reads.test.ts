@@ -77,10 +77,15 @@ function countingSummarizer(): Summarizer & { calls: SummaryInput[] } {
   };
 }
 
-function ctx(env: RuntimeEnv, opts: { method?: string; path?: string; token?: string } = {}): APIContext {
+function ctx(env: RuntimeEnv, opts: { method?: string; path?: string; token?: string; body?: unknown } = {}): APIContext {
   const headers: Record<string, string> = {};
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
-  const request = new Request(`http://localhost:4321${opts.path ?? '/'}`, { method: opts.method ?? 'GET', headers });
+  let body: string | undefined;
+  if (opts.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(opts.body);
+  }
+  const request = new Request(`http://localhost:4321${opts.path ?? '/'}`, { method: opts.method ?? 'GET', headers, body });
   // Route handlers only read `request` and `locals.runtime.env`; the rest of APIContext is unused here.
   const partial = { request, params: {}, locals: { runtime: { env } } };
   return partial as unknown as APIContext;
@@ -123,6 +128,31 @@ describe('Zuey Reads sync', () => {
     // Raw markdown is never persisted.
     const dump = JSON.stringify(d1.raw.query('SELECT * FROM reads').all());
     expect(dump).not.toContain('Alpha body');
+  });
+
+  it('batches the summarize step by offset/limit and hides untagged rows only after the final batch', async () => {
+    const docs = baseDocs();
+    await syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer: countingSummarizer() });
+    docs[2].tags = 'misc'; // Gamma loses the tag
+    docs.push({ id: 'd', title: 'Delta', tags: 'zuey-reads', markdown: '# Delta body' });
+    const summarizer = countingSummarizer();
+    const run = (offset: number) =>
+      syncReads({ d1, apiKey: 'test-key', fetchImpl: fakeAnyMd(docs).fetchImpl, summarizer, offset, limit: 1 });
+
+    const first = await run(0);
+    expect(first).toMatchObject({ tagged: 2, unchanged: 1, summarized: 0, hidden: 0, next_offset: 1 });
+    expect((await rows(d1)).find(r => r.id === 'c')?.visible).toBe(1);
+
+    const last = await run(first.next_offset ?? -1);
+    expect(last).toMatchObject({ summarized: 1, hidden: 1, next_offset: null });
+    expect((await rows(d1)).map(r => [r.id, r.visible])).toEqual([['a', 1], ['c', 0], ['d', 1]]);
+
+    // A retried batch (e.g. after a 524 the client could not see) is a no-op: no LLM call, same rows.
+    const before = await rows(d1);
+    const replay = await run(first.next_offset ?? -1);
+    expect(replay).toMatchObject({ summarized: 0, unchanged: 1, next_offset: null });
+    expect(summarizer.calls).toHaveLength(1);
+    expect(await rows(d1)).toEqual(before);
   });
 
   it('second sync with unchanged content does not call the LLM', async () => {
@@ -219,6 +249,29 @@ describe('Zuey Reads routes', () => {
     expect((await res.json()).success).toBe(false);
     const forbidden = await postReadsSync(ctx(env, { method: 'POST', path: '/api/v1/reads/sync', token: readKey }));
     expect(forbidden.status).toBe(403);
+  });
+
+  it('rejects an invalid batch offset and accepts a body-less call as a full sync', async () => {
+    const env: RuntimeEnv = { DB: d1, AI: fakeAi };
+    const post = (body?: unknown) =>
+      postReadsSync(ctx(env, { method: 'POST', path: '/api/v1/reads/sync', token: adminKey, body }));
+    for (const offset of [-1, 1.5, '3']) {
+      const res = await post({ offset });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('invalid_offset');
+    }
+    // Valid/absent batch fields pass validation and reach the config check.
+    expect((await post(undefined)).status).toBe(503);
+    expect((await post({ offset: 0, limit: 3 })).status).toBe(503);
+  });
+
+  it('rejects an invalid batch limit before touching AnyMD', async () => {
+    const env: RuntimeEnv = { DB: d1, ANYMD_API_KEY: 'k', AI: fakeAi };
+    for (const limit of [0, 101, 2.5]) {
+      const res = await postReadsSync(ctx(env, { method: 'POST', path: '/api/v1/reads/sync', token: adminKey, body: { limit } }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('invalid_limit');
+    }
   });
 
   it('returns honest 503 errors when AnyMD key or AI binding is missing', async () => {

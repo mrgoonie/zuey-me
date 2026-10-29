@@ -18,6 +18,8 @@ export interface OrderNotice {
   /** Outcome returned by the payment applier. */
   outcome: string;
   paymentRef: string | null;
+  /** What the admin must do about it, when the outcome alone does not say. */
+  note?: string;
 }
 
 const KIND_LABELS: Record<OrderKind, string> = {
@@ -57,6 +59,7 @@ export function formatOrderNotice(n: OrderNotice): string {
     `Số tiền: ${formatAmount(n.amount, n.currency)}`,
     `Kênh: ${SOURCE_LABELS[n.source]}`,
     `Mã giao dịch: ${n.paymentRef ?? 'không có'}`,
+    ...(n.note ? [`Ghi chú: ${n.note}`] : []),
   ].join('\n');
 }
 

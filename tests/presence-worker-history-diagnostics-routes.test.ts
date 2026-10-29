@@ -14,7 +14,8 @@ const SECRET = 'test-presence-secret';
 const ORIGIN = 'https://zuey.me';
 const T0 = Date.parse('2026-10-20T04:00:00.000Z');
 const HISTORY_URL = 'https://presence.zuey.me/v1/history';
-const DIAG_URL = 'https://presence.zuey.me/internal/diagnostics';
+const DIAG_PATH = '/internal/diagnostics';
+const DIAG_URL = `https://presence.zuey.me${DIAG_PATH}`;
 
 class FakeSocket implements HubWebSocket {
   sent: PresenceServerMessage[] = [];
@@ -75,7 +76,7 @@ function socket(k: string, over: Partial<SessionIdentity> = {}): FakeSocket {
 const send = (ws: FakeSocket, msg: unknown) => hub.webSocketMessage(ws, typeof msg === 'string' ? msg : JSON.stringify(msg));
 
 const diagRequest = async (headers: Record<string, string> = {}, method = 'GET'): Promise<Request> =>
-  new Request(DIAG_URL, { method, headers: { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, now), ...headers } });
+  new Request(DIAG_URL, { method, headers: { [PRESENCE_INTERNAL_HEADER]: await signPresenceInternal(SECRET, method, DIAG_PATH, now), ...headers } });
 
 beforeEach(() => {
   now = T0;
@@ -173,9 +174,13 @@ describe('GET /v1/history', () => {
 
 describe('GET /internal/diagnostics', () => {
   it('404s without a valid, fresh internal header and never sends CORS headers', async () => {
-    const stale = await signPresenceInternal(SECRET, now - PRESENCE_INTERNAL_MAX_SKEW_MS - 1_000);
-    const forged = await signPresenceInternal('wrong-secret', now);
-    const cases: Record<string, string>[] = [{}, { [PRESENCE_INTERNAL_HEADER]: stale }, { [PRESENCE_INTERNAL_HEADER]: forged }, { [PRESENCE_INTERNAL_HEADER]: 'garbage' }];
+    const stale = await signPresenceInternal(SECRET, 'GET', DIAG_PATH, now - PRESENCE_INTERNAL_MAX_SKEW_MS - 1_000);
+    const forged = await signPresenceInternal('wrong-secret', 'GET', DIAG_PATH, now);
+    // Bound to method and path: a header captured for the owner route or another verb is refused here.
+    const ownerRoute = await signPresenceInternal(SECRET, 'GET', '/internal/owner', now);
+    const otherVerb = await signPresenceInternal(SECRET, 'PUT', DIAG_PATH, now);
+    const cases: Record<string, string>[] = [{}, { [PRESENCE_INTERNAL_HEADER]: stale }, { [PRESENCE_INTERNAL_HEADER]: forged }, { [PRESENCE_INTERNAL_HEADER]: 'garbage' },
+      { [PRESENCE_INTERNAL_HEADER]: ownerRoute }, { [PRESENCE_INTERNAL_HEADER]: otherVerb }];
     for (const headers of cases) {
       const res = await handleRequest(new Request(DIAG_URL, { headers: { Origin: ORIGIN, ...headers } }), env);
       expect(res.status).toBe(404);
