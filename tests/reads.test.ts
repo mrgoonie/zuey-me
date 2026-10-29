@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { createApiKey } from '../src/db/store';
