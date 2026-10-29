@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { createTestD1, crashingD1 } from './helpers/d1';
 import type { D1DatabaseLike } from '../src/db/store';
 import { createArticle, setTagsForArticle, updateArticle } from '../src/lib/blocks/articles';
+import { getTag, updateTag } from '../src/lib/taxonomy/tags';
 import { isObj, num, parseStringArray, str } from '../src/lib/taxonomy/common';
 import type { Row } from '../src/lib/taxonomy/common';
 
@@ -111,5 +112,34 @@ describe('article update and tags set rebuild the legacy tag names in their batc
     await updateArticle(spy.d1, 'post', { title: 'Đã sửa' }, 1);
     expect(stored(d1, 'post')).toEqual({ ...before, revision: 2 });
     expect(spy.batches.flat().some(s => LEGACY.test(s.trim()))).toBe(false);
+  });
+});
+
+describe('a primary locale change rebuilds the legacy tag names in its batch (real SQLite)', () => {
+  it('names follow the new primary locale without a tags write', async () => {
+    const d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', tags: ['alpha'] });
+    const tag = await getTag(d1, 'alpha');
+    if (!tag) throw new Error('seed tag missing');
+    await updateTag(d1, tag.id, { names: { vi: 'Việt', en: 'English' } }, tag.revision, 'admin');
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post' }, 1);
+    expect(stored(d1, 'post')?.legacy).toEqual(['Việt']);
+
+    const spy = crashingD1(d1);
+    await updateArticle(spy.d1, 'post', { primary_locale: 'en' }, 2);
+    expect(stored(d1, 'post')).toEqual({ revision: 3, tags: ['alpha'], legacy: ['English'] });
+    expect(spy.runs.some(s => LEGACY.test(s.trim()))).toBe(false);
+  });
+
+  it('a crash at the legacy tag names update keeps the old primary locale and its names', async () => {
+    const d1 = createTestD1();
+    await createArticle(d1, { slug: 'post', title: 'Bài viết', tags: ['alpha'] });
+    const tag = await getTag(d1, 'alpha');
+    if (!tag) throw new Error('seed tag missing');
+    await updateTag(d1, tag.id, { names: { vi: 'Việt', en: 'English' } }, tag.revision, 'admin');
+    await updateArticle(d1, 'post', { locale: 'en', title: 'Post' }, 1);
+    expect(String(await settle(updateArticle(crashingD1(d1, sqlPoint(LEGACY)).d1, 'post', { primary_locale: 'en' }, 2)))).toMatch(/crashed/);
+    expect(stored(d1, 'post')).toEqual({ revision: 2, tags: ['alpha'], legacy: ['Việt'] });
+    expect(rowOf(d1, "SELECT locale FROM articles WHERE slug = 'post'").locale).toBe('vi');
   });
 });

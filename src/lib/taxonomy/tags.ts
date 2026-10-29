@@ -202,7 +202,7 @@ export async function updateTag(
       WHERE id = ? AND revision = ? AND deleted_at IS NULL
     `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), now, tag.id, expected),
     legacyTagsStatement(db, 'id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)', tag.id),
-    auditLogStatement(db, { actor, action: 'tag.update', targetType: 'tag', targetId: tag.id, before: tag, after: written }, renamedAt(tag.id, expected, now)),
+    auditLogStatement(db, { actor, action: 'tag.update', targetType: 'tag', targetId: tag.id, before: tag, after: written }, renamedTo(written)),
   ]);
   // A concurrent write can take the slug after the checks above; that is a conflict, not a raw 500.
   const [res] = await batch.catch(async (err: unknown) => { throw isSlugViolation(err) ? slugConflict(next.slug, await slugOwner(db, next.slug, tag.id)) : err; });
@@ -213,9 +213,15 @@ export async function updateTag(
   return updated;
 }
 
-/** Holds once an update guarded by `expected` has moved the live tag to `expected + 1` at `updatedAt`. */
-function renamedAt(id: string, expected: number, updatedAt: string): SqlCondition {
-  return { sql: 'EXISTS (SELECT 1 FROM topic_tags WHERE id = ? AND revision = ? AND updated_at = ? AND deleted_at IS NULL)', params: [id, expected + 1, updatedAt] };
+/**
+ * Holds once the live tag is exactly the row a rename wrote: its revision and time, and the slug, names and aliases
+ * as stored. A rename that lost to another one in the same millisecond finds different values, so it audits nothing.
+ */
+function renamedTo(written: TopicTag): SqlCondition {
+  return {
+    sql: 'EXISTS (SELECT 1 FROM topic_tags WHERE id = ? AND revision = ? AND updated_at = ? AND slug = ? AND names = ? AND aliases = ? AND deleted_at IS NULL)',
+    params: [written.id, written.revision, written.updated_at, written.slug, JSON.stringify(written.names), JSON.stringify(written.aliases)],
+  };
 }
 
 export async function deleteTag(d1: D1DatabaseLike | undefined, idOrSlug: string, expectedRevision: unknown, actor: string, env?: RuntimeEnv): Promise<void> {

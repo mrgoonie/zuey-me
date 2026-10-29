@@ -1010,9 +1010,10 @@ export async function updateArticle(
     UPDATE articles SET slug = ?, locale = ?, access = ?, category_id = ${LIVE_CATEGORY}, revision = revision + 1, updated_at = ?
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(nextSlug, primary, input.access ?? art.access, categoryId, categoryId, now, art.id, expected);
-  // The primary mirror and the legacy tag names are derived from the editions and the tag rows, so they are
-  // correct to run whether or not this save won.
-  const derived = [mirrorPrimaryStatement(db, art.id), ...(tagIds ? [articleLegacyTagsStatement(db, art.id)] : [])];
+  // The primary mirror and the legacy tag names are derived from the editions, the tag rows and the primary locale
+  // (which picks each tag's name), so they are correct to run whether or not this save won.
+  const legacyNamesChange = tagIds !== null || primary !== art.primary;
+  const derived = [mirrorPrimaryStatement(db, art.id), ...(legacyNamesChange ? [articleLegacyTagsStatement(db, art.id)] : [])];
   let committed: Partial<UnrevisionedFields>;
   try {
     committed = await commitAtRevision(db, art.id, writes, bump, derived);

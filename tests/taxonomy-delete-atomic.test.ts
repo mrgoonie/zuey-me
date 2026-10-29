@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { createTestD1, crashingD1 } from './helpers/d1';
 import type { D1DatabaseLike } from '../src/db/store';
 import { createArticle, setTagsForArticle } from '../src/lib/blocks/articles';
@@ -268,6 +268,21 @@ describe('tag rename is atomic with the legacy tag names (real SQLite)', () => {
     expect(batch.some(s => /UPDATE articles SET tags/.test(s))).toBe(true);
     expect(batch.some(s => /INSERT INTO taxonomy_audit_log/.test(s))).toBe(true);
     expect(spy.runs.some(s => /UPDATE topic_tags|SET tags|taxonomy_audit_log/.test(s))).toBe(false);
+  });
+
+  describe('two renames from the same revision in the same millisecond', () => {
+    beforeEach(() => { setSystemTime(new Date('2026-10-29T12:00:00.000Z')); });
+    afterEach(() => { setSystemTime(); });
+
+    it('the losing rename is a 409 that writes no audit row', async () => {
+      const outcomes = await Promise.all([
+        settle(updateTag(d1, tag.id, { names: { vi: 'Renamed' } }, tag.revision, 'admin')),
+        settle(updateTag(d1, tag.id, { names: { vi: 'Second' } }, tag.revision, 'admin')),
+      ]);
+      expect(outcomes.filter(o => o instanceof AppError && o.code === 'revision_conflict')).toHaveLength(1);
+      // Exactly one audit row, and it records the rename that is stored.
+      renamed();
+    });
   });
 
   it('a stale revision is a 409 that changes no legacy tag list', async () => {
