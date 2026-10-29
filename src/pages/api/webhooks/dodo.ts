@@ -15,6 +15,8 @@ const CAPTURE_NOTES: Record<NewCourseCapture['reason'], string> = {
   payment_after_refund: 'Khoản thanh toán MỚI trên đơn đã hoàn tiền. Đơn giữ nguyên trạng thái, không cấp quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.',
   payment_after_dispute: 'Khoản thanh toán MỚI trên đơn đang tranh chấp hoặc đã bị chargeback. Đơn giữ nguyên trạng thái, không cấp quyền truy cập; cần hoàn tiền thủ công trên Dodo hoặc quyết định xử lý.',
   payment_after_dismiss: 'Khoản thanh toán MỚI trên đơn đã huỷ (admin dismiss). Đơn chuyển sang cần xử lý, chưa cấp quyền truy cập; hãy cấp quyền hoặc hoàn tiền thủ công trên Dodo.',
+  payment_after_cancel: 'Khoản thanh toán MỚI trên đơn đã huỷ do tạo checkout Dodo thất bại. Đơn chuyển sang cần xử lý, chưa cấp quyền truy cập; hãy cấp quyền hoặc hoàn tiền thủ công trên Dodo.',
+  refunded_before_payment: 'Khoản thanh toán này đã được hoàn tiền trên Dodo trước khi webhook thanh toán tới. Không cấp quyền truy cập và không cần hoàn tiền thêm; chỉ cần đóng đơn nếu đơn đang cần xử lý.',
 };
 
 /**

@@ -704,6 +704,79 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(await ownsCourse(state.d1, userId, courseId)).toBe(true);
       expect(attentionLogs()).toEqual([{ code, reason: 'payment_after_paid', amount: 100, payment_id: 'pay_low' }]);
     });
+
+    /** The test database, except that `race` runs once right before the first batch commits. */
+    const racing = (race: () => Promise<unknown>): D1DatabaseLike => {
+      let fired = false;
+      return {
+        prepare: sql => state.d1.prepare(sql),
+        async batch(statements) {
+          if (!fired) {
+            fired = true;
+            await race();
+          }
+          return state.d1.batch(statements);
+        },
+      };
+    };
+
+    it('flags a payment on a dismissed order as refunded when its refund lands between the read and the flag batch', async () => {
+      const { code, userId, courseId } = await pendingCardOrder();
+      expect((await resolveCourseOrder(state.d1, env(), code, 'dismiss', 'abandoned')).status).toBe('cancelled');
+      const d1 = racing(async () => expect(await dodo('evt_refund_mid', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toBeNull());
+      expect(await applyDodoCourseWebhook(d1, env(), 'evt_pay', { type: 'payment.succeeded', data: latePayment(code, userId) })).toEqual({
+        outcome: 'needs_attention', order_code: code, new_capture: { payment_id: `pay_${code}`, amount: 4900, currency: 'USD', reason: 'refunded_before_payment' },
+      });
+      expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'needs_attention', attention_reason: 'refunded_before_payment', amount_paid: 4900 });
+      expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      expect(gateRows('evt_pay')).toBe(1);
+    });
+
+    it('does not pay an order an admin dismisses between the read and the payment batch, and flags it instead', async () => {
+      const { code, userId, courseId } = await pendingCardOrder();
+      const d1 = racing(() => resolveCourseOrder(state.d1, env(), code, 'dismiss', 'abandoned'));
+      expect(await applyDodoCourseWebhook(d1, env(), 'evt_pay', { type: 'payment.succeeded', data: latePayment(code, userId) })).toMatchObject({
+        outcome: 'needs_attention', new_capture: { payment_id: `pay_${code}`, reason: 'payment_after_dismiss' },
+      });
+      expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'needs_attention', attention_reason: 'payment_after_dismiss', paid_at: null });
+      expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      expect(purchases()).toBe(0);
+      expect(gateRows('evt_pay')).toBe(1);
+    });
+
+    it('announces a second payment on a paid order that Dodo refunded before it arrived as already refunded, not as a double charge', async () => {
+      const { code, userId } = await referredCardOrder();
+      expect(await dodo('evt_refund_second', 'refund.succeeded', { payment_id: 'pay_second', amount: 5900, currency: 'USD' })).toBeNull();
+      const { outcomes, texts } = await throughRoute({ ...latePayment(code, userId, 'pay_second'), total_amount: 5900 }, ['evt_second']);
+      expect(outcomes).toEqual(['needs_attention']);
+      expect(attentionLogs()).toEqual([{ code, reason: 'refunded_before_payment', amount: 5900, payment_id: 'pay_second' }]);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+      expect(texts).toHaveLength(1);
+      expect(texts[0]).toContain('pay_second');
+      expect(texts[0]).toContain('đã được hoàn tiền');
+      expect(texts[0]).not.toContain('hai lần');
+    });
+
+    it('tells the admin that a payment refunded before it arrived needs no further refund', async () => {
+      const { code, userId } = await pendingCardOrder();
+      expect(await dodo('evt_refund_first', 'refund.succeeded', { payment_id: `pay_${code}`, amount: 4900, currency: 'USD' })).toBeNull();
+      const { outcomes, texts } = await throughRoute(latePayment(code, userId), ['evt_pay']);
+      expect(outcomes).toEqual(['needs_attention']);
+      expect(texts).toHaveLength(1);
+      expect(texts[0]).toContain(`pay_${code}`);
+      expect(texts[0]).toContain('đã được hoàn tiền');
+    });
+
+    it('words the notice of a payment on an order cancelled by a failed checkout by that reason, not as an admin dismiss', async () => {
+      const { code, userId, courseId } = await pendingCardOrder();
+      await state.d1.prepare("UPDATE course_orders SET status = 'cancelled', attention_reason = 'checkout_failed' WHERE code = ?").bind(code).run();
+      const { outcomes, texts } = await throughRoute(latePayment(code, userId), ['evt_pay']);
+      expect(outcomes).toEqual(['needs_attention']);
+      expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'needs_attention', attention_reason: 'payment_after_cancel' });
+      expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      expect(texts[0]).toContain('tạo checkout');
+      expect(texts[0]).not.toContain('dismiss');
+    });
   });
 
   describe('a refund while a dispute is open', () => {
