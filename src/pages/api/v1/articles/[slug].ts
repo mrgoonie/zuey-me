@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonError, jsonOk, readJsonObject } from '../../../../lib/http';
-import { deleteArticle, getArticleView, parseArticleInput, resolveReader, toSummary, toWriteReceipt, updateArticle, runtimeWaitUntil } from '../../../../lib/blocks/articles';
+import { deleteArticle, getArticleView, parseArticleInput, resolveReader, submittedArticleFields, toSummary, toWriteReceipt, updateArticle, runtimeWaitUntil } from '../../../../lib/blocks/articles';
 import { localeParam } from '../../../../lib/blocks/params';
 import { documentReceipt, parseReadOptions, parseResponseMode, projectView } from '../../../../lib/blocks/read-modes';
 import { requireAdminActor } from '../../../../lib/taxonomy/admin';
@@ -44,7 +44,7 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
     return await idempotentJson({ request, d1: env.DB, actor, operation: 'article_update', params: { slug: params.slug }, body }, async () => {
       const input = parseArticleInput(withoutIdempotencyKey(body), 'update');
       const rec = await updateArticle(env.DB, params.slug ?? '', input, body.expected_revision, { actor, env, waitUntil: runtimeWaitUntil(locals.runtime) });
-      const summary = { ...toSummary(rec), receipt: toWriteReceipt(rec, input) };
+      const summary = { ...toSummary(rec), receipt: toWriteReceipt(rec, 'update', submittedArticleFields(input)) };
       return responseMode === 'summary' ? { ...summary, ...(await documentReceipt(rec.draft)) } : { ...summary, document: rec.draft };
     });
   } catch (err) {

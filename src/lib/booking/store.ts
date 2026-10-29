@@ -1,12 +1,14 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import { hashString } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
-import { guestDistinctId, queueNeedsAttention, queuePurchase, queueRefund } from '../analytics/commerce-events';
+import { guestDistinctId, needsAttentionEvent, purchaseEvent, queuePurchase, queueRefund } from '../analytics/commerce-events';
+import { outboxInsertStatement } from '../analytics/outbox';
 import { authenticateAdmin } from '../auth';
 import { AppError } from '../http';
 import type { FetchLike } from '../integrations/google-calendar';
 import { createMeetEvent, rescheduleMeetEvent } from '../integrations/google-calendar';
 import { sendEmail } from '../integrations/resend';
+import { isPaymentEventConflict, paymentEventRecorded } from '../payments/payment-events';
 import { capturePaypalOrder, createPaypalOrder, missingPaypalConfig } from '../payments/paypal';
 import type { PaypalReversalEvent } from '../payments/paypal';
 import { missingSepayConfig, parseVndPrice, transferContent, vietQrTransfer } from '../payments/sepay';
@@ -659,76 +661,161 @@ async function findBookingForPayment(d1: D1DatabaseLike, n: PaymentNotice): Prom
   return null;
 }
 
-async function markAttention(d1: D1DatabaseLike, row: BookingRow, reason: string, n: PaymentNotice, nowIso: string): Promise<void> {
-  await d1.prepare(
-    `UPDATE bookings SET status = 'needs_attention', attention_reason = ?, amount_paid = ?, payment_ref = COALESCE(?, payment_ref), updated_at = ?
-     WHERE id = ? AND status <> 'confirmed'`
-  ).bind(reason, n.amount, n.paymentRef, nowIso, row.id).run();
-  await queueNeedsAttention(d1, {
-    distinctId: await guestDistinctId(row.id), provider: n.provider, orderType: 'booking', reference: n.eventId, reason, amountMinor: n.amount, currency: n.currency,
-  });
+/**
+ * The `payment_events` record of a payment notice, built for the batch it gates: written as the batch's first
+ * statement (with `onlyIf`, only while the batch's own guard holds), so the record and what the payment changes commit
+ * together or not at all. It throws a unique violation when the notice was already recorded.
+ */
+type BookingEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike;
+
+function bookingEventGate(d1: D1DatabaseLike, n: PaymentNotice, bookingId: string | null, receivedAt: string): BookingEventGate {
+  return onlyIf => {
+    const source = onlyIf ? `SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, ?, ?, ?, ?, ?)';
+    return d1.prepare(`INSERT INTO payment_events (provider, event_id, booking_id, amount, currency, raw_type, received_at) ${source}`)
+      .bind(n.provider, n.eventId, bookingId, n.amount, n.currency, n.rawType, receivedAt, ...(onlyIf?.params ?? []));
+  };
 }
 
 /**
- * Applies a verified payment notification. Records the provider event first (idempotency gate),
- * then confirms only an active hold paid in full; everything else is flagged for the admin.
+ * Flags the booking for the admin. The notice's record (`gate`), the update and the `payment_needs_attention` event are
+ * one D1 batch: a failure or a crash before the commit leaves nothing, so the redelivery flags the booking once.
+ */
+async function markAttention(d1: D1DatabaseLike, row: BookingRow, reason: string, n: PaymentNotice, nowIso: string, gate: BookingEventGate): Promise<void> {
+  const attention = outboxInsertStatement(d1, needsAttentionEvent({
+    distinctId: await guestDistinctId(row.id), provider: n.provider, orderType: 'booking', reference: n.eventId, reason, amountMinor: n.amount, currency: n.currency,
+  }));
+  await d1.batch([
+    gate(),
+    d1.prepare(
+      `UPDATE bookings SET status = 'needs_attention', attention_reason = ?, amount_paid = ?, payment_ref = COALESCE(?, payment_ref), updated_at = ?
+       WHERE id = ? AND status <> 'confirmed'`
+    ).bind(reason, n.amount, n.paymentRef, nowIso, row.id),
+    ...(attention ? [attention] : []),
+  ]);
+}
+
+/**
+ * How long a delivery's claim on a booking's follow-ups (`meet_status = 'pending'`) holds. The first delivery takes it
+ * in the batch that confirms the booking; a duplicate delivery takes it only while no follow-up ran (both statuses
+ * empty) or once the claim is older than this (the worker that held it died), so a duplicate that arrives while the
+ * Meet event and the invite are being sent never sends them again.
+ */
+export const FOLLOW_UP_CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/** The confirm statement's claim on the follow-ups: set only when none ran yet. */
+const CLAIM_ON_CONFIRM = "meet_status = CASE WHEN meet_status IS NULL AND email_status IS NULL THEN 'pending' ELSE meet_status END";
+
+/**
+ * Claims the follow-ups of a confirmed booking for a duplicate delivery: true only for the one delivery whose update
+ * applied (none ran yet, or the previous claim expired). The claim's time is `updated_at`.
+ */
+async function claimBookingFollowUps(d1: D1DatabaseLike, id: string): Promise<boolean> {
+  const now = bookingRuntime.now();
+  const expired = iso(now - FOLLOW_UP_CLAIM_LEASE_MS);
+  const r = await d1.prepare(
+    `UPDATE bookings SET meet_status = 'pending', updated_at = ?
+     WHERE id = ? AND status = 'confirmed' AND email_status IS NULL
+       AND (meet_status IS NULL OR (meet_status = 'pending' AND updated_at < ?))`
+  ).bind(iso(now), id, expired).run();
+  return (r.meta?.changes ?? 0) === 1;
+}
+
+/**
+ * The follow-ups of a booking confirmed by a payment, each safe to run again: the promo redemption and the invoice
+ * request are guarded on their status and the referral commission is captured once per booking. The Meet event and
+ * the guest's invite email (`fulfilBooking`) run last: they reach outside the database, so their recorded status marks
+ * the follow-ups done. The caller holds the claim on them (see `FOLLOW_UP_CLAIM_LEASE_MS`).
+ */
+async function afterBookingConfirmed(d1: D1DatabaseLike, env: RuntimeEnv, id: string, payer: { payerText: string | null; payerEmail: string | null }): Promise<void> {
+  const confirmed = await getBookingRow(d1, id);
+  if (!confirmed) return;
+  await settleBookingExtras(d1, env, confirmed);
+  if (confirmed.referrer_user_id) await captureReferralCommission(d1, env, { kind: 'booking', id, ...payer });
+  await fulfilBooking(d1, env, confirmed, 'confirmed');
+}
+
+/**
+ * Applies a verified payment notification: confirms only an active hold paid in full; everything else is flagged for
+ * the admin. The provider's event id is the key of the notice's `payment_events` record, which is never written up
+ * front: it is the first statement of the batch that confirms or flags the booking (or written alone when the notice
+ * changes nothing), under that batch's guard. A failure or a worker crash before the commit leaves no record, so the
+ * redelivery applies the notice once, and a record is never deleted. A redelivery after the commit is answered
+ * `duplicate_event`; if the booking it confirmed was never fulfilled (the worker died after the batch and its claim
+ * on the follow-ups expired, see `FOLLOW_UP_CLAIM_LEASE_MS`), the follow-ups run again. A delivery racing this one fails on the record's unique key: its batch rolled
+ * back, so nothing was written twice.
  */
 export async function applyPayment(d1: D1DatabaseLike, env: RuntimeEnv, n: PaymentNotice): Promise<{ outcome: PaymentOutcome; booking_id: string | null }> {
-  const now = bookingRuntime.now();
-  const nowIso = iso(now);
   const row = await findBookingForPayment(d1, n);
-  try {
-    await d1.prepare(
-      'INSERT INTO payment_events (provider, event_id, booking_id, amount, currency, raw_type, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(n.provider, n.eventId, row?.id ?? null, n.amount, n.currency, n.rawType, nowIso).run();
-  } catch (err) {
-    if (isUniqueViolation(err)) return { outcome: 'duplicate_event', booking_id: row?.id ?? null };
-    throw err;
+  const result = (outcome: PaymentOutcome) => ({ outcome, booking_id: row?.id ?? null });
+  const payer = { payerText: n.payerText ?? null, payerEmail: n.payerEmail ?? null };
+  if (await paymentEventRecorded(d1, n.provider, n.eventId)) {
+    const current = row ? await getBookingRow(d1, row.id) : null;
+    const unfulfilled = current?.status === 'confirmed' && current.email_status === null && (current.meet_status === null || current.meet_status === 'pending');
+    if (current && unfulfilled && await claimBookingFollowUps(d1, current.id)) await afterBookingConfirmed(d1, env, current.id, payer);
+    return result('duplicate_event');
   }
-
+  const nowIso = iso(bookingRuntime.now());
+  const gate = bookingEventGate(d1, n, row?.id ?? null, nowIso);
   try {
-    if (!row) return { outcome: 'unmatched', booking_id: null };
-    if (row.status === 'confirmed') return { outcome: 'already_confirmed', booking_id: row.id };
+    if (!row) {
+      await gate().run();
+      return { outcome: 'unmatched', booking_id: null };
+    }
+    if (row.status === 'confirmed') {
+      await gate().run();
+      return result('already_confirmed');
+    }
 
     const expected = expectedAmount(row, env);
     const sufficient = expected.amount !== null && n.currency.toUpperCase() === expected.currency && n.amount >= expected.amount
       && n.provider === row.payment_method;
     if (!sufficient) {
-      await markAttention(d1, row, 'amount_mismatch', n, nowIso);
-      return { outcome: 'needs_attention', booking_id: row.id };
+      await markAttention(d1, row, 'amount_mismatch', n, nowIso, gate);
+      return result('needs_attention');
     }
 
+    // The record, the purchase event and, last, the confirmation are one batch, each applied only while the hold is
+    // still active.
+    const confirmable: SqlCondition = {
+      sql: "EXISTS (SELECT 1 FROM bookings b WHERE b.id = ? AND b.status = 'held' AND b.hold_expires_at >= ?)",
+      params: [row.id, nowIso],
+    };
+    // Keyed by the provider transaction (SePay transfer, PayPal capture shared by the webhook and the return path), so
+    // it is written with the confirmation: resumed follow-ups may run for another notice and could not key it.
+    const purchase = await purchaseEvent(d1, {
+      distinctId: await guestDistinctId(row.id), provider: n.provider, orderType: 'booking', transactionId: n.eventId,
+      amountMinor: n.amount, currency: n.currency, occurredAt: nowIso,
+    });
+    const purchaseInsert = purchase ? outboxInsertStatement(d1, purchase, undefined, confirmable) : null;
     let changes = 0;
     try {
-      const res = await d1.prepare(
-        `UPDATE bookings SET status = 'confirmed', amount_paid = ?, payment_ref = COALESCE(?, payment_ref), attention_reason = NULL, updated_at = ?
-         WHERE id = ? AND status = 'held' AND hold_expires_at >= ?`
-      ).bind(n.amount, n.paymentRef, nowIso, row.id, nowIso).run();
-      changes = res.meta?.changes ?? 0;
+      const results = await d1.batch([
+        gate(confirmable),
+        ...(purchaseInsert ? [purchaseInsert] : []),
+        d1.prepare(
+          `UPDATE bookings SET status = 'confirmed', amount_paid = ?, payment_ref = COALESCE(?, payment_ref), attention_reason = NULL,
+             ${CLAIM_ON_CONFIRM}, updated_at = ?
+           WHERE id = ? AND ${confirmable.sql}`
+        ).bind(n.amount, n.paymentRef, nowIso, row.id, ...confirmable.params),
+      ]);
+      changes = results.at(-1)?.meta?.changes ?? 0;
     } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
+      // Another active booking holds the slot: the batch rolled back and the payment is flagged below.
+      if (isPaymentEventConflict(err) || !isUniqueViolation(err)) throw err;
     }
     if (changes === 1) {
-      // Keyed by the provider transaction (SePay transfer, PayPal capture shared by the webhook and the return path).
-      await queuePurchase(d1, {
-        distinctId: await guestDistinctId(row.id), provider: n.provider, orderType: 'booking', transactionId: n.eventId,
-        amountMinor: n.amount, currency: n.currency, occurredAt: nowIso,
-      });
-      const confirmed = await getBookingRow(d1, row.id);
-      if (confirmed) await fulfilBooking(d1, env, confirmed, 'confirmed');
-      if (confirmed) await settleBookingExtras(d1, env, confirmed);
-      if (row.referrer_user_id) {
-        await captureReferralCommission(d1, env, { kind: 'booking', id: row.id, payerText: n.payerText ?? null, payerEmail: n.payerEmail ?? null });
-      }
-      return { outcome: 'confirmed', booking_id: row.id };
+      await afterBookingConfirmed(d1, env, row.id, payer);
+      return result('confirmed');
     }
     const current = await getBookingRow(d1, row.id);
-    if (current?.status === 'confirmed') return { outcome: 'already_confirmed', booking_id: row.id };
-    await markAttention(d1, row, 'late_payment', n, nowIso);
-    return { outcome: 'needs_attention', booking_id: row.id };
+    if (current?.status === 'confirmed') {
+      await gate().run();
+      return result('already_confirmed');
+    }
+    await markAttention(d1, row, 'late_payment', n, nowIso, gate);
+    return result('needs_attention');
   } catch (err) {
-    // Release the idempotency record so the provider's retry can be processed.
-    await d1.prepare('DELETE FROM payment_events WHERE provider = ? AND event_id = ?').bind(n.provider, n.eventId).run().catch(() => undefined);
+    if (isPaymentEventConflict(err) && await paymentEventRecorded(d1, n.provider, n.eventId)) return result('duplicate_event');
     throw err;
   }
 }
@@ -756,6 +843,8 @@ export async function applyPaypalReversal(
       reason: event.kind === 'refund' ? 'refund' : 'chargeback',
       amountMinor, currency: event.currency ?? row.currency,
       partial: amountMinor !== null && row.amount_paid !== null ? amountMinor < row.amount_paid : undefined,
+      // The purchase of a PayPal booking is keyed by its capture id.
+      purchaseTransactionId: event.captureId,
     });
   }
   return { outcome: result.outcome, booking_id: row.id };
@@ -1031,7 +1120,8 @@ export async function adminUpdateBooking(
   } else {
     if (row.status === 'confirmed') throw new AppError(409, 'already_confirmed', 'Booking is already confirmed');
     try {
-      await d1.prepare("UPDATE bookings SET status = 'confirmed', attention_reason = NULL, admin_note = ?, updated_at = ? WHERE id = ?")
+      // Takes the follow-ups' claim too, so a redelivered notice of this booking does not send the invite again.
+      await d1.prepare(`UPDATE bookings SET status = 'confirmed', attention_reason = NULL, ${CLAIM_ON_CONFIRM}, admin_note = ?, updated_at = ? WHERE id = ?`)
         .bind(noteValue, nowIso, id).run();
     } catch (err) {
       if (isUniqueViolation(err)) throw new AppError(409, 'slot_taken', 'Another active booking holds this slot; cancel or move it first');

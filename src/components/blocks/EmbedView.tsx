@@ -18,7 +18,8 @@ export const EMBED_SLOW_MS = 15000;
 /** In-memory copy for browsers where localStorage throws (private mode, storage disabled). */
 let memoryPref: EmbedLoadPref | null = null;
 
-function readEmbedPref(): EmbedLoadPref {
+/** The reader's stored choice (client only). Widget auto-start honours `click` too. */
+export function readEmbedPref(): EmbedLoadPref {
   if (memoryPref) return memoryPref;
   try {
     return window.localStorage.getItem(EMBED_PREF_KEY) === 'click' ? 'click' : 'auto';

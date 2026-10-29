@@ -1,7 +1,10 @@
-import type { D1DatabaseLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
-import { deferChannelAccessPush, invalidateSenders } from '../channel-access/invalidate';
+import { forgetGa4Client } from '../analytics/ga4-attribution';
+import { reportMemberLifecycle } from '../channel-access/dewee-identity';
 import { AppError } from '../http';
+import type { WaitUntil } from '../wait-until';
+import { deferBestEffort } from '../wait-until';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { exportReferralData, prepareReferralAccountDeletion, referralAccountScrubStatements } from '../referrals/referral-account-data';
 import type { Row } from './runtime';
@@ -159,8 +162,24 @@ export async function insertActivity(
   detail: Record<string, unknown> | null = null,
   request?: Request,
 ): Promise<void> {
-  await d1.prepare('INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso()).run();
+  await activityStatement(d1, userId, action, detail, request).run();
+}
+
+/**
+ * The activity insert of `insertActivity` without running it, for a caller that writes it in a D1 batch. With
+ * `onlyIf`, nothing is inserted unless it holds when the statement runs.
+ */
+export function activityStatement(
+  d1: D1DatabaseLike,
+  userId: string,
+  action: string,
+  detail: Record<string, unknown> | null = null,
+  request?: Request,
+  onlyIf?: SqlCondition,
+): D1PreparedStatementLike {
+  const source = onlyIf ? `SELECT ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, ?, ?, ?)';
+  return d1.prepare(`INSERT INTO user_activity (user_id, action, detail, user_agent, created_at) ${source}`)
+    .bind(userId, action, detail ? JSON.stringify(detail) : null, request ? userAgent(request) : null, nowIso(), ...(onlyIf?.params ?? []));
 }
 
 export async function logActivity(
@@ -215,7 +234,6 @@ export async function exportAccount(d1: D1DatabaseLike, user: UserRecord): Promi
     exported_at: nowIso(),
     user,
     identities: await rows(d1, 'SELECT provider, email, created_at FROM user_identities WHERE user_id = ?', user.id),
-    channel_identities: await rows(d1, 'SELECT provider, external_id, linked_at, source FROM channel_identities WHERE user_id = ?', user.id),
     sessions: await rows(d1, 'SELECT id, created_at, last_seen_at, expires_at, user_agent FROM member_sessions WHERE user_id = ?', user.id),
     api_keys: await rows(d1, 'SELECT id, prefix, name, scopes, created_at, expires_at, last_used_at, revoked_at, replaced_by FROM user_api_keys WHERE user_id = ?', user.id),
     subscriptions: await rows(d1, 'SELECT plan, status, current_period_end, created_at, updated_at FROM subscriptions WHERE user_id = ?', user.id),
@@ -232,10 +250,9 @@ export async function exportAccount(d1: D1DatabaseLike, user: UserRecord): Promi
  * data: national-ID images and the payout profile are deleted, and a mailbox that ever paid is remembered
  * as a hash so re-registering never makes it a "never paid" referee again (`env` reaches the KYC bucket).
  */
-export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: RuntimeEnv = {}): Promise<void> {
+export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: RuntimeEnv = {}, waitUntil?: WaitUntil): Promise<void> {
   await prepareReferralAccountDeletion(d1, env, user);
   const now = nowIso();
-  const { results: channelRows } = await d1.prepare('SELECT external_id FROM channel_identities WHERE user_id = ?').bind(user.id).all<Row>();
   // One D1 batch is one transaction: the profile scrub and every cleanup statement apply together or not at
   // all, so a failure leaves the account intact and a retry starts over instead of hitting a half-deleted row.
   const [scrub] = await d1.batch([
@@ -245,11 +262,6 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
     ).bind(`deleted+${user.id}@deleted.invalid`, now, now, user.id),
     d1.prepare('DELETE FROM member_sessions WHERE user_id = ?').bind(user.id),
     d1.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(user.id),
-    d1.prepare('DELETE FROM channel_identities WHERE user_id = ?').bind(user.id),
-    // Used /connect link tokens: expired rows go (an expired token is rejected anyway). The member's unexpired
-    // rows keep only the nonce, so the token still cannot be replayed, but no longer name the chat id or user.
-    d1.prepare('DELETE FROM channel_link_nonces WHERE expires_at < ?').bind(now),
-    d1.prepare("UPDATE channel_link_nonces SET external_id = '', user_id = '' WHERE user_id = ?").bind(user.id),
     d1.prepare('UPDATE user_api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, user.id),
     d1.prepare('UPDATE login_tokens SET used_at = COALESCE(used_at, ?) WHERE user_id = ? OR email = ?').bind(now, user.id, user.email),
     d1.prepare('DELETE FROM user_activity WHERE user_id = ?').bind(user.id),
@@ -258,7 +270,10 @@ export async function deleteAccount(d1: D1DatabaseLike, user: UserRecord, env: R
   ]);
   // Already deleted: the cleanup above only re-ran idempotent statements on rows that were already clean.
   if (!scrub?.meta?.changes) throw new AppError(404, 'not_found', 'Account not found');
-  // Outside the transaction and best-effort: the agent gate must stop answering the deleted member's chat
-  // accounts now, not when dewee's cache expires.
-  await deferChannelAccessPush(invalidateSenders(env, (channelRows ?? []).map(r => str(r, 'external_id')).filter(Boolean)));
+  // Outside the transaction and best-effort: analytics ids must never block deleting the account.
+  await forgetGa4Client(d1, user.id);
+  // Outside the transaction and best-effort (never throws): Dewee revokes the member's sessions and unlinks every
+  // chat account, so the agent gate stops answering them; a member who never linked one is a no-op. With
+  // waitUntil the call (and its retries) runs after the response, so deletion never waits on Dewee.
+  await deferBestEffort(reportMemberLifecycle(env, user.id, 'delete'), waitUntil);
 }

@@ -1,5 +1,6 @@
 import type { OpenApiFragment } from '../openapi/types';
 import { OWNER_MODES, OWNER_STATUS_TEXT_MAX, PRESENCE_DEFAULT_ORIGIN, PRESENCE_TICKET_TTL_MS } from './contract';
+import { presenceDiagnosticsPath, presenceDiagnosticsSchema } from './presence-diagnostics-openapi';
 import { PRESENCE_TICKET_RATE_LIMIT, PRESENCE_TICKET_RATE_WINDOW_MS } from './presence-rate-limit';
 
 const TAG = 'Presence';
@@ -127,8 +128,10 @@ export const presenceOpenApi: OpenApiFragment = {
         },
       },
     },
+    '/api/v1/presence/diagnostics': presenceDiagnosticsPath,
   },
   schemas: {
+    PresenceDiagnostics: presenceDiagnosticsSchema,
     PresenceOwnerStatus: {
       type: 'object',
       required: ['mode', 'text', 'updatedAt', 'connected', 'public'],

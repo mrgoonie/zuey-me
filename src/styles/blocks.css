@@ -88,6 +88,65 @@
 .zb-tk-heading { color: var(--zb-tk-heading); font-weight: 700; }
 .zb-tk-link { color: var(--zb-tk-link); text-decoration: underline; text-underline-offset: 2px; }
 .zb-tk-meta { color: var(--zb-tk-meta); }
+/* Code options: file caption, toolbar, line gutter, emphasised and diff lines, wrap, collapse. Plain code blocks
+   keep the bare <pre class="zb-code"> above until hydration adds the toolbar around it. */
+.zb-codeblock { position: relative; margin: 0; min-width: 0; max-width: 100%; }
+.zb-code-head {
+  display: flex; align-items: baseline; gap: 0.75rem; min-width: 0; padding: 0.55rem 5.5rem 0.5rem 1rem;
+  background: #292524; color: #e7e5e4; border-radius: 1rem 1rem 0 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.78rem; line-height: 1.4;
+}
+.zb-code-file { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.zb-code-head .zb-code-lang { display: inline; margin: 0 0 0 auto; flex: none; }
+.zb-code-head + .zb-code { border-top-left-radius: 0; border-top-right-radius: 0; }
+.zb-code-tools { position: absolute; top: 0.35rem; right: 0.4rem; display: flex; gap: 0.15rem; }
+.zb-code-tools button {
+  display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; padding: 0;
+  border: 0; border-radius: 0.55rem; background: rgba(41, 37, 36, 0.92); color: #d6d3d1; cursor: pointer;
+}
+.zb-code-tools button:hover, .zb-code-tools button[aria-pressed='true'] { background: #44403c; color: #fafaf9; }
+.zb-code-tools button[data-state='copied'] { color: #86efac; }
+.zb-code-tools button[data-state='failed'] { color: #fca5a5; }
+.zb-code-tools button:focus-visible, .zb-code-expand:focus-visible, .zb-codeblock .zb-code:focus-visible { outline: 2px solid #fcd34d; outline-offset: 2px; }
+/* A block with options and no caption keeps its first line clear of the toolbar (rendered so on the server, so
+   nothing moves on hydration). Plain blocks keep their layout; the toolbar sits beside their language label. */
+.zb-code-top { padding-top: 2.6rem; }
+.zb-code-top > .zb-code-lang { position: absolute; top: 0.95rem; left: 1rem; margin: 0; }
+/* A plain block without a language label has no row above its code for the toolbar (2.35rem tall from the top),
+   so it reserves the same clear first line. Applied to the server markup too, so nothing moves on hydration. */
+.zb-code:not(:has(> .zb-code-lang)):not(.zb-code-head + .zb-code) { padding-top: 2.6rem; }
+.zb-code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.zb-code-lines { padding-inline: 0; }
+.zb-code-lines > .zb-code-lang { padding-inline: 1rem; }
+.zb-code-lines > code { display: block; counter-reset: zb-line; width: max-content; min-width: 100%; }
+.zb-code-lines.zb-code-wrap > code { width: auto; }
+.zb-line {
+  display: block; position: relative; counter-increment: zb-line; text-decoration: none;
+  padding-left: calc(1rem + var(--zb-mark)); padding-right: 1rem;
+}
+.zb-code-numbered .zb-line { padding-left: calc(2rem + var(--zb-gutter) + var(--zb-mark)); }
+.zb-code-numbered .zb-line::before {
+  content: counter(zb-line); content: counter(zb-line) / '';
+  position: absolute; left: 0.75rem; width: var(--zb-gutter); text-align: right; color: #8a837e; user-select: none;
+}
+.zb-line-add, .zb-line-del, .zb-line-ctx { --zb-mark-left: 1rem; }
+.zb-code-numbered .zb-line-add, .zb-code-numbered .zb-line-del, .zb-code-numbered .zb-line-ctx { --zb-mark-left: calc(1.6rem + var(--zb-gutter)); }
+.zb-line-add::after, .zb-line-del::after { position: absolute; top: 0; left: var(--zb-mark-left); user-select: none; }
+.zb-line-add { background: rgba(34, 197, 94, 0.16); }
+.zb-line-add::after { content: '+'; content: '+' / ''; color: #86efac; }
+.zb-line-del { background: rgba(239, 68, 68, 0.16); }
+.zb-line-del::after { content: '-'; content: '-' / ''; color: #fca5a5; }
+/* The spoken "added"/"removed" label stays out of a manual selection, like the gutter markers. */
+.zb-diff-sr { user-select: none; }
+.zb-line-head { color: var(--zb-tk-meta); }
+.zb-line-hl { background: rgba(250, 204, 21, 0.14); box-shadow: inset 3px 0 #fcd34d; }
+.zb-code-collapsed { max-height: calc(var(--zb-code-rows) * 1.6em + 1.8rem); overflow-y: auto; }
+.zb-code-top.zb-code-collapsed { max-height: calc(var(--zb-code-rows) * 1.6em + 3.5rem); }
+.zb-code-expand {
+  display: block; width: 100%; margin-top: 0.35rem; padding: 0.45rem 0.75rem; border: 1px solid #d6d3d1; border-radius: 0.75rem;
+  background: #fafaf9; color: #1c1917; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+}
+.zb-code-expand:hover { background: #f5f5f4; }
 .zb-divider { border: 0; border-top: 1px solid #d6d3d1; margin: 0.6rem 0; width: 100%; }
 .zb-figure { margin: 0; }
 .zb-figure img { display: block; max-width: 100%; height: auto; border-radius: 1rem; }
@@ -109,6 +168,63 @@
 .zb-table th, .zb-table td { padding: 0.5rem 0.75rem; border-top: 1px solid #e7e5e4; text-align: left; vertical-align: top; }
 .zb-table th { background: #f5f5f4; font-weight: 700; white-space: nowrap; }
 .zb-table td.zb-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Data tables: typed cells, controls added on hydration, sticky header, stacked cards on narrow widths. Plain
+   tables keep the markup above. The container query follows the block's own width (layout cells included). */
+.zb-dt { container-type: inline-size; }
+.zb-dt .zb-table th.zb-num { text-align: right; }
+.zb-dt-scroll:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+.zb-dt-sticky { max-height: min(70vh, 40rem); overflow: auto; }
+.zb-dt-sticky thead th { position: sticky; top: 0; z-index: 1; box-shadow: inset 0 -1px #e7e5e4; }
+.zb-dt-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; }
+.zb-dt-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; margin: 0; padding: 0; border: 0; font-size: 0.8rem; font-weight: 600; color: #57534e; }
+.zb-dt-field legend { padding: 0; margin-bottom: 0.2rem; }
+.zb-dt-range { flex-direction: row; flex-wrap: wrap; gap: 0.35rem; }
+.zb-dt-range legend { width: 100%; }
+.zb-dt-field :is(input, select) {
+  min-width: 0; max-width: 100%; padding: 0.4rem 0.6rem; border: 1px solid #d6d3d1; border-radius: 0.6rem;
+  background: #fff; color: #1c1917; font: inherit; font-weight: 400; font-size: 0.875rem;
+}
+.zb-dt-range input { width: 8.5rem; }
+.zb-dt-search { flex: 1 1 14rem; }
+.zb-dt-field :is(input, select):focus-visible, .zb-dt-sort:focus-visible, .zb-dt-reset:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+.zb-dt-reset {
+  padding: 0.4rem 0.75rem; border: 1px solid #d6d3d1; border-radius: 0.6rem; background: #fafaf9; color: #1c1917;
+  font-size: 0.8rem; font-weight: 600; cursor: pointer;
+}
+.zb-dt-status { margin: 0; font-size: 0.8rem; color: #78716c; }
+.zb-dt-sort {
+  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; font-weight: 700; text-align: inherit; cursor: pointer;
+}
+.zb-dt-sort-icon { font-size: 0.7em; color: #a8a29e; }
+th[aria-sort='ascending'] .zb-dt-sort-icon, th[aria-sort='descending'] .zb-dt-sort-icon { color: #b45309; }
+.zb-dt-empty { text-align: center; color: #78716c; }
+.zb-dt-yes { color: #15803d; font-weight: 700; }
+.zb-dt-no { color: #b91c1c; font-weight: 700; }
+.zb-dt-badge { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+.zb-dt-tone-0 { background: #fef3c7; color: #92400e; }
+.zb-dt-tone-1 { background: #d1fae5; color: #065f46; }
+.zb-dt-tone-2 { background: #e0f2fe; color: #075985; }
+.zb-dt-tone-3 { background: #ffe4e6; color: #9f1239; }
+.zb-dt-tone-4 { background: #ede9fe; color: #5b21b6; }
+.zb-dt-tone-5 { background: #f5f5f4; color: #44403c; }
+.zb-dt td a { overflow-wrap: anywhere; }
+.zb-surface-contrast :is(.zb-dt-field, .zb-dt-status) { color: #d6d3d1; }
+@container (max-width: 34rem) {
+  .zb-dt-cards .zb-dt-scroll { max-height: none; overflow: visible; border: 0; border-radius: 0; }
+  .zb-dt-cards .zb-table, .zb-dt-cards .zb-table tbody, .zb-dt-cards .zb-table tr, .zb-dt-cards .zb-table td { display: block; width: 100%; }
+  .zb-dt-cards .zb-table thead tr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  /* Sortable cards keep the headers as a row of sort buttons. */
+  .zb-dt-cards.zb-dt-sortable .zb-table thead tr { position: static; width: auto; height: auto; overflow: visible; clip: auto; display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
+  .zb-dt-cards.zb-dt-sortable .zb-table thead th { position: static; padding: 0.3rem 0.6rem; border: 1px solid #e7e5e4; border-radius: 999px; box-shadow: none; }
+  .zb-dt-cards .zb-table tbody tr { margin-bottom: 0.6rem; padding: 0.35rem 0; border: 1px solid #e7e5e4; border-radius: 0.85rem; background: #fff; }
+  .zb-dt-cards .zb-table td { display: grid; grid-template-columns: minmax(6rem, 38%) minmax(0, 1fr); gap: 0.75rem; border: 0; padding: 0.35rem 0.85rem; text-align: left; }
+  .zb-dt-cards .zb-table td::before { content: attr(data-label); font-weight: 600; color: #57534e; }
+  .zb-dt-cards .zb-table td > * { justify-self: start; }
+  .zb-dt-cards .zb-table td.zb-dt-empty { display: block; }
+  .zb-dt-cards .zb-table td.zb-dt-empty::before { content: none; }
+}
 
 .zb-chart canvas { width: 100% !important; max-height: 360px; }
 .zb-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -310,7 +426,7 @@
 .zb-surface-contrast .zb-h, .zb-surface-contrast .zb-icon { color: inherit; }
 .zb-surface-contrast :is(.zb-quote footer, .zb-checklist .zb-done, figcaption) { color: #d6d3d1; }
 /* Blocks drawn as light panels keep dark text on a dark band. */
-.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math, .zb-file, .zb-bookmark, .zb-toggle,
+.zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-math-display, .zb-file, .zb-bookmark, .zb-toggle,
   .zb-embed-placeholder, .zb-embed-notice, .zb-embed-fallback, .zb-layout-bento > .zb-cell) { color: #1c1917; }
 .zb-surface-contrast :is(.zb-callout, .zb-scroll, .zb-survey, .zb-diagram, .zb-file, .zb-bookmark, .zb-toggle, .zb-layout-bento > .zb-cell) :is(.zb-h, .zb-icon) { color: #0c0a09; }
 .zb-surface-contrast :is(.zb-toggle, .zb-scroll) { background: #fafaf9; }
@@ -388,7 +504,144 @@
 .zb-frame-error { color: #b91c1c; font-size: 0.9rem; }
 .zb-frame figcaption { font-size: 0.85rem; color: #78716c; text-align: center; }
 @keyframes zb-frame-pulse { 50% { opacity: 0.55; } }
+
+/* Chart v2: HTML legend whose items toggle series (or slices). */
+.zb-chart-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.35rem; }
+.zb-chart-legend-item, .zb-chart-legend-reset {
+  display: inline-flex; align-items: center; gap: 0.4rem; min-height: 2rem; padding: 0.2rem 0.65rem; border-radius: 999px;
+  border: 1px solid #e7e5e4; background: transparent; color: #44403c; font: inherit; font-size: 0.8rem; cursor: pointer;
+}
+.zb-chart-legend-item[aria-pressed="false"] { color: #a8a29e; text-decoration: line-through; }
+.zb-chart-legend-item[aria-pressed="false"] .zb-chart-swatch { opacity: 0.35; }
+.zb-chart-legend-reset { font-weight: 700; }
+.zb-chart-legend :is(button):focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+.zb-chart-swatch { width: 0.75rem; height: 0.75rem; border-radius: 0.2rem; flex: none; }
+/* Chart.js reads the canvas max-height and lowers the drawing height to it (no stretching), so a full-screen
+   chart gets wider rather than taller than the screen. */
+.zb-chart-v2:fullscreen canvas { max-height: calc(100vh - 9rem); }
+.zb-chart-marks { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: 0.8rem; color: #57534e; }
 @media (prefers-reduced-motion: reduce) {
   .zb-frame-loading { animation: none; }
   .zb-frame-btn { transition: none; }
 }
+
+/* Composition widgets (tabs, stat, steps, comparison, progress). Motion only for readers who did not ask to reduce it. */
+.zb-widget { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.zb-widget-title { margin: 0; font-weight: 700; font-size: 1.02rem; }
+.zb-badge { display: inline-flex; align-items: center; padding: 0.1rem 0.55rem; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
+.zb-surface-contrast :is(.zb-stat-item, .zb-compare-option, .zb-tablist, .zb-step-status) { color: #1c1917; }
+
+/* Tabs: without JavaScript every panel is shown under its heading; the live form scrolls its tab list sideways on phones. */
+.zb-tabs { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.zb-tab-panel { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; scroll-margin-top: 1.5rem; }
+.zb-tab-panel[hidden] { display: none; }
+.zb-tab-heading { margin: 0; font-size: 1.05rem; font-weight: 700; }
+.zb-tabs-live { gap: 0.9rem; }
+.zb-tablist {
+  display: flex; gap: 0.25rem; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: thin;
+  padding: 0.25rem; border-radius: 999px; background: #efe8e2; max-width: 100%; align-self: flex-start;
+}
+.zb-tab {
+  flex: none; scroll-snap-align: start; min-height: 2.25rem; padding: 0.3rem 0.95rem; border: 0; border-radius: 999px;
+  background: transparent; color: #57534e; font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.zb-tab:hover { color: #1c1917; }
+.zb-tab[aria-selected="true"] { background: #ffffff; color: #1c1917; box-shadow: 0 1px 3px rgba(28, 25, 23, 0.15); }
+.zb-tab:focus-visible, .zb-tabs-live .zb-tab-panel:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+
+/* Stat */
+.zb-stat-grid { display: grid; gap: 0.75rem; margin: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); }
+.zb-stat-item { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; padding: 0.9rem 1rem; border-radius: 1rem; background: #ffffff; border: 1px solid #e7e5e4; }
+.zb-stat-item dd { margin: 0; }
+.zb-stat-label { font-size: 0.85rem; color: #57534e; }
+.zb-stat-value { font-size: clamp(1.2rem, 0.9rem + 1.6vw, 1.6rem); font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+.zb-stat-delta { font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.zb-stat-basis { font-weight: 400; color: #78716c; }
+.zb-stat-note, .zb-progress-note { font-size: 0.8rem; color: #78716c; margin: 0; }
+.zb-state-positive .zb-stat-delta { color: #15803d; }
+.zb-state-negative .zb-stat-delta { color: #b91c1c; }
+.zb-state-neutral .zb-stat-delta { color: #57534e; }
+.zb-sparkline { display: block; width: 100%; height: 1.75rem; }
+.zb-sparkline polyline { stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.zb-stat-spark { color: #a16207; }
+.zb-state-positive .zb-stat-spark { color: #15803d; }
+.zb-state-negative .zb-stat-spark { color: #b91c1c; }
+
+/* Steps and timeline */
+.zb-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.zb-step { position: relative; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 0.75rem; padding-bottom: 1.1rem; }
+.zb-step:last-child { padding-bottom: 0; }
+.zb-step::before { content: ''; position: absolute; left: calc(1rem - 1px); top: 2.1rem; bottom: 0.1rem; width: 2px; background: #e7ded6; }
+.zb-step:last-child::before, .zb-steps-noline .zb-step::before { display: none; }
+.zb-step-marker {
+  width: 2rem; height: 2rem; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
+  background: #ffffff; border: 2px solid #d6d3d1; color: #57534e; font-size: 0.85rem; font-weight: 800;
+}
+.zb-steps-timeline .zb-step-marker { width: 1rem; height: 1rem; margin: 0.35rem 0.5rem 0; }
+.zb-steps-timeline .zb-step::before { top: 1.6rem; }
+.zb-step-done .zb-step-marker { background: #1c1917; border-color: #1c1917; color: #fafaf9; }
+.zb-step-current .zb-step-marker { border-color: #d97706; color: #b45309; box-shadow: 0 0 0 4px #fef3c7; }
+.zb-step-done::before { background: #1c1917; }
+.zb-step-body { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; padding-top: 0.2rem; }
+.zb-step-title { margin: 0; font-weight: 700; }
+.zb-step-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: #78716c; }
+.zb-step-status { padding: 0.05rem 0.5rem; border-radius: 999px; background: #f5f5f4; color: #44403c; font-weight: 600; }
+.zb-step-status-done { background: #dcfce7; color: #166534; }
+.zb-step-status-current { background: #fef3c7; color: #92400e; }
+.zb-step-content { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+@media (min-width: 768px) {
+  .zb-steps-horizontal { flex-direction: row; gap: 1rem; }
+  .zb-steps-horizontal .zb-step { flex: 1 1 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; padding-bottom: 0; }
+  .zb-steps-horizontal .zb-step::before { left: 2.4rem; right: -0.6rem; top: calc(1rem - 1px); bottom: auto; width: auto; height: 2px; }
+  .zb-steps-horizontal.zb-steps-timeline .zb-step::before { top: calc(0.85rem - 1px); left: 1.9rem; }
+}
+
+/* Comparison */
+.zb-compare-options { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
+.zb-compare-option { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; padding: 1rem; border-radius: 1rem; background: #ffffff; border: 1px solid #e7e5e4; }
+.zb-compare-highlight { border: 2px solid #d97706; box-shadow: 0 10px 28px -18px rgba(180, 83, 9, 0.6); }
+.zb-compare-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.zb-compare-name { margin: 0; font-weight: 800; font-size: 1.05rem; }
+.zb-compare-desc { margin: 0; color: #57534e; }
+.zb-compare-points { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.zb-compare-points li { display: flex; gap: 0.45rem; align-items: baseline; }
+.zb-compare-pro > span[aria-hidden], .zb-mark-yes { color: #15803d; font-weight: 800; }
+.zb-compare-con > span[aria-hidden], .zb-mark-no { color: #b91c1c; font-weight: 800; }
+.zb-compare-content { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+.zb-compare-matrix th[scope="row"] { font-weight: 600; text-align: left; }
+.zb-compare-matrix .zb-compare-col-highlight { background: #fffbeb; }
+
+/* Progress, segments, gauge and rating (role="meter" with the value in text beside it) */
+.zb-progress-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
+.zb-progress-gauge .zb-progress-list, .zb-progress-rating .zb-progress-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
+.zb-progress-item { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.zb-progress-head { display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.9rem; }
+.zb-progress-label { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.zb-progress-value { font-variant-numeric: tabular-nums; white-space: nowrap; color: #44403c; }
+.zb-progress-state { color: var(--zp-color); font-weight: 700; }
+.zb-progress-item { --zp-color: #a16207; }
+.zb-progress-item.zb-state-positive { --zp-color: #15803d; }
+.zb-progress-item.zb-state-warning { --zp-color: #b45309; }
+.zb-progress-item.zb-state-negative { --zp-color: #b91c1c; }
+.zb-progress-bar .zb-meter { height: 0.6rem; border-radius: 999px; background: #e7ded6; overflow: hidden; }
+.zb-meter-fill { display: block; height: 100%; border-radius: inherit; background: var(--zp-color); }
+.zb-progress-segments .zb-meter { display: flex; gap: 0.2rem; }
+.zb-seg { flex: 1 1 0; height: 0.6rem; border-radius: 0.2rem; background: #e7ded6; }
+.zb-seg-on { background: var(--zp-color); }
+.zb-gauge { display: block; width: 100%; max-width: 9rem; }
+.zb-gauge path { fill: none; stroke-width: 9; stroke-linecap: round; }
+.zb-gauge-track { stroke: #e7ded6; }
+.zb-gauge-fill { stroke: var(--zp-color); }
+.zb-progress-gauge .zb-progress-head, .zb-progress-rating .zb-progress-head { flex-direction: column; gap: 0.1rem; }
+.zb-progress-rating .zb-meter { display: flex; gap: 0.1rem; font-size: 1.35rem; line-height: 1; }
+.zb-star {
+  color: transparent; background: linear-gradient(90deg, #f59e0b var(--zp-fill), #d6d3d1 var(--zp-fill));
+  -webkit-background-clip: text; background-clip: text;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .zb-tab { transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease; }
+  .zb-tabs-live .zb-tab-panel:not([hidden]) { animation: zb-tab-in 0.18s ease-out; }
+  .zb-meter-fill { animation: zb-meter-grow 0.6s ease-out; transform-origin: left center; }
+}
+@keyframes zb-tab-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes zb-meter-grow { from { transform: scaleX(0); } }

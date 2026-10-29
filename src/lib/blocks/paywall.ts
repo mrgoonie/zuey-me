@@ -1,4 +1,5 @@
-import type { ArticleAccess, ArticleDocument, Block, CardBlock, LayoutBlock, LayoutChild, SectionBlock, ToggleBlock } from './schema';
+import type { ArticleAccess, ArticleDocument, Block, CardBlock, ItemWidgetBlock, LayoutBlock, LayoutChild, SectionBlock, ToggleBlock } from './schema';
+import { widgetItems } from './schema';
 import { inlineToPlain } from './inline';
 import { blockDefinition } from './registry';
 import { documentText, wordCount } from '../search/text';
@@ -66,17 +67,41 @@ function nestedWeight(blocks: Block[]): number {
   return blocks.reduce((n, b) => n + blockWeight(b), 0);
 }
 
-/** One container a unit sits in: a section, card or toggle body, or one cell of a layout. */
-type UnitFrame = { kind: 'body'; block: SectionBlock | CardBlock | ToggleBlock } | { kind: 'cell'; block: LayoutBlock; cell: LayoutChild };
+/** One container a unit sits in: a section, card or toggle body, one cell of a layout, or one tabs, steps or comparison item. */
+type UnitFrame =
+  | { kind: 'body'; block: SectionBlock | CardBlock | ToggleBlock }
+  | { kind: 'cell'; block: LayoutBlock; cell: LayoutChild }
+  | { kind: 'item'; block: ItemWidgetBlock; index: number };
 
-/** A unit the paywall keeps or withholds: a leaf block, with the containers it sits in. */
-interface PaywallUnit { block: Block; path: UnitFrame[] }
+/**
+ * A unit the paywall keeps or withholds: a leaf block, with the containers it sits in. A shell unit stands for a
+ * widget item with an empty body: keeping it keeps the item (its label, pros, …) and adds no block.
+ */
+interface PaywallUnit { block: Block; path: UnitFrame[]; shell?: true }
+
+/** Visible text of one widget item outside its blocks (what a shell unit keeps). */
+function itemTextWeight(block: ItemWidgetBlock, index: number): number {
+  switch (block.type) {
+    case 'tabs': return block.tabs[index].label.length;
+    case 'steps': return inlineToPlain(block.items[index].title).length + (block.items[index].date?.length ?? 0);
+    case 'comparison': {
+      const o = block.options[index];
+      return o.name.length + [o.description ?? '', ...(o.pros ?? []), ...(o.cons ?? [])].reduce((n, s) => n + inlineToPlain(s).length, 0);
+    }
+  }
+}
+
+function unitWeight(u: PaywallUnit): number {
+  const frame = u.path[u.path.length - 1];
+  return u.shell && frame?.kind === 'item' ? Math.max(1, itemTextWeight(frame.block, frame.index)) : blockWeight(u.block);
+}
 
 /**
  * Splits a block into paywall units. Sections, cards and toggles are split down to their body blocks
  * and layouts cell by cell, at any depth and at the top level alike, so no container that holds the
  * whole article (or most of it) can bypass the paywall. A container with nothing to split (an empty
- * body, or a layout whose cells are all empty) is one unit on its own, so it never disappears.
+ * body, or a layout whose cells are all empty) is one unit on its own, so it never disappears. Tabs, steps and
+ * comparison widgets split item by item; an item without blocks is a shell unit, so its label still counts.
  */
 function blockUnits(block: Block, path: UnitFrame[]): PaywallUnit[] {
   let units: PaywallUnit[] = [];
@@ -85,6 +110,12 @@ function blockUnits(block: Block, path: UnitFrame[]): PaywallUnit[] {
     units = block.blocks.flatMap(child => blockUnits(child, inner));
   } else if (block.type === 'layout') {
     units = block.children.flatMap(cell => cell.blocks.flatMap(child => blockUnits(child, [...path, { kind: 'cell', block, cell }])));
+  } else if (block.type === 'tabs' || block.type === 'steps' || block.type === 'comparison') {
+    units = widgetItems(block).flatMap((item, index) => {
+      const inner: UnitFrame[] = [...path, { kind: 'item', block, index }];
+      const own = item.blocks.flatMap(child => blockUnits(child, inner));
+      return own.length > 0 ? own : [{ block, path: inner, shell: true as const }];
+    });
   }
   return units.length > 0 ? units : [{ block, path }];
 }
@@ -114,9 +145,28 @@ function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[
   const bodies = new Map<SectionBlock | CardBlock | ToggleBlock | LayoutChild, Block[]>();
   const layouts = new Map<LayoutBlock, LayoutBlock>();
   const cards: Array<[CardBlock, CardBlock]> = [];
-  for (const { block, path } of units) {
+  const widgets = new Map<ItemWidgetBlock, { copy: ItemWidgetBlock; kept: number[] }>();
+  const itemBodies = new Map<{ blocks: Block[] }, Block[]>();
+  for (const { block, path, shell } of units) {
     let list = out;
     for (const frame of path) {
+      if (frame.kind === 'item') {
+        let widget = widgets.get(frame.block);
+        if (!widget) {
+          widget = { copy: { ...frame.block }, kept: [] };
+          list.push(widget.copy);
+          widgets.set(frame.block, widget);
+        }
+        const item = widgetItems(frame.block)[frame.index];
+        let body = itemBodies.get(item);
+        if (!body) {
+          body = [];
+          itemBodies.set(item, body);
+          widget.kept.push(frame.index);
+        }
+        list = body;
+        continue;
+      }
       if (frame.kind === 'body') {
         let body = bodies.get(frame.block);
         if (!body) {
@@ -144,8 +194,9 @@ function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[
       }
       list = body;
     }
-    list.push(block);
+    if (!shell) list.push(block);
   }
+  for (const [source, { copy, kept }] of widgets) keepItems(source, copy, kept, itemBodies);
   const kept = cardUnitCounts(units);
   for (const [source, copy] of cards) {
     if ((kept.get(source) ?? 0) < (totals.get(source) ?? 0)) delete copy.footer;
@@ -153,19 +204,41 @@ function joinUnits(units: PaywallUnit[], totals: Map<CardBlock, number>): Block[
   return out;
 }
 
+function pick<T extends { blocks: Block[] }>(items: T[], kept: number[], bodies: Map<{ blocks: Block[] }, Block[]>): T[] {
+  return kept.map(i => ({ ...items[i], blocks: bodies.get(items[i]) ?? [] }));
+}
+
+/**
+ * Fills a partly kept widget with its kept items (in order). A comparison keeps the matrix columns of its kept
+ * options only; tabs keep their default tab when it was kept.
+ */
+function keepItems(source: ItemWidgetBlock, copy: ItemWidgetBlock, kept: number[], bodies: Map<{ blocks: Block[] }, Block[]>): void {
+  if (source.type === 'tabs' && copy.type === 'tabs') {
+    copy.tabs = pick(source.tabs, kept, bodies);
+    const first = kept.indexOf(source.defaultTab ?? 0);
+    if (first > 0) copy.defaultTab = first;
+    else delete copy.defaultTab;
+  } else if (source.type === 'steps' && copy.type === 'steps') {
+    copy.items = pick(source.items, kept, bodies);
+  } else if (source.type === 'comparison' && copy.type === 'comparison') {
+    copy.options = pick(source.options, kept, bodies);
+    if (source.features) copy.features = source.features.map(f => ({ ...f, values: kept.map(i => f.values[i]) }));
+  }
+}
+
 /**
  * Keeps roughly the first third (by text weight) of the article's units (blocks inside sections, cards,
- * toggles and layout cells count one by one) for paid articles when the viewer is not entitled. Always keeps at least one unit
+ * toggles, layout cells and widget items count one by one) for paid articles when the viewer is not entitled. Always keeps at least one unit
  * and, when the article has more than one, always withholds at least one.
  */
 export function applyPaywall(doc: ArticleDocument, access: ArticleAccess, viewer: Viewer): PaywallResult {
   if (access !== 'knowledges' || canReadFull(viewer)) return { doc, truncated: false };
   const units = paywallUnits(doc.blocks);
-  const total = units.reduce((n, u) => n + blockWeight(u.block), 0);
+  const total = units.reduce((n, u) => n + unitWeight(u), 0);
   let keep = 0;
   let acc = 0;
   while (keep < units.length && (keep === 0 || acc < total / 3)) {
-    acc += blockWeight(units[keep].block);
+    acc += unitWeight(units[keep]);
     keep += 1;
   }
   if (units.length > 1) keep = Math.min(keep, units.length - 1);

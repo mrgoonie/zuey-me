@@ -6,7 +6,7 @@ import { BlockRenderer } from '../src/components/blocks/BlockRenderer';
 import { validateDocument } from '../src/lib/blocks/validate';
 import { PROSE_ARTICLE } from './fixtures/v1-article-documents';
 import { parseReadsList } from '../src/components/reads/reads-api-client';
-import { parseLab200Snapshot } from '../src/components/lab200/lab200-api-client';
+import { parseLab200Catalog } from '../src/components/lab200/lab200-api-client';
 import { lab200OpenApi } from '../src/lib/lab200/openapi';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { AMBIENT_VIDEO_SCRIPT, FONT_LOADER_SCRIPT, FONTS_URL } from '../src/lib/page/deferred-asset-scripts';
@@ -20,7 +20,7 @@ const read = (path: string) => readFile(new URL(path, import.meta.url), 'utf8');
 describe('page weight budget', () => {
   test('index.astro does not load the reads, videos or 200lab data sets', async () => {
     const src = await read('../src/pages/index.astro');
-    for (const banned of ['listReads', 'listVideos', 'getLab200Snapshot', 'ReadsBrowser', 'ZueytubeBrowser', 'Lab200Courses']) {
+    for (const banned of ['listReads', 'listVideos', 'getLab200Catalog', 'ReadsBrowser', 'ZueytubeBrowser', 'Lab200Catalog']) {
       expect(src).not.toContain(banned);
     }
     for (const win of ['ReadsWindow', 'ZueytubeWindow', 'Lab200Window']) {
@@ -51,8 +51,22 @@ describe('page weight budget', () => {
     for (const d of sans) expect(d).toMatch(/Plus Jakarta Sans Fallback['"], ['"]Plus Jakarta Sans Fallback Roboto['"]/);
     for (const d of serif) expect(d).toContain('Fraunces Fallback');
     const css = await read('../src/styles/global.css');
+    // Each fallback has a regular face and a real bold face: a synthesized bold is narrower than the web font's
+    // bold, so bold titles and badges would rewrap (and shift the page) when the web font arrives.
     for (const face of ['Plus Jakarta Sans Fallback', 'Plus Jakarta Sans Fallback Roboto', 'Fraunces Fallback']) {
-      expect(css).toMatch(new RegExp(`font-family: '${face}';\\s*src: local\\('[A-Za-z]+'\\);\\s*size-adjust`));
+      const faces = css.match(new RegExp(`@font-face \\{ font-family: '${face}'; [^}]+\\}`, 'g')) ?? [];
+      expect(faces.some(f => /src: local\('[A-Za-z]+'\); font-weight: 100 /.test(f))).toBe(true);
+      expect(faces.some(f => /src: local\('[A-Za-z]+ Bold'\)[^;]*; font-weight: 550 /.test(f))).toBe(true);
+      for (const f of faces) expect(f).toMatch(/size-adjust: [\d.]+%; ascent-override: [\d.]+%; descent-override: [\d.]+%; line-gap-override: 0%/);
+      // Overrides are scaled by size-adjust, so every face must give the same ascent and descent once scaled.
+      const scaled = faces.map(f => {
+        const [size, ascent, descent] = ['size-adjust', 'ascent-override', 'descent-override'].map(k => Number(f.match(new RegExp(`${k}: ([\\d.]+)%`))?.[1]));
+        return { ascent: (size * ascent) / 1e4, descent: (size * descent) / 1e4 };
+      });
+      for (const m of scaled) {
+        expect(m.ascent).toBeCloseTo(scaled[0].ascent, 2);
+        expect(m.descent).toBeCloseTo(scaled[0].descent, 2);
+      }
     }
   });
 
@@ -80,18 +94,23 @@ describe('window data parsers', () => {
     expect(parseReadsList({ items: 'nope' })).toBeNull();
   });
 
-  test('parseLab200Snapshot accepts only https images', () => {
-    const snap = parseLab200Snapshot({
+  test('parseLab200Catalog accepts only 200lab asset images', () => {
+    const item = (slug: string, cover: unknown) => ({
+      slug, url: `https://200lab.io/courses/${slug}`, jsonUrl: `https://200lab.io/courses/${slug}.json`, title: slug.toUpperCase(),
+      cover, pricing: { state: 'available', prices: [] },
+    });
+    const snap = parseLab200Catalog({
       courses: [
-        { slug: 'x', title: 'X', summary: 's', lessons: 5, status: 'open', free: true, image: 'https://assets.200lab.io/x' },
-        { slug: 'y', title: 'Y', image: 'http://insecure.example/y' },
+        item('x', { url: 'https://assets.200lab.io/x', variants: [] }),
+        item('y', { url: 'http://insecure.example/y', variants: [] }),
         { title: 'no slug' },
       ],
       synced_at: null,
+      learning_paths: [],
     });
-    expect(snap?.courses.map(c => [c.slug, c.image])).toEqual([['x', 'https://assets.200lab.io/x'], ['y', null]]);
-    expect(snap?.syncedAt).toBeNull();
-    expect(parseLab200Snapshot(null)).toBeNull();
+    expect(snap?.courses.items.map(c => [c.slug, c.cover?.url ?? null])).toEqual([['x', 'https://assets.200lab.io/x'], ['y', null]]);
+    expect(snap?.courses.syncedAt).toBeNull();
+    expect(parseLab200Catalog(null)).toBeNull();
   });
 });
 
