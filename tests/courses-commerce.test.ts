@@ -734,15 +734,20 @@ describe('Dodo course payments, refunds and disputes', () => {
         invites: state.d1.raw.query<Record<string, unknown>, []>('SELECT * FROM github_invites ORDER BY repo').all(),
       });
 
-      async function referredDisputedOrder(): Promise<{ code: string; userId: string; courseId: string }> {
+      async function referredPaidOrder(): Promise<{ code: string; userId: string; courseId: string }> {
         const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
         const { user: ref } = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
         const { code: referralCode } = await ensureReferralProfile(state.d1, ref.id);
         await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.id).run();
         const lan = await member('lan@example.com');
         const code = await paidByCard(lan, { referral_code: referralCode });
-        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'reversed' });
         return { code, userId: lan.userId, courseId: course.id };
+      }
+
+      async function referredDisputedOrder(): Promise<{ code: string; userId: string; courseId: string }> {
+        const order = await referredPaidOrder();
+        expect(await dodo('evt_open', 'dispute.opened', { payment_id: `pay_${order.code}` })).toMatchObject({ outcome: 'reversed' });
+        return order;
       }
 
       for (const [surface, resolve] of Object.entries(surfaces)) {
@@ -833,6 +838,83 @@ describe('Dodo course payments, refunds and disputes', () => {
         const pending = String(field((await read(await checkout(await member('mai@example.com'), { provider: 'dodo', accept_terms: true }))).data, 'code'));
         expect(await surfaces.REST(state.d1, pending, 'dismiss')).toEqual({ status: 200 });
         expect(await getCourseOrderByCode(state.d1, pending)).toMatchObject({ status: 'cancelled', attention_reason: 'dismissed:admin note' });
+      });
+
+      /** Orders whose money went back: refunded by the admin, refunded while a dispute is open, and that dispute then lost. */
+      const refundedOrders = {
+        'a refunded order': async () => {
+          const order = await referredPaidOrder();
+          expect((await resolveCourseOrder(state.d1, env(), order.code, 'refund', 'goodwill')).status).toBe('refunded');
+          return order;
+        },
+        'an order refunded while its dispute is open': async () => {
+          const order = await referredDisputedOrder();
+          expect((await resolveCourseOrder(state.d1, env(), order.code, 'refund', 'goodwill')).status).toBe('refunded');
+          return order;
+        },
+        'an order refunded during a dispute that was then lost': async () => {
+          const order = await referredDisputedOrder();
+          expect((await resolveCourseOrder(state.d1, env(), order.code, 'refund', 'goodwill')).status).toBe('refunded');
+          expect(await dodo('evt_lost', 'dispute.lost', { payment_id: `pay_${order.code}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+          return order;
+        },
+      };
+
+      for (const [surface, resolve] of Object.entries(surfaces)) {
+        for (const [name, setup] of Object.entries(refundedOrders)) {
+          it(`through ${surface} refuses a grant of ${name} with 409 and changes nothing`, async () => {
+            const { code, userId, courseId } = await setup();
+            const before = snapshot(code);
+            expect(before.order).toMatchObject({ status: 'refunded' });
+            expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded', message: expect.stringMatching(/cannot be granted/) });
+            expect(snapshot(code)).toEqual(before);
+            expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+          });
+
+          it(`through ${surface} refuses a dismiss of ${name} with 409, so a later grant cannot re-open it`, async () => {
+            const { code, userId, courseId } = await setup();
+            const before = snapshot(code);
+            expect(await resolve(state.d1, code, 'dismiss')).toMatchObject({ status: 409, code: 'order_refunded', message: expect.stringMatching(/cannot be dismissed/) });
+            expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
+            expect(snapshot(code)).toEqual(before);
+            expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('refunded');
+            expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+          });
+        }
+
+        for (const from of ['pending', 'expired', 'needs_attention'] as const) {
+          it(`through ${surface} still grants a ${from} order`, async () => {
+            const order = await flaggedCardOrder();
+            if (from !== 'needs_attention') {
+              await state.d1.prepare('UPDATE course_orders SET status = ?, attention_reason = NULL WHERE code = ?').bind(from, order.code).run();
+            }
+            expect(await resolve(state.d1, order.code, 'grant')).toEqual({ status: 200 });
+            expect(await getCourseOrderByCode(state.d1, order.code)).toMatchObject({ status: 'paid', attention_reason: 'admin_grant:admin note' });
+            expect(await ownsCourse(state.d1, order.userId, order.courseId)).toBe(true);
+          });
+        }
+      }
+
+      it('refuses a grant of a flagged order that an admin refund refunded meanwhile', async () => {
+        const { code, userId, courseId } = await flaggedCardOrder();
+        const d1 = landingBefore(/^UPDATE course_orders SET status = 'paid'/, () => resolveCourseOrder(state.d1, env(), code, 'refund', 'underpaid'));
+        expect(await surfaces.REST(d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'refunded', attention_reason: 'underpaid' });
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      });
+
+      it('refuses a dismiss of a flagged order that an admin refund refunded meanwhile', async () => {
+        const { code } = await flaggedCardOrder();
+        const d1 = landingBefore(/^UPDATE course_orders SET status = 'cancelled'/, () => resolveCourseOrder(state.d1, env(), code, 'refund', 'underpaid'));
+        expect(await surfaces.REST(d1, code, 'dismiss')).toMatchObject({ status: 409, code: 'order_refunded' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'refunded', attention_reason: 'underpaid' });
+      });
+
+      it('reports the dismiss 409 from the status the dismiss found: a grant that paid the order meanwhile', async () => {
+        const { code } = await flaggedCardOrder();
+        const d1 = landingBefore(/^UPDATE course_orders SET status = 'cancelled'/, () => resolveCourseOrder(state.d1, env(), code, 'grant', 'paid by card'));
+        expect(await surfaces.REST(d1, code, 'dismiss')).toMatchObject({ status: 409, code: 'already_paid', message: 'Use refund for a paid order' });
+        expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
       });
 
       it('reports the refund 409 from the status the refund found, not the one read before it', async () => {
