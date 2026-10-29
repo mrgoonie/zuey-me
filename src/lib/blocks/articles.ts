@@ -13,7 +13,7 @@ import { DEFAULT_LOCALE, LOCALES, isLocale } from '../i18n/locales';
 import type { Locale } from '../i18n/locales';
 import { reindexArticle } from '../search/indexer';
 import { documentText, readingMinutes, wordCount } from '../search/text';
-import { mirrorLegacyTags, resolveTagRefs, tagsForArticles, toPublicTag } from '../taxonomy/tags';
+import { articleLegacyTagsStatement, resolveTagRefs, tagsForArticles, toPublicTag } from '../taxonomy/tags';
 import type { PublicTag } from '../taxonomy/tags';
 import { listCategories, resolveCategoryRef, toPublicCategory } from '../taxonomy/categories';
 import type { PublicCategory } from '../taxonomy/categories';
@@ -879,8 +879,7 @@ function isSlugUniqueViolation(err: unknown): boolean {
 
 /**
  * Runs a derived-cache rebuild after a write has committed. A failure is logged, not thrown: the write
- * landed (a retry would only get 409). The search index is rebuilt by the next write or an admin reindex; the
- * legacy tag mirror only by a later tags write, tag rename or tag delete (a reindex does not touch it).
+ * landed (a retry would only get 409). The search index is rebuilt by the next write or an admin reindex.
  */
 async function afterCommit(what: string, task: () => Promise<unknown>): Promise<void> {
   try {
@@ -912,8 +911,8 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
   const docJson = JSON.stringify(doc);
   const access = input.access ?? 'free';
   const excerpt = input.excerpt ?? '';
-  // One D1 batch (one transaction): the article, its edition, its first history row and its tags exist
-  // together or not at all, so a failure leaves nothing behind and a retry can succeed.
+  // One D1 batch (one transaction): the article, its edition, its first history row, its tags and their legacy
+  // names exist together or not at all, so a failure leaves nothing behind and a retry can succeed.
   let committed: Partial<UnrevisionedFields>;
   try {
     committed = unrevisionedFields(await db.batch([
@@ -932,6 +931,7 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
       `).bind(newId('rev_'), id, locale, input.title, excerpt, docJson, actor, now),
       ...tagIds.map((tagId, i) => db.prepare('INSERT OR IGNORE INTO article_tags (article_id, tag_id, position, created_at) VALUES (?, ?, ?, ?)')
         .bind(id, tagId, i, now)),
+      ...(tagIds.length ? [articleLegacyTagsStatement(db, id)] : []),
       unrevisionedRead(db, id),
     ]));
   } catch (err) {
@@ -939,8 +939,6 @@ export async function createArticle(d1: D1DatabaseLike | undefined, input: Artic
     if (isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${input.slug}" is already used`);
     throw err;
   }
-  // The legacy tag names column is a cache derived from the committed tag rows, as in update and tags set.
-  if (tagIds.length) await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, id));
   return readBackAfterCommit(db, id, {
     art: {
       id, slug: input.slug, primary: locale, access, categoryId, revision: 1, labelRevision: 0, createdAt: now, updatedAt: now,
@@ -1012,20 +1010,20 @@ export async function updateArticle(
     UPDATE articles SET slug = ?, locale = ?, access = ?, category_id = ${LIVE_CATEGORY}, revision = revision + 1, updated_at = ?
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(nextSlug, primary, input.access ?? art.access, categoryId, categoryId, now, art.id, expected);
-  // The primary mirror is derived from the editions, so it is correct to run whether or not this save won.
+  // The primary mirror and the legacy tag names are derived from the editions and the tag rows, so they are
+  // correct to run whether or not this save won.
+  const derived = [mirrorPrimaryStatement(db, art.id), ...(tagIds ? [articleLegacyTagsStatement(db, art.id)] : [])];
   let committed: Partial<UnrevisionedFields>;
   try {
-    committed = await commitAtRevision(db, art.id, writes, bump, [mirrorPrimaryStatement(db, art.id)]);
+    committed = await commitAtRevision(db, art.id, writes, bump, derived);
   } catch (err) {
     // Another article took the slug after the check above; the batch rolled back as a whole.
     if (nextSlug !== art.slug && isSlugUniqueViolation(err)) throw new AppError(409, 'slug_taken', `Slug "${nextSlug}" is already used`);
     throw err;
   }
 
-  // Derived caches rebuilt from the committed rows: the legacy tag names column and the search index
-  // (which also calls Workers AI / Vectorize, so it cannot join a D1 batch). Both are idempotent.
-  if (tagIds) await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
-  // Access, tags and category affect what each search tier may contain: always rebuild.
+  // The search index is rebuilt from the committed rows (it also calls Workers AI / Vectorize, so it cannot join
+  // a D1 batch). Access, tags and category affect what each search tier may contain: always rebuild.
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, nextSlug, ctx);
   const writtenEdition: EditionRow = edition
@@ -1182,9 +1180,10 @@ export async function setTagsForArticle(
   // Read before the commit so the answer can still be built if the read-back after it fails.
   const editions = (await loadEditions(db, [art.id])).get(art.id) ?? [];
   const now = nowIso();
-  const committed = await commitAtRevision(db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now));
-  // Derived caches rebuilt from the committed rows (legacy tag names column, search index); idempotent.
-  await afterCommit('Legacy tag mirror', () => mirrorLegacyTags(db, art.id));
+  const committed = await commitAtRevision(
+    db, art.id, guardedTagStatements(db, art.id, expected, tagIds, now), bumpRevisionStatement(db, art.id, expected, now), [articleLegacyTagsStatement(db, art.id)],
+  );
+  // The search index is rebuilt from the committed rows; idempotent.
   await afterCommit('Search reindex', () => reindexArticle(db, art.id, ctx.env));
   scheduleOgRefresh(db, art.id, slug, ctx);
   return readBackAfterCommit(db, art.id, unchangedEditionShown(art, editions, expected + 1, now, committed));

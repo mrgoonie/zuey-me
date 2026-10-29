@@ -94,11 +94,23 @@ async function adminCookie(d1: TestD1): Promise<string> {
   return `zuey_session=${await createSession('admin@zuey.me', d1)}`;
 }
 
+type RouteContext = Parameters<APIRoute>[0];
+
+/** Checks the fields the tag and article handlers read, so a partial context can be passed without a cast. */
+function isRouteContext(value: unknown): value is RouteContext {
+  return typeof value === 'object' && value !== null
+    && 'request' in value && value.request instanceof Request
+    && 'url' in value && value.url instanceof URL
+    && 'params' in value && typeof value.params === 'object'
+    && 'locals' in value && typeof value.locals === 'object';
+}
+
 async function callApi(route: APIRoute, path: string, db: D1DatabaseLike, cookie: string, body: unknown): Promise<{ status: number; json: unknown }> {
   const request = new Request(`https://zuey.test${path}`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const ctx = { request, params: {}, url: new URL(request.url), locals: { runtime: { env: { DB: db } } } };
-  // The handlers only read request/params/locals; a full APIContext is not constructible in tests.
-  const res = await route(ctx as unknown as Parameters<APIRoute>[0]);
+  // The handlers only read request/params/url/locals; a full APIContext is not constructible in tests.
+  if (!isRouteContext(ctx)) throw new Error('route context is missing request, params, url or locals');
+  const res = await route(ctx);
   return { status: res.status, json: JSON.parse(await res.text()) };
 }
 

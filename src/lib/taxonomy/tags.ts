@@ -1,4 +1,4 @@
-import type { D1DatabaseLike, D1PreparedStatementLike } from '../../db/store';
+import type { D1DatabaseLike, D1PreparedStatementLike, SqlCondition } from '../../db/store';
 import type { RuntimeEnv } from '../../env';
 import { AppError } from '../http';
 import type { Locale } from '../i18n/locales';
@@ -190,23 +190,32 @@ export async function updateTag(
     if (owner) throw slugConflict(next.slug, owner);
   }
   await assertNoCollision(db, next, tag.id);
-  // One batch (one transaction): the rename and the legacy tag names of its articles commit together, so a crash
-  // cannot leave the old name in `articles.tags`. When the rename does not apply, the rebuild leaves the column as it was.
+  const now = nowIso();
+  // The row this rename stores when it applies; the guard above holds only if `tag` was read at `expected`.
+  const written: TopicTag = { ...tag, ...next, revision: expected + 1, updated_at: now };
+  // One batch (one transaction): the rename, the legacy tag names of its articles and the audit row commit together,
+  // so a crash cannot leave the old name in `articles.tags` or a rename without its audit row. When the rename does
+  // not apply, the rebuild leaves the column as it was and the audit row is not written.
   const batch = db.batch([
     db.prepare(`
       UPDATE topic_tags SET slug = ?, names = ?, aliases = ?, revision = revision + 1, updated_at = ?
       WHERE id = ? AND revision = ? AND deleted_at IS NULL
-    `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), nowIso(), tag.id, expected),
+    `).bind(next.slug, JSON.stringify(next.names), JSON.stringify(next.aliases), now, tag.id, expected),
     legacyTagsStatement(db, 'id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)', tag.id),
+    auditLogStatement(db, { actor, action: 'tag.update', targetType: 'tag', targetId: tag.id, before: tag, after: written }, renamedAt(tag.id, expected, now)),
   ]);
   // A concurrent write can take the slug after the checks above; that is a conflict, not a raw 500.
   const [res] = await batch.catch(async (err: unknown) => { throw isSlugViolation(err) ? slugConflict(next.slug, await slugOwner(db, next.slug, tag.id)) : err; });
   if (!res?.meta?.changes) throw new AppError(409, 'revision_conflict', 'Tag was changed by someone else; reload and retry', { current_revision: tag.revision });
   const updated = await getTag(db, tag.id);
   if (!updated) throw new AppError(500, 'internal_error', 'Tag disappeared after update');
-  await writeAuditLog(db, { actor, action: 'tag.update', targetType: 'tag', targetId: tag.id, before: tag, after: updated });
   await reindexTagged(db, tag.id, env);
   return updated;
+}
+
+/** Holds once an update guarded by `expected` has moved the live tag to `expected + 1` at `updatedAt`. */
+function renamedAt(id: string, expected: number, updatedAt: string): SqlCondition {
+  return { sql: 'EXISTS (SELECT 1 FROM topic_tags WHERE id = ? AND revision = ? AND updated_at = ? AND deleted_at IS NULL)', params: [id, expected + 1, updatedAt] };
 }
 
 export async function deleteTag(d1: D1DatabaseLike | undefined, idOrSlug: string, expectedRevision: unknown, actor: string, env?: RuntimeEnv): Promise<void> {
@@ -299,9 +308,9 @@ function legacyTagsStatement(db: D1DatabaseLike, where: string, ...params: unkno
   `).bind(...params);
 }
 
-/** Keeps the legacy `articles.tags` JSON (read by older builds) in sync with topic tags. */
-export async function mirrorLegacyTags(db: D1DatabaseLike, articleId: string): Promise<void> {
-  await legacyTagsStatement(db, 'id = ?', articleId).run();
+/** Rebuilds one article's legacy `articles.tags` JSON; article writes put it in the batch that writes its tag rows. */
+export function articleLegacyTagsStatement(db: D1DatabaseLike, articleId: string): D1PreparedStatementLike {
+  return legacyTagsStatement(db, 'id = ?', articleId);
 }
 
 /** Tags per article in display order (deleted tags excluded). */

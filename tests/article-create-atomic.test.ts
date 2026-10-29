@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import type { Mock } from 'bun:test';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import type { APIRoute } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../src/db/store';
 import type { ArticleDocument } from '../src/lib/blocks/schema';
-import { createArticle, getArticle, setTagsForArticle } from '../src/lib/blocks/articles';
+import { createArticle, getArticle } from '../src/lib/blocks/articles';
 import { AppError } from '../src/lib/http';
 import { createSession } from '../src/db/store';
 import { createTag } from '../src/lib/taxonomy/tags';
@@ -204,37 +203,27 @@ describe('concurrent creates with the same slug (real SQLite)', () => {
   });
 });
 
-describe('the legacy tag mirror is a derived cache (real SQLite)', () => {
+describe('the legacy tag names commit with the create (real SQLite)', () => {
   let d1: TestD1;
-  let errors: Mock<typeof console.error>;
 
   beforeEach(() => {
     d1 = createTestD1();
     d1.raw.run(`CREATE TEMP TRIGGER injected_failure BEFORE UPDATE OF tags ON articles BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END`);
-    errors = spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  afterEach(() => {
-    errors.mockRestore();
-  });
-
-  it('a failed mirror does not fail the committed create: it is logged and the tags are stored', async () => {
-    const rec = await createArticle(d1, NEW);
-    expect(rec).toMatchObject({ slug: NEW.slug, revision: 1, tags: ['alpha', 'beta'] });
-    expect(rec.read_back).toBeUndefined();
-    expect(rowCounts(d1)).toEqual({ articles: 1, article_editions: 1, article_revisions: 1, article_tags: 2 });
-    expect(errors.mock.calls.some(call => String(call[0]).includes('Legacy tag mirror failed after commit'))).toBe(true);
-    expect(errors.mock.calls.some(call => call.some(arg => String(arg).includes('injected')))).toBe(true);
-
-    // The next tags write rebuilds the cache once storage works again.
+  it('a failed legacy tag names update fails the create and leaves no rows, and a retry succeeds', async () => {
+    const err = await createArticle(d1, NEW).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/injected/);
+    expect(rowCounts(d1)).toEqual(EMPTY);
     clearFailure(d1);
-    await setTagsForArticle(d1, NEW.slug, ['beta', 'alpha'], 1);
-    expect(d1.raw.query('SELECT tags FROM articles').get()).toEqual({ tags: JSON.stringify(['beta', 'alpha']) });
+    await createArticle(d1, NEW);
+    await expectFullyCreated(d1);
   });
 
-  it('REST: a failed mirror still answers 201 with the tags', async () => {
+  it('REST: a failed legacy tag names update is an error that creates nothing', async () => {
     const res = await callCreate(d1, await adminCookie(d1), NEW);
-    expect(res.status).toBe(201);
-    expect(res.json).toMatchObject({ success: true, data: { slug: NEW.slug, tags: ['alpha', 'beta'] } });
+    expect(res.status).toBe(500);
+    expect(res.json).toMatchObject({ success: false });
+    expect(rowCounts(d1)).toEqual(EMPTY);
   });
 });
