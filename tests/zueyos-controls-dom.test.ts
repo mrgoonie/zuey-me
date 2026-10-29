@@ -1,8 +1,8 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { ReactElement } from 'react';
 import type { Root } from 'react-dom/client';
-import type { Profile } from '../src/db/types';
+import { FakeAnimation, WAIT_MS, flush, profile, trackHashChanges, waitFor } from './helpers/zueyos';
 
 // Zuey OS controls in happy-dom: roles and accessible names (windows, dock, menu, phone home,
 // appearance), menu keyboard support, Escape closing the focused window, transform/opacity-only
@@ -34,22 +34,7 @@ const mounted: Array<{ root: Root; container: HTMLElement }> = [];
 /** Keyframes passed to Element.animate, to check which properties window motion touches. */
 const recorded: Keyframe[][] = [];
 
-const profile: Profile = { id: 'p', name: 'Duy', handle: 'duy', email: 'duy@example.com', avatar_url: '/avatar.png', intro_en: 'Hi', intro_vi: 'Chào', theme: 'default' };
-
-/** Minimal Web Animation: finishes on the next task, like a very short real one. */
-class FakeAnimation extends EventTarget {
-  onfinish: (() => void) | null = null;
-  finished = Promise.resolve();
-  constructor() {
-    super();
-    setTimeout(() => this.onfinish?.(), 0);
-  }
-  cancel(): void {}
-}
-
-async function settle(rounds = 8) {
-  for (let i = 0; i < rounds; i++) await React.act(async () => { await new Promise(r => setTimeout(r, 20)); });
-}
+setDefaultTimeout(30_000);
 
 function mount(el: ReactElement): HTMLElement {
   const container = document.createElement('div');
@@ -75,6 +60,7 @@ function nameOf(el: Element): string {
 
 beforeAll(async () => {
   GlobalRegistrator.register({ url: 'https://zuey.me/' });
+  trackHashChanges();
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.defineProperty(Element.prototype, 'animate', {
     configurable: true,
@@ -216,16 +202,18 @@ describe('Zuey OS window', () => {
     const closedState = { ...props.state, open: false, min: false };
     const root = mount(React.createElement(win.OsWindow, { ...props, state: closedState }));
     const render = (state: typeof props.state) => React.act(() => mounted[0].root.render(React.createElement(win.OsWindow, { ...props, state })));
+    // Each step waits for its motion to land: a window that leaves stays rendered until its exit finishes.
+    const shown = (on: boolean) => () => root.querySelector<HTMLElement>('section.osw')?.hidden === !on;
     render({ ...props.state, open: true, min: false });
-    await settle(2);
+    await waitFor('window shown', shown(true));
     render({ ...props.state, open: true, min: true });
-    await settle(2);
+    await waitFor('window hidden', shown(false));
     render({ ...props.state, open: true, min: false });
-    await settle(2);
+    await waitFor('window shown', shown(true));
     render({ ...props.state, open: false, min: false });
-    await settle(2);
+    await waitFor('window hidden', shown(false));
     render({ ...props.state, open: true, min: false, mode: 'max' });
-    await settle(2);
+    await waitFor('window shown', shown(true));
     expect(recorded.length).toBeGreaterThanOrEqual(5);
     const props_ = new Set(recorded.flatMap(frames => frames.flatMap(f => Object.keys(f))));
     for (const p of props_) expect(['transform', 'opacity', 'offset']).toContain(p);
@@ -237,7 +225,7 @@ describe('Zuey OS window', () => {
     mount(React.createElement(win.OsWindow, { ...props, state: { ...props.state, open: false } }));
     React.act(() => mounted[0].root.render(React.createElement(win.OsWindow, props)));
     React.act(() => mounted[0].root.render(React.createElement(win.OsWindow, { ...props, state: { ...props.state, open: false } })));
-    await settle(2);
+    await waitFor('window hidden without motion', () => mounted[0].container.querySelector('section.osw')?.hasAttribute('hidden') === true);
     expect(recorded).toEqual([]);
     expect(mounted[0].container.querySelector('section.osw')?.hasAttribute('hidden')).toBe(true);
   });
@@ -270,7 +258,7 @@ describe('Zuey OS dock, menu bar, phone home and appearance', () => {
       signedIn: false, shortcut: 'Ctrl K', menu, onWeather: () => {}, onPalette: () => {}, onToggleTheme: () => {}, onToggleMascot: () => {},
       onAccount: () => {}, beforeNavigate: async () => {},
     }));
-    await settle(2);
+    await flush();
     const btn = root.querySelector<HTMLButtonElement>('.os-mb-brand');
     if (!btn) throw new Error('menu button missing');
     expect(btn.getAttribute('aria-haspopup')).toBe('menu');
@@ -371,7 +359,7 @@ describe('Zuey OS feedback', () => {
     // Foreign or malformed events are ignored.
     React.act(() => { window.dispatchEvent(new CustomEvent(toastBus.TOAST_EVENT, { detail: { nope: true } })); });
     expect(region?.textContent).toBe('Copy failed');
-    await React.act(async () => { await new Promise(r => setTimeout(r, toaster.TOAST_MS.error + 50)); });
+    await waitFor('toast hidden', () => region?.querySelector('.zf-toast')?.classList.contains('is-on') === false, toaster.TOAST_MS.error + WAIT_MS);
     expect(region?.querySelector('.zf-toast')?.classList.contains('is-on')).toBe(false);
     expect(region?.querySelector('.zf-toast')?.getAttribute('aria-hidden')).toBe('true');
   });
@@ -393,15 +381,16 @@ describe('Zuey OS desktop keyboard flow', () => {
     offlineFetch();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
     const root = mount(React.createElement(os.ZueyOS, { locale: 'en', profile, links: [], signedIn: false }));
-    await settle();
-    React.act(() => { window.location.hash = '#about'; });
-    await settle();
+    await flush();
     const about = () => root.querySelector<HTMLElement>('.osw[data-app="about"]');
+    React.act(() => { window.location.hash = '#about'; });
+    await waitFor('About window shown', () => about()?.hidden === false);
     expect(about()?.hidden).toBe(false);
     const modal = () => about()?.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? null;
-    const escape = async () => {
+    /** Presses Escape where focus is, then waits until `done()` (named `condition`) holds. */
+    const escape = async (condition: string, done: () => boolean) => {
       key(document.activeElement ?? document.body, { key: 'Escape' });
-      await settle(2);
+      await waitFor(`Escape: ${condition}`, done);
     };
     return { about, modal, escape };
   }
@@ -412,18 +401,17 @@ describe('Zuey OS desktop keyboard flow', () => {
     if (!share) throw new Error('No share button');
     share.focus();
     React.act(() => share.click());
-    await settle(2);
+    await waitFor('share modal focused', () => modal()?.contains(document.activeElement) === true);
     expect(modal()).not.toBeNull();
     // Focus starts inside the dialog, and Escape is pressed from there.
     expect(modal()?.contains(document.activeElement)).toBe(true);
 
-    await escape();
+    await escape('modal closed onto the share button', () => modal() === null && document.activeElement === share);
     expect(modal()).toBeNull();
     expect(about()?.hidden).toBe(false);
     expect(document.activeElement === share).toBe(true);
 
-    await escape();
-    await settle();
+    await escape('About window hidden', () => about()?.hidden === true);
     expect(about()?.hidden).toBe(true);
   });
 
@@ -433,22 +421,22 @@ describe('Zuey OS desktop keyboard flow', () => {
     if (!share) throw new Error('No share button');
     share.focus();
     React.act(() => share.click());
-    await settle(2);
-    const showQr = Array.from(modal()?.querySelectorAll('button') ?? []).find(b => b.textContent?.trim() === 'Show QR Code');
+    const qrButton = () => Array.from(modal()?.querySelectorAll('button') ?? []).find(b => b.textContent?.trim() === 'Show QR Code');
+    await waitFor('QR button shown', () => qrButton() !== undefined);
+    const showQr = qrButton();
     if (!showQr) throw new Error('No QR button');
     showQr.focus();
     React.act(() => showQr.click());
-    await settle(2);
+    await waitFor('QR modal focused', () => modal()?.querySelector('h2')?.textContent === 'Scan Profile QR' && modal()?.contains(document.activeElement) === true);
     expect(modal()?.querySelector('h2')?.textContent).toBe('Scan Profile QR');
     expect(modal()?.contains(document.activeElement)).toBe(true);
 
-    await escape();
+    await escape('modal closed onto the share button', () => modal() === null && document.activeElement === share);
     expect(modal()).toBeNull();
     expect(about()?.hidden).toBe(false);
     expect(document.activeElement === share).toBe(true);
 
-    await escape();
-    await settle();
+    await escape('About window hidden', () => about()?.hidden === true);
     expect(about()?.hidden).toBe(true);
   });
 
@@ -456,20 +444,20 @@ describe('Zuey OS desktop keyboard flow', () => {
     offlineFetch();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
     const root = mount(React.createElement(os.ZueyOS, { locale: 'en', profile, links: [], signedIn: false }));
-    await settle();
+    await flush();
     const reads = () => root.querySelector<HTMLElement>('.osw[data-app="reads"]');
     const readsDock = () => root.querySelector('[data-dock-app="reads"]');
     expect(apps.DOCK_APPS[3]).toBe('reads');
     expect(readsDock()?.classList.contains('is-run')).toBe(false);
 
     key(window, { key: '4', code: 'Digit4', altKey: true });
-    await settle();
+    await waitFor('Reads window shown and focused', () => reads()?.hidden === false && reads()?.contains(document.activeElement) === true);
     expect(reads()?.hidden).toBe(false);
     expect(readsDock()?.classList.contains('is-run')).toBe(true);
     expect(reads()?.contains(document.activeElement)).toBe(true);
 
     key(document.activeElement ?? document.body, { key: 'Escape' });
-    await settle();
+    await waitFor('Reads hidden, focus on the AI window', () => reads()?.hidden === true && document.activeElement?.closest('.osw')?.getAttribute('data-app') === 'ai');
     expect(readsDock()?.classList.contains('is-run')).toBe(false);
     expect(reads()?.hidden).toBe(true);
     // Focus moves on to the window now on top instead of being dropped on <body>.
@@ -477,15 +465,22 @@ describe('Zuey OS desktop keyboard flow', () => {
 
     // Appearance changes and resets confirm through the shared toast.
     key(window, { key: 'o', code: 'KeyO', altKey: true });
-    await settle(2);
+    await waitFor('Expose open', () => root.querySelector('.os-expo:not(.is-leaving)') !== null);
     key(window, { key: 'Escape' });
-    await settle(2);
+    await waitFor('Expose closed', () => root.querySelector('.os-expo') === null);
     React.act(() => { window.location.hash = '#appearance'; });
-    await settle();
+    const resetButton = () => Array.from(root.querySelectorAll<HTMLButtonElement>('.osw[data-app="appearance"] button')).find(b => b.textContent === i18n.osStrings('en').look.reset);
+    await waitFor('Appearance reset button shown', () => resetButton() !== undefined);
     const region = root.querySelector('.zf-toaster');
-    const reset = Array.from(root.querySelectorAll<HTMLButtonElement>('.osw[data-app="appearance"] button')).find(b => b.textContent === i18n.osStrings('en').look.reset);
+    const reset = resetButton();
     React.act(() => reset?.click());
-    await settle(2);
+    await waitFor('reset toast shown', () => region?.textContent === i18n.osStrings('en').look.resetDone);
     expect(region?.textContent).toBe(i18n.osStrings('en').look.resetDone);
+  });
+});
+
+describe('Zuey OS test helpers', () => {
+  test('waitFor names the condition that never held', async () => {
+    await expect(waitFor('a condition that never holds', () => false, 20)).rejects.toThrow('waitFor timed out after 20 ms: a condition that never holds');
   });
 });

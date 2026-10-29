@@ -12,6 +12,7 @@ import {
   createPostHogServerDestination, isProductionBuild, isTruthyFlag, resolvePostHogConfig,
   type AnalyticsEnv, type FetchLike,
 } from './destinations/posthog';
+import { createGa4ServerDestination, resolveGa4ServerConfig } from './destinations/ga4';
 import { PRODUCTION_HOSTNAMES } from './constants';
 import type { DestinationResult, ServerAnalyticsEvent, ServerDestination } from './destinations/types';
 import { isValidDistinctId } from './identity';
@@ -19,7 +20,7 @@ import { isValidDistinctId } from './identity';
 export const DEFAULT_SERVER_TIMEOUT_MS = 2500;
 
 export interface ServerDeliveryResult {
-  /** True when at least one destination accepted the event. */
+  /** True when every primary destination (PostHog) accepted the event; secondary (GA4) results never count. */
   delivered: boolean;
   /** Stable event id; reuse it when retrying so destinations de-duplicate. */
   uuid: string;
@@ -69,9 +70,17 @@ export function serverDestinations(
 ): ServerDestination[] {
   if (!isServerCaptureHost(env, options.requestHost)) return [];
   const production = options.production ?? isProductionBuild();
+  const debug = isTruthyFlag(env.PUBLIC_ANALYTICS_DEBUG);
+  if (!production && !debug) return [];
+  // PostHog is the primary destination: without it nothing is sent (the outbox keeps rows queued and the
+  // drain reports analytics disabled), even when GA4 is configured.
   const config = resolvePostHogConfig(env, { production });
-  if (!config || (!production && !config.debug)) return [];
-  return [createPostHogServerDestination(config, options.fetchImpl)];
+  if (!config) return [];
+  const destinations: ServerDestination[] = [createPostHogServerDestination(config, options.fetchImpl)];
+  // GA4 Measurement Protocol (purchase and refund only, best effort) needs the server-only GA4_API_SECRET.
+  const ga4 = resolveGa4ServerConfig(env);
+  if (ga4) destinations.push(createGa4ServerDestination(ga4, options.fetchImpl));
+  return destinations;
 }
 
 async function deliver(destination: ServerDestination, event: ServerAnalyticsEvent, timeoutMs: number): Promise<DestinationResult> {
@@ -128,9 +137,22 @@ export async function sendServerEvent(
       occurredAt,
       properties: { ...checked.properties, event_version: checked.version, schema_version: ANALYTICS_SCHEMA_VERSION },
     };
+    // A destination that does not take this event (GA4 takes only purchase and refund) is not sent it.
+    const targets = destinations.filter(d => d.accepts?.(input.event) ?? true);
+    const primaries = targets.filter(d => !d.secondary);
+    // Delivery is decided by the primary destinations alone: without one the event is not delivered.
+    if (primaries.length === 0) {
+      return { delivered: false, uuid, results: [{ destination: 'none', ok: false, reason: 'disabled' }] };
+    }
     const timeoutMs = options.timeoutMs ?? DEFAULT_SERVER_TIMEOUT_MS;
-    const results = await Promise.all(destinations.map(d => deliver(d, event, timeoutMs)));
-    return { delivered: results.some(r => r.ok), uuid, results };
+    const primaryResults = await Promise.all(primaries.map(d => deliver(d, event, timeoutMs)));
+    const delivered = primaryResults.every(r => r.ok);
+    if (!delivered) return { delivered, uuid, results: primaryResults };
+    // Secondary copies go out once, after the primaries accepted: a retried event never reaches them twice,
+    // and their failures are reported but never make the event fail or retry.
+    const secondaries = targets.filter(d => d.secondary);
+    const secondaryResults = await Promise.all(secondaries.map(d => deliver(d, event, timeoutMs)));
+    return { delivered, uuid, results: [...primaryResults, ...secondaryResults] };
   } catch (err) {
     return {
       delivered: false, uuid,

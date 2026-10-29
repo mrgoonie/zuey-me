@@ -99,6 +99,8 @@ export interface PresenceFeed {
   /** Registers a listener (called on every state change, not on subscribe) and returns its unsubscribe. */
   subscribeFeed: (listener: (state: FeedState) => void) => () => void;
   getFeedState: () => FeedState;
+  /** Worker origin the snapshot is read from: the latest ticket's origin, else the fallback. */
+  getFeedOrigin: () => string;
 }
 
 export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceFeed {
@@ -333,6 +335,7 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
 
   return {
     getFeedState: () => state,
+    getFeedOrigin: () => origin ?? deps.fallbackOrigin,
     subscribeFeed(listener) {
       listeners.add(listener);
       if (listeners.size === 1) start();
@@ -351,3 +354,4 @@ export function createPresenceFeed(overrides: Partial<FeedDeps> = {}): PresenceF
 const shared = createPresenceFeed();
 export const subscribeFeed = shared.subscribeFeed;
 export const getFeedState = shared.getFeedState;
+export const getFeedOrigin = shared.getFeedOrigin;

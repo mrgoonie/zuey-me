@@ -22,7 +22,7 @@ import { USER_KEY_SCOPES } from '../lib/members/api-keys';
 import { resolveMemberSession } from '../lib/members/session';
 import { configuredPaymentMethods } from '../lib/booking/store';
 import { Lab200Window } from '../components/lab200/Lab200Window';
-import { imageTransformsFor } from '../lib/media/image-transform';
+import { imageTransformsFor, transformImageUrl } from '../lib/media/image-transform';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const d1 = runtimeEnv.DB;
@@ -42,6 +42,11 @@ const locale = resolveLocale(Astro.request);
 Astro.response.headers.set('Vary', 'Cookie, Accept-Language');
 if (member) Astro.response.headers.set('Cache-Control', 'private, no-store');
 const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
+const imageTransforms = imageTransformsFor(Astro.url.hostname, runtimeEnv.IMAGE_TRANSFORMS);
+// The avatar is shown at most 112 CSS px (80 px in the share sheet, 52–64 px in the dock, glyphs and phone
+// home), so one 256 px square stays sharp on 2x screens everywhere; the original PNG is ~280 KB. If the
+// transformation fails, Cloudflare redirects to the original.
+const shownProfile = { ...profile, avatar_url: transformImageUrl(profile.avatar_url, { width: 256, height: 256, fit: 'cover', onerror: 'redirect' }, imageTransforms) };
 ---
 
 <Layout
@@ -54,12 +59,12 @@ const description = locale === 'vi' ? profile.intro_vi : profile.intro_en;
   <script is:inline slot="head" set:html={LOOK_BOOT_SCRIPT} />
   <!-- Fonts for the 200lab app window (200lab design tokens); the window is closed at first paint, so they never block it. -->
   <link slot="head" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" media="print" onload="this.media='all'" />
-  <ZueyOS client:load locale={locale} profile={profile} links={links} signedIn={member !== null}>
+  <ZueyOS client:load locale={locale} profile={shownProfile} links={links} signedIn={member !== null}>
     <div slot="ai" class="min-w-0 h-full">
       <ZueyAiPanel client:visible locale={locale} />
     </div>
     <div slot="knowledges" class="min-w-0">
-      <KnowledgesPanel client:visible locale={locale} imageTransforms={imageTransformsFor(Astro.url.hostname, runtimeEnv.IMAGE_TRANSFORMS)} />
+      <KnowledgesPanel client:visible locale={locale} imageTransforms={imageTransforms} />
     </div>
     <div slot="reads" class="min-w-0">
       <ReadsWindow client:visible locale={locale} />

@@ -1,7 +1,7 @@
 import { AppError } from '../http';
 import { BLOCK_TYPES, LIMITS } from './schema';
 import type { BlockType } from './schema';
-import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, ICON_BLOCK_EXAMPLE, SECTION_EXAMPLE, blockSchemas } from './openapi';
+import { BLOCK_SCHEMA_NOTES, CALLOUT_ICON_EXAMPLE, CARD_EXAMPLE, CODE_BLOCK_EXAMPLE, ICON_BLOCK_EXAMPLE, MATH_EXAMPLE, SECTION_EXAMPLE, TABLE_EXAMPLE, CHART_EXAMPLE, COMPARISON_EXAMPLE, PROGRESS_EXAMPLE, STAT_EXAMPLE, STEPS_EXAMPLE, TABS_EXAMPLE, blockSchemas } from './openapi';
 import { iconCatalog } from './icons';
 
 /** Parts of the block_schema answer a caller may ask for. */
@@ -14,6 +14,15 @@ const EXAMPLES: Array<{ key: string; type: BlockType; value: unknown }> = [
   { key: 'callout_with_icon', type: 'callout', value: CALLOUT_ICON_EXAMPLE },
   { key: 'section', type: 'section', value: SECTION_EXAMPLE },
   { key: 'card', type: 'card', value: CARD_EXAMPLE },
+  { key: 'code_diff', type: 'code', value: CODE_BLOCK_EXAMPLE },
+  { key: 'math', type: 'math', value: MATH_EXAMPLE },
+  { key: 'data_table', type: 'table', value: TABLE_EXAMPLE },
+  { key: 'chart_v2', type: 'chart', value: CHART_EXAMPLE },
+  { key: 'tabs', type: 'tabs', value: TABS_EXAMPLE },
+  { key: 'stat', type: 'stat', value: STAT_EXAMPLE },
+  { key: 'timeline', type: 'steps', value: STEPS_EXAMPLE },
+  { key: 'comparison', type: 'comparison', value: COMPARISON_EXAMPLE },
+  { key: 'progress', type: 'progress', value: PROGRESS_EXAMPLE },
 ];
 
 const schemaName = (type: string) => `Block${type.charAt(0).toUpperCase()}${type.slice(1)}`;

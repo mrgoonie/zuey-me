@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { OPENAPI_FRAGMENTS } from '../../lib/openapi/registry';
-import { OAUTH_SCOPES } from '../../lib/oauth/config';
+import { OAUTH_SCOPES, isIdentityScope } from '../../lib/oauth/config';
+import { LINK_ICON_DESCRIPTION } from '../../lib/link-icons';
 
 export const GET: APIRoute = async () => {
   const spec = {
@@ -47,13 +48,13 @@ export const GET: APIRoute = async () => {
         },
         McpOAuth: {
           type: 'oauth2',
-          description: 'OAuth 2.1 for MCP clients (PKCE S256, audience `<origin>/mcp`). Access tokens are only accepted by `/mcp`.',
+          description: 'OAuth 2.1 for MCP clients (PKCE S256, audience `<origin>/mcp`). Access tokens are only accepted by `/mcp`, plus `/oauth/userinfo` when they carry `openid`. Identity-only tokens (openid, profile, email) are bound to `<origin>/oauth/userinfo`.',
           flows: {
             authorizationCode: {
               authorizationUrl: '/oauth/authorize',
               tokenUrl: '/oauth/token',
               refreshUrl: '/oauth/token',
-              scopes: Object.fromEntries(OAUTH_SCOPES.map(s => [s, s === 'admin' ? 'Admin tools (allowlisted admins only)' : `Member scope ${s}`])),
+              scopes: Object.fromEntries(OAUTH_SCOPES.map(s => [s, s === 'admin' ? 'Admin tools (allowlisted admins only)' : isIdentityScope(s) ? `Identity scope ${s} (userinfo only)` : `Member scope ${s}`])),
             },
           },
         }
@@ -99,7 +100,7 @@ export const GET: APIRoute = async () => {
             subtitle_en: { type: 'string' },
             subtitle_vi: { type: 'string' },
             url: { type: 'string' },
-            icon: { type: 'string' },
+            icon: { type: 'string', description: LINK_ICON_DESCRIPTION },
             order_index: { type: 'integer' },
             is_active: { type: 'boolean' },
             click_count: { type: 'integer' }
@@ -198,7 +199,7 @@ export const GET: APIRoute = async () => {
                     subtitle_en: { type: 'string' },
                     subtitle_vi: { type: 'string' },
                     url: { type: 'string' },
-                    icon: { type: 'string' }
+                    icon: { type: 'string', description: LINK_ICON_DESCRIPTION }
                   }
                 }
               }

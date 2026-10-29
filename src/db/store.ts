@@ -10,12 +10,23 @@ export interface D1PreparedStatementLike {
 
 export interface D1RunResultLike {
   meta?: { changes?: number; last_row_id?: number };
+  /** Rows of a reading statement run in a batch (D1 returns them for each SELECT in the batch). */
+  results?: Record<string, unknown>[];
 }
 
 export interface D1DatabaseLike {
   prepare(query: string): D1PreparedStatementLike;
   /** Runs the statements in one transaction (Cloudflare D1 `batch`): all apply or none do. */
   batch(statements: D1PreparedStatementLike[]): Promise<D1RunResultLike[]>;
+}
+
+/**
+ * An SQL boolean expression and its parameters. A statement built for a D1 batch with one applies only while the
+ * expression holds when it runs, so later statements of the batch can depend on a state its last statement changes.
+ */
+export interface SqlCondition {
+  sql: string;
+  params: unknown[];
 }
 // In-memory fallback for local dev / tests when Cloudflare D1 is not present
 let memoryProfile: Profile = { ...initialProfile };

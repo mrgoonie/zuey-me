@@ -19,6 +19,7 @@ export function isMachineEndpoint(pathname: string): boolean {
     || pathname === '/oauth/token'
     || pathname === '/oauth/register'
     || pathname === '/oauth/revoke'
+    || pathname === '/oauth/userinfo'
     || pathname.startsWith('/.well-known/oauth-')
     || pathname.startsWith('/api/v1/media/uploads/');
 }

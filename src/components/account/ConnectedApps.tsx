@@ -62,7 +62,7 @@ export function ConnectedApps() {
     <section id="connected-apps" className={`${card} mt-4 grid gap-4`} aria-labelledby="connected-apps-title">
       <h2 id="connected-apps-title" className="text-lg font-bold">Ứng dụng đã kết nối</h2>
       <p className="text-sm text-stone-700">
-        Các ứng dụng MCP (ví dụ Claude, ChatGPT, Cursor) bạn đã cho phép truy cập qua OAuth. Ngắt kết nối sẽ thu hồi ngay mọi token của ứng dụng đó.
+        Các ứng dụng MCP (ví dụ Claude, ChatGPT, Cursor) và ứng dụng “Đăng nhập bằng zuey.me” bạn đã cho phép truy cập qua OAuth. Ngắt kết nối sẽ thu hồi ngay mọi token của ứng dụng đó.
       </p>
       <div role="status" aria-live="polite" className="empty:hidden">{error && <p className={alertError}>{error}</p>}</div>
       {apps === null && !error && <p className="text-sm text-stone-600">Đang tải…</p>}

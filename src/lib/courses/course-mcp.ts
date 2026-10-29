@@ -76,7 +76,7 @@ const tools: McpTool[] = [
   },
   {
     name: 'course_order_resolve',
-    description: `Resolve a flagged course order: grant, dismiss, or refund (records a manual refund and revokes access). ${ADMIN}`,
+    description: `Resolve a flagged course order: grant, dismiss, or refund (records a manual refund and revokes access). Refund works on paid, flagged and disputed (charged_back) orders; a disputed order becomes refunded and a later won dispute does not restore access. 409 not_refundable for other states, or after a lost dispute (the chargeback already returned the money). Grant and dismiss of a disputed (charged_back) order answer 409 order_disputed and change nothing: the dispute outcome decides its access. ${ADMIN}`,
     inputSchema: { type: 'object', properties: { code: { type: 'string' }, action: { type: 'string', enum: ['grant', 'dismiss', 'refund'] }, reason: { type: 'string' } }, required: ['code', 'action'] },
   },
   { name: 'course_discounts_set', description: `Set subscriber discount % per plan for all courses: { knowledges, ai, combo, community } integers 0–90. ${ADMIN}`, inputSchema: { type: 'object', properties: { plan_discounts: { type: 'object' } }, required: ['plan_discounts'] } },

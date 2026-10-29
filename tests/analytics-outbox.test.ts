@@ -8,6 +8,7 @@ import {
   MAX_DRAIN_LIMIT, MAX_DRAIN_QUERIES, OUTBOX_MAX_ATTEMPTS, OUTBOX_MAX_DELAY_MS, OUTBOX_SENT_RETENTION_MS, backoffMs, drainAnalyticsOutbox,
   enqueueServerEvent, sweepExpiredSubscriptions,
 } from '../src/lib/analytics/outbox';
+import { ecommerceTransactionId } from '../src/lib/analytics/commerce-events';
 import { bookingRuntime } from '../src/lib/booking/store';
 import { addMonths, recomputeSubscription } from '../src/lib/members/subscriptions';
 import { membersRuntime } from '../src/lib/members/runtime';
@@ -196,6 +197,7 @@ describe('SePay membership events', () => {
     // Original currency, no conversion: VND as paid.
     expect(props(purchases[0])).toEqual({
       provider: 'sepay', order_type: 'membership', amount: o.amount, currency: 'VND', renewal: false, plan: 'knowledges', months: 3,
+      transaction_id: expect.stringMatching(/^tx_[0-9a-f]{24}$/),
     });
     const activated = rows('subscription_activated');
     expect(activated).toHaveLength(1);
@@ -252,11 +254,34 @@ describe('SePay membership events', () => {
     now = Date.parse(end) + 60 * 1000;
     expect(await sweepExpiredSubscriptions(d1)).toBe(1);
     expect(await sweepExpiredSubscriptions(d1)).toBe(0);
-    await recomputeSubscription(d1, m.userId, 'knowledges');
+    await recomputeSubscription(d1, m.userId, 'knowledges', { provider: 'sepay' });
     const expired = rows('subscription_expired');
     expect(expired).toHaveLength(1);
     expect(expired[0].occurred_at).toBe(end);
-    expect(props(expired[0])).toEqual({ plan: 'knowledges', period_end: end });
+    expect(props(expired[0])).toEqual({ plan: 'knowledges', period_end: end, provider: 'sepay' });
+  });
+
+  it('reports access a recompute revokes after a SePay order change with provider sepay', async () => {
+    const m = await member('lan@example.com');
+    const o = await order(m, 'ai');
+    expect(await webhook(transfer(o.code, o.amount))).toBe('paid');
+    now += DAY;
+    d1.raw.run("UPDATE billing_orders SET status = 'needs_attention' WHERE user_id = ?", [m.userId]);
+    await recomputeSubscription(d1, m.userId, 'ai', { provider: 'sepay' });
+    const expired = rows('subscription_expired');
+    expect(expired).toHaveLength(1);
+    expect(props(expired[0])).toEqual({ plan: 'ai', period_end: new Date(now).toISOString(), provider: 'sepay' });
+  });
+
+  it('leaves provider out of a swept expiry that neither a card nor a paid SePay order granted', async () => {
+    const m = await member('lan@example.com');
+    const end = new Date(now - DAY).toISOString();
+    d1.raw.run(
+      "INSERT INTO subscriptions (id, user_id, plan, status, current_period_end, created_at, updated_at) VALUES ('sub_x', ?, 'knowledges', 'active', ?, ?, ?)",
+      [m.userId, end, end, end],
+    );
+    expect(await sweepExpiredSubscriptions(d1)).toBe(1);
+    expect(props(rows('subscription_expired')[0])).toEqual({ plan: 'knowledges', period_end: end });
   });
 });
 
@@ -304,6 +329,7 @@ describe('Dodo card events', () => {
     expect(rows('purchase')).toHaveLength(1);
     expect(props(rows('purchase')[0])).toEqual({
       provider: 'dodo', order_type: 'membership', amount: 9, currency: 'USD', renewal: false, plan: 'knowledges', months: 1,
+      transaction_id: await ecommerceTransactionId('dodo', 'pay_1'),
     });
 
     now += 30 * DAY;
@@ -316,7 +342,11 @@ describe('Dodo card events', () => {
     await applyDodoReversal(d1, { type: 'refund.succeeded', kind: 'refund', objectId: 'ref_1', paymentId: 'pay_1', amount: PRICE, currency: 'USD', isPartial: false });
     const refunds = rows('refund');
     expect(refunds).toHaveLength(1);
-    expect(props(refunds[0])).toEqual({ provider: 'dodo', order_type: 'membership', reason: 'refund', amount: 9, currency: 'USD', partial: false, plan: 'knowledges' });
+    // The refund carries the refunded purchase's transaction id, so GA4 nets it against that purchase.
+    expect(props(refunds[0])).toEqual({
+      provider: 'dodo', order_type: 'membership', reason: 'refund', amount: 9, currency: 'USD', partial: false, plan: 'knowledges',
+      transaction_id: field(props(purchases[0]), 'transaction_id'),
+    });
     const logged = d1.raw.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM user_activity WHERE user_id = ? AND action = 'billing.card_reversal'").get(userId);
     expect(logged?.n).toBe(1);
   });
@@ -335,7 +365,10 @@ describe('Dodo card events', () => {
     const refunds = rows('refund');
     expect(refunds.map(r => r.dedupe_key)).toEqual(['refund:dodo:refund:ref_2']);
     expect(refunds[0].distinct_id).toBe(userId);
-    expect(props(refunds[0])).toEqual({ provider: 'dodo', order_type: 'membership', reason: 'refund', amount: 4, currency: 'USD', partial: true, plan: 'knowledges' });
+    expect(props(refunds[0])).toEqual({
+      provider: 'dodo', order_type: 'membership', reason: 'refund', amount: 4, currency: 'USD', partial: true, plan: 'knowledges',
+      transaction_id: await ecommerceTransactionId('dodo', 'pay_2'),
+    });
 
     const lost = { type: 'dispute.lost', kind: 'dispute_lost', objectId: 'dsp_2', paymentId: 'pay_2', amount: 500, currency: 'USD', isPartial: false } as const;
     expect((await applyDodoReversal(d1, lost)).outcome).toBe('renewal');
@@ -547,6 +580,7 @@ describe('Dodo card events', () => {
     expect(purchases[0].dedupe_key).toBe('purchase:dodo:pay_low');
     expect(props(purchases[0])).toEqual({
       provider: 'dodo', order_type: 'membership', amount: 1, currency: 'USD', renewal: false, plan: 'knowledges', months: 1, flagged: true,
+      transaction_id: await ecommerceTransactionId('dodo', 'pay_low'),
     });
     expect(rows('payment_needs_attention')).toHaveLength(1);
   });
@@ -568,10 +602,34 @@ describe('Dodo card events', () => {
     expect(rows('subscription_cancelled')).toHaveLength(1);
     // Access was revoked by the recompute: one expiry, and the drain sweep reports the same one.
     expect(rows('subscription_expired')).toHaveLength(1);
-    expect(props(rows('subscription_expired')[0])).toEqual({ plan: 'knowledges', period_end: new Date(now).toISOString() });
+    expect(props(rows('subscription_expired')[0])).toEqual({ plan: 'knowledges', period_end: new Date(now).toISOString(), provider: 'dodo' });
     expect(await sweepExpiredSubscriptions(d1)).toBe(0);
     for (const r of rows()) expect(r.distinct_id).toBe(userId);
     expect(JSON.stringify(rows())).not.toContain('card@example.com');
+  });
+
+  it('sweeps a card plan that lapsed without a renewal webhook as a dodo expiry at the end of the grace', async () => {
+    await seedCard();
+    await applyDodoEvent(d1, env(), 'wh_r1', subscription('subscription.renewed', 'active', new Date(now).toISOString(), false));
+    const end = new Date(T0 + 31 * DAY).toISOString();
+    expect(props(rows('subscription_activated')[0])).toEqual({ plan: 'knowledges', provider: 'dodo', period_end: end });
+    now = Date.parse(end) + 60 * 1000;
+    expect(await sweepExpiredSubscriptions(d1)).toBe(1);
+    const expired = rows('subscription_expired');
+    expect(expired.map(r => r.dedupe_key)).toEqual([`subscription_expired:${userId}:knowledges:${end}`]);
+    expect(props(expired[0])).toEqual({ plan: 'knowledges', period_end: end, provider: 'dodo' });
+  });
+
+  it('sweeps a cancelled card plan whose end passed before the cancellation webhook as a dodo expiry', async () => {
+    await seedCard();
+    await applyDodoEvent(d1, env(), 'wh_c1', subscription('subscription.updated', 'active', new Date(now).toISOString(), true));
+    const end = new Date(T0 + 30 * DAY).toISOString();
+    now = Date.parse(end) + 60 * 60 * 1000;
+    await applyDodoEvent(d1, env(), 'wh_c2', subscription('subscription.cancelled', 'cancelled', new Date(now).toISOString(), true));
+    // Access had already ended by the clock, so the recompute queues nothing; the sweep reports it.
+    expect(rows('subscription_expired')).toHaveLength(0);
+    expect(await sweepExpiredSubscriptions(d1)).toBe(1);
+    expect(props(rows('subscription_expired')[0])).toEqual({ plan: 'knowledges', period_end: end, provider: 'dodo' });
   });
 });
 

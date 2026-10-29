@@ -1,10 +1,14 @@
-import type { ArticleAccess, ArticleDocument, Block, CardBlock, ImageSize } from '../blocks/schema';
+import type { ArticleAccess, ArticleDocument, Block, CardBlock, ImageSize, TableBlock } from '../blocks/schema';
 import { DEFAULT_CARD_LEVEL } from '../blocks/schema';
 import { parseInline } from '../blocks/inline';
 import type { InlineNode } from '../blocks/inline';
 import { inlineToPlain } from '../blocks/inline';
 import { applyPaywall } from '../blocks/paywall';
+import { columnOf, formatCell, isDataTable, isNumericColumn, linkCell, tableLocale } from '../blocks/table-data';
+import type { TableLocale } from '../blocks/table-data';
 import { escapeHtml } from '../members/runtime';
+import { localeNumber, progressRatio, progressScale, progressState, progressText, statDelta, statTrend, statValue } from '../blocks/widget-format';
+import { widgetLabels } from '../blocks/widget-labels';
 
 /**
  * New-article email: article blocks rendered as conservative, inline-styled HTML that mail clients display reliably,
@@ -148,6 +152,21 @@ function webLink(what: string, input: ArticleEmailInput, block: Block): string {
   return `<p style="${P}"><a href="${escapeHtml(href)}" style="${LINK}">▶ ${escapeHtml(copyFor(input.locale).viewOnWeb(what))}</a></p>`;
 }
 
+/** A table cell in email HTML: inline text for text columns, the formatted value (or a link) for typed ones. */
+function tableCellHtml(block: TableBlock, column: number, raw: string, locale: TableLocale): string {
+  const col = columnOf(block, column);
+  if (col.type === 'text') return inlineHtml(raw);
+  const link = col.type === 'link' ? linkCell(raw) : null;
+  if (link) return `<a href="${escapeHtml(link.href)}" style="${LINK}">${escapeHtml(link.label)}</a>`;
+  return escapeHtml(formatCell(col, raw, locale));
+}
+
+function tableCellText(block: TableBlock, column: number, raw: string, locale: TableLocale): string {
+  const col = columnOf(block, column);
+  if (col.type === 'link') return linkCell(raw)?.href ?? raw;
+  return formatCell(col, raw, locale);
+}
+
 function blockHtml(block: Block, input: ArticleEmailInput): string {
   const labels = labelsFor(input.locale);
   switch (block.type) {
@@ -167,7 +186,8 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
     case 'callout':
       return `<div style="margin:0 0 16px;padding:14px 16px;border-radius:10px;background:#fbf3e8"><p style="${P};margin:0">${inlineHtml(block.text)}</p></div>`;
     case 'code':
-      return `<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.code)}</pre>`;
+      return (block.filename ? `<p style="margin:0 0 4px;font-family:Menlo,Consolas,monospace;font-size:13px;color:#57534e">${escapeHtml(block.filename)}</p>` : '')
+        + `<pre style="margin:0 0 16px;padding:14px;border-radius:10px;background:#1c1917;color:#f5f5f4;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.code)}</pre>`;
     case 'divider': return '<hr style="border:none;border-top:1px solid #e7e0d8;margin:24px 0">';
     case 'image': return image(block, input.siteUrl);
     case 'gallery':
@@ -175,7 +195,11 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
         + (block.caption ? `<p style="font-size:13px;color:#78716c;margin:-8px 0 16px;text-align:center">${inlineHtml(block.caption)}</p>` : '');
     case 'table': {
       const cell = 'padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top';
-      return `<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px"><tr>${block.headers.map(h => `<th style="${cell};background:#f5f0eb">${inlineHtml(h)}</th>`).join('')}</tr>${block.rows.map(r => `<tr>${r.map(c => `<td style="${cell}">${inlineHtml(c)}</td>`).join('')}</tr>`).join('')}</table>`;
+      const table = `<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px"><tr>${block.headers.map(h => `<th style="${cell};background:#f5f0eb">${inlineHtml(h)}</th>`).join('')}</tr>${block.rows.map(r => `<tr>${r.map((c, i) => `<td style="${cell}${isNumericColumn(columnOf(block, i)) ? ';text-align:right' : ''}">${tableCellHtml(block, i, c, tableLocale(input.locale))}</td>`).join('')}</tr>`).join('')}</table>`;
+      if (!isDataTable(block)) return table;
+      return (block.title ? `<p style="${P};margin-bottom:8px"><strong>${escapeHtml(block.title)}</strong></p>` : '')
+        + table
+        + (block.caption ? `<p style="font-size:13px;color:#78716c;margin:-8px 0 16px">${inlineHtml(block.caption)}</p>` : '');
     }
     case 'bookmark':
       return `<p style="${P}"><a href="${escapeHtml(block.url)}" style="${LINK}"><strong>${escapeHtml(block.title || block.url)}</strong></a>${block.description ? `<br><span style="font-size:14px;color:#57534e">${escapeHtml(block.description)}</span>` : ''}</p>`;
@@ -199,6 +223,63 @@ function blockHtml(block: Block, input: ArticleEmailInput): string {
         + (block.footer ? `<p style="${P};margin:0">${inlineHtml(block.footer)}</p>` : '')
         + '</div>';
     }
+    // Widgets keep a single column: every tab panel in order, steps as a numbered list, options one after another.
+    case 'tabs': {
+      const tag = `h${(block.level ?? DEFAULT_CARD_LEVEL) + 1}`;
+      const size = CARD_TITLE_SIZE[block.level ?? DEFAULT_CARD_LEVEL];
+      return block.tabs.map(t => `<${tag} style="font-family:Georgia,serif;font-size:${size}px;line-height:1.3;margin:20px 0 8px;color:#1c1917">${escapeHtml(t.label)}</${tag}>${t.blocks.map(b => blockHtml(b, input)).join('')}`).join('');
+    }
+    case 'stat': {
+      const fmt = (n: number, d?: number) => localeNumber(n, d, input.locale);
+      const words = widgetLabels(input.locale);
+      const rows = block.items.map(i => {
+        const delta = statDelta(i, fmt);
+        const trend = statTrend(i);
+        const arrow = trend === 'up' ? '▲' : trend === 'down' ? '▼' : trend === 'flat' ? '▬' : '';
+        const extra = delta || trend ? `<br><span style="font-size:14px;color:#57534e">${arrow} ${escapeHtml([delta, i.delta?.label ?? (trend && !delta ? words.trend[trend] : '')].filter(Boolean).join(' '))}</span>` : '';
+        return `<tr><td style="padding:10px 12px;border:1px solid #e7e0d8"><span style="font-size:13px;color:#78716c">${escapeHtml(i.label)}</span><br><strong style="font-size:22px;color:#1c1917">${escapeHtml(statValue(i, fmt))}</strong>${extra}${i.note ? `<br><span style="font-size:13px;color:#78716c">${inlineHtml(i.note)}</span>` : ''}</td></tr>`;
+      }).join('');
+      return (block.title ? `<p style="${P};margin-bottom:8px"><strong>${escapeHtml(block.title)}</strong></p>` : '')
+        + `<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px">${rows}</table>`;
+    }
+    case 'steps': {
+      const words = widgetLabels(input.locale);
+      return `<ol style="${P};padding-left:24px">${block.items.map(i => {
+        const meta = [i.date, i.status ? words.status[i.status] : ''].filter(Boolean).join(' · ');
+        return `<li style="margin:0 0 12px"><strong>${inlineHtml(i.title)}</strong>${meta ? ` <span style="font-size:14px;color:#78716c">${escapeHtml(meta)}</span>` : ''}${i.blocks.map(b => blockHtml(b, input)).join('')}</li>`;
+      }).join('')}</ol>`;
+    }
+    case 'comparison': {
+      const words = widgetLabels(input.locale);
+      const options = block.options.map(o => `<div style="margin:0 0 12px;padding:16px;border:${o.highlight ? '2px solid #b45309' : '1px solid #e7e0d8'};border-radius:12px">`
+        + `<p style="${P};margin:0 0 8px"><strong>${escapeHtml(o.name)}</strong>${o.badge ? ` <span style="font-size:13px;color:#b45309">${escapeHtml(o.badge)}</span>` : ''}${o.highlight && !o.badge ? ` <span style="font-size:13px;color:#b45309">${escapeHtml(words.recommended)}</span>` : ''}</p>`
+        + (o.description ? `<p style="${P}">${inlineHtml(o.description)}</p>` : '')
+        + ((o.pros?.length || o.cons?.length) ? `<ul style="${P};list-style:none;padding-left:4px">${(o.pros ?? []).map(s => `<li style="margin:0 0 4px">✓ ${inlineHtml(s)}</li>`).join('')}${(o.cons ?? []).map(s => `<li style="margin:0 0 4px">✗ ${inlineHtml(s)}</li>`).join('')}</ul>` : '')
+        + o.blocks.map(b => blockHtml(b, input)).join('')
+        + '</div>').join('');
+      const cell = 'padding:8px;border:1px solid #e7e0d8;font-size:14px;text-align:left;vertical-align:top';
+      const value = (x: string | boolean) => escapeHtml(x === true ? `✓ ${words.yes}` : x === false ? `✗ ${words.no}` : x);
+      const matrix = block.features
+        ? `<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px"><tr><th style="${cell};background:#f5f0eb">${escapeHtml(words.feature)}</th>${block.options.map(o => `<th style="${cell};background:#f5f0eb">${escapeHtml(o.name)}</th>`).join('')}</tr>${block.features.map(f => `<tr><td style="${cell}">${escapeHtml(f.label)}</td>${f.values.map(x => `<td style="${cell}">${value(x)}</td>`).join('')}</tr>`).join('')}</table>`
+        : '';
+      return (block.title ? `<p style="${P};margin-bottom:8px"><strong>${escapeHtml(block.title)}</strong></p>` : '') + options + matrix;
+    }
+    case 'progress': {
+      const fmt = (n: number, d?: number) => localeNumber(n, d, input.locale);
+      const words = widgetLabels(input.locale);
+      const color = { positive: '#15803d', warning: '#b45309', negative: '#b91c1c', neutral: '#57534e' };
+      const rows = block.items.map(i => {
+        const state = progressState(block, i);
+        const pct = Math.round(progressRatio(block, i) * 100);
+        // Email clients cannot clip a glyph, so a partial star shows empty rather than overstating the rating.
+        const mark = block.variant === 'rating'
+          ? `<span style="font-size:18px;color:#d97706">${'★'.repeat(Math.floor(i.value))}${'☆'.repeat(Math.max(0, progressScale(block).max - Math.floor(i.value)))}</span>`
+          : `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:4px 0 0"><tr><td width="${pct}%" style="height:8px;background:${color[state]};border-radius:4px"></td><td style="height:8px;background:#e7e0d8"></td></tr></table>`;
+        const stateText = words.progressState[state];
+        return `<p style="${P};margin-bottom:12px">${escapeHtml(i.label)}: <strong>${escapeHtml(progressText(block, i, fmt))}</strong>${stateText ? ` <span style="font-size:13px;color:${color[state]}">${escapeHtml(stateText)}</span>` : ''}${mark}${i.note ? `<br><span style="font-size:13px;color:#78716c">${inlineHtml(i.note)}</span>` : ''}</p>`;
+      }).join('');
+      return (block.title ? `<p style="${P};margin-bottom:8px"><strong>${escapeHtml(block.title)}</strong></p>` : '') + rows;
+    }
     // Email clients render inline SVG unreliably: a labelled icon keeps its label, a decorative one is dropped.
     case 'icon':
       return block.label ? `<p style="${P}">${escapeHtml(block.label)}</p>` : '';
@@ -214,9 +295,9 @@ function blockText(block: Block, input: ArticleEmailInput): string {
     case 'list': return block.items.map((i, n) => `${block.style === 'number' ? `${n + 1}.` : '-'} ${inlineToPlain(i)}`).join('\n');
     case 'checklist': return block.items.map(i => `[${i.checked ? 'x' : ' '}] ${inlineToPlain(i.text)}`).join('\n');
     case 'quote': return `“${inlineToPlain(block.text)}”${block.cite ? ` — ${inlineToPlain(block.cite)}` : ''}`;
-    case 'code': return block.code;
+    case 'code': return block.filename ? `${block.filename}\n${block.code}` : block.code;
     case 'divider': return '---';
-    case 'table': return [block.headers, ...block.rows].map(r => r.map(inlineToPlain).join(' | ')).join('\n');
+    case 'table': return [...(block.title ? [block.title] : []), block.headers.map(inlineToPlain).join(' | '), ...block.rows.map(r => r.map((c, i) => tableCellText(block, i, c, tableLocale(input.locale))).join(' | ')), ...(block.caption ? [inlineToPlain(block.caption)] : [])].join('\n');
     case 'bookmark': return `${block.title || ''} ${block.url}`.trim();
     case 'toggle': return [inlineToPlain(block.summary), ...block.blocks.map(b => blockText(b, input))].join('\n\n');
     case 'layout': return block.children.flatMap(c => c.blocks.map(b => blockText(b, input))).filter(Boolean).join('\n\n');
@@ -224,6 +305,39 @@ function blockText(block: Block, input: ArticleEmailInput): string {
     case 'card':
       return [block.title ? inlineToPlain(block.title) : '', ...block.blocks.map(b => blockText(b, input)), block.footer ? inlineToPlain(block.footer) : '']
         .filter(Boolean).join('\n\n');
+    case 'tabs': return block.tabs.map(t => [t.label.toUpperCase(), ...t.blocks.map(b => blockText(b, input))].filter(Boolean).join('\n\n')).join('\n\n');
+    case 'stat': {
+      const fmt = (n: number, d?: number) => localeNumber(n, d, input.locale);
+      return [block.title ?? '', ...block.items.map(i => {
+        const delta = statDelta(i, fmt);
+        return `${i.label}: ${statValue(i, fmt)}${delta ? ` (${[delta, i.delta?.label].filter(Boolean).join(' ')})` : ''}${i.note ? ` — ${inlineToPlain(i.note)}` : ''}`;
+      })].filter(Boolean).join('\n');
+    }
+    case 'steps': {
+      const words = widgetLabels(input.locale);
+      return block.items.map((i, n) => [
+        `${n + 1}. ${inlineToPlain(i.title)}${[i.date, i.status ? words.status[i.status] : ''].filter(Boolean).map(s => ` · ${s}`).join('')}`,
+        ...i.blocks.map(b => blockText(b, input)),
+      ].filter(Boolean).join('\n\n')).join('\n\n');
+    }
+    case 'comparison': {
+      const words = widgetLabels(input.locale);
+      const value = (x: string | boolean) => (x === true ? words.yes : x === false ? words.no : x);
+      return [
+        block.title ?? '',
+        ...block.options.map(o => [
+          `${o.name}${o.badge ? ` (${o.badge})` : o.highlight ? ` (${words.recommended})` : ''}`,
+          o.description ? inlineToPlain(o.description) : '',
+          ...(o.pros ?? []).map(s => `+ ${inlineToPlain(s)}`), ...(o.cons ?? []).map(s => `- ${inlineToPlain(s)}`),
+          ...o.blocks.map(b => blockText(b, input)),
+        ].filter(Boolean).join('\n')),
+        ...(block.features ?? []).map(f => `${f.label}: ${f.values.map((x, i) => `${block.options[i]?.name ?? ''} ${value(x)}`).join(' | ')}`),
+      ].filter(Boolean).join('\n\n');
+    }
+    case 'progress': {
+      const fmt = (n: number, d?: number) => localeNumber(n, d, input.locale);
+      return [block.title ?? '', ...block.items.map(i => `${i.label}: ${progressText(block, i, fmt)}${i.note ? ` — ${inlineToPlain(i.note)}` : ''}`)].filter(Boolean).join('\n');
+    }
     case 'image': case 'gallery': case 'file': return '';
     case 'icon': return block.label ?? '';
     default: return `[${labelsFor(input.locale)[block.type] ?? block.type}: ${input.articleUrl}]`;

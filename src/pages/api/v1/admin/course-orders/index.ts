@@ -5,10 +5,14 @@ import { getUserById } from '../../../../../lib/members/users';
 import { getCourseById } from '../../../../../lib/courses/course-store';
 import type { CourseOrderStatus } from '../../../../../lib/courses/course-orders';
 import { listCourseOrders, toCourseOrderView } from '../../../../../lib/courses/course-orders';
+import { courseDisputeLost } from '../../../../../lib/courses/course-order-payments';
 
 const STATUSES: CourseOrderStatus[] = ['pending', 'paid', 'expired', 'needs_attention', 'refunded', 'charged_back', 'cancelled'];
 
-/** Admin: course orders, newest first (`?status=needs_attention` for the review queue). */
+/**
+ * Admin: course orders, newest first (`?status=needs_attention` for the review queue). `dispute_lost` marks a charged-back
+ * order whose dispute was lost: it can no longer be granted, dismissed or refunded.
+ */
 export const GET = memberRoute(async ({ request }, { d1, env, principal }) => {
   requireCan(principal, 'admin');
   const raw = new URL(request.url).searchParams.get('status');
@@ -18,5 +22,6 @@ export const GET = memberRoute(async ({ request }, { d1, env, principal }) => {
     ...toCourseOrderView(o, await getCourseById(d1, o.course_id), env),
     user_id: o.user_id,
     user_email: (await getUserById(d1, o.user_id))?.email ?? null,
+    dispute_lost: o.status === 'charged_back' && await courseDisputeLost(d1, o.id),
   }))), 200, NO_STORE);
 });
