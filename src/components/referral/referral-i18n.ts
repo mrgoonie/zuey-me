@@ -12,6 +12,7 @@ const en = {
     title: 'Sign in to get your referral link',
     steps: ['Members with an active plan get one personal link.', 'Friends who sign up through it get a discount on their first order.', 'You earn a commission once their payment clears the hold period.'],
     cta: 'Sign in',
+    terms: 'How it works & terms',
   },
   notEligible: {
     title: 'Referral links are for active members',
@@ -82,6 +83,7 @@ const vi: ReferralStrings = {
     title: 'Đăng nhập để lấy link giới thiệu',
     steps: ['Thành viên có gói đang hoạt động nhận một link riêng.', 'Bạn bè đăng ký qua link được giảm giá đơn đầu tiên.', 'Bạn nhận hoa hồng khi khoản thanh toán qua thời gian giữ.'],
     cta: 'Đăng nhập',
+    terms: 'Cách hoạt động & điều khoản',
   },
   notEligible: {
     title: 'Link giới thiệu dành cho thành viên đang hoạt động',

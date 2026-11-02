@@ -3,12 +3,17 @@ import Layout from '../layouts/Layout.astro';
 import { PricingTable } from '../components/members/PricingTable';
 import { plansCatalog } from '../lib/members/account';
 import { isPlanId } from '../lib/members/plans';
+import { DEFAULT_REFERRAL_SETTINGS, getReferralSettings } from '../lib/referrals/config';
 
 const runtimeEnv = Astro.locals.runtime?.env ?? {};
 const catalog = plansCatalog(runtimeEnv);
 const planParam = Astro.url.searchParams.get('plan');
 const initialPlan = isPlanId(planParam) ? planParam : null;
 const initialMonths = Number(Astro.url.searchParams.get('months') ?? 1);
+const referral = runtimeEnv.DB ? await getReferralSettings(runtimeEnv.DB).catch(() => DEFAULT_REFERRAL_SETTINGS) : DEFAULT_REFERRAL_SETTINGS;
+const referralRates = referral.tiers.map(t => t.rate);
+const referralMin = Math.min(...referralRates);
+const referralMax = Math.max(...referralRates);
 
 // Prices depend only on server configuration, so the page is shareable-cacheable.
 Astro.response.headers.set('Cache-Control', 'public, max-age=300');
@@ -27,6 +32,7 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=300');
       <p class="mt-2 text-sm text-stone-300">Đọc toàn bộ bài viết, trò chuyện với Zuey AI, hoặc tham gia cộng đồng. Đăng nhập để mua; gói kích hoạt ngay khi hệ thống xác nhận thanh toán{catalog.card_plans.length > 0 ? ' (chuyển khoản VietQR hoặc thẻ quốc tế)' : ''}.</p>
     </header>
     <PricingTable client:load catalog={catalog} initialPlan={initialPlan} initialMonths={initialMonths} />
+    <p class="w-full max-w-[720px] text-center text-sm text-stone-200">Đã là thành viên? <a href="/referral" class="font-semibold underline hover:text-white">Giới thiệu bạn bè</a>: nhận tỷ lệ {referralMin}–{referralMax}% để tự chia giữa giảm giá đơn đầu cho bạn bè và hoa hồng của bạn.</p>
     <p class="text-xs text-stone-300"><a href="/account#billing" class="underline hover:text-white">Gói của tôi</a> · <a href="/login?next=%2Fpricing" class="underline hover:text-white">Đăng nhập</a></p>
   </main>
 </Layout>

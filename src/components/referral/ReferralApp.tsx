@@ -37,7 +37,10 @@ function SignedOut({ t }: { t: ReferralStrings }) {
       <ol className="mt-3 grid gap-2 text-sm text-stone-800 list-decimal pl-5">
         {t.signedOut.steps.map(step => <li key={step}>{step}</li>)}
       </ol>
-      <p className="mt-5"><a className={btnPrimary} href={loginUrl(returnPath())}>{t.signedOut.cta}</a></p>
+      <p className="mt-5 flex flex-wrap items-center gap-3">
+        <a className={btnPrimary} href={loginUrl(returnPath())}>{t.signedOut.cta}</a>
+        <a className="text-sm font-semibold underline text-stone-700 hover:text-stone-900" href="/referral#how-it-works">{t.signedOut.terms}</a>
+      </p>
     </section>
   );
 }
