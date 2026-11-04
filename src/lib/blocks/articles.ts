@@ -269,18 +269,50 @@ function toEditionRow(r: Row): EditionRow {
   };
 }
 
-function editionSummary(e: EditionRow): EditionSummary {
+/**
+ * An edition without its document bodies, as the article list loads it. The bodies of every edition run to megabytes,
+ * and a list that read them all timed out, so the list query computes the one comparison it needs in SQL instead.
+ */
+type EditionMeta = Omit<EditionRow, 'draftJson' | 'publishedJson'> & { hasUnpublishedChanges: boolean };
+
+/** Light columns of `article_editions`, plus the body comparison a list summary needs. */
+const EDITION_META_COLUMNS = `article_id, locale, title, excerpt, revision, published_revision, published_words, cover_url, cover_alt,
+  published_at, updated_at, published_json IS NOT NULL AND published_json <> '' AS is_published,
+  published_json IS NOT draft_json AS has_unpublished_changes`;
+
+function toEditionMeta(r: Row): EditionMeta {
   return {
-    locale: e.locale, title: e.title, excerpt: e.excerpt, status: e.status, revision: e.revision,
-    published_revision: e.publishedRevision, published_at: e.publishedAt, updated_at: e.updatedAt,
-    has_unpublished_changes: e.publishedJson !== e.draftJson, reading_minutes: readingMinutes(e.publishedWords),
+    articleId: s(r, 'article_id'),
+    locale: asLocale(r.locale),
+    title: s(r, 'title'),
+    excerpt: s(r, 'excerpt'),
+    revision: n(r, 'revision', 1),
+    publishedRevision: nullableNum(r, 'published_revision'),
+    status: r.is_published ? 'published' : 'draft',
+    publishedWords: n(r, 'published_words'),
+    coverUrl: typeof r.cover_url === 'string' ? r.cover_url : null,
+    coverAlt: typeof r.cover_alt === 'string' ? r.cover_alt : '',
+    publishedAt: typeof r.published_at === 'string' ? r.published_at : null,
+    updatedAt: s(r, 'updated_at'),
+    hasUnpublishedChanges: Boolean(r.has_unpublished_changes),
   };
 }
 
-const localeOrder = (a: EditionRow, b: EditionRow) => LOCALES.indexOf(a.locale) - LOCALES.indexOf(b.locale);
+const hasUnpublishedChanges = (e: EditionRow | EditionMeta) =>
+  'hasUnpublishedChanges' in e ? e.hasUnpublishedChanges : e.publishedJson !== e.draftJson;
+
+function editionSummary(e: EditionRow | EditionMeta): EditionSummary {
+  return {
+    locale: e.locale, title: e.title, excerpt: e.excerpt, status: e.status, revision: e.revision,
+    published_revision: e.publishedRevision, published_at: e.publishedAt, updated_at: e.updatedAt,
+    has_unpublished_changes: hasUnpublishedChanges(e), reading_minutes: readingMinutes(e.publishedWords),
+  };
+}
+
+const localeOrder = (a: { locale: Locale }, b: { locale: Locale }) => LOCALES.indexOf(a.locale) - LOCALES.indexOf(b.locale);
 
 /** Requested locale when available, else the primary edition, else the first edition in locale order. */
-function pickEdition(editions: EditionRow[], requested: Locale | undefined, primary: Locale): { edition: EditionRow; fallback: boolean } | null {
+function pickEdition<E extends { locale: Locale }>(editions: E[], requested: Locale | undefined, primary: Locale): { edition: E; fallback: boolean } | null {
   if (editions.length === 0) return null;
   const exact = requested ? editions.find(e => e.locale === requested) : undefined;
   if (exact) return { edition: exact, fallback: false };
@@ -297,6 +329,19 @@ async function loadEditions(db: D1DatabaseLike, articleIds: string[] | null): Pr
   for (const r of results ?? []) {
     const e = toEditionRow(r);
     if (wanted && !wanted.has(e.articleId)) continue;
+    const list = out.get(e.articleId) ?? [];
+    list.push(e);
+    out.set(e.articleId, list);
+  }
+  return out;
+}
+
+/** Every live edition without its bodies, grouped by article (the article list). */
+async function loadEditionMetas(db: D1DatabaseLike): Promise<Map<string, EditionMeta[]>> {
+  const { results } = await db.prepare(`SELECT ${EDITION_META_COLUMNS} FROM article_editions WHERE deleted_at IS NULL`).all<Row>();
+  const out = new Map<string, EditionMeta[]>();
+  for (const r of results ?? []) {
+    const e = toEditionMeta(r);
     const list = out.get(e.articleId) ?? [];
     list.push(e);
     out.set(e.articleId, list);
@@ -348,12 +393,13 @@ async function loadDecorations(db: D1DatabaseLike, picks: Array<{ articleId: str
 }
 
 function buildSummary(
-  art: ArticleRowData, edition: EditionRow, editions: EditionRow[], deco: Decorations, opts: { includeEditions?: boolean },
+  art: ArticleRowData, edition: EditionRow | EditionMeta, editions: Array<EditionRow | EditionMeta>, deco: Decorations,
+  opts: { includeEditions?: boolean },
 ): ArticleSummary {
   const tagList = deco.tags.get(art.id) ?? [];
   const cat = art.categoryId ? deco.categories.get(art.categoryId) : undefined;
   const topicTags = tagList.map(t => toPublicTag(t, edition.locale));
-  const published = editions.filter(e => e.publishedJson !== null).sort(localeOrder);
+  const published = editions.filter(e => e.status === 'published').sort(localeOrder);
   return {
     id: art.id,
     slug: art.slug,
@@ -373,7 +419,7 @@ function buildSummary(
     created_at: art.createdAt,
     updated_at: art.updatedAt,
     published_at: edition.publishedAt,
-    has_unpublished_changes: edition.publishedJson !== edition.draftJson,
+    has_unpublished_changes: hasUnpublishedChanges(edition),
     available_locales: published.map(e => e.locale),
     reading_minutes: readingMinutes(edition.publishedWords),
     cover_url: edition.coverUrl,
@@ -477,17 +523,17 @@ export async function listArticles(d1: D1DatabaseLike | undefined, opts: ListOpt
   // Independent reads run concurrently: every sequential D1 query costs a round trip to the database.
   const [{ results }, editionsBy] = await Promise.all([
     d1.prepare('SELECT * FROM articles WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500').all<Row>(),
-    loadEditions(d1, null),
+    loadEditionMetas(d1),
   ]);
   const articles = (results ?? []).map(toArticleRow);
   const idFilter = opts.ids ? new Set(opts.ids) : null;
 
-  const picked: Array<{ art: ArticleRowData; edition: EditionRow; editions: EditionRow[] }> = [];
+  const picked: Array<{ art: ArticleRowData; edition: EditionMeta; editions: EditionMeta[] }> = [];
   for (const art of articles) {
     if (idFilter && !idFilter.has(art.id)) continue;
     if (opts.access && art.access !== opts.access) continue;
     const all = editionsBy.get(art.id) ?? [];
-    const visible = opts.includeDrafts ? all : all.filter(e => e.publishedJson !== null);
+    const visible = opts.includeDrafts ? all : all.filter(e => e.status === 'published');
     const pick = pickEdition(visible, opts.locale, art.primary);
     if (pick) picked.push({ art, edition: pick.edition, editions: all });
   }
