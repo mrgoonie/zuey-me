@@ -39,7 +39,7 @@ describe('article list edition load', () => {
     expect(bodyTableReads.some(q => /FROM article_editions/i.test(q))).toBe(true);
     for (const q of bodyTableReads) {
       expect(q).not.toMatch(/SELECT \*/i);
-      const plan = (await d1.prepare(`EXPLAIN QUERY PLAN ${q}`).all<{ detail: string }>()).results.map(r => r.detail).join('\n');
+      const plan = (await d1.prepare(`EXPLAIN QUERY PLAN ${q}`).all<{ detail: string }>()).results?.map(r => r.detail).join('\n');
       if (/draft_json|published_json/.test(q)) {
         // The bodies are compared only once the index shows the edition was edited after publishing.
         expect(plan).toContain('USING INDEX idx_article_editions_list');
