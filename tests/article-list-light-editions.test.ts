@@ -20,8 +20,8 @@ function recordingD1(db: D1DatabaseLike) {
 const doc = (text: string): ArticleDocument => ({ version: 1, blocks: [{ id: 'p1', type: 'paragraph', text }] });
 
 describe('article list edition load', () => {
-  // Every edition body together runs to megabytes in production; a list that read them all timed out (Cloudflare 524).
-  test('the list never reads edition bodies yet still reports status and unpublished changes', async () => {
+  // Every body together runs to megabytes in production; a list that read them all timed out (Cloudflare 524).
+  test('the list never reads article or edition bodies yet still reports status and unpublished changes', async () => {
     const d1 = createTestD1();
     const created = await createArticle(d1, { slug: 'mot', title: 'Một', document: doc('một') });
     const published = await publishArticle(d1, 'mot', created.revision, true, { locale: 'vi', notify: false });
@@ -33,9 +33,11 @@ describe('article list edition load', () => {
     const publicList = await listArticles(rec.db, { locale: 'vi' });
     const adminList = await listArticles(rec.db, { includeDrafts: true });
 
-    const editionReads = rec.sql.filter(q => /FROM article_editions/i.test(q));
-    expect(editionReads.length).toBeGreaterThan(0);
-    for (const q of editionReads) {
+    // Both tables hold document bodies: editions their own, articles the legacy pre-edition copy.
+    const bodyTableReads = rec.sql.filter(q => /FROM (article_editions|articles)\b/i.test(q));
+    expect(bodyTableReads.some(q => /FROM articles\b/i.test(q))).toBe(true);
+    expect(bodyTableReads.some(q => /FROM article_editions/i.test(q))).toBe(true);
+    for (const q of bodyTableReads) {
       expect(q).not.toMatch(/SELECT \*/i);
       expect(q.replace(/published_json IS NOT (NULL|draft_json)|published_json <> ''/g, '')).not.toMatch(/draft_json|published_json/);
     }
