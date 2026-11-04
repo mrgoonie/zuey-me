@@ -291,6 +291,16 @@ describe('search, Zuey AI grounding and related links', () => {
     expect(back.map(v => v.youtube_id)).toEqual([VI_ID]);
     expect(await relatedVideosForArticle(d1, 'art_meo', 'vi', { origin: ORIGIN, limit: 3 })).toEqual([]);
   });
+
+  it('never links a paid article to videos through its locked text', async () => {
+    await addVideo(deps(), { url: VI_ID, locale: 'vi' });
+    const locked = 'Hướng dẫn tự host n8n bằng Docker, reverse proxy Caddy trên VPS giá rẻ.';
+    insertArticle('meo-tra-phi', 'knowledges', ['Mèo thích ngủ trong nắng sớm.', 'Mèo hay ăn cá.', locked], 'Mèo và nắng');
+    insertArticle('n8n-tra-phi', 'knowledges', [locked, 'Mèo thích ngủ trong nắng sớm.', 'Mèo hay ăn cá.'], 'Tự host n8n với Docker');
+    expect(await relatedVideosForArticle(d1, 'art_meo-tra-phi', 'vi', { origin: ORIGIN, limit: 3 })).toEqual([]);
+    const previewed = await relatedVideosForArticle(d1, 'art_n8n-tra-phi', 'vi', { origin: ORIGIN, limit: 3 });
+    expect(previewed.map(v => v.youtube_id)).toEqual([VI_ID]);
+  });
 });
 
 // ---------- REST, markdown, MCP, OpenAPI ----------

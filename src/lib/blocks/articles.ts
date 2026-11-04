@@ -271,14 +271,21 @@ function toEditionRow(r: Row): EditionRow {
 
 /**
  * An edition without its document bodies, as the article list loads it. The bodies of every edition run to megabytes,
- * and a list that read them all timed out, so the list query computes the one comparison it needs in SQL instead.
+ * and a list that read them all timed out, so the list query computes what it needs from them in SQL instead.
  */
 type EditionMeta = Omit<EditionRow, 'draftJson' | 'publishedJson'> & { hasUnpublishedChanges: boolean };
 
-/** Light columns of `article_editions`, plus the body comparison a list summary needs. */
+/**
+ * Light columns of `article_editions`, plus what a list summary needs from the bodies. Any expression on a body
+ * column makes D1 read that body, so the bodies are compared only when the revisions say they may differ:
+ * publishing copies the draft and sets `published_revision = revision`, unpublishing clears both, and every draft
+ * write bumps `revision`. Comparing every body still cost about 180 ms of D1 time per list, and D1 runs one query
+ * at a time, so that slowed every page on the site.
+ */
 const EDITION_META_COLUMNS = `article_id, locale, title, excerpt, revision, published_revision, published_words, cover_url, cover_alt,
-  published_at, updated_at, published_json IS NOT NULL AND published_json <> '' AS is_published,
-  published_json IS NOT draft_json AS has_unpublished_changes`;
+  published_at, updated_at, published_revision IS NOT NULL AS is_published,
+  CASE WHEN published_revision IS NULL THEN 1 WHEN published_revision = revision THEN 0
+    ELSE published_json IS NOT draft_json END AS has_unpublished_changes`;
 
 function toEditionMeta(r: Row): EditionMeta {
   return {

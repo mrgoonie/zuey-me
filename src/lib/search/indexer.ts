@@ -16,9 +16,11 @@ const PUBLIC_VIEWER: Viewer = { isAdmin: false, entitlements: [] };
 type Row = Record<string, unknown>;
 const s = (row: Row, key: string): string => (typeof row[key] === 'string' ? String(row[key]) : '');
 
+type ArticleDoc = NonNullable<ReturnType<typeof parseDoc>>;
+
 interface IndexEntry { locale: string; tier: SearchTier; title: string; tags: string; body: string }
 
-function parseDoc(text: string) {
+export function parseDoc(text: string) {
   try {
     return readStoredDocument(JSON.parse(text))?.doc ?? null;
   } catch {
@@ -27,7 +29,7 @@ function parseDoc(text: string) {
 }
 
 /** Public metadata text indexed with every row: tag names/aliases and the category name in all locales. */
-async function metadataText(db: D1DatabaseLike, articleId: string, categoryId: string | null): Promise<string> {
+export async function metadataText(db: D1DatabaseLike, articleId: string, categoryId: string | null): Promise<string> {
   const { results } = await db.prepare(`
     SELECT t.names, t.aliases, t.slug FROM article_tags at JOIN topic_tags t ON t.id = at.tag_id
     WHERE at.article_id = ? AND t.deleted_at IS NULL
@@ -55,6 +57,12 @@ async function metadataText(db: D1DatabaseLike, articleId: string, categoryId: s
   return Array.from(new Set(parts)).join(' ');
 }
 
+/** Indexed text anyone may read: the full text of a free article, the public preview of a paid one. */
+export function publicBodyText(doc: ArticleDoc, excerpt: string, paid: boolean): string {
+  const visible = paid ? applyPaywall(doc, 'knowledges', PUBLIC_VIEWER).doc : doc;
+  return spaceCjk([excerpt, documentText(visible)].filter(Boolean).join('\n'));
+}
+
 /** Builds the index rows for one article: free → full text; paid → separate preview and full rows. */
 async function buildEntries(db: D1DatabaseLike, articleId: string): Promise<IndexEntry[]> {
   const article = await db.prepare('SELECT id, access, category_id, deleted_at FROM articles WHERE id = ?').bind(articleId).first<Row>();
@@ -76,8 +84,7 @@ async function buildEntries(db: D1DatabaseLike, articleId: string): Promise<Inde
       entries.push({ ...base, tier: 'free', body: full });
       continue;
     }
-    const preview = applyPaywall(doc, 'knowledges', PUBLIC_VIEWER).doc;
-    entries.push({ ...base, tier: 'preview', body: spaceCjk([excerpt, documentText(preview)].filter(Boolean).join('\n')) });
+    entries.push({ ...base, tier: 'preview', body: publicBodyText(doc, excerpt, true) });
     entries.push({ ...base, tier: 'full', body: full });
   }
   return entries;
