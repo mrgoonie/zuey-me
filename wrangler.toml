@@ -3,6 +3,12 @@ compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist"
 
+# Run Functions near the D1 primary (APAC) instead of the visitor's colo. Visitors from Vietnam are often routed to
+# European colos (MRS, CDG, FRA), where every D1 round trip crosses continents and an uncached /articles render
+# took 3-6 s while its queries ran for ~30 ms. Responses carry `cf-placement` showing where they ran.
+[placement]
+mode = "smart"
+
 # Cloudflare D1 Database binding
 [[d1_databases]]
 binding = "DB"
