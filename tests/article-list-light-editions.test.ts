@@ -39,7 +39,9 @@ describe('article list edition load', () => {
     expect(bodyTableReads.some(q => /FROM article_editions/i.test(q))).toBe(true);
     for (const q of bodyTableReads) {
       expect(q).not.toMatch(/SELECT \*/i);
-      expect(q.replace(/published_json IS NOT (NULL|draft_json)|published_json <> ''/g, '')).not.toMatch(/draft_json|published_json/);
+      // The bodies are compared only once the revisions show the edition was edited after publishing.
+      const gated = /WHEN published_revision = revision THEN 0\s+ELSE published_json IS NOT draft_json END/;
+      expect(q.replace(gated, '')).not.toMatch(/draft_json|published_json/);
     }
 
     expect(publicList.map(a => a.slug)).toEqual(['mot']);
@@ -48,6 +50,16 @@ describe('article list edition load', () => {
     const mot = adminList.find(a => a.slug === 'mot');
     expect(mot?.editions?.map(e => [e.locale, e.status, e.has_unpublished_changes])).toEqual([['en', 'draft', true], ['vi', 'published', true]]);
     expect(adminList.find(a => a.slug === 'hai')).toMatchObject({ status: 'draft', has_unpublished_changes: true });
+  });
+
+  test('a draft save that leaves the body as published reports no unpublished changes', async () => {
+    const d1 = createTestD1();
+    const created = await createArticle(d1, { slug: 'bon', title: 'Bốn', document: doc('bốn') });
+    const published = await publishArticle(d1, 'bon', created.revision, true, { locale: 'vi', notify: false });
+    const saved = await updateArticle(d1, 'bon', { locale: 'vi', title: 'Bốn', document: doc('bốn') }, published.revision);
+    expect(saved.revision).toBeGreaterThan(published.revision);
+    const [item] = await listArticles(d1, { locale: 'vi' });
+    expect(item).toMatchObject({ slug: 'bon', status: 'published', has_unpublished_changes: false });
   });
 
   test('a freshly published edition has no unpublished changes', async () => {

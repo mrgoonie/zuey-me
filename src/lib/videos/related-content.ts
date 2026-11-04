@@ -4,6 +4,8 @@
  * article rows), so paid full text never influences or leaks through related links.
  */
 import type { D1DatabaseLike } from '../../db/store';
+import { metadataText, parseDoc, publicBodyText } from '../search/indexer';
+import { spaceCjk } from '../search/text';
 import { transcriptPlainText } from './anymd-transcript-parser';
 import { keepStrong, relatedMatchQuery } from './related-keywords';
 import type { RelatedArticle, VideoHit, VideoItem } from './types';
@@ -74,21 +76,23 @@ export async function relatedArticlesForVideo(
 export async function relatedVideosForArticle(
   db: D1DatabaseLike, articleId: string, locale: string, opts: { origin: string; limit?: number },
 ): Promise<VideoHit[]> {
-  const article = await db.prepare('SELECT tags FROM articles WHERE id = ? AND deleted_at IS NULL').bind(articleId).first<Row>();
+  const article = await db.prepare('SELECT tags, access, category_id FROM articles WHERE id = ? AND deleted_at IS NULL').bind(articleId).first<Row>();
   if (!article) return [];
   const edition = await db.prepare(
-    `SELECT title, excerpt FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL AND published_json IS NOT NULL`,
+    `SELECT title, excerpt, published_json FROM article_editions WHERE article_id = ? AND locale = ? AND deleted_at IS NULL AND published_json IS NOT NULL`,
   ).bind(articleId, locale).first<Row>();
   if (!edition) return [];
-  // Public text only: the free row, or the preview row of a paid article.
-  const body = await db.prepare(
-    `SELECT tags, body FROM knowledge_fts WHERE article_id = ? AND locale = ? AND tier IN ('free', 'preview') LIMIT 1`,
-  ).bind(articleId, locale).first<Row>();
+  // Public text only, built the way the search index builds its free/preview row. Reading that row back from
+  // knowledge_fts would scan the whole table: its article_id and locale columns are UNINDEXED.
+  const doc = parseDoc(s(edition, 'published_json'));
+  const categoryId = typeof article.category_id === 'string' ? article.category_id : null;
+  const metadata = doc ? spaceCjk(await metadataText(db, articleId, categoryId)) : '';
+  const body = doc ? publicBodyText(doc, s(edition, 'excerpt'), article.access === 'knowledges') : '';
   const match = relatedMatchQuery([
     { text: s(edition, 'title'), weight: 3 },
-    { text: `${parseTags(s(article, 'tags'))} ${body ? s(body, 'tags') : ''}`, weight: 2 },
+    { text: `${parseTags(s(article, 'tags'))} ${metadata}`, weight: 2 },
     { text: s(edition, 'excerpt'), weight: 1.5 },
-    { text: body ? s(body, 'body').slice(0, BODY_CHARS) : '', weight: 1 },
+    { text: body.slice(0, BODY_CHARS), weight: 1 },
   ]);
   if (!match) return [];
   const hits = await matchVideos(db, match, { limit: 10, origin: opts.origin, preferLocale: locale });
