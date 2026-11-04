@@ -276,34 +276,44 @@ function toEditionRow(r: Row): EditionRow {
 type EditionMeta = Omit<EditionRow, 'draftJson' | 'publishedJson'> & { hasUnpublishedChanges: boolean };
 
 /**
- * Light columns of `article_editions`, plus what a list summary needs from the bodies. Any expression on a body
- * column makes D1 read that body, so the bodies are compared only when the revisions say they may differ:
- * publishing copies the draft and sets `published_revision = revision`, unpublishing clears both, and every draft
- * write bumps `revision`. Comparing every body still cost about 180 ms of D1 time per list, and D1 runs one query
- * at a time, so that slowed every page on the site.
+ * Light columns of `article_editions`, all in `idx_article_editions_list` (migration 0034). Most of them sit after
+ * the bodies in each row, so a read that is not covered by that index walks every body's overflow pages: about
+ * 125 ms of D1 time per list, and D1 runs one query at a time, so that slowed every page on the site.
  */
-const EDITION_META_COLUMNS = `article_id, locale, title, excerpt, revision, published_revision, published_words, cover_url, cover_alt,
-  published_at, updated_at, published_revision IS NOT NULL AS is_published,
-  CASE WHEN published_revision IS NULL THEN 1 WHEN published_revision = revision THEN 0
-    ELSE published_json IS NOT draft_json END AS has_unpublished_changes`;
+const EDITION_META_SQL = `SELECT article_id, locale, title, excerpt, revision, published_revision, published_words, cover_url,
+  cover_alt, published_at, updated_at FROM article_editions WHERE deleted_at IS NULL`;
 
-function toEditionMeta(r: Row): EditionMeta {
+/**
+ * Published editions whose draft body differs from the published one. Publishing copies the draft and sets
+ * `published_revision = revision`, unpublishing clears both, and every draft write bumps `revision`, so only
+ * editions whose revisions differ can have changed. INDEXED BY makes SQLite check the revisions in the index and
+ * read the bodies of just those editions; on its own it picks an index that reads every row.
+ */
+const CHANGED_EDITIONS_SQL = `SELECT article_id, locale FROM article_editions INDEXED BY idx_article_editions_list
+  WHERE deleted_at IS NULL AND published_revision IS NOT NULL AND published_revision <> revision
+    AND published_json IS NOT draft_json`;
+
+function toEditionMeta(r: Row, changed: Set<string>): EditionMeta {
+  const publishedRevision = nullableNum(r, 'published_revision');
   return {
     articleId: s(r, 'article_id'),
     locale: asLocale(r.locale),
     title: s(r, 'title'),
     excerpt: s(r, 'excerpt'),
     revision: n(r, 'revision', 1),
-    publishedRevision: nullableNum(r, 'published_revision'),
-    status: r.is_published ? 'published' : 'draft',
+    publishedRevision,
+    status: publishedRevision !== null ? 'published' : 'draft',
     publishedWords: n(r, 'published_words'),
     coverUrl: typeof r.cover_url === 'string' ? r.cover_url : null,
     coverAlt: typeof r.cover_alt === 'string' ? r.cover_alt : '',
     publishedAt: typeof r.published_at === 'string' ? r.published_at : null,
     updatedAt: s(r, 'updated_at'),
-    hasUnpublishedChanges: Boolean(r.has_unpublished_changes),
+    // A draft that was never published counts as unpublished changes, as when comparing bodies.
+    hasUnpublishedChanges: publishedRevision === null || changed.has(editionKey(r)),
   };
 }
+
+const editionKey = (r: Row) => `${s(r, 'article_id')}\u0000${s(r, 'locale')}`;
 
 const hasUnpublishedChanges = (e: EditionRow | EditionMeta) =>
   'hasUnpublishedChanges' in e ? e.hasUnpublishedChanges : e.publishedJson !== e.draftJson;
@@ -345,10 +355,15 @@ async function loadEditions(db: D1DatabaseLike, articleIds: string[] | null): Pr
 
 /** Every live edition without its bodies, grouped by article (the article list). */
 async function loadEditionMetas(db: D1DatabaseLike): Promise<Map<string, EditionMeta[]>> {
-  const { results } = await db.prepare(`SELECT ${EDITION_META_COLUMNS} FROM article_editions WHERE deleted_at IS NULL`).all<Row>();
+  // Both start at once: each D1 round trip adds latency far from the database.
+  const [{ results }, { results: changedRows }] = await Promise.all([
+    db.prepare(EDITION_META_SQL).all<Row>(),
+    db.prepare(CHANGED_EDITIONS_SQL).all<Row>(),
+  ]);
+  const changed = new Set((changedRows ?? []).map(editionKey));
   const out = new Map<string, EditionMeta[]>();
   for (const r of results ?? []) {
-    const e = toEditionMeta(r);
+    const e = toEditionMeta(r, changed);
     const list = out.get(e.articleId) ?? [];
     list.push(e);
     out.set(e.articleId, list);

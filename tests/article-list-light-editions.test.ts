@@ -39,9 +39,14 @@ describe('article list edition load', () => {
     expect(bodyTableReads.some(q => /FROM article_editions/i.test(q))).toBe(true);
     for (const q of bodyTableReads) {
       expect(q).not.toMatch(/SELECT \*/i);
-      // The bodies are compared only once the revisions show the edition was edited after publishing.
-      const gated = /WHEN published_revision = revision THEN 0\s+ELSE published_json IS NOT draft_json END/;
-      expect(q.replace(gated, '')).not.toMatch(/draft_json|published_json/);
+      const plan = (await d1.prepare(`EXPLAIN QUERY PLAN ${q}`).all<{ detail: string }>()).results.map(r => r.detail).join('\n');
+      if (/draft_json|published_json/.test(q)) {
+        // The bodies are compared only once the index shows the edition was edited after publishing.
+        expect(plan).toContain('USING INDEX idx_article_editions_list');
+      } else if (/FROM article_editions/i.test(q)) {
+        // Most light columns sit after the bodies in each row; only the covering index avoids reading them.
+        expect(plan).toContain('USING COVERING INDEX idx_article_editions_list');
+      }
     }
 
     expect(publicList.map(a => a.slug)).toEqual(['mot']);
