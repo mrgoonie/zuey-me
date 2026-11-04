@@ -364,6 +364,13 @@ interface ArticleRowData {
   socialPreviewAssetId: string | null;
 }
 
+/**
+ * The `articles` columns `toArticleRow` reads. The table still carries legacy `draft_json`/`published_json` bodies
+ * (megabytes across all articles), so the list never selects `*`.
+ */
+const ARTICLE_ROW_COLUMNS = `id, slug, locale, access, category_id, revision, label_revision, created_at, updated_at,
+  cover_asset_id, social_preview_mode, social_preview_asset_id`;
+
 function toArticleRow(r: Row): ArticleRowData {
   return {
     id: s(r, 'id'), slug: s(r, 'slug'), primary: asLocale(r.locale), access: r.access === 'knowledges' ? 'knowledges' : 'free',
@@ -522,7 +529,7 @@ export async function listArticles(d1: D1DatabaseLike | undefined, opts: ListOpt
   if (!d1) return [];
   // Independent reads run concurrently: every sequential D1 query costs a round trip to the database.
   const [{ results }, editionsBy] = await Promise.all([
-    d1.prepare('SELECT * FROM articles WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500').all<Row>(),
+    d1.prepare(`SELECT ${ARTICLE_ROW_COLUMNS} FROM articles WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500`).all<Row>(),
     loadEditionMetas(d1),
   ]);
   const articles = (results ?? []).map(toArticleRow);
