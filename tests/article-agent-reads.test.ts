@@ -3,12 +3,12 @@ import type { APIRoute } from 'astro';
 import { createTestD1 } from './helpers/d1';
 import { articlesMcpModule } from '../src/lib/blocks/mcp';
 import { AppError } from '../src/lib/http';
-import { articleAlternates, articleUrl } from '../src/lib/blocks/seo';
+import { articleAlternates, articleUrl, linkHeader } from '../src/lib/blocks/seo';
 import { BLOCK_TYPES } from '../src/lib/blocks/schema';
 import type { Locale } from '../src/lib/i18n/locales';
 import { LOCALE_LABELS } from '../src/lib/i18n/locales';
 import type { McpContext } from '../src/lib/mcp/types';
-import { verifyPublicArticle } from '../src/lib/blocks/verify-public';
+import { parseArticleHead, parseLinkHeader, verifyPublicArticle } from '../src/lib/blocks/verify-public';
 import { GET as getApi, PUT as putApi } from '../src/pages/api/v1/articles/[slug]';
 import { GET as verifyApi } from '../src/pages/api/v1/articles/[slug]/verify';
 import { createSession } from '../src/db/store';
@@ -257,15 +257,23 @@ describe('REST parity', () => {
   });
 });
 
+/** Where a page states its hreflang alternates: the site sends them in the `Link` header; older pages used `<link>` tags. */
+type AlternatesIn = 'header' | 'html';
+
 /** Page HTML as the site renders it, for the fetcher stub. */
-function pageHtml(slug: string, locale: Locale, published: Locale[], overrides: { canonical?: string; cover?: string } = {}) {
+function pageHtml(slug: string, locale: Locale, published: Locale[], overrides: { canonical?: string; cover?: string } = {}, alternatesIn: AlternatesIn = 'header') {
   const url = articleUrl(ORIGIN, slug, locale);
-  const alts = articleAlternates(ORIGIN, slug, published).map(a => `<link rel="alternate" hreflang="${a.hreflang}" href="${a.href}">`).join('');
+  const alts = alternatesIn === 'html' ? articleAlternates(ORIGIN, slug, published).map(a => `<link rel="alternate" hreflang="${a.hreflang}" href="${a.href}">`).join('') : '';
   const cover = overrides.cover ?? 'https://media.zuey.me/a/cover.webp';
   return `<!doctype html><html lang="${LOCALE_LABELS[locale].htmlLang}"><head><title>Title ${slug}${locale === 'vi' ? '' : ` ${locale}`} | Zuey</title>
 <link rel="canonical" href="${overrides.canonical ?? url}">${alts}
 <meta property="og:image" content="${ORIGIN}/og/${slug}-${locale}.png"><meta name="twitter:image" content="${ORIGIN}/og/${slug}-${locale}.png">
 <script type="application/ld+json">${JSON.stringify({ '@type': 'Article', image: [cover] })}</script></head><body></body></html>`;
+}
+
+/** The `Link` header the article route sends for this edition. */
+function pageLinkHeader(slug: string, locale: Locale, published: Locale[], canonical = articleUrl(ORIGIN, slug, locale)) {
+  return linkHeader(canonical, articleAlternates(ORIGIN, slug, published));
 }
 
 describe('article_verify_public', () => {
@@ -275,7 +283,7 @@ describe('article_verify_public', () => {
     await call('article_create', { slug: 'verify-draft-only', title: 'Draft only', document: fixtureDocument() });
   });
 
-  function fetcherFor(opts: { status?: Partial<Record<string, number>>; overrides?: Partial<Record<Locale, { canonical?: string; cover?: string }>> } = {}) {
+  function fetcherFor(opts: { status?: Partial<Record<string, number>>; overrides?: Partial<Record<Locale, { canonical?: string; cover?: string }>>; alternatesIn?: AlternatesIn } = {}) {
     const seen: Array<{ url: string; method: string; headers: Headers }> = [];
     const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -284,7 +292,10 @@ describe('article_verify_public', () => {
       if (url.startsWith(`${ORIGIN}/articles/`)) {
         const locale = new URL(url).searchParams.get('lang') as Locale;
         const status = opts.status?.[locale] ?? 200;
-        return new Response(status === 200 ? pageHtml('verify-me', locale, published, opts.overrides?.[locale]) : 'x', { status, headers: { 'content-type': 'text/html' } });
+        const alternatesIn = opts.alternatesIn ?? 'header';
+        const headers: Record<string, string> = { 'content-type': 'text/html' };
+        if (alternatesIn === 'header') headers.link = pageLinkHeader('verify-me', locale, published, opts.overrides?.[locale]?.canonical);
+        return new Response(status === 200 ? pageHtml('verify-me', locale, published, opts.overrides?.[locale], alternatesIn) : 'x', { status, headers });
       }
       const status = opts.status?.[url] ?? 200;
       return new Response(null, { status, headers: { 'content-type': status === 200 ? 'image/webp' : 'text/plain' } });
@@ -305,6 +316,25 @@ describe('article_verify_public', () => {
     expect(result.pending_side_effects.email_notification?.status ?? 'skipped').toBeDefined();
     // The check reads like an anonymous visitor: no cookies, no authorization.
     expect(seen.every(r => !r.headers.has('cookie') && !r.headers.has('authorization'))).toBe(true);
+  });
+
+  it('reads canonical and hreflang from the Link header, and still accepts pages that only use <link> tags', async () => {
+    const fromHeader = await verifyPublicArticle(d1, 'verify-me', { origin: ORIGIN, fetcher: fetcherFor().fn, checkImages: false });
+    expect(fromHeader.ok).toBe(true);
+    expect(fromHeader.locales.vi?.hreflang.actual).toEqual(fromHeader.locales.vi?.hreflang.expected);
+    const fromTags = await verifyPublicArticle(d1, 'verify-me', { origin: ORIGIN, fetcher: fetcherFor({ alternatesIn: 'html' }).fn, checkImages: false });
+    expect(fromTags.ok).toBe(true);
+  });
+
+  it('flags a Link header whose alternates differ from the published editions', async () => {
+    const partial = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const locale = new URL(url).searchParams.get('lang') as Locale;
+      return new Response(pageHtml('verify-me', locale, published), { status: 200, headers: { link: pageLinkHeader('verify-me', locale, ['vi']) } });
+    }) as typeof fetch;
+    const result = await verifyPublicArticle(d1, 'verify-me', { origin: ORIGIN, fetcher: partial, locales: ['en'], checkImages: false });
+    expect(result.ok).toBe(false);
+    expect(result.locales.en?.problems).toContain('hreflang alternates differ from the published editions');
   });
 
   it('reports a wrong canonical, an unreachable cover and a failing page per locale', async () => {
@@ -330,7 +360,7 @@ describe('article_verify_public', () => {
     const outsider = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith(`${ORIGIN}/articles/`)) {
-        return new Response(pageHtml('verify-me', 'vi', published).replace(`${ORIGIN}/og/verify-me-vi.png`, 'https://evil.example/x.png'), { status: 200 });
+        return new Response(pageHtml('verify-me', 'vi', published).replace(`${ORIGIN}/og/verify-me-vi.png`, 'https://evil.example/x.png'), { status: 200, headers: { link: pageLinkHeader('verify-me', 'vi', published) } });
       }
       throw new Error(`unexpected request ${url}`);
     }) as typeof fetch;
@@ -360,7 +390,7 @@ describe('article_verify_public', () => {
     await seed('verify-paid', 'knowledges');
     const paidFetcher = (body: string) => (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith(`${ORIGIN}/articles/`)) return new Response(pageHtml('verify-paid', 'vi', ['vi']).replace('<body></body>', `<body>${body}</body>`), { status: 200 });
+      if (url.startsWith(`${ORIGIN}/articles/`)) return new Response(pageHtml('verify-paid', 'vi', ['vi']).replace('<body></body>', `<body>${body}</body>`), { status: 200, headers: { link: pageLinkHeader('verify-paid', 'vi', ['vi']) } });
       return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
     }) as typeof fetch;
     const locked = await verifyPublicArticle(d1, 'verify-paid', { origin: ORIGIN, fetcher: paidFetcher('<div class="zb-lock-outline zb-paywalled"></div>') });
@@ -371,6 +401,54 @@ describe('article_verify_public', () => {
     expect(leaked.locales.vi?.problems).toContain('members-only notice is missing on a paid edition (the paid part may be public)');
     const free = await verifyPublicArticle(d1, 'verify-me', { origin: ORIGIN, fetcher: fetcherFor().fn, locales: ['vi'] });
     expect(free.locales.vi?.paywall).toEqual({ expected: false, present: false });
+  });
+});
+
+describe('parseArticleHead with a Link header', () => {
+  const PAGE = 'https://zuey.test/articles/x?lang=vi';
+
+  it('parses quoted and bare parameters, several rel tokens and commas between entries', () => {
+    expect(parseLinkHeader('<https://a.test/x>; rel="canonical", <https://a.test/x?lang=en>; rel=alternate; HrefLang="en",<https://a.test/y>; rel="preload alternate"; hreflang=vi')).toEqual([
+      { href: 'https://a.test/x', rel: 'canonical' },
+      { href: 'https://a.test/x?lang=en', rel: 'alternate', hreflang: 'en' },
+      { href: 'https://a.test/y', rel: 'preload alternate', hreflang: 'vi' },
+    ]);
+    expect(parseLinkHeader(null)).toEqual([]);
+    expect(parseLinkHeader('')).toEqual([]);
+  });
+
+  it('keeps quoted "<", "," and escaped quotes inside their parameter', () => {
+    expect(parseLinkHeader('<https://a.test/x>; title="a<b, \\"q\\"; rel=canonical"; rel=preload, <https://a.test/c>; rel=canonical')).toEqual([
+      { href: 'https://a.test/x', title: 'a<b, "q"; rel=canonical', rel: 'preload' },
+      { href: 'https://a.test/c', rel: 'canonical' },
+    ]);
+  });
+
+  it('resolves relative targets against the page and skips links anchored to another resource', () => {
+    expect(parseLinkHeader('</articles/x?lang=vi>; rel=canonical, <https://a.test/other>; rel=canonical; anchor="#part"', PAGE))
+      .toEqual([{ href: 'https://zuey.test/articles/x?lang=vi', rel: 'canonical' }]);
+  });
+
+  it('uses the header when it declares links and the HTML tags otherwise', () => {
+    const tags = '<link rel="canonical" href="https://zuey.test/a"><link rel="alternate" hreflang="vi" href="https://zuey.test/a">';
+    const header = parseArticleHead(`<html>${tags}</html>`, '<https://zuey.test/a>; rel="canonical", <https://zuey.test/a>; rel="alternate"; hreflang="vi"', PAGE);
+    expect(header).toMatchObject({ canonical: 'https://zuey.test/a', hreflang: ['vi=https://zuey.test/a'], linkConflicts: [] });
+    const canonicalOnlyInHtml = parseArticleHead(`<html>${tags}</html>`, '<https://zuey.test/b>; rel="alternate"; hreflang="vi"', PAGE);
+    expect(canonicalOnlyInHtml.canonical).toBe('https://zuey.test/a');
+    expect(parseArticleHead(`<html>${tags}</html>`)).toMatchObject({ canonical: 'https://zuey.test/a', hreflang: ['vi=https://zuey.test/a'] });
+  });
+
+  it('reports the header value but flags a header that disagrees with the HTML tags', () => {
+    const html = '<html><link rel="canonical" href="https://zuey.test/old"><link rel="alternate" hreflang="vi" href="https://zuey.test/old-vi"></html>';
+    const head = parseArticleHead(html, '<https://zuey.test/new>; rel="canonical", <https://zuey.test/new-vi>; rel="alternate"; hreflang="vi"', PAGE);
+    expect(head.canonical).toBe('https://zuey.test/new');
+    expect(head.hreflang).toEqual(['vi=https://zuey.test/new-vi']);
+    expect(head.linkConflicts).toHaveLength(2);
+  });
+
+  it('keeps a repeated hreflang so it never matches a clean expected set', () => {
+    const head = parseArticleHead('<html></html>', '<https://zuey.test/en>; rel=alternate; hreflang=en, <https://evil.test/en>; rel=alternate; hreflang=en', PAGE);
+    expect(head.hreflang).toEqual(['en=https://evil.test/en', 'en=https://zuey.test/en']);
   });
 });
 
