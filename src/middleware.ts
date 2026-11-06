@@ -44,6 +44,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   // Anonymous HTML of the public landing pages is served from the colo's cache (see edge-html-cache.ts).
   const runtime = context.locals.runtime;
+  const started = Date.now();
   const ctx = runtime?.ctx;
   const rendered = await serveWithEdgeCache(request, url, () => next(), {
     cache: runtime?.caches?.default,
@@ -52,6 +53,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
     canStore: () => [...context.cookies.headers()].length === 0,
   });
   const response = await withRequestId(rendered, requestId);
+  // Time spent inside the Function (including D1 round trips), so slow pages can be told apart from slow networks.
+  response.headers.set('Server-Timing', `app;dur=${Date.now() - started}`);
 
   if (machine) {
     setMachineCors(response.headers);
