@@ -27,6 +27,13 @@
 .zb-h2 { font-size: 1.4rem; font-weight: 700; }
 .zb-h3 { font-size: 1.15rem; font-weight: 700; }
 .zb-list { margin: 0; padding-left: 1.4rem; }
+/* Tailwind Preflight resets ul/ol to list-style: none; restore markers explicitly. */
+ul.zb-list { list-style-type: disc; list-style-position: outside; }
+ol.zb-list { list-style-type: decimal; list-style-position: outside; }
+.zb-list li::marker { color: currentColor; }
+.zb-list li { overflow-wrap: anywhere; }
+.zb-list .zb-list { margin-top: 0.25rem; }
+ul.zb-list ul.zb-list { list-style-type: circle; }
 .zb-list li + li { margin-top: 0.25rem; }
 .zb-checklist { list-style: none; margin: 0; padding: 0; }
 .zb-checklist li { display: flex; gap: 0.55rem; align-items: flex-start; }
