@@ -80,6 +80,18 @@ export const REFRESH_GRACE_MAX = 3;
 /** A rotated token still inside the grace window; binds the window start (ISO). */
 const IN_GRACE = `rotated_at IS NOT NULL AND rotated_at > ? AND revoked_at IS NULL AND grace_uses < ${REFRESH_GRACE_MAX}`;
 
+/** Grant end of a row: its own value, else the earliest one in its family, else first token + GRANT_MAX_LIFETIME_MS. */
+async function resolveGrantExpiresAt(d1: D1DatabaseLike, row: Row, familyId: string): Promise<string> {
+  const own = strOrNull(row, 'grant_expires_at');
+  if (own !== null) return own;
+  const fam = await d1.prepare('SELECT MIN(grant_expires_at) AS g, MIN(created_at) AS c FROM oauth_tokens WHERE family_id = ?')
+    .bind(familyId).first<Row>();
+  const g = fam ? strOrNull(fam, 'g') : null;
+  if (g !== null) return g;
+  const c = (fam ? strOrNull(fam, 'c') : null) ?? str(row, 'created_at');
+  return iso(Date.parse(c) + GRANT_MAX_LIFETIME_MS);
+}
+
 /** Only revoked or rotated tokens reach this; the message covers both. */
 const reusedGrant = (): OAuthError => invalidGrant('Refresh token was already used or revoked; all tokens of this grant are now revoked');
 
@@ -108,7 +120,7 @@ async function prepareTokens(
   const scopes = sortScopes(input.scopes);
   const cap = input.grantExpiresAt === null ? Infinity : Date.parse(input.grantExpiresAt);
   const accessExpiresAt = Math.min(now + ACCESS_TOKEN_TTL_MS, cap);
-  const refreshExpiresAt = input.refreshExpiresAt ?? iso(Math.min(now + REFRESH_TOKEN_TTL_MS, cap));
+  const refreshExpiresAt = iso(Math.min(input.refreshExpiresAt === undefined ? now + REFRESH_TOKEN_TTL_MS : Date.parse(input.refreshExpiresAt), cap));
   const values: unknown[] = [
     randomId('ot'), input.familyId, input.client.client_id, input.userId, await sha256Hex(access), refresh ? await sha256Hex(refresh) : null,
     JSON.stringify(scopes), input.audience, iso(now), iso(accessExpiresAt), refresh ? refreshExpiresAt : null,
@@ -229,15 +241,15 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
     await revokeFamily(d1, familyId);
     throw reusedGrant();
   }
-  if (expired) throw invalidGrant('Refresh token expired');
-  // Absolute grant lifetime: rotation never extends past it. Without migration 0036 the row has no
-  // `grant_expires_at` (undefined), and a NULL means the grant is uncapped.
+  // Absolute grant lifetime: rotation never extends past it. Only a missing column (migration 0036 not applied)
+  // means uncapped; a NULL value is resolved from the family, then from its first token.
   const withGrantColumn = 'grant_expires_at' in row;
-  const grantExpiresAt = strOrNull(row, 'grant_expires_at');
+  const grantExpiresAt = withGrantColumn ? await resolveGrantExpiresAt(d1, row, familyId) : null;
   if (grantExpiresAt !== null && Date.parse(grantExpiresAt) <= now) {
     await revokeFamily(d1, familyId);
     throw invalidGrant('Grant lifetime exceeded; the client must request authorization again');
   }
+  if (expired) throw invalidGrant('Refresh token expired');
 
   // Validate everything before rotating, so a rejected request leaves the token usable for a corrected retry.
   // RFC 6749 §6: a refresh may narrow but never widen; a scope outside the grant is rejected, not intersected.
