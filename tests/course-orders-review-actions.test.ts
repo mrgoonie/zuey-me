@@ -24,4 +24,10 @@ describe('admin course order actions', () => {
   it('offers neither a grant nor a dismiss of a refunded order: its money went back', () => {
     expect(orderActions('refunded', false)).toEqual({});
   });
+
+  it('offers no grant of an unpaid order whose payment was refunded before it arrived, dismissed or not', () => {
+    expect(Object.keys(orderActions('needs_attention', false, true))).toEqual(['dismiss', 'refund']);
+    expect(Object.keys(orderActions('cancelled', false, true))).toEqual([]);
+    expect(Object.keys(orderActions('needs_attention', false, false))).toEqual(['grant', 'dismiss', 'refund']);
+  });
 });

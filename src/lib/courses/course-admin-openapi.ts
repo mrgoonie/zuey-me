@@ -54,7 +54,7 @@ export const coursesAdminOpenApi: OpenApiFragment = {
     },
     '/api/v1/admin/course-orders': {
       get: admin('Course orders (filter by status)', {
-        description: 'Each order carries `dispute_lost`: true for a `charged_back` order whose dispute was lost (it can no longer be granted, dismissed or refunded).',
+        description: 'Each order carries `dispute_lost`: true for a `charged_back` order whose dispute was lost (it can no longer be granted, dismissed or refunded), and `money_returned`: true for an unpaid order whose money went back (refunded, or its payment refunded before it arrived), which can no longer be granted.',
         params: [{ name: 'status', in: 'query', schema: { type: 'string' } }],
       }),
     },
@@ -62,7 +62,7 @@ export const coursesAdminOpenApi: OpenApiFragment = {
       post: admin('Resolve a flagged order: grant, dismiss or refund', {
         description: '`refund` records a manual refund of a paid, flagged or disputed (`charged_back`) order and revokes access. A disputed order becomes `refunded`: its access and commission were already revoked when the dispute opened, and a later won dispute does not restore it. `grant` and `dismiss` of a disputed order are refused and change nothing: the dispute outcome decides its access. `grant` and `dismiss` of a `refunded` order (also one refunded during a dispute) are refused and change nothing: its money went back.',
         params: [pathParam('code', 'Order code')], body: { action: { type: 'string', enum: ['grant', 'dismiss', 'refund'] }, reason: { type: 'string' } }, required: ['action'],
-        extra: { '404': 'Order not found', '409': '`already_paid` (grant or dismiss of a paid order), `order_disputed` (grant or dismiss of a `charged_back` order), `order_refunded` (grant or dismiss of a `refunded` order), `not_dismissable` (dismiss that found the order in another state) or `not_refundable` (refund of another state, or after a lost dispute)' },
+        extra: { '404': 'Order not found', '409': '`already_paid` (grant or dismiss of a paid order), `order_disputed` (grant or dismiss of a `charged_back` order), `order_refunded` (grant or dismiss of a `refunded` order, or grant of one whose payment was refunded before it arrived, flagged `refunded_before_payment`, also after a dismiss), `not_dismissable` (dismiss that found the order in another state) or `not_refundable` (refund of another state, or after a lost dispute)' },
       }),
     },
     '/api/v1/admin/account-flags': { get: admin('Anti-abuse review queue', { params: [{ name: 'status', in: 'query', schema: { type: 'string', enum: ['open', 'dismissed', 'locked', 'all'] } }] }) },
