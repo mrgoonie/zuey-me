@@ -2142,7 +2142,7 @@ describe('Dodo course payments, refunds and disputes', () => {
             // order says so. A Dodo payment is announced as a second capture under its own payment id.
             const lostRace = winner === 'payment';
             expect(flagged).toMatchObject({ outcome: lostRace && provider === 'sepay' ? 'already_paid' : 'needs_attention' });
-            expect(shouldNotifyOrder(flagged.outcome)).toBe(!(lostRace && provider === 'sepay'));
+            expect(shouldNotifyOrder(flagged?.outcome ?? '')).toBe(!(lostRace && provider === 'sepay'));
             const after = await getCourseOrderByCode(state.d1, p.code);
             expect(after?.status).toBe('paid');
             if (lostRace) {
