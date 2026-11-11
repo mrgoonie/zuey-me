@@ -86,6 +86,21 @@ async function applyCoursePaymentEvent(
 }
 
 /**
+ * Flags a SePay order for the admin. When a payment paid the order between the read and this batch, the flag changes
+ * nothing and the transfer is a second payment on a paid order, handled as the non-racing path does: the order stays
+ * paid with `duplicate_payment` as its attention reason (an earlier reason is kept; the amount paid is untouched, the
+ * transfer stays in `payment_events`), and the outcome is `already_paid`, which the SePay webhook announces to the admin as a second payment (not as a flagged order).
+ * The reason is set in the flag's own batch, ahead of its update, so a crash leaves neither.
+ */
+async function flagSepayOrder(
+  d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount: number; currency: string; ref: string | null; eventId: string }, gate: CourseEventGate,
+): Promise<CoursePaymentOutcome> {
+  const duplicate = d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ? AND status = 'paid'")
+    .bind(iso(membersRuntime.now()), order.id);
+  return (await markCourseOrderAttention(d1, order, reason, extra, gate, [duplicate])) ? 'needs_attention' : 'already_paid';
+}
+
+/**
  * Full, on-time payment of a pending SePay order pays it; anything else is flagged for the admin. SePay's transaction
  * id (`eventId`, the same on every redelivery and on reconciliation) is the idempotency key of the `payment_events`
  * record, so a transfer is applied once.
@@ -111,17 +126,14 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
     const paidIso = iso(paymentTimeMs(order, n.transactedAt, nowMs));
     const payable = order.provider === 'sepay' && (order.status === 'pending' || (order.status === 'expired' && order.attention_reason === null));
     if (!payable || order.expires_at < paidIso) {
-      await markCourseOrderAttention(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', extra, gate);
-      return 'needs_attention';
+      return flagSepayOrder(d1, order, order.status === 'needs_attention' ? (order.attention_reason ?? 'additional_payment') : 'late_payment', extra, gate);
     }
     if (order.amount_vnd === null || n.amount < order.amount_vnd) {
-      await markCourseOrderAttention(d1, order, 'underpaid', extra, gate);
-      return 'needs_attention';
+      return flagSepayOrder(d1, order, 'underpaid', extra, gate);
     }
     if (!(await getCourseById(d1, order.course_id))) {
       // The course was deleted after checkout: the money is recorded on the order for a refund, and nothing is granted.
-      await markCourseOrderAttention(d1, order, 'course_missing', extra, gate);
-      return 'needs_attention';
+      return flagSepayOrder(d1, order, 'course_missing', extra, gate);
     }
     const nowIso = iso(nowMs);
     const paid = await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: nowIso, amount_paid: n.amount, currency_paid: 'VND' }, {
@@ -133,12 +145,19 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
     // The order changed since it was read; the payment batch wrote nothing, its record included.
     const current = await getCourseOrderByCode(d1, order.code);
     if (current?.status === 'paid') {
-      await gate().run();
+      // A second payment on a paid order, as on the other paid branches: the order says so, an earlier reason stays.
+      await d1.batch([
+        gate(),
+        d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ? AND status = 'paid'")
+          .bind(iso(membersRuntime.now()), current.id),
+      ]);
       return 'already_paid';
     }
-    if (current) await markCourseOrderAttention(d1, current, 'late_payment', extra, gate);
-    else await gate().run();
-    return 'needs_attention';
+    if (!current) {
+      await gate().run();
+      return 'needs_attention';
+    }
+    return flagSepayOrder(d1, current, 'late_payment', extra, gate);
   });
 }
 
@@ -215,7 +234,8 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
   }
 
   if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type) || DODO_DISPUTE_FUNDS_KEPT.has(type))) {
-    return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type });
+    const disputeId = type.startsWith('dispute.') ? text(d, 'dispute_id') : null;
+    return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type, disputeId });
   }
   const event: CoursePaymentEvent = { provider: 'dodo', eventId, orderId: order?.id ?? null, amount, currency, rawType: type };
   return applyCoursePaymentEvent(d1, env, order, event, null, async gate => {
@@ -255,16 +275,16 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
     } else if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
       // Only a charged-back order is restored; one refunded meanwhile stays revoked. Before its opened event the order
       // is still paid: the outcome is only recorded, and the late opened event then finds it.
-      const restored = await restoreCourseOrder(d1, env, order, type, gate);
+      const restored = await restoreCourseOrder(d1, env, order, type, gate, event.eventId);
       if (restored) return result(restored);
     } else {
       const lost = DODO_DISPUTE_FUNDS_LOST.has(type);
       // A late `dispute.opened` of a dispute already won or cancelled takes nothing away; the check is also part of the
       // batch guard, so an outcome racing this event is seen either way.
       const opened = type === 'dispute.opened';
-      const settled = opened && await courseDisputeResolvedEarly(d1, order.id);
+      const settled = opened && await courseDisputeResolvedEarly(d1, order.id, event.disputeId ?? null);
       // A funds-lost outcome on a paid order reports the chargeback in the same batch as the reversal.
-      if (!settled && await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost, gate, opened ? courseDisputesPaired(order.id) : undefined)) {
+      if (!settled && await reverseCourseOrder(d1, order, 'charged_back', type, 'system', moneyBack, lost, gate, opened ? courseDisputesPaired(order.id, event.disputeId ?? null) : undefined)) {
         return result('reversed');
       }
       if (lost) {
@@ -274,7 +294,7 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
       }
     }
     // Nothing applied: the event is still recorded as handled.
-    return result((await recordCoursePaymentEvent(d1, 'dodo', event.eventId, event.orderId, amount, currency, type)) ? 'ignored' : 'duplicate_event');
+    return result((await recordCoursePaymentEvent(d1, 'dodo', event.eventId, event.orderId, amount, currency, type, event.disputeId ?? null)) ? 'ignored' : 'duplicate_event');
   } catch (err) {
     // A delivery racing this one committed the record first; this batch rolled back, so nothing was written twice.
     if (isPaymentEventConflict(err) && await coursePaymentEventRecorded(d1, 'dodo', event.eventId)) return result('duplicate_event');
