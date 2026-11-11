@@ -278,6 +278,20 @@ describe('Dodo course payments, refunds and disputes', () => {
       expect(storedDisputeIds()).toEqual([{ event_id: 'evt_open', dispute_id: 'dp_a' }, { event_id: 'evt_won', dispute_id: 'dp_a' }]);
     });
 
+    it('keeps access when a won stored without a dispute id precedes the opened event that now carries one', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      // Recorded before the id was stored: no dispute id on the row.
+      expect(await dodo('evt_won_old', 'dispute.won', { payment_id: `pay_${code}` })).toMatchObject({ outcome: 'ignored' });
+      expect(await dodo('evt_open_a', 'dispute.opened', pay(code, 'dp_a'))).toMatchObject({ outcome: 'ignored' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+      // Its opened event consumed that outcome: the next dispute revokes again.
+      expect(await dodo('evt_open_b', 'dispute.opened', pay(code, 'dp_b'))).toMatchObject({ outcome: 'reversed' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    });
+
     it('revokes on a new dispute after a won that was re-sent under another event id', async () => {
       const { course } = await publishedCourse();
       const lan = await member('lan@example.com');
@@ -2163,19 +2177,44 @@ describe('Dodo course payments, refunds and disputes', () => {
         }
       }
 
+      it('keeps the attention reason of an order a racing payment paid when a SePay transfer loses the race', async () => {
+        const p = await pendingPayment('sepay', 1000);
+        expect(await p.deliver(racingFlag('before', p.code, 'already_owned'))).toMatchObject({ outcome: 'already_paid' });
+        expect(await getCourseOrderByCode(state.d1, p.code)).toMatchObject({ status: 'paid', attention_reason: 'already_owned', amount_paid: null });
+        expect(attentionKeys()).toEqual([]);
+        expect(activities('courses.order_attention')).toBe(0);
+      });
+
+      it('flags a SePay transfer as late_payment when the order was cancelled between the read and the payment batch', async () => {
+        const p = await pendingPayment('sepay');
+        const isPay = sqlPoint(/^UPDATE course_orders SET status = 'paid'/);
+        let cancelled = false;
+        const spy = crashingD1(sql => {
+          if (!cancelled && isPay(sql)) {
+            cancelled = true;
+            state.d1.raw.query("UPDATE course_orders SET status = 'cancelled' WHERE code = ?").run(p.code);
+          }
+          return false;
+        });
+        expect(await p.deliver(spy.d1)).toMatchObject({ outcome: 'needs_attention' });
+        expect(await getCourseOrderByCode(state.d1, p.code)).toMatchObject({ status: 'needs_attention', attention_reason: 'late_payment', amount_paid: p.amount });
+        expect(await ownsCourse(state.d1, p.lan.userId, p.course.id)).toBe(false);
+        expect(attentionKeys()).toEqual([`payment_needs_attention:sepay:${p.eventId}`]);
+      });
+
       /**
        * The test database, except that another delivery pays the order `code` right before (or right after) the batch
        * that flags it commits, as a payment racing the flag would.
        */
-      function racingFlag(when: 'before' | 'after', code: string): D1DatabaseLike {
+      function racingFlag(when: 'before' | 'after', code: string, reason: string | null = null): D1DatabaseLike {
         const isFlag = sqlPoint(/^UPDATE course_orders SET status = 'needs_attention'/);
         let raced = false;
         const pay = () => {
           if (raced) return;
           raced = true;
           // A racing card payment pays the order with its own payment id.
-          state.d1.raw.query("UPDATE course_orders SET status = 'paid', paid_at = ?, updated_at = ?, provider_payment_id = COALESCE(provider_payment_id, 'pay_racing') WHERE code = ?")
-            .run(new Date(state.now).toISOString(), new Date(state.now).toISOString(), code);
+          state.d1.raw.query("UPDATE course_orders SET status = 'paid', paid_at = ?, updated_at = ?, provider_payment_id = COALESCE(provider_payment_id, 'pay_racing'), attention_reason = ? WHERE code = ?")
+            .run(new Date(state.now).toISOString(), new Date(state.now).toISOString(), reason, code);
         };
         // The spy checks every statement of a batch before the batch runs, which is where the racing payment lands first.
         const spy = crashingD1(sql => {

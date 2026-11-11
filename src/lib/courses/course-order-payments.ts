@@ -376,21 +376,22 @@ const DISPUTE_KEPT = [...DODO_DISPUTE_FUNDS_KEPT];
  * outcome before the opened event it ends (that delivery retried later), and may re-send an outcome under a new event
  * id; a late `dispute.opened` of a dispute already won or cancelled must not take access away, while the opened event of
  * any other dispute of the order must. With a dispute id the outcome is matched by it, so a stray outcome of another
- * dispute never hides this one. Without one (a payload with no dispute id) the order's won or cancelled rows that carry
- * no dispute id are compared by count with its opened rows, as before the id was stored. Recording an opened event
+ * dispute never hides this one. The order's won or cancelled rows that carry no dispute id (written before the id was
+ * stored, or of a payload with none) are always compared by count with its opened rows, as before. Recording an opened event
  * never changes the answer, so it holds for every statement of the batch that records it.
  */
 export function courseDisputesPaired(orderId: string, disputeId: string | null = null): SqlCondition {
-  if (disputeId) {
-    return {
-      sql: `NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND dispute_id = ? AND raw_type IN (${DISPUTE_KEPT.map(() => '?').join(', ')}))`,
-      params: [orderId, disputeId, ...DISPUTE_KEPT],
-    };
-  }
-  const count = (types: string) => `(SELECT COUNT(*) FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND dispute_id IS NULL AND raw_type IN (${types}))`;
-  return {
-    sql: `${count(DISPUTE_KEPT.map(() => '?').join(', '))} <= ${count('?')}`,
+  const count = (types: string, noId: string) => `(SELECT COUNT(*) FROM payment_events WHERE provider = 'dodo' AND course_order_id = ?${noId} AND raw_type IN (${types}))`;
+  // Outcomes stored without a dispute id (before the id was kept, or of a payload with none) wait for an opened event of
+  // the order, whichever id that opened event carries: each opened event recorded consumes one of them.
+  const legacy: SqlCondition = {
+    sql: `${count(DISPUTE_KEPT.map(() => '?').join(', '), ' AND dispute_id IS NULL')} <= ${count('?', '')}`,
     params: [orderId, ...DISPUTE_KEPT, orderId, 'dispute.opened'],
+  };
+  if (!disputeId) return legacy;
+  return {
+    sql: `NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND dispute_id = ? AND raw_type IN (${DISPUTE_KEPT.map(() => '?').join(', ')})) AND ${legacy.sql}`,
+    params: [orderId, disputeId, ...DISPUTE_KEPT, ...legacy.params],
   };
 }
 
