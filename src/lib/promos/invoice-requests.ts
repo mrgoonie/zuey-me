@@ -117,26 +117,34 @@ export async function createInvoiceRequest(
 
 /**
  * The order was paid: the request becomes `requested` and every admin is emailed once. Safe to call from every
- * fulfilment path (webhook, reconciliation, admin grant); only the first call changes anything. Email failures
- * are logged and never undo the payment.
+ * fulfilment path (webhook, reconciliation, admin grant, course follow-up resume). The status change happens at
+ * most once, but the admin email is its own step keyed per request and admin in `email_log`, so a worker that
+ * died between the two is repaired by the next call and nobody is emailed twice. A failed or skipped send is
+ * only retried when this function is called again (for example a webhook replay); nothing schedules that
+ * call. Email failures are logged and never undo the payment.
  */
 export async function activateInvoiceRequest(
   d1: D1DatabaseLike, env: RuntimeEnv, kind: InvoiceSourceKind, sourceId: string, amountPaidVnd: number | null,
 ): Promise<void> {
   const now = iso(membersRuntime.now());
-  const res = await d1.prepare(
+  await d1.prepare(
     "UPDATE invoice_requests SET status = 'requested', amount_paid_vnd = ?, paid_at = ?, updated_at = ? WHERE source_kind = ? AND source_id = ? AND status = 'awaiting_payment'"
   ).bind(amountPaidVnd, now, now, kind, sourceId).run();
-  if (res.meta?.changes !== 1) return;
   const inv = await getInvoiceForSource(d1, kind, sourceId);
-  if (!inv) return;
+  // Once an admin has issued the invoice there is nothing left to notify about.
+  if (!inv || inv.status !== 'requested') return;
+  await notifyAdminsOfInvoiceRequest(d1, env, inv);
+}
+
+/** Emails every admin about a paid request; each (request, admin) pair is sent at most once, failed sends retry. */
+async function notifyAdminsOfInvoiceRequest(d1: D1DatabaseLike, env: RuntimeEnv, inv: InvoiceRequest): Promise<void> {
   const content = invoiceRequestEmail({
     sourceCode: inv.source_code,
     description: inv.description,
     taxId: inv.tax_id,
     email: inv.email,
     amountVnd: inv.amount_paid_vnd ?? inv.amount_vnd,
-    paidAt: inv.paid_at ?? now,
+    paidAt: inv.paid_at ?? inv.updated_at,
     studioUrl: `${siteUrl(env)}/studio#invoices`,
   });
   for (const admin of adminEmailList(env)) {
