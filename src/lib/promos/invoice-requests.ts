@@ -118,9 +118,10 @@ export async function createInvoiceRequest(
 /**
  * The order was paid: the request becomes `requested` and every admin is emailed once. Safe to call from every
  * fulfilment path (webhook, reconciliation, admin grant, course follow-up resume). The status change happens at
- * most once, but the admin email is its own retryable step keyed per request and admin in `email_log`, so a
- * worker that died between the two is repaired by the next call and nobody is emailed twice. Email failures
- * are logged and never undo the payment.
+ * most once, but the admin email is its own step keyed per request and admin in `email_log`, so a worker that
+ * died between the two is repaired by the next call and nobody is emailed twice. A failed or skipped send is
+ * only retried when this function is called again (for example a webhook replay); nothing schedules that
+ * call. Email failures are logged and never undo the payment.
  */
 export async function activateInvoiceRequest(
   d1: D1DatabaseLike, env: RuntimeEnv, kind: InvoiceSourceKind, sourceId: string, amountPaidVnd: number | null,
