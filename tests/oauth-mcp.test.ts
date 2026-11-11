@@ -12,7 +12,7 @@ import { findOrCreateVerifiedUser } from '../src/lib/members/users';
 import { allMcpTools } from '../src/lib/mcp/dispatch';
 import { OPENAPI_FRAGMENTS } from '../src/lib/openapi/registry';
 import { loadConsent, startAuthorization } from '../src/lib/oauth/authorize';
-import { ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from '../src/lib/oauth/config';
+import { ACCESS_TOKEN_TTL_MS, GRANT_MAX_LIFETIME_MS, REFRESH_TOKEN_TTL_MS } from '../src/lib/oauth/config';
 import { REFRESH_GRACE_MAX, REFRESH_GRACE_MS, pkceChallenge } from '../src/lib/oauth/tokens';
 import { TOOL_ACCESS } from '../src/lib/oauth/tool-access';
 import { GET as asMetadataApi } from '../src/pages/.well-known/oauth-authorization-server';
@@ -28,6 +28,7 @@ import { DELETE as mcpDeleteApi, GET as mcpGetApi, POST as mcpApi } from '../src
 import { POST as legacyMcpApi } from '../src/pages/api/mcp';
 
 const T0 = Date.parse('2026-10-05T00:00:00.000Z');
+const DAY = 24 * 60 * 60 * 1000;
 const ORIGIN = 'https://zuey.test';
 const MCP_URL = `${ORIGIN}/mcp`;
 const REDIRECT = 'http://127.0.0.1:33418/callback';
@@ -682,8 +683,106 @@ describe('refresh tokens and revocation', () => {
     now += 1000;
     const sibling = await exchange(base);
     expect(sibling.status).toBe(200);
-    expect(await expiryOf(String(get(first.body, 'refresh_token')))).toBe(new Date(now - 1000 + REFRESH_TOKEN_TTL_MS).toISOString());
+    // The first rotation would reach past the grant's absolute end, so it is clamped to it.
+    expect(await expiryOf(String(get(first.body, 'refresh_token')))).toBe(new Date(T0 + GRANT_MAX_LIFETIME_MS).toISOString());
     expect(await expiryOf(String(get(sibling.body, 'refresh_token')))).toBe(original);
+  });
+
+  describe('absolute grant lifetime', () => {
+    const refreshBody = (f: { refresh: string; clientId: string }): Record<string, string> =>
+      ({ grant_type: 'refresh_token', refresh_token: f.refresh, client_id: f.clientId });
+    const grantEnd = (): unknown => get(d1.raw.query('SELECT grant_expires_at FROM oauth_tokens LIMIT 1').get(), 'grant_expires_at');
+
+    it('stamps the grant end at authorization and carries it over every rotation', async () => {
+      const f = await fullFlow('lan@example.com');
+      expect(grantEnd()).toBe(new Date(T0 + GRANT_MAX_LIFETIME_MS).toISOString());
+      now += 10 * DAY;
+      const r = await exchange(refreshBody(f));
+      expect(r.status).toBe(200);
+      const ends = d1.raw.query('SELECT DISTINCT grant_expires_at AS g FROM oauth_tokens').all();
+      expect(ends).toEqual([{ g: new Date(T0 + GRANT_MAX_LIFETIME_MS).toISOString() }]);
+    });
+
+    it('refuses the rotation that would come after the grant end', async () => {
+      const f = await fullFlow('lan@example.com');
+      now += 60 * DAY;
+      const first = await exchange(refreshBody(f));
+      expect(first.status).toBe(200);
+      now += 40 * DAY; // 100 days after authorization
+      const late = await exchange({ ...refreshBody(f), refresh_token: String(get(first.body, 'refresh_token')) });
+      expect(get(late.body, 'error')).toBe('invalid_grant');
+    });
+
+    it('never lets a token outlive the grant and refuses a refresh after it', async () => {
+      const f = await fullFlow('lan@example.com');
+      const end = T0 + GRANT_MAX_LIFETIME_MS;
+      now = end - 5 * DAY;
+      const r = await exchange(refreshBody(f));
+      expect(r.status).toBe(200);
+      expect(Number(get(r.body, 'expires_in'))).toBe(5 * 24 * 3600);
+      const latest = d1.raw.query('SELECT access_expires_at AS a, refresh_expires_at AS r FROM oauth_tokens ORDER BY created_at DESC LIMIT 1').get();
+      expect(get(latest, 'a')).toBe(new Date(end).toISOString());
+      expect(get(latest, 'r')).toBe(new Date(end).toISOString());
+
+      now = end + 1000;
+      const late = await exchange({ ...refreshBody(f), refresh_token: String(get(r.body, 'refresh_token')) });
+      expect(late.status).toBe(400);
+      expect(get(late.body, 'error')).toBe('invalid_grant');
+      expect((await mcp('ping', {}, { token: String(get(r.body, 'access_token')) })).status).toBe(401);
+    });
+
+    it('caps a NULL grant end from the family, or from the first token when the family has none', async () => {
+      const f = await fullFlow('lan@example.com');
+      const end = new Date(T0 + GRANT_MAX_LIFETIME_MS).toISOString();
+      now += 10 * DAY;
+      const a = await exchange(refreshBody(f));
+      d1.raw.run('UPDATE oauth_tokens SET grant_expires_at = NULL WHERE refresh_hash = ?', [await sha256Hex(String(get(a.body, 'refresh_token')))]);
+      now += 10 * DAY;
+      const b = await exchange({ ...refreshBody(f), refresh_token: String(get(a.body, 'refresh_token')) });
+      expect(b.status).toBe(200);
+      const newest = d1.raw.query('SELECT grant_expires_at AS g, refresh_expires_at AS r FROM oauth_tokens ORDER BY created_at DESC, rowid DESC LIMIT 1').get();
+      expect(newest).toEqual({ g: end, r: new Date(now + REFRESH_TOKEN_TTL_MS).toISOString() > end ? end : new Date(now + REFRESH_TOKEN_TTL_MS).toISOString() });
+
+      // No capped token left in the family: falls back to first token + lifetime.
+      d1.raw.run('UPDATE oauth_tokens SET grant_expires_at = NULL');
+      now = T0 + GRANT_MAX_LIFETIME_MS - 2 * DAY;
+      const c = await exchange({ ...refreshBody(f), refresh_token: String(get(b.body, 'refresh_token')) });
+      expect(c.status).toBe(200);
+      const last = d1.raw.query('SELECT access_expires_at AS a, grant_expires_at AS g FROM oauth_tokens ORDER BY created_at DESC, rowid DESC LIMIT 1').get();
+      expect(last).toEqual({ a: end, g: end });
+      now = T0 + GRANT_MAX_LIFETIME_MS + 1000;
+      d1.raw.run('UPDATE oauth_tokens SET grant_expires_at = NULL');
+      const late = await exchange({ ...refreshBody(f), refresh_token: String(get(c.body, 'refresh_token')) });
+      expect(get(late.body, 'error')).toBe('invalid_grant');
+    });
+
+    it('revokes the whole family with a clear message once the grant end passes, even before the refresh expiry and for grace siblings', async () => {
+      const f = await fullFlow('lan@example.com');
+      const first = await exchange(refreshBody(f));
+      expect(first.status).toBe(200);
+      // Grant ends earlier than the refresh tokens' own expiry.
+      d1.raw.run('UPDATE oauth_tokens SET grant_expires_at = ?', [new Date(now + 5000).toISOString()]);
+      now += 10_000; // past the grant end and the grace window is still open (rotation 10s ago)
+      const sibling = await exchange(refreshBody(f));
+      expect(sibling.status).toBe(400);
+      expect(get(sibling.body, 'error')).toBe('invalid_grant');
+      expect(String(get(sibling.body, 'error_description'))).toContain('Grant lifetime exceeded');
+      expect(d1.raw.query('SELECT COUNT(*) AS n FROM oauth_tokens WHERE revoked_at IS NULL').get()).toEqual({ n: 0 });
+      const fresh = await exchange({ ...refreshBody(f), refresh_token: String(get(first.body, 'refresh_token')) });
+      // The family is already revoked, so the newest token is refused too.
+      expect(get(fresh.body, 'error')).toBe('invalid_grant');
+    });
+
+    it('does not cap at all only when the column is missing (migration not applied yet)', async () => {
+      d1.raw.run('ALTER TABLE oauth_tokens DROP COLUMN grant_expires_at');
+      const g = await fullFlow('mai@example.com');
+      now += 80 * DAY;
+      const r = await exchange(refreshBody(g));
+      expect(r.status).toBe(200);
+      // Refresh reaches past the 90 day grant window because there is no cap without the column.
+      const newest = d1.raw.query('SELECT refresh_expires_at AS r FROM oauth_tokens ORDER BY created_at DESC, rowid DESC LIMIT 1').get();
+      expect(get(newest, 'r')).toBe(new Date(now + REFRESH_TOKEN_TTL_MS).toISOString());
+    });
   });
 
   it('lets a revoke win over a grace sibling, before or during the refresh', async () => {
