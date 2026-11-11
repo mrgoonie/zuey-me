@@ -1078,3 +1078,123 @@ describe('request ids', () => {
     expect(redirect.headers.get('X-Request-Id')).toBe('req_redirect1');
   });
 });
+
+const PROMO_TOOLS = ['promo_code_list', 'promo_code_create', 'promo_code_update', 'promo_code_redemptions'];
+const PROMO_FIELDS = ['code', 'percent', 'status', 'starts_at', 'ends_at', 'max_uses', 'once_per_customer', 'products', 'plans', 'course_ids', 'min_months', 'card_cycles'];
+
+/** Parses the JSON text a tools/call result carries; error results carry `{ error: {...} }`. */
+function toolPayload(r: { body: unknown }): { isError: boolean; data: unknown } {
+  const text = get(r.body, 'result', 'content', 0, 'text');
+  return { isError: get(r.body, 'result', 'isError') === true, data: typeof text === 'string' ? JSON.parse(text) : null };
+}
+
+async function promoRowCount(): Promise<number> {
+  const row = await d1.prepare('SELECT COUNT(*) AS n FROM promo_codes').first<{ n: number }>();
+  return row?.n ?? -1;
+}
+
+describe('admin promo tool discovery and calls over /mcp', () => {
+  it('registers every promo tool as admin-only with the schema the REST endpoint validates', () => {
+    const tools = allMcpTools();
+    for (const t of PROMO_TOOLS) {
+      expect(TOOL_ACCESS[t]).toEqual({ kind: 'admin' });
+      expect(tools.map(x => x.name)).toContain(t);
+    }
+    const create = tools.find(t => t.name === 'promo_code_create');
+    expect(get(create, 'inputSchema', 'required')).toEqual(['code', 'percent']);
+    for (const f of PROMO_FIELDS) expect(get(create, 'inputSchema', 'properties', f)).toBeDefined();
+  });
+
+  it('lists the tools only for an admin grant or admin key', async () => {
+    const boss = await fullFlow('boss@example.com', { scope: 'account:read admin', approve: ['account:read', 'admin'] });
+    const adminKey = (await createApiKey('ops', 'admin', d1)).key;
+    for (const token of [boss.access, adminKey]) expect(await toolNames(token)).toEqual(expect.arrayContaining(PROMO_TOOLS));
+
+    const bossNoAdmin = await fullFlow('boss@example.com', { scope: 'account:read' });
+    const lan = await fullFlow('lan@example.com', { scope: 'account:read' });
+    const personal = await createUserKey(d1, lan.userId, { name: 'cli', scopes: ['articles:read'], expires_in_days: 30 });
+    for (const token of [bossNoAdmin.access, lan.access, personal.secret]) {
+      const names = await toolNames(token);
+      for (const t of PROMO_TOOLS) expect(names).not.toContain(t);
+    }
+  });
+
+  it('creates, lists, disables and reads redemptions of a code through tools/call', async () => {
+    const boss = await fullFlow('boss@example.com', { scope: 'account:read admin', approve: ['account:read', 'admin'] });
+    const call = async (name: string, args: Record<string, unknown>) => toolPayload(await mcp('tools/call', { name, arguments: args }, { token: boss.access }));
+
+    const created = await call('promo_code_create', { code: 'thieuandzuey', percent: 50 });
+    expect(created.isError).toBe(false);
+    expect(get(created.data, 'code')).toBe('THIEUANDZUEY');
+    expect(get(created.data, 'percent')).toBe(50);
+    expect(get(created.data, 'status')).toBe('active');
+    const id = String(get(created.data, 'id'));
+    expect(id.length).toBeGreaterThan(0);
+
+    const listed = await call('promo_code_list', { q: 'THIEU' });
+    const rows = get(listed.data, 'promo_codes');
+    expect(Array.isArray(rows) ? rows.map(r => get(r, 'id')) : null).toEqual([id]);
+
+    // A duplicate name is a readable 409 tool error, not a transport failure.
+    const dup = await call('promo_code_create', { code: 'THIEUANDZUEY', percent: 10 });
+    expect(dup.isError).toBe(true);
+    expect(get(dup.data, 'error', 'code')).toBe('code_taken');
+    expect(get(dup.data, 'error', 'status')).toBe(409);
+
+    const invalid = await call('promo_code_create', { code: 'BAD', percent: 500 });
+    expect(invalid.isError).toBe(true);
+    expect(get(invalid.data, 'error', 'status')).toBe(400);
+
+    const disabled = await call('promo_code_update', { id, status: 'disabled' });
+    expect(disabled.isError).toBe(false);
+    expect(get(disabled.data, 'status')).toBe('disabled');
+    expect(get(disabled.data, 'percent')).toBe(50);
+
+    const redemptions = await call('promo_code_redemptions', { id });
+    expect(redemptions.isError).toBe(false);
+    expect(get(redemptions.data, 'promo_code', 'id')).toBe(id);
+    expect(get(redemptions.data, 'redemptions')).toEqual([]);
+
+    const missing = await call('promo_code_redemptions', { id: 'does-not-exist' });
+    expect(missing.isError).toBe(true);
+    expect(get(missing.data, 'error', 'status')).toBe(404);
+  });
+
+  it('denies calls without the admin grant and points an admin identity at the missing scope', async () => {
+    const bossNoAdmin = await fullFlow('boss@example.com', { scope: 'account:read' });
+    const lan = await fullFlow('lan@example.com', { scope: 'account:read' });
+    for (const name of PROMO_TOOLS) {
+      const args = name === 'promo_code_create' ? { code: 'NOPE', percent: 5 } : { id: 'x' };
+      const stepUp = await mcp('tools/call', { name, arguments: args }, { token: bossNoAdmin.access });
+      expect(stepUp.status).toBe(403);
+      expect(stepUp.res.headers.get('WWW-Authenticate')).toContain('scope="admin"');
+      const plain = await mcp('tools/call', { name, arguments: args }, { token: lan.access });
+      expect(toolPayload(plain).isError).toBe(true);
+      expect(plain.res.headers.get('WWW-Authenticate')).toBeNull();
+    }
+    expect(await promoRowCount()).toBe(0);
+  });
+
+  it('refuses mutations from a read-only admin key and a member key', async () => {
+    const readKey = (await createApiKey('ro', 'read', d1)).key;
+    const denied = await mcp('tools/call', { name: 'promo_code_create', arguments: { code: 'READONLY', percent: 5 } }, { token: readKey });
+    expect(toolPayload(denied).isError).toBe(true);
+    const lan = await member('mai@example.com');
+    const key = await createUserKey(d1, lan.userId, { name: 'cli', scopes: ['articles:read'], expires_in_days: 30 });
+    const memberCall = await mcp('tools/call', { name: 'promo_code_update', arguments: { id: 'x', status: 'disabled' } }, { token: key.secret });
+    expect(toolPayload(memberCall).isError).toBe(true);
+    expect(await promoRowCount()).toBe(0);
+  });
+
+  it('tells only an admin identity without the admin grant how to reveal the hidden tools', async () => {
+    const bossNoAdmin = await fullFlow('boss@example.com', { scope: 'account:read' });
+    const boss = await fullFlow('boss@example.com', { scope: 'account:read admin', approve: ['account:read', 'admin'] });
+    const lan = await fullFlow('lan@example.com', { scope: 'account:read' });
+    const instructions = async (token: string, method: string) => String(get((await mcp(method, {}, { token })).body, 'result', 'instructions'));
+    for (const method of ['initialize', 'server/discover']) {
+      expect(await instructions(bossNoAdmin.access, method)).toContain('reconnect the connector');
+      expect(await instructions(boss.access, method)).not.toContain('reconnect the connector');
+      expect(await instructions(lan.access, method)).not.toContain('reconnect the connector');
+    }
+  });
+});

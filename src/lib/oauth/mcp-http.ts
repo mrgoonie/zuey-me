@@ -28,6 +28,18 @@ export const SERVER_INFO = { name: 'zuey-me', title: 'Zuey (zuey.me)', version: 
 const INSTRUCTIONS = 'Tools for zuey.me: Duy Nguyen\'s profile, articles (full text follows the member\'s plan), courses (catalog and trial lessons; paid lessons are read in the browser), reads, '
   + 'membership plans and SePay checkout. Admin tools appear only for admin identities that granted the admin scope.';
 
+/**
+ * Extra hint only for an admin identity whose token lacks the `admin` grant: its admin tools (promo codes,
+ * media, articles...) are hidden from `tools/list`, so nothing else tells the client why they are missing.
+ * Never sent to other callers, so it reveals nothing about admin tooling to non-admins.
+ */
+const ADMIN_GRANT_HINT = ' This account is an admin but this connection did not grant the admin scope, so admin tools (promo codes, media, articles, members) are hidden: '
+  + 'disconnect and reconnect the connector, tick the admin scope on the consent screen, then refresh the tool list.';
+
+function instructionsFor(oauth: OAuthGrantInfo | null): string {
+  return oauth && oauth.adminIdentity && !oauth.scopes.includes('admin') ? INSTRUCTIONS + ADMIN_GRANT_HINT : INSTRUCTIONS;
+}
+
 const META_VERSION = 'io.modelcontextprotocol/protocolVersion';
 const META_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities';
 const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo';
@@ -239,9 +251,9 @@ export async function handleMcpPost(request: Request, env: RuntimeEnv, waitUntil
 
   switch (method) {
     case 'initialize':
-      return ok({ protocolVersion: era.version, capabilities: { tools: { listChanged: false } }, serverInfo: SERVER_INFO, instructions: INSTRUCTIONS });
+      return ok({ protocolVersion: era.version, capabilities: { tools: { listChanged: false } }, serverInfo: SERVER_INFO, instructions: instructionsFor(oauth) });
     case 'server/discover':
-      return ok({ supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: { listChanged: false } }, instructions: INSTRUCTIONS });
+      return ok({ supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: { listChanged: false } }, instructions: instructionsFor(oauth) });
     case 'ping':
       return ok({});
     case 'tools/list': {
