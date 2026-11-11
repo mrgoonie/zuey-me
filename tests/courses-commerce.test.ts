@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { ownsCourse } from '../src/lib/courses/course-access';
 import { getCourseOrderByCode } from '../src/lib/courses/course-orders';
 import { resolveCourseOrder } from '../src/lib/courses/course-order-payments';
+import { shouldNotifyOrder } from '../src/lib/notifications/order-notify';
 import { applyCourseSepayPayment, applyDodoCourseWebhook } from '../src/lib/courses/course-payment-webhooks';
 import { DEFAULT_PLAN_DISCOUNTS, quoteCoursePrice } from '../src/lib/courses/course-pricing';
 import type { CourseRecord } from '../src/lib/courses/course-types';
@@ -239,6 +240,91 @@ describe('Dodo course payments, refunds and disputes', () => {
     expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
     const attention = state.d1.raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM analytics_outbox WHERE event = 'payment_needs_attention'").get()?.n;
     expect(attention).toBe(1);
+  });
+
+  it('announces each flag of a won dispute on a deleted course, not only the first', async () => {
+    const { course } = await publishedCourse();
+    const lan = await member('lan@example.com');
+    const code = await paidByCard(lan);
+    const pay = { payment_id: `pay_${code}` };
+    await state.d1.prepare('UPDATE courses SET deleted_at = ? WHERE id = ?').bind(new Date(state.now).toISOString(), course.id).run();
+    const keys = () => state.d1.raw
+      .query<{ dedupe_key: string }, []>("SELECT dedupe_key FROM analytics_outbox WHERE event = 'payment_needs_attention' ORDER BY id").all().map(r => r.dedupe_key);
+
+    expect(await dodo('evt_open1', 'dispute.opened', { ...pay, dispute_id: 'dp_1' })).toMatchObject({ outcome: 'reversed' });
+    expect(await dodo('evt_won1', 'dispute.won', { ...pay, dispute_id: 'dp_1' })).toMatchObject({ outcome: 'needs_attention' });
+    expect(keys()).toHaveLength(1);
+
+    expect(await dodo('evt_open2', 'dispute.opened', { ...pay, dispute_id: 'dp_2' })).toMatchObject({ outcome: 'reversed' });
+    expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+    expect(await dodo('evt_won2', 'dispute.won', { ...pay, dispute_id: 'dp_2' })).toMatchObject({ outcome: 'needs_attention' });
+    expect(keys()).toHaveLength(2);
+    expect(new Set(keys()).size).toBe(2);
+    // A redelivery of the second outcome is a duplicate and announces nothing more.
+    expect(await dodo('evt_won2', 'dispute.won', { ...pay, dispute_id: 'dp_2' })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(keys()).toHaveLength(2);
+  });
+
+  describe('disputes matched by dispute id', () => {
+    const pay = (code: string, disputeId: string) => ({ payment_id: `pay_${code}`, dispute_id: disputeId });
+    const storedDisputeIds = () => state.d1.raw
+      .query<{ event_id: string; dispute_id: string | null }, []>("SELECT event_id, dispute_id FROM payment_events WHERE raw_type LIKE 'dispute.%' ORDER BY id").all();
+
+    it('stores the dispute id of each dispute event', async () => {
+      await publishedCourse();
+      const code = await paidByCard(await member('lan@example.com'));
+      await dodo('evt_open', 'dispute.opened', pay(code, 'dp_a'));
+      await dodo('evt_won', 'dispute.won', pay(code, 'dp_a'));
+      expect(storedDisputeIds()).toEqual([{ event_id: 'evt_open', dispute_id: 'dp_a' }, { event_id: 'evt_won', dispute_id: 'dp_a' }]);
+    });
+
+    it('revokes on a new dispute after a won that was re-sent under another event id', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      expect(await dodo('evt_open_a', 'dispute.opened', pay(code, 'dp_a'))).toMatchObject({ outcome: 'reversed' });
+      expect(await dodo('evt_won_a', 'dispute.won', pay(code, 'dp_a'))).toMatchObject({ outcome: 'restored' });
+      // The same won again under a new event id: the order is paid, so nothing changes, but a stray won is on record.
+      expect(await dodo('evt_won_a_again', 'dispute.won', pay(code, 'dp_a'))).toMatchObject({ outcome: 'ignored' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+
+      expect(await dodo('evt_open_b', 'dispute.opened', pay(code, 'dp_b'))).toMatchObject({ outcome: 'reversed' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('charged_back');
+    });
+
+    it('revokes on a new dispute after both a won and a cancelled of the previous one', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      await dodo('evt_open_a', 'dispute.opened', pay(code, 'dp_a'));
+      await dodo('evt_won_a', 'dispute.won', pay(code, 'dp_a'));
+      await dodo('evt_cancel_a', 'dispute.cancelled', pay(code, 'dp_a'));
+      expect(await dodo('evt_open_b', 'dispute.opened', pay(code, 'dp_b'))).toMatchObject({ outcome: 'reversed' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    });
+
+    it('keeps access when a dispute.opened is re-sent under a new event id after its own outcome', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      await dodo('evt_open_a', 'dispute.opened', pay(code, 'dp_a'));
+      await dodo('evt_won_a', 'dispute.won', pay(code, 'dp_a'));
+      expect(await dodo('evt_open_a_again', 'dispute.opened', pay(code, 'dp_a'))).toMatchObject({ outcome: 'ignored' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+      expect((await getCourseOrderByCode(state.d1, code))?.status).toBe('paid');
+    });
+
+    it('keeps access when an outcome arrives before its own dispute.opened, and still revokes another dispute', async () => {
+      const { course } = await publishedCourse();
+      const lan = await member('lan@example.com');
+      const code = await paidByCard(lan);
+      await dodo('evt_won_a', 'dispute.won', pay(code, 'dp_a'));
+      expect(await dodo('evt_open_a', 'dispute.opened', pay(code, 'dp_a'))).toMatchObject({ outcome: 'ignored' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+      expect(await dodo('evt_open_b', 'dispute.opened', pay(code, 'dp_b'))).toMatchObject({ outcome: 'reversed' });
+      expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    });
   });
 
   it('counts the money back of a course order once when it is both refunded and lost in a dispute, in either order', async () => {
@@ -2052,8 +2138,18 @@ describe('Dodo course payments, refunds and disputes', () => {
           it(`logs and counts the needs-attention flag of an underpaid ${provider} payment ${winner === 'payment' ? 'never when a racing payment pays the order first' : 'once when it commits before a racing payment'}`, async () => {
             const p = await pendingPayment(provider, 1000);
             const flagged = await p.deliver(racingFlag(winner === 'payment' ? 'before' : 'after', p.code));
-            expect(flagged).toMatchObject({ outcome: 'needs_attention' });
-            expect((await getCourseOrderByCode(state.d1, p.code))?.status).toBe('paid');
+            // A SePay transfer that lost the race is a second payment on a paid order: no needs-attention alert, and the
+            // order says so. A Dodo payment is announced as a second capture under its own payment id.
+            const lostRace = winner === 'payment';
+            expect(flagged).toMatchObject({ outcome: lostRace && provider === 'sepay' ? 'already_paid' : 'needs_attention' });
+            expect(shouldNotifyOrder(flagged.outcome)).toBe(!(lostRace && provider === 'sepay'));
+            const after = await getCourseOrderByCode(state.d1, p.code);
+            expect(after?.status).toBe('paid');
+            if (lostRace) {
+              // The second payment's money is never added to the paid order.
+              expect(after?.amount_paid).toBeNull();
+              expect(after?.attention_reason).toBe(provider === 'sepay' ? 'duplicate_payment' : null);
+            }
             // The record is written either way, so the redelivery changes nothing.
             expect(events(p.eventId)).toBe(1);
             expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });

@@ -30,6 +30,8 @@ export type CoursePaymentOutcome = 'duplicate_event' | 'unmatched' | 'paid' | 'a
 
 export type CoursePaymentEvent = {
   provider: 'sepay' | 'dodo'; eventId: string; orderId: string | null; amount: number | null; currency: string | null; rawType: string;
+  /** The provider's dispute id of a dispute event; null for every other event and when the payload carries none. */
+  disputeId?: string | null;
 };
 
 /**
@@ -37,9 +39,9 @@ export type CoursePaymentEvent = {
  * unique violation when the event was already recorded.
  */
 export function coursePaymentEventStatement(d1: D1DatabaseLike, e: CoursePaymentEvent, onlyIf?: SqlCondition): D1PreparedStatementLike {
-  const source = onlyIf ? `SELECT ?, ?, NULL, ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, NULL, ?, ?, ?, ?, ?)';
-  return d1.prepare(`INSERT INTO payment_events (provider, event_id, booking_id, course_order_id, amount, currency, raw_type, received_at) ${source}`)
-    .bind(e.provider, e.eventId, e.orderId, e.amount, e.currency, e.rawType, iso(membersRuntime.now()), ...(onlyIf?.params ?? []));
+  const source = onlyIf ? `SELECT ?, ?, NULL, ?, ?, ?, ?, ?, ? WHERE ${onlyIf.sql}` : 'VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)';
+  return d1.prepare(`INSERT INTO payment_events (provider, event_id, booking_id, course_order_id, amount, currency, raw_type, received_at, dispute_id) ${source}`)
+    .bind(e.provider, e.eventId, e.orderId, e.amount, e.currency, e.rawType, iso(membersRuntime.now()), e.disputeId ?? null, ...(onlyIf?.params ?? []));
 }
 
 export { isPaymentEventConflict };
@@ -47,9 +49,10 @@ export { isPaymentEventConflict };
 /** Inserts the idempotency record; false when this provider event was already processed. */
 export async function recordCoursePaymentEvent(
   d1: D1DatabaseLike, provider: 'sepay' | 'dodo', eventId: string, orderId: string | null, amount: number | null, currency: string | null, rawType: string,
+  disputeId: string | null = null,
 ): Promise<boolean> {
   try {
-    await coursePaymentEventStatement(d1, { provider, eventId, orderId, amount, currency, rawType }).run();
+    await coursePaymentEventStatement(d1, { provider, eventId, orderId, amount, currency, rawType, disputeId }).run();
     return true;
   } catch (err) {
     if (isPaymentEventConflict(err)) return false;
@@ -77,10 +80,12 @@ export type CourseEventGate = (onlyIf?: SqlCondition) => D1PreparedStatementLike
  * racing this one) stays paid, and no flag that never took effect is logged or counted. The record is still written,
  * so the redelivery is a duplicate; with `onlyIf` it is written only while that holds. The update runs last, so the
  * statements before it still see the order it read. A card payment's id (`paymentId`), with the event that flagged it,
- * is kept in the activity log, which marks that payment as counted on the order. Returns whether the order was flagged.
+ * is kept in the activity log, which marks that payment as counted on the order. A flag without a payment of its own
+ * (a restored dispute on a deleted course) names the event that triggered it (`triggerEventId`), so each flag of the
+ * same order and reason is announced, not only the first. Returns whether the order was flagged.
  */
 export async function markCourseOrderAttention(
-  d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string; paymentId?: string | null },
+  d1: D1DatabaseLike, order: CourseOrder, reason: string, extra: { amount?: number; currency?: string; ref?: string | null; eventId?: string; paymentId?: string | null; triggerEventId?: string },
   gate: CourseEventGate, also: D1PreparedStatementLike[] = [], onlyIf?: SqlCondition,
 ): Promise<boolean> {
   const unpaidSql = "EXISTS (SELECT 1 FROM course_orders o WHERE o.id = ? AND o.status <> 'paid')";
@@ -88,7 +93,7 @@ export async function markCourseOrderAttention(
     ? { sql: `${unpaidSql} AND ${onlyIf.sql}`, params: [order.id, ...onlyIf.params] }
     : { sql: unpaidSql, params: [order.id] };
   const attention = outboxInsertStatement(d1, needsAttentionEvent({
-    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: extra.eventId ?? `course_order:${order.id}:${reason}`,
+    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: extra.eventId ?? `course_order:${order.id}:${reason}${extra.triggerEventId ? `:${extra.triggerEventId}` : ''}`,
     reason, amountMinor: extra.amount, currency: extra.currency ?? (order.provider === 'sepay' ? 'VND' : null),
   }), undefined, unpaid);
   const results = await d1.batch([
@@ -367,22 +372,31 @@ export async function courseMoneyBackStatement(
 const DISPUTE_KEPT = [...DODO_DISPUTE_FUNDS_KEPT];
 
 /**
- * Every won or cancelled dispute outcome recorded for the order has its `dispute.opened` recorded too (a dispute opens
- * once and ends once). Dodo may deliver an outcome before the opened event it ends (that delivery retried later); while
- * an outcome waits for its opened event, the late `dispute.opened` must not take access away. Recording an opened
- * event only keeps this true, so it holds for every statement of the batch that records it.
+ * The `dispute.opened` being recorded may take access away: its dispute has not already ended. Dodo may deliver an
+ * outcome before the opened event it ends (that delivery retried later), and may re-send an outcome under a new event
+ * id; a late `dispute.opened` of a dispute already won or cancelled must not take access away, while the opened event of
+ * any other dispute of the order must. With a dispute id the outcome is matched by it, so a stray outcome of another
+ * dispute never hides this one. Without one (a payload with no dispute id) the order's won or cancelled rows that carry
+ * no dispute id are compared by count with its opened rows, as before the id was stored. Recording an opened event
+ * never changes the answer, so it holds for every statement of the batch that records it.
  */
-export function courseDisputesPaired(orderId: string): SqlCondition {
-  const count = (types: string) => `(SELECT COUNT(*) FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND raw_type IN (${types}))`;
+export function courseDisputesPaired(orderId: string, disputeId: string | null = null): SqlCondition {
+  if (disputeId) {
+    return {
+      sql: `NOT EXISTS (SELECT 1 FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND dispute_id = ? AND raw_type IN (${DISPUTE_KEPT.map(() => '?').join(', ')}))`,
+      params: [orderId, disputeId, ...DISPUTE_KEPT],
+    };
+  }
+  const count = (types: string) => `(SELECT COUNT(*) FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND dispute_id IS NULL AND raw_type IN (${types}))`;
   return {
     sql: `${count(DISPUTE_KEPT.map(() => '?').join(', '))} <= ${count('?')}`,
     params: [orderId, ...DISPUTE_KEPT, orderId, 'dispute.opened'],
   };
 }
 
-/** True when a won or cancelled outcome of the order's dispute arrived before its `dispute.opened`. */
-export async function courseDisputeResolvedEarly(d1: D1DatabaseLike, orderId: string): Promise<boolean> {
-  const paired = courseDisputesPaired(orderId);
+/** True when a won or cancelled outcome of the dispute arrived before its `dispute.opened` (or after it was already settled). */
+export async function courseDisputeResolvedEarly(d1: D1DatabaseLike, orderId: string, disputeId: string | null = null): Promise<boolean> {
+  const paired = courseDisputesPaired(orderId, disputeId);
   return (await d1.prepare(`SELECT 1 AS found WHERE NOT (${paired.sql})`).bind(...paired.params).first<Row>()) !== null;
 }
 
@@ -399,11 +413,11 @@ export async function courseDisputeResolvedEarly(d1: D1DatabaseLike, orderId: st
  * Returns the outcome, or null when the order was no longer charged back.
  */
 export async function restoreCourseOrder(
-  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string, gate: CourseEventGate,
+  d1: D1DatabaseLike, env: RuntimeEnv, order: CourseOrder, reason: string, gate: CourseEventGate, eventId?: string,
 ): Promise<'restored' | 'needs_attention' | null> {
   const disputed = orderIn(order.id, ['charged_back']);
   const course = await getCourseById(d1, order.course_id);
-  if (!course) return (await markCourseOrderAttention(d1, order, 'course_missing', {}, gate, [], disputed)) ? 'needs_attention' : null;
+  if (!course) return (await markCourseOrderAttention(d1, order, 'course_missing', { triggerEventId: eventId }, gate, [], disputed)) ? 'needs_attention' : null;
   const results = await d1.batch([
     gate(disputed),
     ...grantCourseStatements(d1, course, { userId: order.user_id, courseId: order.course_id, orderId: order.id, source: 'purchase' }, disputed),
