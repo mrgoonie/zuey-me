@@ -16,7 +16,7 @@ import { getCourseById } from './course-store';
 import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from './course-order-payments';
 import {
   chargeBackLostCourseOrder, courseDisputeResolvedEarly, courseDisputesPaired, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder,
-  isPartialCourseReversal, isPaymentEventConflict,
+  isPartialCourseReversal, isPaymentEventConflict, REFUND_BEFORE_PAYMENT_PREFIX,
   markCourseOrderAttention, recordCoursePaymentEvent, refundCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
 } from './course-order-payments';
 
@@ -165,7 +165,7 @@ async function orderByPaymentId(d1: D1DatabaseLike, paymentId: string): Promise<
 }
 
 /** The `payment_events` key that keeps a refund of a Dodo payment no course order held when the refund arrived. */
-const refundBeforePaymentKey = (paymentId: string) => `refund_before_payment:${paymentId}`;
+const refundBeforePaymentKey = (paymentId: string) => `${REFUND_BEFORE_PAYMENT_PREFIX}${paymentId}`;
 
 /** The Dodo payment was refunded before any course order held it. */
 const refundedBeforePayment = (paymentId: string): SqlCondition => ({

@@ -442,14 +442,28 @@ function refundedOrder(verb: 'granted' | 'dismissed'): AppError {
 /** Neither paid, charged back nor refunded: what an admin grant or dismiss may change. */
 const SETTLEABLE = "o.status NOT IN ('paid', 'charged_back', 'refunded')";
 
-/** The `attention_reason` of an order whose payment Dodo refunded before it reached us: its money is already back. */
-const REFUNDED_BEFORE_PAYMENT = 'refunded_before_payment';
+/** The `payment_events` key prefix that keeps a Dodo refund no course order held when the refund arrived. */
+export const REFUND_BEFORE_PAYMENT_PREFIX = 'refund_before_payment:';
 
-/** What an admin grant may pay: settleable and not flagged as refunded before payment (a dismiss of it stays allowed). */
-const GRANTABLE = `${SETTLEABLE} AND COALESCE(o.attention_reason, '') <> '${REFUNDED_BEFORE_PAYMENT}'`;
+/**
+ * What an admin grant may pay: settleable, and its payment was not refunded before it arrived. The refund record of the
+ * order's payment decides, not the `attention_reason` label: a dismiss overwrites the label, and a later flag may too.
+ * A dismiss of such an order stays allowed.
+ */
+const GRANTABLE = `${SETTLEABLE} AND NOT EXISTS (SELECT 1 FROM payment_events e WHERE e.provider = 'dodo' AND e.event_id = '${REFUND_BEFORE_PAYMENT_PREFIX}' || o.provider_payment_id)`;
 
-/** Refunded, or flagged as refunded before its payment arrived: money back, so a grant is refused. */
-const moneyReturned = (o: Pick<CourseOrder, 'status' | 'attention_reason'>) => o.status === 'refunded' || o.attention_reason === REFUNDED_BEFORE_PAYMENT;
+/** Whether Dodo refunded the order's payment before the payment reached us (the order itself never paid). */
+async function refundedBeforePaid(d1: D1DatabaseLike, order: CourseOrder): Promise<boolean> {
+  if (!order.provider_payment_id) return false;
+  const row = await d1.prepare("SELECT 1 AS found FROM payment_events WHERE provider = 'dodo' AND event_id = ?").bind(`${REFUND_BEFORE_PAYMENT_PREFIX}${order.provider_payment_id}`).first<{ found: number }>();
+  return row !== null;
+}
+
+/** Money went back to the buyer: refunded, or its payment was refunded before it arrived. A paid order is never this. */
+export async function courseMoneyReturned(d1: D1DatabaseLike, order: CourseOrder): Promise<boolean> {
+  if (order.status === 'paid') return false;
+  return order.status === 'refunded' || refundedBeforePaid(d1, order);
+}
 
 /**
  * Admin decisions: `grant` pays out a flagged order (e.g. underpaid by a rounding error),
@@ -463,8 +477,9 @@ const moneyReturned = (o: Pick<CourseOrder, 'status' | 'attention_reason'>) => o
  * `409 order_refunded` and changes nothing: its money went back, so it is never paid out again, and a dismiss cannot
  * turn it into a `cancelled` order a grant would pay. Both apply only while the order is not refunded either, so a
  * refund landing meanwhile is refused the same way.
- * A `grant` of an order flagged `refunded_before_payment` (Dodo refunded the payment before it arrived) answers the same
- * `409 order_refunded` and changes nothing, also when the flag lands meanwhile; a dismiss of it stays allowed.
+ * A `grant` of an order whose payment Dodo refunded before it arrived (flagged `refunded_before_payment`) answers the same
+ * `409 order_refunded` and changes nothing, also when the flag lands meanwhile, after a dismiss overwrote the flag and
+ * when another flag replaced it; a dismiss of it stays allowed.
  * A `grant` retried on an order an admin grant already paid, whose receipt is still missing (the follow-ups after the
  * payment batch failed), runs the idempotent follow-ups again; a grant of an order paid any other way, or whose
  * follow-ups completed, answers `409 already_paid`.
@@ -478,7 +493,7 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
   const current = async () => (await getCourseOrderByCode(d1, order.code)) ?? order;
   if (action === 'grant') {
     if (order.status === 'charged_back') throw disputedOrder('granted');
-    if (moneyReturned(order)) throw refundedOrder('granted');
+    if (await courseMoneyReturned(d1, order)) throw refundedOrder('granted');
     const done = order.status === 'paid'
       ? (order.attention_reason ?? '').startsWith(ADMIN_GRANT) && await resumeCourseOrderFollowUps(d1, env, order)
       : await fulfilCourseOrder(d1, env, { ...order, status: 'paid', paid_at: order.paid_at ?? now }, {
@@ -487,7 +502,7 @@ export async function resolveCourseOrder(d1: D1DatabaseLike, env: RuntimeEnv, co
     if (!done) {
       const found = await current();
       if (found.status === 'charged_back') throw disputedOrder('granted');
-      if (moneyReturned(found)) throw refundedOrder('granted');
+      if (await courseMoneyReturned(d1, found)) throw refundedOrder('granted');
       throw new AppError(409, 'already_paid', 'Order is already paid');
     }
   } else if (action === 'dismiss') {

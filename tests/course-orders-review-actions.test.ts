@@ -25,8 +25,9 @@ describe('admin course order actions', () => {
     expect(orderActions('refunded', false)).toEqual({});
   });
 
-  it('offers a dismiss but no grant of an order flagged refunded_before_payment', () => {
-    expect(Object.keys(orderActions('needs_attention', false, 'refunded_before_payment'))).toEqual(['dismiss', 'refund']);
-    expect(Object.keys(orderActions('needs_attention', false, 'underpaid'))).toEqual(['grant', 'dismiss', 'refund']);
+  it('offers no grant of an unpaid order whose payment was refunded before it arrived, dismissed or not', () => {
+    expect(Object.keys(orderActions('needs_attention', false, true))).toEqual(['dismiss', 'refund']);
+    expect(Object.keys(orderActions('cancelled', false, true))).toEqual([]);
+    expect(Object.keys(orderActions('needs_attention', false, false))).toEqual(['grant', 'dismiss', 'refund']);
   });
 });

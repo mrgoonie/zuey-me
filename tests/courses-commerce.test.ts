@@ -1204,6 +1204,33 @@ describe('Dodo course payments, refunds and disputes', () => {
         });
       }
 
+      for (const [surface, resolve] of Object.entries(surfaces)) {
+        it(`through ${surface} refuses a grant of a refunded-before-payment order after a dismiss overwrote its flag, changing nothing`, async () => {
+          const { code, userId, courseId } = await refundedBeforePaymentOrder();
+          expect(await resolve(state.d1, code, 'dismiss')).toEqual({ status: 200 });
+          const before = snapshot(code);
+          expect(before.order).toMatchObject({ status: 'cancelled', attention_reason: 'dismissed:admin note' });
+          expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
+          expect(snapshot(code)).toEqual(before);
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        });
+
+        it(`through ${surface} still refuses that grant when another flag replaced refunded_before_payment`, async () => {
+          const { code, userId, courseId } = await refundedBeforePaymentOrder();
+          await state.d1.prepare("UPDATE course_orders SET attention_reason = 'underpaid' WHERE code = ?").bind(code).run();
+          const before = snapshot(code);
+          expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
+          expect(snapshot(code)).toEqual(before);
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        });
+
+        it(`through ${surface} answers already_paid, not order_refunded, for a paid order that still carries the flag`, async () => {
+          const { code } = await refundedBeforePaymentOrder();
+          await state.d1.prepare("UPDATE course_orders SET status = 'paid', paid_at = ? WHERE code = ?").bind(new Date(state.now).toISOString(), code).run();
+          expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'already_paid' });
+        });
+      }
+
       it('refuses a grant of a pending order flagged refunded_before_payment meanwhile', async () => {
         const { course } = await publishedCourse();
         const lan = await member('lan@example.com');

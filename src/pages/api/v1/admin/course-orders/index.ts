@@ -5,13 +5,14 @@ import { getUserById } from '../../../../../lib/members/users';
 import { getCourseById } from '../../../../../lib/courses/course-store';
 import type { CourseOrderStatus } from '../../../../../lib/courses/course-orders';
 import { listCourseOrders, toCourseOrderView } from '../../../../../lib/courses/course-orders';
-import { courseDisputeLost } from '../../../../../lib/courses/course-order-payments';
+import { courseDisputeLost, courseMoneyReturned } from '../../../../../lib/courses/course-order-payments';
 
 const STATUSES: CourseOrderStatus[] = ['pending', 'paid', 'expired', 'needs_attention', 'refunded', 'charged_back', 'cancelled'];
 
 /**
  * Admin: course orders, newest first (`?status=needs_attention` for the review queue). `dispute_lost` marks a charged-back
- * order whose dispute was lost: it can no longer be granted, dismissed or refunded.
+ * order whose dispute was lost: it can no longer be granted, dismissed or refunded. `money_returned` marks an unpaid
+ * order whose money went back (refunded, or its payment refunded before it arrived): it can no longer be granted.
  */
 export const GET = memberRoute(async ({ request }, { d1, env, principal }) => {
   requireCan(principal, 'admin');
@@ -23,5 +24,6 @@ export const GET = memberRoute(async ({ request }, { d1, env, principal }) => {
     user_id: o.user_id,
     user_email: (await getUserById(d1, o.user_id))?.email ?? null,
     dispute_lost: o.status === 'charged_back' && await courseDisputeLost(d1, o.id),
+    money_returned: await courseMoneyReturned(d1, o),
   }))), 200, NO_STORE);
 });
