@@ -27,6 +27,11 @@ export const DEFAULT_MEMBER_SCOPES: UserKeyScope[] = [...USER_KEY_SCOPES];
  */
 export const ACCESS_TOKEN_TTL_MS = 30 * DAY_MS;
 export const REFRESH_TOKEN_TTL_MS = 90 * DAY_MS;
+/**
+ * Absolute lifetime of a grant, counted from the original authorization. Refresh rotation never extends a
+ * grant past it; after it the client must send the member back through consent.
+ */
+export const GRANT_MAX_LIFETIME_MS = 90 * DAY_MS;
 export const CODE_TTL_MS = 2 * 60 * 1000;
 export const REQUEST_TTL_MS = 10 * 60 * 1000;
 /** Cached Client ID Metadata Documents are refetched after this long. */

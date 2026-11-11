@@ -6,7 +6,7 @@ import type { OAuthClient } from './clients';
 import { redirectDisplayHost } from './clients';
 import type { OAuthScope } from './config';
 import {
-  ACCESS_TOKEN_PREFIX, ACCESS_TOKEN_TTL_MS, CODE_PREFIX, CODE_TTL_MS, REFRESH_TOKEN_PREFIX, REFRESH_TOKEN_TTL_MS,
+  ACCESS_TOKEN_PREFIX, ACCESS_TOKEN_TTL_MS, CODE_PREFIX, CODE_TTL_MS, GRANT_MAX_LIFETIME_MS, REFRESH_TOKEN_PREFIX, REFRESH_TOKEN_TTL_MS,
   canonicalResource, parseScopeParam, parseStoredScopes, sortScopes,
 } from './config';
 import { OAuthError } from './errors';
@@ -95,6 +95,10 @@ async function prepareTokens(
     guard?: { id: string; where: string; binds: unknown[] };
     /** Refresh expiry to keep instead of a fresh REFRESH_TOKEN_TTL_MS (ISO). */
     refreshExpiresAt?: string;
+    /** Absolute end of the grant (ISO); no token outlives it. null: uncapped (column missing or unset). */
+    grantExpiresAt: string | null;
+    /** Whether the `grant_expires_at` column exists (migration 0036). */
+    withGrantColumn: boolean;
   },
 ): Promise<{ insert: D1PreparedStatementLike; response: TokenResponse }> {
   const now = membersRuntime.now();
@@ -102,33 +106,48 @@ async function prepareTokens(
   const withRefresh = input.client.grant_types.includes('refresh_token');
   const refresh = withRefresh ? REFRESH_TOKEN_PREFIX + randomSecret(32) : null;
   const scopes = sortScopes(input.scopes);
-  const values = [
+  const cap = input.grantExpiresAt === null ? Infinity : Date.parse(input.grantExpiresAt);
+  const accessExpiresAt = Math.min(now + ACCESS_TOKEN_TTL_MS, cap);
+  const refreshExpiresAt = input.refreshExpiresAt ?? iso(Math.min(now + REFRESH_TOKEN_TTL_MS, cap));
+  const values: unknown[] = [
     randomId('ot'), input.familyId, input.client.client_id, input.userId, await sha256Hex(access), refresh ? await sha256Hex(refresh) : null,
-    JSON.stringify(scopes), input.audience, iso(now), iso(now + ACCESS_TOKEN_TTL_MS), refresh ? input.refreshExpiresAt ?? iso(now + REFRESH_TOKEN_TTL_MS) : null,
+    JSON.stringify(scopes), input.audience, iso(now), iso(accessExpiresAt), refresh ? refreshExpiresAt : null,
   ];
-  const columns = 'INSERT INTO oauth_tokens (id, family_id, client_id, user_id, access_hash, refresh_hash, scopes, audience, created_at, access_expires_at, refresh_expires_at)';
+  const columnList = 'id, family_id, client_id, user_id, access_hash, refresh_hash, scopes, audience, created_at, access_expires_at, refresh_expires_at';
+  if (input.withGrantColumn) values.push(input.grantExpiresAt);
+  const columns = `INSERT INTO oauth_tokens (${columnList}${input.withGrantColumn ? ', grant_expires_at' : ''})`;
+  const marks = values.map(() => '?').join(', ');
   const guard = input.guard;
   const insert = guard === undefined
-    ? d1.prepare(`${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values)
-    : d1.prepare(`${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM oauth_tokens WHERE id = ? AND ${guard.where})`)
+    ? d1.prepare(`${columns} VALUES (${marks})`).bind(...values)
+    : d1.prepare(`${columns} SELECT ${marks} WHERE EXISTS (SELECT 1 FROM oauth_tokens WHERE id = ? AND ${guard.where})`)
       .bind(...values, guard.id, ...guard.binds);
   return {
     insert,
     response: {
       access_token: access,
       token_type: 'Bearer',
-      expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
+      expires_in: Math.max(0, Math.floor((accessExpiresAt - now) / 1000)),
       ...(refresh ? { refresh_token: refresh } : {}),
       scope: scopes.join(' '),
     },
   };
 }
 
+/** First token pair of a grant: stamps the absolute grant lifetime. Before migration 0036 it inserts without it. */
 async function issueTokens(
   d1: D1DatabaseLike,
   input: { familyId: string; client: OAuthClient; userId: string; scopes: OAuthScope[]; audience: string },
 ): Promise<TokenResponse> {
-  const { insert, response } = await prepareTokens(d1, input);
+  const grantExpiresAt = iso(membersRuntime.now() + GRANT_MAX_LIFETIME_MS);
+  const withColumn = await prepareTokens(d1, { ...input, grantExpiresAt, withGrantColumn: true });
+  try {
+    await withColumn.insert.run();
+    return withColumn.response;
+  } catch (err) {
+    if (!(err instanceof Error) || !/grant_expires_at/.test(err.message)) throw err;
+  }
+  const { insert, response } = await prepareTokens(d1, { ...input, grantExpiresAt: null, withGrantColumn: false });
   await insert.run();
   return response;
 }
@@ -211,6 +230,14 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
     throw reusedGrant();
   }
   if (expired) throw invalidGrant('Refresh token expired');
+  // Absolute grant lifetime: rotation never extends past it. Without migration 0036 the row has no
+  // `grant_expires_at` (undefined), and a NULL means the grant is uncapped.
+  const withGrantColumn = 'grant_expires_at' in row;
+  const grantExpiresAt = strOrNull(row, 'grant_expires_at');
+  if (grantExpiresAt !== null && Date.parse(grantExpiresAt) <= now) {
+    await revokeFamily(d1, familyId);
+    throw invalidGrant('Grant lifetime exceeded; the client must request authorization again');
+  }
 
   // Validate everything before rotating, so a rejected request leaves the token usable for a corrected retry.
   // RFC 6749 §6: a refresh may narrow but never widen; a scope outside the grant is rejected, not intersected.
@@ -232,7 +259,7 @@ export async function refreshTokens(d1: D1DatabaseLike, client: OAuthClient, for
   }
 
   const tokenId = str(row, 'id');
-  const tokens = { familyId, client, userId, scopes, audience };
+  const tokens = { familyId, client, userId, scopes, audience, grantExpiresAt, withGrantColumn };
 
   // Rotate and issue in one batch (one transaction on D1): the new pair is inserted only while the old token
   // is unrotated, and the old token is marked rotated in the same step, so of two concurrent refreshes exactly
