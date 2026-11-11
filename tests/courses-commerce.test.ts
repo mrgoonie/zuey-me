@@ -386,28 +386,46 @@ describe('Dodo course payments, refunds and disputes', () => {
     ]);
   });
 
-  it('counts a chargeback after a partial refund of a course order, and no partial refund after a chargeback', async () => {
+  it('keeps access and the paid order on a partial refund, counts it once, and still counts a later chargeback', async () => {
     const { course } = await publishedCourse();
     const lan = await member('lan@example.com');
     const partlyRefunded = await paidByCard(lan);
     const partlyOrder = await getCourseOrderByCode(state.d1, partlyRefunded);
-    expect(await dodo('evt_pr_a', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
-    // Any refund still revokes access.
-    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
-    expect((await getCourseOrderByCode(state.d1, partlyRefunded))?.attention_reason).toBe('dodo_partial_refund');
-    expect(await dodo('evt_pl_a', 'dispute.lost', { payment_id: `pay_${partlyRefunded}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(await dodo('evt_pr_a', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(await dodo('evt_pr_a', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+    expect((await getCourseOrderByCode(state.d1, partlyRefunded))?.status).toBe('paid');
+    const logged = state.d1.raw.query("SELECT COUNT(*) AS n FROM user_activity WHERE action = 'courses.order_partial_refund'").get();
+    expect(logged).toEqual({ n: 1 });
+    expect(refundKeys()).toEqual([`refund:dodo:course_order:${partlyOrder?.id}:partial:evt_pr_a`]);
+    // The same refund id re-sent under a new webhook id is the same refund: counted once, access kept.
+    expect(await dodo('evt_pr_a_resend', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, refund_id: 'rfd_a', amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(await dodo('evt_pr_a_resend2', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, refund_id: 'rfd_a', amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await dodo('evt_pr_a_resend3', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, refund_id: 'rfd_a', amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
     expect(refundKeys()).toEqual([
-      `refund:dodo:course_order:${partlyOrder?.id}:refunded`, `refund:dodo:course_order:${partlyOrder?.id}:charged_back`,
+      `refund:dodo:course_order:${partlyOrder?.id}:partial:evt_pr_a`, `refund:dodo:course_order:${partlyOrder?.id}:partial:rfd_a`,
     ]);
+    // Refunds that add up to the price revoke access like a full refund.
+    expect(await dodo('evt_pr_a2', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, amount: 3900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);
+    expect((await getCourseOrderByCode(state.d1, partlyRefunded))).toMatchObject({ status: 'refunded', attention_reason: 'dodo_refund' });
+
+    // A chargeback after a partial refund reverses the still paid order and is counted.
+    const mai = await member('mai@example.com');
+    const charged = await paidByCard(mai);
+    const chargedOrder = await getCourseOrderByCode(state.d1, charged);
+    await dodo('evt_pr_c', 'refund.succeeded', { payment_id: `pay_${charged}`, amount: 1000, currency: 'USD' });
+    expect(await dodo('evt_pl_c', 'dispute.lost', { payment_id: `pay_${charged}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
+    expect(await ownsCourse(state.d1, mai.userId, course.id)).toBe(false);
+    expect(refundKeys()).toContain(`refund:dodo:course_order:${chargedOrder?.id}:charged_back`);
 
     const lostFirst = await paidByCard(await member('mai@example.com'));
     const lostOrder = await getCourseOrderByCode(state.d1, lostFirst);
     expect(await dodo('evt_pl_b', 'dispute.lost', { payment_id: `pay_${lostFirst}`, amount: 4900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
     expect(await dodo('evt_pr_b', 'refund.succeeded', { payment_id: `pay_${lostFirst}`, amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
-    expect(refundKeys()).toEqual([
-      `refund:dodo:course_order:${partlyOrder?.id}:refunded`, `refund:dodo:course_order:${partlyOrder?.id}:charged_back`,
-      `refund:dodo:course_order:${lostOrder?.id}:charged_back`,
-    ]);
+    expect(refundKeys()).not.toContain(`refund:dodo:course_order:${lostOrder?.id}:refunded`);
+    expect(refundKeys()).toContain(`refund:dodo:course_order:${lostOrder?.id}:charged_back`);
   });
 
   describe('a late payment of a refunded or disputed order', () => {

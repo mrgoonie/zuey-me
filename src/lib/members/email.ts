@@ -4,7 +4,7 @@ import { sendEmail } from '../integrations/resend';
 import type { Row } from './runtime';
 import { escapeHtml, isUniqueViolation, membersRuntime, nowIso, str } from './runtime';
 
-export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'referral_payout' | 'course_receipt' | 'invoice_request';
+export type EmailKind = 'magic_link' | 'email_change_verify' | 'email_change_notice' | 'payment_receipt' | 'renewal_reminder' | 'article_notification' | 'referral_payout' | 'course_receipt' | 'invoice_request' | 'card_access_revoked';
 export type LoggedEmailStatus = 'sent' | 'skipped' | 'failed' | 'duplicate';
 
 export interface LoggedEmail {
@@ -147,6 +147,19 @@ export function renewalReminderEmail(input: { planName: string; periodEnd: strin
     p(`English: your ${input.planName} plan ends on ${input.periodEnd.slice(0, 10)}. Prepaid plans do not renew automatically.`),
   ].join(''));
   const text = `Gói ${input.planName} của bạn có hiệu lực đến ${viDate(input.periodEnd)}.\nGia hạn: ${input.pricingUrl}`;
+  return { subject, html, text };
+}
+
+export function cardAccessRevokedEmail(input: { planName: string; chargeback: boolean; pricingUrl: string }): EmailContent {
+  const subject = `Gói ${input.planName} đã bị thu hồi quyền truy cập`;
+  const cause = input.chargeback ? 'khoản thanh toán bị chủ thẻ khiếu nại và ngân hàng đã hoàn tiền cho họ' : 'khoản thanh toán đã được hoàn tiền';
+  const html = layout(subject, [
+    p(`Quyền truy cập gói ${input.planName} đã bị thu hồi vì ${cause}. Gói thẻ cũng đã được dừng, sẽ không tự gia hạn.`),
+    p('Nếu đây là nhầm lẫn hoặc bạn muốn tiếp tục dùng, hãy đăng ký lại hoặc trả lời email này để được hỗ trợ.'),
+    button(input.pricingUrl, 'Xem các gói'),
+    p(`English: your ${input.planName} access was revoked because the payment was ${input.chargeback ? 'charged back by the cardholder' : 'refunded'}. The card subscription was stopped and will not renew. Reply to this email if this is a mistake.`),
+  ].join(''));
+  const text = `Quyền truy cập gói ${input.planName} đã bị thu hồi vì ${cause}. Gói thẻ đã được dừng và không tự gia hạn.\nXem các gói: ${input.pricingUrl}`;
   return { subject, html, text };
 }
 

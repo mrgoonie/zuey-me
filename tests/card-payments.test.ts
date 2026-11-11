@@ -493,6 +493,168 @@ describe('Dodo card subscription lifecycle', () => {
   });
 });
 
+describe('membership access after money goes back to the cardholder', () => {
+  function paymentBody(paymentId: string, metadata: Record<string, unknown>): string {
+    return JSON.stringify({
+      business_id: 'bus_test', type: 'payment.succeeded', timestamp: new Date(now).toISOString(),
+      data: {
+        payload_type: 'Payment', payment_id: paymentId, subscription_id: 'sub_1', total_amount: 1900, tax: 0, currency: 'USD', status: 'succeeded',
+        customer: { customer_id: 'cus_1', email: 'lan@example.com' }, metadata,
+      },
+    });
+  }
+
+  function reversalBody(type: string, data: Record<string, unknown>): string {
+    return JSON.stringify({ business_id: 'bus_test', type, timestamp: new Date(now).toISOString(), data });
+  }
+
+  const refund = (extra: Record<string, unknown> = {}) => reversalBody('refund.succeeded', { payload_type: 'Refund', refund_id: 'rfd_1', payment_id: 'pay_1', amount: 1900, currency: 'USD', is_partial: false, ...extra });
+  const dispute = (type: string, extra: Record<string, unknown> = {}) => reversalBody(type, { payload_type: 'Dispute', dispute_id: 'dsp_1', payment_id: 'pay_1', amount: '1900', currency: 'USD', ...extra });
+  const mailEnv = () => env({ RESEND_API_KEY: 're_test' });
+  const sent = () => calls.filter(c => c.url === 'https://api.resend.com/emails');
+  const cancelCalls = () => calls.filter(c => c.method === 'PATCH');
+
+  async function activeCard(email = 'lan@example.com'): Promise<{ m: Member; id: string }> {
+    const m = await member(email);
+    const { id, metadata } = await startCard(m, 'combo');
+    expect((await sendDodo(subscriptionPayload('subscription.active', { metadata }))).outcome).toBe('activated');
+    expect((await sendDodo(paymentBody('pay_1', metadata))).outcome).toBe('updated');
+    expect((await entitlements(m)).sort()).toEqual(['agent_chat', 'ai_chat', 'read_full']);
+    calls = [];
+    return { m, id };
+  }
+
+  it('revokes access, stops renewal, notifies the member once and keeps a stale active event from reviving it on a full refund', async () => {
+    const { m, id } = await activeCard();
+    const staleActive = subscriptionPayload('subscription.active', { metadata: {} });
+    now += 1000;
+    expect((await sendDodo(refund(), {}, mailEnv())).status).toBe(200);
+    expect(await entitlements(m)).toEqual([]);
+    const row = await cardRow(id);
+    expect(row.status).toBe('cancelled');
+    expect(row.attention_reason).toBe('refunded');
+    expect(cancelCalls().map(c => c.url)).toEqual([`${DODO_BASE}/subscriptions/sub_1`]);
+    expect(sent()).toHaveLength(1);
+    const logged = d1.raw.query('SELECT kind, status FROM email_log').all();
+    expect(logged).toEqual([{ kind: 'card_access_revoked', status: 'sent' }]);
+    expect(d1.raw.query("SELECT COUNT(*) AS n FROM user_activity WHERE action = 'billing.card_reversal' AND detail LIKE '%\"access_revoked\":true%'").get()).toEqual({ n: 1 });
+
+    // A redelivery of the same refund re-runs the idempotent steps: no second email, and the stop-renewal call is repeated once.
+    await sendDodo(refund(), { id: 'msg_redeliver' }, mailEnv());
+    expect(sent()).toHaveLength(1);
+    expect(cancelCalls()).toHaveLength(2);
+    expect(await entitlements(m)).toEqual([]);
+
+    // Dodo reports the cancel we asked for as an active, cancelling subscription: access stays revoked.
+    now += 1000;
+    expect((await sendDodo(subscriptionPayload('subscription.updated', { metadata: {}, cancel: true }))).outcome).toBe('ignored');
+    expect(await entitlements(m)).toEqual([]);
+    // An older delayed active event is stale.
+    expect((await sendDodo(staleActive)).outcome).toBe('stale_event');
+    expect(await entitlements(m)).toEqual([]);
+    // The admin re-activates the subscription in Dodo (a newer, non-cancelling active event): access returns.
+    now += 1000;
+    expect((await sendDodo(subscriptionPayload('subscription.active', { metadata: {} }))).outcome).toBe('activated');
+    expect((await entitlements(m)).sort()).toEqual(['agent_chat', 'ai_chat', 'read_full']);
+  });
+
+  it('keeps access on a partial refund and on dispute.opened', async () => {
+    const { m, id } = await activeCard();
+    now += 1000;
+    expect((await sendDodo(refund({ amount: 500, is_partial: true }), {}, mailEnv())).status).toBe(200);
+    expect((await sendDodo(dispute('dispute.opened'), {}, mailEnv())).status).toBe(200);
+    expect((await entitlements(m)).sort()).toEqual(['agent_chat', 'ai_chat', 'read_full']);
+    expect((await cardRow(id)).status).toBe('active');
+    expect(cancelCalls()).toHaveLength(0);
+    expect(sent()).toHaveLength(0);
+  });
+
+  for (const type of ['dispute.lost', 'dispute.accepted', 'dispute.expired']) {
+    it(`revokes access like a refund when the dispute ends in ${type}`, async () => {
+      const { m, id } = await activeCard();
+      await sendDodo(dispute('dispute.opened'), {}, mailEnv());
+      expect((await entitlements(m)).length).toBe(3);
+      now += 1000;
+      await sendDodo(dispute(type), {}, mailEnv());
+      expect(await entitlements(m)).toEqual([]);
+      const row = await cardRow(id);
+      expect([row.status, row.attention_reason]).toEqual(['cancelled', 'charged_back']);
+      expect(sent()).toHaveLength(1);
+      expect(cancelCalls()).toHaveLength(1);
+    });
+  }
+
+  it('a won dispute after dispute.opened changes nothing', async () => {
+    const { m } = await activeCard();
+    await sendDodo(dispute('dispute.opened'), {}, mailEnv());
+    await sendDodo(dispute('dispute.won'), {}, mailEnv());
+    expect((await entitlements(m)).length).toBe(3);
+  });
+
+  it('does not mail or call Dodo again when a refund is redelivered after an admin restored the subscription', async () => {
+    const { m } = await activeCard();
+    now += 1000;
+    expect((await sendDodo(refund(), { id: 'msg_first' }, mailEnv())).status).toBe(200);
+    expect(sent()).toHaveLength(1);
+    expect(cancelCalls()).toHaveLength(1);
+    now += 1000;
+    expect((await sendDodo(subscriptionPayload('subscription.active', { metadata: {} }))).outcome).toBe('activated');
+    expect((await entitlements(m)).length).toBe(3);
+    expect((await sendDodo(refund(), { id: 'msg_again' }, mailEnv())).status).toBe(200);
+    expect(sent()).toHaveLength(1);
+    expect(cancelCalls()).toHaveLength(1);
+    expect((await entitlements(m)).length).toBe(3);
+  });
+
+  it('sends no email and no Dodo call for a full refund on a card that was already cancelled', async () => {
+    const { m, id } = await activeCard();
+    now += 1000;
+    expect((await sendDodo(subscriptionPayload('subscription.cancelled', { metadata: {}, status: 'cancelled' }))).outcome).toBe('deactivated');
+    expect(await entitlements(m)).toEqual([]);
+    now += 1000;
+    expect((await sendDodo(refund(), {}, mailEnv())).status).toBe(200);
+    expect(sent()).toHaveLength(0);
+    expect(cancelCalls()).toHaveLength(0);
+    expect((await cardRow(id)).attention_reason).not.toBe('refunded');
+  });
+
+  it('revokes access on a full refund of a renewal charge', async () => {
+    const { m, id } = await activeCard();
+    now += 1000;
+    expect((await sendDodo(paymentBody('pay_2', {}))).outcome).toBe('updated');
+    now += 1000;
+    expect((await sendDodo(refund({ refund_id: 'rfd_2', payment_id: 'pay_2' }), {}, mailEnv())).status).toBe(200);
+    expect(await entitlements(m)).toEqual([]);
+    expect((await cardRow(id)).status).toBe('cancelled');
+    expect(sent()).toHaveLength(1);
+    expect(cancelCalls()).toHaveLength(1);
+  });
+
+  it('skips the Dodo call, without failing the webhook, when DODO_API_KEY is missing', async () => {
+    const { m } = await activeCard();
+    now += 1000;
+    expect((await sendDodo(refund(), {}, env({ RESEND_API_KEY: 're_test', DODO_API_KEY: undefined }))).status).toBe(200);
+    expect(await entitlements(m)).toEqual([]);
+    expect(cancelCalls()).toHaveLength(0);
+    expect(sent()).toHaveLength(1);
+  });
+
+  it('answers 502 so Dodo redelivers when stopping the subscription fails, and finishes on the redelivery', async () => {
+    const { m } = await activeCard();
+    const real = membersRuntime.fetch;
+    let fail = true;
+    membersRuntime.fetch = async (input, init) => (fail && init?.method === 'PATCH' ? json({ error: 'down' }, 503) : real(input, init));
+    now += 1000;
+    expect((await sendDodo(refund(), { id: 'msg_flaky' }, mailEnv())).status).toBe(502);
+    // Access is already revoked, whatever Dodo does next.
+    expect(await entitlements(m)).toEqual([]);
+    fail = false;
+    expect((await sendDodo(refund(), { id: 'msg_flaky_2' }, mailEnv())).status).toBe(200);
+    expect(cancelCalls()).toHaveLength(1);
+    expect(d1.raw.query('SELECT COUNT(*) AS n FROM email_log').get()).toEqual({ n: 1 });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // PayPal (consultation booking)
 // ---------------------------------------------------------------------------
