@@ -77,15 +77,61 @@ interface ParsedHead {
   htmlLang: string | null;
   canonical: string | null;
   hreflang: string[];
+  /** Where the `Link` header and the HTML `<link>` tags both declare a relation but disagree. */
+  linkConflicts: string[];
   ogImage: string | null;
   twitterImage: string | null;
   jsonLdImage: string | null;
 }
 
-/** Reads the SEO-relevant head of an article page; tolerant of attribute order, never executes anything. */
-export function parseArticleHead(html: string): ParsedHead {
+/** One link-value: `<uri>` then `; name=value` parameters, values bare or quoted (quoted-pair escapes allowed). */
+const LINK_VALUE = /<([^>]*)>((?:\s*;\s*[\w*-]+\s*(?:=\s*(?:"(?:[^"\\]|\\.)*"|[^;,\s"]*))?)*)/g;
+const LINK_PARAM = /;\s*([\w*-]+)\s*(?:=\s*(?:"((?:[^"\\]|\\.)*)"|([^;,\s"]*)))?/g;
+
+/**
+ * Reads an RFC 8288 `Link` response header into the same shape as parsed `<link>` attributes
+ * (href plus lower-cased parameter names). Article pages send canonical and hreflang alternates here.
+ * Relative targets resolve against `base`; a link with an `anchor` describes another resource and is skipped.
+ */
+export function parseLinkHeader(value: string | null, base?: string): Attrs[] {
+  if (!value) return [];
+  const links: Attrs[] = [];
+  for (const m of value.matchAll(LINK_VALUE)) {
+    const attrs: Attrs = {};
+    for (const p of m[2].matchAll(LINK_PARAM)) {
+      const name = p[1].toLowerCase();
+      // The first occurrence of a parameter wins (RFC 8288 §3).
+      if (!(name in attrs)) attrs[name] = p[2] !== undefined ? p[2].replace(/\\(.)/g, '$1') : p[3] ?? '';
+    }
+    if ('anchor' in attrs) continue;
+    let href = m[1].trim();
+    if (base) { try { href = new URL(href, base).toString(); } catch { /* kept as written; reported as a mismatch */ } }
+    links.push({ ...attrs, href });
+  }
+  return links;
+}
+
+/** rel holds a space-separated token list, so `rel="alternate canonical"` counts for both. */
+const hasRel = (a: Attrs, rel: string) => (a.rel ?? '').toLowerCase().split(/\s+/).includes(rel);
+const canonicalOf = (links: Attrs[]) => links.find(a => hasRel(a, 'canonical'))?.href ?? null;
+/** Every alternate as `hreflang=href`, duplicates kept so a repeated hreflang never matches the expected set. */
+const alternatesOf = (links: Attrs[]) => links.filter(a => hasRel(a, 'alternate') && a.hreflang).map(a => `${a.hreflang}=${a.href ?? ''}`).sort();
+
+/**
+ * Reads the SEO-relevant head of an article page; tolerant of attribute order, never executes anything.
+ * Canonical and hreflang come from the `Link` response header when it declares them and from the HTML
+ * `<link>` tags otherwise. When both declare one and disagree, the header value is reported and the
+ * disagreement lands in `linkConflicts`, since crawlers see both.
+ */
+export function parseArticleHead(html: string, linkHeader: string | null = null, pageUrl?: string): ParsedHead {
   const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map(m => attributes(m[0]));
-  const links = [...html.matchAll(/<link\b[^>]*>/gi)].map(m => attributes(m[0]));
+  const headerLinks = parseLinkHeader(linkHeader, pageUrl);
+  const htmlLinks = [...html.matchAll(/<link\b[^>]*>/gi)].map(m => attributes(m[0]));
+  const canonical = { header: canonicalOf(headerLinks), html: canonicalOf(htmlLinks) };
+  const hreflang = { header: alternatesOf(headerLinks), html: alternatesOf(htmlLinks) };
+  const linkConflicts: string[] = [];
+  if (canonical.header && canonical.html && canonical.header !== canonical.html) linkConflicts.push(`Link header canonical ${canonical.header} differs from the HTML canonical ${canonical.html}`);
+  if (hreflang.header.length && hreflang.html.length && hreflang.header.join('|') !== hreflang.html.join('|')) linkConflicts.push('Link header hreflang alternates differ from the HTML alternate tags');
   const meta = (key: 'property' | 'name', value: string) => metas.find(a => a[key] === value)?.content ?? null;
   const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
   let jsonLdImage: string | null = null;
@@ -102,8 +148,9 @@ export function parseArticleHead(html: string): ParsedHead {
   return {
     title: title === undefined ? null : decodeEntities(title.trim()),
     htmlLang: attributes(/<html\b[^>]*>/i.exec(html)?.[0] ?? '').lang ?? null,
-    canonical: links.find(a => a.rel === 'canonical')?.href ?? null,
-    hreflang: links.filter(a => a.rel === 'alternate' && a.hreflang).map(a => `${a.hreflang}=${a.href}`).sort(),
+    canonical: canonical.header ?? canonical.html,
+    hreflang: hreflang.header.length ? hreflang.header : hreflang.html,
+    linkConflicts,
     ogImage: meta('property', 'og:image'),
     twitterImage: meta('name', 'twitter:image'),
     jsonLdImage,
@@ -187,7 +234,7 @@ export async function verifyPublicArticle(d1: D1DatabaseLike | undefined, slug: 
         problems.push(`page answered HTTP ${res.status}`);
       } else {
         const html = await readHtml(res);
-        const head = parseArticleHead(html);
+        const head = parseArticleHead(html, res.headers.get('link'), url);
         out.paywall.present = PAYWALL_CLASS.test(html);
         out.title.actual = head.title;
         out.html_lang.actual = head.htmlLang;
@@ -200,6 +247,7 @@ export async function verifyPublicArticle(d1: D1DatabaseLike | undefined, slug: 
         if (head.htmlLang !== out.html_lang.expected) problems.push(`html lang is ${head.htmlLang ?? 'missing'}, expected ${out.html_lang.expected}`);
         if (head.canonical !== url) problems.push(`canonical is ${head.canonical ?? 'missing'}, expected ${url}`);
         if (head.hreflang.join('|') !== expectedAlternates.join('|')) problems.push('hreflang alternates differ from the published editions');
+        problems.push(...head.linkConflicts);
         if (!head.ogImage) problems.push('og:image is missing');
         if (!head.twitterImage) problems.push('twitter:image is missing');
         if (rec.cover_url && head.jsonLdImage !== rec.cover_url) problems.push('JSON-LD image is not the edition cover');
