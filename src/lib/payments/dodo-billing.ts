@@ -11,6 +11,7 @@ import { getPlan, isPlanId } from '../members/plans';
 import type { Row } from '../members/runtime';
 import { iso, isUniqueViolation, membersRuntime, numOrNull, randomId, siteUrl, str, strOrNull } from '../members/runtime';
 import { recomputeSubscription } from '../members/subscriptions';
+import { cardAccessRevokedEmail, sendLoggedEmail } from '../members/email';
 import { activityStatement, getUserById, logActivity } from '../members/users';
 import { normalizeEmailForSelfCheck } from '../referrals/codes';
 import { captureReferralCommission } from '../referrals/commissions';
@@ -438,12 +439,23 @@ async function succeededCharges(d1: D1DatabaseLike, cardId: string): Promise<num
   return Number(charges?.n ?? 0) + Number(legacy?.n ?? 0);
 }
 
+/** `attention_reason` of a card whose access was revoked because its money went back to the cardholder. */
+export const MONEY_BACK_REVOKE_REASONS = { refund: 'refunded', chargeback: 'charged_back' } as const;
+
+function isMoneyBackRevoked(card: CardSubscription): boolean {
+  return card.status === 'cancelled' && (card.attention_reason === MONEY_BACK_REVOKE_REASONS.refund || card.attention_reason === MONEY_BACK_REVOKE_REASONS.chargeback);
+}
+
 async function applySubscriptionEvent(
   d1: D1DatabaseLike, env: RuntimeEnv, card: CardSubscription, event: DodoEvent & { kind: 'subscription' }, identityOk: boolean,
   waitUntil?: WaitUntil,
 ): Promise<CardOutcome> {
   if (card.last_event_at && event.occurredAt && event.occurredAt < card.last_event_at) return 'stale_event';
   const data = event.data;
+  // The Dodo subscription of a card whose payment was refunded or charged back is set to stop renewing, and Dodo may report
+  // that change as an active, cancelling subscription: it must not give the revoked access back. A later active event that
+  // is not cancelling (the admin re-activated it in Dodo, or the member paid again) restores it.
+  if (isMoneyBackRevoked(card) && nextStatus(event) === 'active' && data.cancelAtPeriodEnd) return 'ignored';
   const target = nextStatus(event) ?? card.status;
   let status: CardStatus = target;
   let reason: string | null = card.attention_reason;
@@ -606,13 +618,16 @@ export async function applyDodoEvent(
   }
 }
 
+/** Columns of the card a refund or dispute is matched to: what the reversal and the access revoke need. */
+const REVERSAL_CARD_COLUMNS = 'id, user_id, plan, first_payment_id, provider_subscription_id';
+
 /** The card a Dodo payment was charged to: the first payment, or any later charge recorded by `applyPaymentEvent`. */
 async function cardForPayment(d1: D1DatabaseLike, paymentId: string): Promise<Row | null> {
-  const first = await d1.prepare("SELECT id, user_id, plan, first_payment_id FROM card_subscriptions WHERE provider = 'dodo' AND first_payment_id = ?")
+  const first = await d1.prepare(`SELECT ${REVERSAL_CARD_COLUMNS} FROM card_subscriptions WHERE provider = 'dodo' AND first_payment_id = ?`)
     .bind(paymentId).first<Row>();
   if (first) return first;
   return d1.prepare(
-    `SELECT c.id, c.user_id, c.plan, c.first_payment_id FROM payment_events e JOIN card_subscriptions c ON c.id = e.card_subscription_id
+    `SELECT ${REVERSAL_CARD_COLUMNS.split(', ').map(c => `c.${c}`).join(', ')} FROM payment_events e JOIN card_subscriptions c ON c.id = e.card_subscription_id
      WHERE e.provider = 'dodo' AND e.event_id = ? AND c.provider = 'dodo'`
   ).bind(chargeKey(paymentId)).first<Row>();
 }
@@ -641,7 +656,7 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
     return null;
   }
   const { subscriptionId, metadata } = payment;
-  const columns = 'SELECT id, user_id, plan, first_payment_id FROM card_subscriptions';
+  const columns = `SELECT ${REVERSAL_CARD_COLUMNS} FROM card_subscriptions`;
   let row = subscriptionId
     ? await d1.prepare(`${columns} WHERE provider = 'dodo' AND provider_subscription_id = ?`).bind(subscriptionId).first<Row>()
     : null;
@@ -660,13 +675,13 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
 /**
  * Refund or chargeback on a Dodo payment of a card subscription, first charge or renewal. Only the first
  * payment carries a referral commission, so only its reversal reverses the commission (idempotently); a
- * renewal reports `renewal`. Access is not changed for either: the admin reviews the logged reversal.
+ * renewal reports `renewal`. A full refund or a funds-lost dispute (either payment) revokes access and stops the subscription renewing (`finishMoneyBackRevoke`); a partial refund and an opened dispute leave access alone.
  * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
  * `payment_events` row keyed by the refund or dispute id gates them across webhook retries, written in the same
  * D1 batch as both, so a crash never leaves the gate without them.
  * An opened dispute logs and reverses the commission but queues no `refund` (it may still be won); the funds-lost
  * outcomes (`dispute.accepted`, `dispute.lost`, `dispute.expired`) share one gate and one analytics key per dispute,
- * so it is reported once whichever arrives. `dispute.won` / `dispute.cancelled` are not parsed: nothing is restored,
+ * so it is reported once whichever arrives. `dispute.won` / `dispute.cancelled` are not parsed: an opened dispute never took access away, so nothing is restored,
  * and a commission reversed on `dispute.opened` stays reversed for the admin to review.
  *
  * A payment with no recorded charge (a reversal that beats its `payment.succeeded`, or a renewal charged before
@@ -707,14 +722,65 @@ export async function applyDodoReversal(
     }), { provider: 'dodo', eventId: moneyBackKey(event.paymentId, chargeback ? 'full_refund' : 'chargeback') });
     if (refund) statements.push(refund);
   }
+  // A full refund or a lost dispute takes the membership access away at once; a partial refund and an opened dispute do not.
+  const revoke = (event.kind === 'refund' && !event.isPartial) || event.kind === 'dispute_lost';
+  const revokeReason = event.kind === 'dispute_lost' ? MONEY_BACK_REVOKE_REASONS.chargeback : MONEY_BACK_REVOKE_REASONS.refund;
   statements.push(activityStatement(d1, userId, 'billing.card_reversal', {
     card_subscription_id: cardId, kind: event.kind, event: event.type, payment_id: event.paymentId, amount: event.amount, currency: event.currency, partial: event.isPartial, renewal,
+    access_revoked: revoke,
   }));
+  if (revoke) {
+    // The card stops counting as access: the recompute below ends the plan unless another source still grants it. The
+    // activity timestamp keeps a delayed older subscription event from reviving it.
+    statements.push(d1.prepare(
+      `UPDATE card_subscriptions SET status = 'cancelled', attention_reason = ?, last_event_at = ?, updated_at = ?
+       WHERE id = ? AND status NOT IN ('cancelled', 'expired', 'failed')`
+    ).bind(revokeReason, iso(membersRuntime.now()), iso(membersRuntime.now()), cardId));
+  }
   try {
     await d1.batch(statements);
   } catch (err) {
     // Only the gate can be a duplicate: this refund or dispute outcome is already logged and reported.
     if (!isUniqueViolation(err)) throw err;
   }
+  // Also run for a redelivery: the first delivery may have crashed after its batch committed, and every step is idempotent.
+  if (revoke) await finishMoneyBackRevoke(d1, env, row, userId, revokeReason);
   return { outcome, card_subscription_id: cardId };
+}
+
+/**
+ * After a card's access was revoked for a refund or a lost dispute: recompute the plan (access ends now), report the
+ * subscription as cancelled, tell the member once, and stop the Dodo subscription renewing. The Dodo call is the last
+ * step: a failure answers the webhook with an error so Dodo redelivers it and every step runs again. A Dodo 4xx (the
+ * subscription is already ended or unknown) is not retried.
+ */
+async function finishMoneyBackRevoke(d1: D1DatabaseLike, env: RuntimeEnv | undefined, row: Row, userId: string, reason: string): Promise<void> {
+  const cardId = str(row, 'id');
+  const plan = strOrNull(row, 'plan');
+  if (!isPlanId(plan)) return;
+  await recomputeSubscription(d1, userId, plan, { provider: 'dodo', env });
+  await queueCardSubscriptionEnd(d1, 'subscription_cancelled', { id: cardId, user_id: userId, plan });
+  if (env) {
+    try {
+      const user = await getUserById(d1, userId);
+      if (user) {
+        const mail = await sendLoggedEmail(d1, env, {
+          key: `card_access_revoked:${cardId}`, kind: 'card_access_revoked', to: user.email, userId,
+          ...cardAccessRevokedEmail({ planName: getPlan(plan).name, chargeback: reason === MONEY_BACK_REVOKE_REASONS.chargeback, pricingUrl: `${siteUrl(env)}/pricing` }),
+        });
+        if (mail.status !== 'sent' && mail.status !== 'duplicate') console.warn(`card access revoked notice for ${cardId} ${mail.status}`);
+      }
+    } catch (err) {
+      console.warn(`card access revoked notice for ${cardId} failed:`, err instanceof Error ? err.message : 'unknown');
+    }
+  }
+  const subscriptionId = strOrNull(row, 'provider_subscription_id');
+  if (!env || !subscriptionId) return;
+  try {
+    await cancelDodoSubscription(env, subscriptionId, membersRuntime.fetch);
+  } catch (err) {
+    const status = err instanceof DodoApiError ? err.upstreamStatus : null;
+    if (!(err instanceof DodoApiError) || status === null || status < 400 || status >= 500 || status === 408 || status === 429) throw err;
+    console.warn(`dodo subscription cancel after money back skipped (${err.message})`);
+  }
 }

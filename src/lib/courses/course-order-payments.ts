@@ -292,6 +292,47 @@ export async function reverseCourseOrder(
 }
 
 /**
+ * Whether a Dodo refund of a course order leaves the buyer's access intact: the order is paid and the refunds of its
+ * payment, this one included, still add up to less than what it paid. Refunds already recorded count by their amount,
+ * so a refund in several parts that reaches the full price revokes access like a full refund. Without a comparable
+ * amount (or in another currency) it is not partial.
+ */
+export async function isAccessKeepingCourseRefund(d1: D1DatabaseLike, order: CourseOrder, amountMinor: number | null, currency: string | null, eventId: string): Promise<boolean> {
+  const paid = paidAmount(order);
+  if (order.status !== 'paid' || amountMinor === null || paid.amountMinor === null || (currency !== null && currency !== paid.currency)) return false;
+  const earlier = await d1.prepare(
+    "SELECT COALESCE(SUM(amount), 0) AS total FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND raw_type = 'refund.succeeded' AND event_id <> ?"
+  ).bind(order.id, eventId).first<Row>();
+  return amountMinor + Number(earlier?.total ?? 0) < paid.amountMinor;
+}
+
+/**
+ * A partial Dodo refund of a paid course order: the buyer keeps access and the order stays `paid`. The webhook's record
+ * (`gate`), the activity log and the `refund` event (`partial: true`, one per refund event) are one D1 batch that applies
+ * only while the order is still paid, so a failure leaves none of them and a refund or dispute that closed the order
+ * meanwhile makes it a no-op (returns false and the caller applies the refund to the current order). A later chargeback
+ * is still counted, and a refund that completes the price revokes access (`isAccessKeepingCourseRefund`).
+ */
+export async function recordPartialCourseRefund(
+  d1: D1DatabaseLike, order: CourseOrder, reversed: MoneyBack, eventId: string, gate: CourseEventGate,
+): Promise<boolean> {
+  const paidOnly = orderIn(order.id, ['paid']);
+  const paid = paidAmount(order);
+  const money = order.paid_at === null ? null : outboxInsertStatement(d1, await refundEvent(d1, {
+    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:partial:${eventId}`,
+    reason: 'refund', amountMinor: reversed.amountMinor, currency: reversed.currency ?? paid.currency, partial: true,
+    purchaseTransactionId: `course_order:${order.id}`,
+  }), undefined, paidOnly);
+  const results = await d1.batch([
+    gate(paidOnly),
+    activityStatement(d1, order.user_id, 'courses.order_partial_refund', { code: order.code, amount: reversed.amountMinor, currency: reversed.currency, access: 'kept' }, undefined, paidOnly),
+    ...(money ? [money] : []),
+    d1.prepare('UPDATE course_orders SET updated_at = ? WHERE id = ? AND status = ?').bind(iso(membersRuntime.now()), order.id, 'paid'),
+  ]);
+  return Boolean(results.at(-1)?.meta?.changes);
+}
+
+/**
  * A refund (Dodo's, or a manual one an admin records) of an order that an opened dispute already charged back. Access
  * is already revoked and the referral commission reversed, so the order only becomes `refunded` and its money back is
  * counted; a later won or cancelled dispute then finds no `charged_back` order to restore. The refund is dropped once a
