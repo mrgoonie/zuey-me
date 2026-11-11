@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { ownsCourse } from '../src/lib/courses/course-access';
 import { getCourseOrderByCode } from '../src/lib/courses/course-orders';
 import { resolveCourseOrder } from '../src/lib/courses/course-order-payments';
-import { shouldNotifyOrder } from '../src/lib/notifications/order-notify';
+import { formatOrderNotice, shouldNotifyOrder } from '../src/lib/notifications/order-notify';
 import { applyCourseSepayPayment, applyDodoCourseWebhook } from '../src/lib/courses/course-payment-webhooks';
 import { DEFAULT_PLAN_DISCOUNTS, quoteCoursePrice } from '../src/lib/courses/course-pricing';
 import type { CourseRecord } from '../src/lib/courses/course-types';
@@ -113,6 +113,30 @@ describe('course checkout and SePay', () => {
     const resolve = (m: Member, body: unknown) => resolveApi(ctx({ method: 'POST', body, headers: m.browser, params: { code } }));
     expect((await read(await resolve(lan, { action: 'grant' }))).status).toBe(403);
     expect((await read(await resolve(boss, { action: 'grant', reason: 'thiếu 1.000đ' }))).status).toBe(200);
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+  });
+
+  it('announces a second SePay transfer on a paid order once, naming its amount, and stays silent on its redelivery', async () => {
+    const { course } = await publishedCourse();
+    const lan = await member('lan@example.com');
+    const { code, amount } = await sepayOrder(lan);
+    expect(await payTransfer(code, amount, 1)).toMatchObject({ outcome: 'paid' });
+    const second = await payTransfer(code, amount + 5000, 2);
+    expect(second).toMatchObject({ outcome: 'already_paid' });
+    const notice = { kind: 'course', source: 'sepay', code, amount: amount + 5000, currency: 'VND', outcome: 'already_paid', paymentRef: 'FT2' } as const;
+    expect(shouldNotifyOrder('already_paid', notice)).toBe(true);
+    expect(formatOrderNotice(notice)).toContain('Thanh toán cần kiểm tra');
+    expect(formatOrderNotice(notice)).toContain(`Mã đơn: ${code}`);
+    expect(formatOrderNotice(notice)).toContain('lần hai');
+    // Redelivered under the same transaction id: a duplicate, never announced.
+    const again = await payTransfer(code, amount + 5000, 2);
+    expect(again).toMatchObject({ outcome: 'duplicate_event' });
+    expect(shouldNotifyOrder('duplicate_event', notice)).toBe(false);
+    // Only a SePay transfer on a course order is announced as a second payment.
+    expect(shouldNotifyOrder('already_paid', { ...notice, kind: 'membership' })).toBe(false);
+    expect(shouldNotifyOrder('already_paid', { ...notice, source: 'dodo' })).toBe(false);
+    expect(shouldNotifyOrder('already_paid')).toBe(false);
+    expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'paid', amount_paid: amount, attention_reason: 'duplicate_payment' });
     expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
   });
 
@@ -2156,7 +2180,7 @@ describe('Dodo course payments, refunds and disputes', () => {
             // order says so. A Dodo payment is announced as a second capture under its own payment id.
             const lostRace = winner === 'payment';
             expect(flagged).toMatchObject({ outcome: lostRace && provider === 'sepay' ? 'already_paid' : 'needs_attention' });
-            expect(shouldNotifyOrder(flagged?.outcome ?? '')).toBe(!(lostRace && provider === 'sepay'));
+            expect(shouldNotifyOrder(flagged?.outcome ?? '', { kind: 'course', source: provider })).toBe(true);
             const after = await getCourseOrderByCode(state.d1, p.code);
             expect(after?.status).toBe('paid');
             if (lostRace) {

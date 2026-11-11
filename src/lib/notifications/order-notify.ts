@@ -39,8 +39,18 @@ const SOURCE_LABELS: Record<OrderSource, string> = {
 const PAID_OUTCOMES = new Set(['paid', 'confirmed', 'activated']);
 const ATTENTION_OUTCOMES = new Set(['needs_attention']);
 
-export function shouldNotifyOrder(outcome: string): boolean {
-  return PAID_OUTCOMES.has(outcome) || ATTENTION_OUTCOMES.has(outcome);
+/**
+ * A SePay transfer on a course order that is already paid is money that arrived twice: the admin refunds it or decides
+ * otherwise. Only the notice's own transfer reaches here (a redelivered transfer is a `duplicate_event`, which never
+ * notifies), so the transfer's event id is the dedupe. Other kinds and Dodo's `already_paid` (the order's own payment
+ * delivered again) stay silent.
+ */
+function isSecondCoursePayment(outcome: string, n?: Pick<OrderNotice, 'kind' | 'source'>): boolean {
+  return outcome === 'already_paid' && n?.kind === 'course' && (n.source === 'sepay' || n.source === 'sepay_reconcile');
+}
+
+export function shouldNotifyOrder(outcome: string, n?: Pick<OrderNotice, 'kind' | 'source'>): boolean {
+  return PAID_OUTCOMES.has(outcome) || ATTENTION_OUTCOMES.has(outcome) || isSecondCoursePayment(outcome, n);
 }
 
 function formatAmount(amount: number | null, currency: string): string {
@@ -49,6 +59,8 @@ function formatAmount(amount: number | null, currency: string): string {
   if (cur === 'VND') return `${new Intl.NumberFormat('vi-VN').format(amount)} ₫`;
   return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount / 100)} ${cur}`;
 }
+
+const SECOND_PAYMENT_NOTE = 'Đơn đã thanh toán trước đó; số tiền trên là khoản thanh toán lần hai, cần hoàn tiền hoặc xử lý';
 
 export function formatOrderNotice(n: OrderNotice): string {
   const head = PAID_OUTCOMES.has(n.outcome) ? '💰 Đơn hàng mới đã thanh toán' : '⚠️ Thanh toán cần kiểm tra';
@@ -59,7 +71,7 @@ export function formatOrderNotice(n: OrderNotice): string {
     `Số tiền: ${formatAmount(n.amount, n.currency)}`,
     `Kênh: ${SOURCE_LABELS[n.source]}`,
     `Mã giao dịch: ${n.paymentRef ?? 'không có'}`,
-    ...(n.note ? [`Ghi chú: ${n.note}`] : []),
+    ...(n.note ? [`Ghi chú: ${n.note}`] : isSecondCoursePayment(n.outcome, n) ? [SECOND_PAYMENT_NOTE] : []),
   ].join('\n');
 }
 
@@ -83,7 +95,7 @@ async function post(channel: string, url: string, body: unknown): Promise<void> 
  * (DISCORD_WEBHOOK_SEPAY_NOTI). Never throws; a channel without config is skipped.
  */
 export async function notifyOrder(env: RuntimeEnv, n: OrderNotice): Promise<void> {
-  if (!shouldNotifyOrder(n.outcome)) return;
+  if (!shouldNotifyOrder(n.outcome, n)) return;
   const text = formatOrderNotice(n);
   const sends: Promise<void>[] = [];
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
@@ -103,7 +115,7 @@ export async function notifyOrder(env: RuntimeEnv, n: OrderNotice): Promise<void
 export async function announceOrder(
   runtime: { ctx?: { waitUntil(promise: Promise<unknown>): void } } | undefined, env: RuntimeEnv, n: OrderNotice,
 ): Promise<void> {
-  if (!shouldNotifyOrder(n.outcome)) return;
+  if (!shouldNotifyOrder(n.outcome, n)) return;
   const sent = notifyOrder(env, n);
   const waitUntil = runtimeWaitUntil(runtime);
   if (waitUntil) waitUntil(sent);

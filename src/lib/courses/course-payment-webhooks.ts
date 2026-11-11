@@ -89,7 +89,7 @@ async function applyCoursePaymentEvent(
  * Flags a SePay order for the admin. When a payment paid the order between the read and this batch, the flag changes
  * nothing and the transfer is a second payment on a paid order, handled as the non-racing path does: the order stays
  * paid with `duplicate_payment` as its attention reason (an earlier reason is kept; the amount paid is untouched, the
- * transfer stays in `payment_events`), and the outcome is `already_paid` so no needs-attention alert is sent for it.
+ * transfer stays in `payment_events`), and the outcome is `already_paid`, which the SePay webhook announces to the admin as a second payment (not as a flagged order).
  * The reason is set in the flag's own batch, ahead of its update, so a crash leaves neither.
  */
 async function flagSepayOrder(
