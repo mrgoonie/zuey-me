@@ -64,6 +64,15 @@ const editionSummary = {
     updated_at: { type: 'string' }, has_unpublished_changes: { type: 'boolean' }, reading_minutes: { type: 'integer' },
   },
 };
+/** State of the new-article member email, shared by article views, publish responses and the notification action. */
+const emailNotificationObject = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled', 'failed'] },
+    send_after: { type: ['string', 'null'], format: 'date-time' }, sent_count: { type: 'integer' },
+    reason: { type: ['string', 'null'] }, updated_at: { type: 'string' },
+  },
+};
 const articleSummary = {
   type: 'object',
   properties: {
@@ -99,14 +108,10 @@ const articleSummary = {
     email_notification: {
       description: 'Admin draft views and publish responses only: the new-article email to members (null before the first publish). '
         + 'A publish response reports reason `notification_update_failed` when the email step failed after the publish committed; '
-        + 'the edition is published, and republishing with an explicit `notify` applies the email decision again. '
+        + 'the edition is published, and `POST /api/v1/articles/{slug}/notification` applies the email decision again without republishing. '
         + 'With that reason the returned status is what is stored (e.g. still `scheduled` after a failed `notify: false`), or `failed` (send_after null) when nothing could be read back, '
         + 'so check it before assuming no email will be sent.',
-      oneOf: [{ type: 'null' }, { type: 'object', properties: {
-        status: { type: 'string', enum: ['scheduled', 'sending', 'sent', 'skipped', 'cancelled', 'failed'] },
-        send_after: { type: ['string', 'null'], format: 'date-time' }, sent_count: { type: 'integer' },
-        reason: { type: ['string', 'null'] }, updated_at: { type: 'string' },
-      } }],
+      oneOf: [{ type: 'null' }, emailNotificationObject],
     },
   },
 };
@@ -353,6 +358,14 @@ export const articlesOpenApi: OpenApiFragment = {
           notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' },
         } }) },
         responses: { '200': ok('Published edition with its `receipt`', withReceipt(ref('Article'))), '404': notFound, '409': conflict, ...errorResponses },
+      },
+    },
+    '/api/v1/articles/{slug}/notification': {
+      post: {
+        tags, summary: 'Schedule, cancel or retry only the member email of the current published edition', security: adminSecurity, parameters: [slugParam],
+        description: 'Works on the single email row without republishing: no revision bump, reindex or share-image refresh. `notify: true` schedules the email 30 minutes out when it was skipped, cancelled or never recorded (use it after a publish reported `notification_update_failed`); `false` cancels a scheduled or in-progress send. Idempotent: an email already scheduled, sending or sent stays as is (`changed: false`), so it is never sent twice. 409 `not_published` when no edition is published.',
+        requestBody: { required: true, content: json({ type: 'object', required: ['notify'], properties: { notify: { type: 'boolean' } } }) },
+        responses: { '200': ok('Stored email state', { type: 'object', properties: { slug: { type: 'string' }, email_notification: emailNotificationObject, changed: { type: 'boolean', description: 'false when the stored state already matched or another process (the sender) got there first' } } }), '404': notFound, '409': { description: 'not_published', content: json(ref('Error')) }, ...errorResponses },
       },
     },
     '/api/v1/articles/{slug}/localization/prepare': {

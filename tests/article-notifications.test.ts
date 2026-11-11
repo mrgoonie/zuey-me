@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
+import { createApiKey } from '../src/db/store';
+import type { D1PreparedStatementLike } from '../src/db/store';
+import { POST as mcpApi } from '../src/pages/api/mcp';
 import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { createArticle, deleteArticle, getArticleView, publishArticle, updateArticle } from '../src/lib/blocks/articles';
@@ -17,6 +20,10 @@ import {
 import { ARTICLE_EMAIL_DELAY_MS, getArticleNotification } from '../src/lib/notifications/article-notification-schedule';
 import { signStandardWebhook } from '../src/lib/payments/standard-webhooks';
 import { POST as dispatchApi } from '../src/pages/api/v1/articles/notifications/dispatch';
+import { setArticleNotification } from '../src/lib/notifications/article-notification-action';
+import { articlesMcpModule } from '../src/lib/blocks/mcp';
+import { AppError } from '../src/lib/http';
+import { POST as notificationApi } from '../src/pages/api/v1/articles/[slug]/notification';
 import { POST as unsubscribeApi } from '../src/pages/api/email/unsubscribe';
 import { POST as resendWebhook } from '../src/pages/api/webhooks/resend';
 import { isForbiddenCrossSiteSubmission } from '../src/lib/csrf-origin-check';
@@ -165,6 +172,159 @@ describe('publish schedules the member email', () => {
       .split(';').find(stmt => stmt.includes('INSERT OR IGNORE INTO article_notifications'));
     await d1.prepare(sql ?? '').run();
     expect(await getArticleNotification(d1, rec.id)).toMatchObject({ status: 'skipped', reason: 'published_before_notifications' });
+  });
+});
+
+describe('notification action without republishing', () => {
+  const actor = { actor: 'tester' };
+
+  it('cancels, re-schedules and retries the email without touching the edition', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-flow');
+    const revisionOf = async () => (await d1.prepare('SELECT revision FROM articles WHERE id = ?').bind(rec.id).first<{ revision: number }>())?.revision;
+    const revisionBefore = await revisionOf();
+
+    const off = await setArticleNotification(d1, 'action-flow', false, actor);
+    expect(off).toMatchObject({ changed: true, email_notification: { status: 'skipped', reason: 'publisher_opted_out' } });
+    expect((await setArticleNotification(d1, 'action-flow', false, actor)).changed).toBe(false);
+
+    const on = await setArticleNotification(d1, 'action-flow', true, actor);
+    expect(on).toMatchObject({ changed: true, email_notification: { status: 'scheduled', reason: null } });
+    const again = await setArticleNotification(d1, 'action-flow', true, actor);
+    expect(again.changed).toBe(false);
+    expect(again.email_notification.send_after).toBe(on.email_notification.send_after);
+
+    await d1.prepare("UPDATE article_notifications SET status = 'sending' WHERE article_id = ?").bind(rec.id).run();
+    expect((await setArticleNotification(d1, 'action-flow', false, actor)).email_notification.status).toBe('cancelled');
+    expect((await setArticleNotification(d1, 'action-flow', true, actor)).email_notification.status).toBe('scheduled');
+    expect(await revisionOf()).toBe(revisionBefore);
+  });
+
+  it('records a missing row, e.g. after a failed publish email step', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-gap');
+    await d1.prepare('DELETE FROM article_notifications WHERE article_id = ?').bind(rec.id).run();
+    expect((await setArticleNotification(d1, 'action-gap', true, actor)).email_notification.status).toBe('scheduled');
+    await d1.prepare('DELETE FROM article_notifications WHERE article_id = ?').bind(rec.id).run();
+    expect((await setArticleNotification(d1, 'action-gap', false, actor)).email_notification.status).toBe('skipped');
+  });
+
+  it('never sends twice: a sent email stays sent and a retry does not email again', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    await member(d1, 'a@example.com');
+    const rec = await publishNew(d1, 'action-once');
+    afterDelay();
+    await dispatchArticleNotifications(d1, env);
+    expect(sent).toHaveLength(1);
+    const retry = await setArticleNotification(d1, 'action-once', true, actor);
+    expect(retry).toMatchObject({ changed: false, email_notification: { status: 'sent', sent_count: 1 } });
+    expect((await setArticleNotification(d1, 'action-once', false, actor)).email_notification.status).toBe('sent');
+    await dispatchArticleNotifications(d1, env);
+    expect(sent).toHaveLength(1);
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('sent');
+  });
+
+  it('a cancelled email is not dispatched and a retried one is', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    await member(d1, 'a@example.com');
+    await publishNew(d1, 'action-dispatch');
+    await setArticleNotification(d1, 'action-dispatch', false, actor);
+    afterDelay();
+    await dispatchArticleNotifications(d1, env);
+    expect(sent).toHaveLength(0);
+    await setArticleNotification(d1, 'action-dispatch', true, actor);
+    membersRuntime.now = () => Date.now() + ARTICLE_EMAIL_DELAY_MS + 120_000;
+    await dispatchArticleNotifications(d1, env);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('rejects unpublished, unknown and malformed requests', async () => {
+    const d1 = createTestD1();
+    await createArticle(d1, { slug: 'action-draft', title: 'T', locale: 'vi', document: paragraphs('x', 1) });
+    await expect(setArticleNotification(d1, 'action-draft', true, actor)).rejects.toMatchObject({ status: 409, code: 'not_published' });
+    await expect(setArticleNotification(d1, 'nope', true, actor)).rejects.toMatchObject({ status: 404 });
+    await publishNew(d1, 'action-bad');
+    await expect(setArticleNotification(d1, 'action-bad', 'yes', actor)).rejects.toMatchObject({ code: 'invalid_field' });
+    await expect(setArticleNotification(undefined, 'action-bad', true, actor)).rejects.toMatchObject({ status: 503 });
+  });
+
+  it('reports changed: false when the sender claims the row between the read and the cancel', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-race');
+    const racing: typeof d1 = {
+      ...d1,
+      prepare(sql: string): D1PreparedStatementLike {
+        const st = d1.prepare(sql);
+        if (!sql.includes('SET status = CASE')) return st;
+        // The dispatcher finishes (scheduled to sent) just before the cancel statement runs.
+        return { ...st, bind: (...values: unknown[]) => ({ ...st.bind(...values), run: async () => {
+          await d1.prepare("UPDATE article_notifications SET status = 'sent', sent_count = 3").run();
+          return st.bind(...values).run();
+        } }) };
+      },
+    };
+    const res = await setArticleNotification(racing, 'action-race', false, actor);
+    expect(res).toMatchObject({ changed: false, email_notification: { status: 'sent', sent_count: 3 } });
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('sent');
+  });
+
+  it('cancelling a partly sent email and retrying never emails a member twice', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    await member(d1, 'first@example.com');
+    const rec = await publishNew(d1, 'action-partial');
+    afterDelay();
+    await dispatchArticleNotifications(d1, env);
+    expect(sent.map(e => e.to[0])).toEqual(['first@example.com']);
+    // The run was interrupted after the first batch: the row is back in progress with one member emailed.
+    await d1.prepare("UPDATE article_notifications SET status = 'sending', locked_until = NULL WHERE article_id = ?").bind(rec.id).run();
+    expect((await setArticleNotification(d1, 'action-partial', false, actor)).email_notification.status).toBe('cancelled');
+    membersRuntime.now = () => Date.now();
+    await member(d1, 'second@example.com');
+    expect((await setArticleNotification(d1, 'action-partial', true, actor)).email_notification.status).toBe('scheduled');
+    membersRuntime.now = () => Date.now() + ARTICLE_EMAIL_DELAY_MS + 120_000;
+    await dispatchArticleNotifications(d1, env);
+    expect(sent.map(e => e.to[0]).sort()).toEqual(['first@example.com', 'second@example.com']);
+  });
+
+  it('refuses read-only API keys over REST and MCP', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-readonly');
+    const readKey = (await createApiKey('viewer', 'read', d1)).key;
+    const env = baseEnv(d1);
+    const rest = await notificationApi({
+      ...ctx(new Request('https://zuey.me/api/v1/articles/action-readonly/notification', {
+        method: 'POST', headers: { Authorization: `Bearer ${readKey}`, 'Content-Type': 'application/json' }, body: '{"notify":false}',
+      }), env),
+      params: { slug: 'action-readonly' },
+    } as unknown as APIContext);
+    expect(rest.status).toBe(403);
+    const mcpRequest = new Request('https://zuey.me/api/mcp', {
+      method: 'POST', headers: { Authorization: `Bearer ${readKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'article_notification_set', arguments: { slug: 'action-readonly', notify: false } } }),
+    });
+    expect((await mcpApi(ctx(mcpRequest, env))).status).toBe(403);
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('scheduled');
+  });
+
+  it('is admin only over REST and MCP', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-auth');
+    const res = await notificationApi({
+      ...ctx(new Request('https://zuey.me/api/v1/articles/action-auth/notification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"notify":false}' }), baseEnv(d1)),
+      params: { slug: 'action-auth' },
+    } as unknown as APIContext);
+    expect(res.status).toBe(401);
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('scheduled');
+    const err = await articlesMcpModule.call('article_notification_set', { slug: 'action-auth', notify: false }, {
+      request: new Request('https://zuey.me/api/mcp'), env: {}, d1,
+      async requireAdmin() { throw new AppError(401, 'unauthorized', 'Unauthorized'); },
+      async isAdmin() { return false; },
+    }).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ status: 401 });
+    expect(articlesMcpModule.tools.map(t => t.name)).toContain('article_notification_set');
   });
 });
 
