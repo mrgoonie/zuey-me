@@ -398,6 +398,14 @@ describe('Dodo course payments, refunds and disputes', () => {
     const logged = state.d1.raw.query("SELECT COUNT(*) AS n FROM user_activity WHERE action = 'courses.order_partial_refund'").get();
     expect(logged).toEqual({ n: 1 });
     expect(refundKeys()).toEqual([`refund:dodo:course_order:${partlyOrder?.id}:partial:evt_pr_a`]);
+    // The same refund id re-sent under a new webhook id is the same refund: counted once, access kept.
+    expect(await dodo('evt_pr_a_resend', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, refund_id: 'rfd_a', amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'ignored' });
+    expect(await dodo('evt_pr_a_resend2', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, refund_id: 'rfd_a', amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await dodo('evt_pr_a_resend3', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, refund_id: 'rfd_a', amount: 1000, currency: 'USD' })).toMatchObject({ outcome: 'duplicate_event' });
+    expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(true);
+    expect(refundKeys()).toEqual([
+      `refund:dodo:course_order:${partlyOrder?.id}:partial:evt_pr_a`, `refund:dodo:course_order:${partlyOrder?.id}:partial:rfd_a`,
+    ]);
     // Refunds that add up to the price revoke access like a full refund.
     expect(await dodo('evt_pr_a2', 'refund.succeeded', { payment_id: `pay_${partlyRefunded}`, amount: 3900, currency: 'USD' })).toMatchObject({ outcome: 'reversed' });
     expect(await ownsCourse(state.d1, lan.userId, course.id)).toBe(false);

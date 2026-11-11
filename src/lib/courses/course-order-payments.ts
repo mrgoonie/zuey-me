@@ -32,6 +32,8 @@ export type CoursePaymentEvent = {
   provider: 'sepay' | 'dodo'; eventId: string; orderId: string | null; amount: number | null; currency: string | null; rawType: string;
   /** The provider's dispute id of a dispute event; null for every other event and when the payload carries none. */
   disputeId?: string | null;
+  /** The provider's refund id of a refund event; null for every other event and when the payload carries none. */
+  refundId?: string | null;
 };
 
 /**
@@ -291,45 +293,74 @@ export async function reverseCourseOrder(
   return Boolean(results.at(-1)?.meta?.changes);
 }
 
-/**
- * Whether a Dodo refund of a course order leaves the buyer's access intact: the order is paid and the refunds of its
- * payment, this one included, still add up to less than what it paid. Refunds already recorded count by their amount,
- * so a refund in several parts that reaches the full price revokes access like a full refund. Without a comparable
- * amount (or in another currency) it is not partial.
- */
-export async function isAccessKeepingCourseRefund(d1: D1DatabaseLike, order: CourseOrder, amountMinor: number | null, currency: string | null, eventId: string): Promise<boolean> {
-  const paid = paidAmount(order);
-  if (order.status !== 'paid' || amountMinor === null || paid.amountMinor === null || (currency !== null && currency !== paid.currency)) return false;
-  const earlier = await d1.prepare(
-    "SELECT COALESCE(SUM(amount), 0) AS total FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND raw_type = 'refund.succeeded' AND event_id <> ?"
-  ).bind(order.id, eventId).first<Row>();
-  return amountMinor + Number(earlier?.total ?? 0) < paid.amountMinor;
+/** `raw_type` of the per-refund marker a kept-access partial refund writes; one row per Dodo refund id, whatever webhook delivered it. */
+const PARTIAL_REFUND_MARKER = 'course_refund';
+
+/** The marker's `event_id`: keyed by the refund id, so the same refund re-sent under a new webhook id is the same refund. */
+const partialRefundKey = (orderId: string, refundId: string | null, eventId: string) => `course_refund:${orderId}:${refundId ?? eventId}`;
+
+/** The partial refunds recorded for the order, other than this refund, plus `amountMinor` stay below what it paid. */
+function stillPartial(orderId: string, markerKey: string, amountMinor: number, paidMinor: number): SqlCondition {
+  return {
+    sql: `((SELECT COALESCE(SUM(amount), 0) FROM payment_events WHERE provider = 'dodo' AND course_order_id = ? AND raw_type = '${PARTIAL_REFUND_MARKER}' AND event_id <> ?) + ?) < ?`,
+    params: [orderId, markerKey, amountMinor, paidMinor],
+  };
 }
 
 /**
- * A partial Dodo refund of a paid course order: the buyer keeps access and the order stays `paid`. The webhook's record
- * (`gate`), the activity log and the `refund` event (`partial: true`, one per refund event) are one D1 batch that applies
- * only while the order is still paid, so a failure leaves none of them and a refund or dispute that closed the order
- * meanwhile makes it a no-op (returns false and the caller applies the refund to the current order). A later chargeback
- * is still counted, and a refund that completes the price revokes access (`isAccessKeepingCourseRefund`).
+ * Whether a Dodo refund of a course order leaves the buyer's access intact: the order is paid and the refunds of its
+ * payment, this one included, still add up to less than what it paid. Refunds already kept count once per refund id
+ * (a refund re-sent under a new webhook id is not added twice). Without a comparable amount (or in another currency)
+ * it is not partial.
+ */
+export async function isAccessKeepingCourseRefund(
+  d1: D1DatabaseLike, order: CourseOrder, amountMinor: number | null, currency: string | null, eventId: string, refundId: string | null = null,
+): Promise<boolean> {
+  const paid = paidAmount(order);
+  if (order.status !== 'paid' || amountMinor === null || paid.amountMinor === null || (currency !== null && currency !== paid.currency)) return false;
+  const cond = stillPartial(order.id, partialRefundKey(order.id, refundId, eventId), amountMinor, paid.amountMinor);
+  return (await d1.prepare(`SELECT 1 AS found WHERE ${cond.sql}`).bind(...cond.params).first<Row>()) !== null;
+}
+
+/**
+ * A partial Dodo refund of a paid course order: the buyer keeps access and the order stays `paid`. The refund's marker
+ * (keyed by its refund id), the webhook's record (`gate`), the activity log and the `refund` event (`partial: true`, keyed
+ * by the refund id) are one D1 batch that applies only while the order is still paid and the kept refunds, this one
+ * included, stay below the price; two refunds racing each other cannot both pass. Returns `applied`; `duplicate` when
+ * this refund id was already kept (the caller then records the webhook alone); `not_applicable` when the order changed
+ * meanwhile (the caller applies the refund to the current order).
  */
 export async function recordPartialCourseRefund(
-  d1: D1DatabaseLike, order: CourseOrder, reversed: MoneyBack, eventId: string, gate: CourseEventGate,
-): Promise<boolean> {
-  const paidOnly = orderIn(order.id, ['paid']);
+  d1: D1DatabaseLike, order: CourseOrder, reversed: MoneyBack, event: CoursePaymentEvent, gate: CourseEventGate,
+): Promise<'applied' | 'duplicate' | 'not_applicable'> {
   const paid = paidAmount(order);
+  if (reversed.amountMinor === null || paid.amountMinor === null) return 'not_applicable';
+  const markerKey = partialRefundKey(order.id, event.refundId ?? null, event.eventId);
+  if (await paymentEventRecorded(d1, 'dodo', markerKey)) return 'duplicate';
+  const guard = orderIn(order.id, ['paid']);
+  const still = stillPartial(order.id, markerKey, reversed.amountMinor, paid.amountMinor);
+  const cond: SqlCondition = { sql: `${guard.sql} AND ${still.sql}`, params: [...guard.params, ...still.params] };
   const money = order.paid_at === null ? null : outboxInsertStatement(d1, await refundEvent(d1, {
-    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:partial:${eventId}`,
+    distinctId: order.user_id, provider: order.provider, orderType: 'course', reference: `course_order:${order.id}:partial:${event.refundId ?? event.eventId}`,
     reason: 'refund', amountMinor: reversed.amountMinor, currency: reversed.currency ?? paid.currency, partial: true,
     purchaseTransactionId: `course_order:${order.id}`,
-  }), undefined, paidOnly);
-  const results = await d1.batch([
-    gate(paidOnly),
-    activityStatement(d1, order.user_id, 'courses.order_partial_refund', { code: order.code, amount: reversed.amountMinor, currency: reversed.currency, access: 'kept' }, undefined, paidOnly),
-    ...(money ? [money] : []),
-    d1.prepare('UPDATE course_orders SET updated_at = ? WHERE id = ? AND status = ?').bind(iso(membersRuntime.now()), order.id, 'paid'),
-  ]);
-  return Boolean(results.at(-1)?.meta?.changes);
+  }), undefined, cond);
+  try {
+    const results = await d1.batch([
+      coursePaymentEventStatement(d1, { provider: 'dodo', eventId: markerKey, orderId: order.id, amount: reversed.amountMinor, currency: reversed.currency, rawType: PARTIAL_REFUND_MARKER }, cond),
+      gate(cond),
+      activityStatement(d1, order.user_id, 'courses.order_partial_refund', { code: order.code, amount: reversed.amountMinor, currency: reversed.currency, access: 'kept' }, undefined, cond),
+      ...(money ? [money] : []),
+      d1.prepare(`UPDATE course_orders SET updated_at = ? WHERE id = ? AND status = 'paid' AND ${still.sql}`)
+        .bind(iso(membersRuntime.now()), order.id, ...still.params),
+    ]);
+    return results.at(-1)?.meta?.changes ? 'applied' : 'not_applicable';
+  } catch (err) {
+    if (!isPaymentEventConflict(err)) throw err;
+    // A racing delivery of the same refund id committed its marker first.
+    if (await paymentEventRecorded(d1, 'dodo', markerKey)) return 'duplicate';
+    throw err;
+  }
 }
 
 /**

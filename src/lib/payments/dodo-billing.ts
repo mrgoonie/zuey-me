@@ -675,7 +675,7 @@ async function cardFromDodoLookup(d1: D1DatabaseLike, env: RuntimeEnv, paymentId
 /**
  * Refund or chargeback on a Dodo payment of a card subscription, first charge or renewal. Only the first
  * payment carries a referral commission, so only its reversal reverses the commission (idempotently); a
- * renewal reports `renewal`. A full refund or a funds-lost dispute (either payment) revokes access and stops the subscription renewing (`finishMoneyBackRevoke`); a partial refund and an opened dispute leave access alone.
+ * renewal reports `renewal`. A full refund or a funds-lost dispute (either payment) revokes access and stops the subscription renewing (`finishMoneyBackRevoke`, only while the revoke stands); a partial refund and an opened dispute leave access alone.
  * The activity log entry and the `refund` analytics event are written once per refund/dispute: a
  * `payment_events` row keyed by the refund or dispute id gates them across webhook retries, written in the same
  * D1 batch as both, so a crash never leaves the gate without them.
@@ -758,6 +758,10 @@ async function finishMoneyBackRevoke(d1: D1DatabaseLike, env: RuntimeEnv | undef
   const cardId = str(row, 'id');
   const plan = strOrNull(row, 'plan');
   if (!isPlanId(plan)) return;
+  // Only the delivery whose revoke stands finishes it (the first one, or its redelivery after a crash): a card that was
+  // already cancelled before this event, or that an admin has since restored, gets no email and no Dodo call.
+  const current = await d1.prepare('SELECT status, attention_reason FROM card_subscriptions WHERE id = ?').bind(cardId).first<Row>();
+  if (!current || strOrNull(current, 'status') !== 'cancelled' || strOrNull(current, 'attention_reason') !== reason) return;
   await recomputeSubscription(d1, userId, plan, { provider: 'dodo', env });
   await queueCardSubscriptionEnd(d1, 'subscription_cancelled', { id: cardId, user_id: userId, plan });
   if (env) {
@@ -776,6 +780,10 @@ async function finishMoneyBackRevoke(d1: D1DatabaseLike, env: RuntimeEnv | undef
   }
   const subscriptionId = strOrNull(row, 'provider_subscription_id');
   if (!env || !subscriptionId) return;
+  if (!env.DODO_API_KEY) {
+    console.warn('dodo subscription cancel after money back skipped (missing DODO_API_KEY)');
+    return;
+  }
   try {
     await cancelDodoSubscription(env, subscriptionId, membersRuntime.fetch);
   } catch (err) {
