@@ -1168,6 +1168,58 @@ describe('Dodo course payments, refunds and disputes', () => {
         }
       }
 
+      /** A card order whose Dodo refund arrived before its payment: flagged `refunded_before_payment`, referral attached. */
+      async function refundedBeforePaymentOrder(): Promise<{ code: string; userId: string; courseId: string }> {
+        const { course } = await publishedCourse({ github_repos: ['zuey/course-repo'] });
+        const { user: ref } = await findOrCreateVerifiedUser(state.d1, { email: 'ref@example.com' });
+        const { code: referralCode } = await ensureReferralProfile(state.d1, ref.id);
+        await state.d1.prepare('UPDATE referral_profiles SET discount_percent = 10, admin_enabled = 1 WHERE user_id = ?').bind(ref.id).run();
+        const lan = await member('lan@example.com');
+        const res = await read(await checkout(lan, { provider: 'dodo', accept_terms: true, referral_code: referralCode }));
+        const code = String(field(res.data, 'code'));
+        const order = await getCourseOrderByCode(state.d1, code);
+        const amount = order?.amount_usd_cents ?? 0;
+        expect(await dodo('evt_refund_first', 'refund.succeeded', { payment_id: `pay_${code}`, amount, currency: 'USD' })).toBeNull();
+        expect(await dodo('evt_pay_late', 'payment.succeeded', {
+          payment_id: `pay_${code}`, total_amount: amount, currency: 'USD', metadata: { course_order: code, user_id: lan.userId },
+        })).toMatchObject({ outcome: 'needs_attention' });
+        return { code, userId: lan.userId, courseId: course.id };
+      }
+
+      for (const [surface, resolve] of Object.entries(surfaces)) {
+        it(`through ${surface} refuses a grant of an order flagged refunded_before_payment with 409 and changes nothing`, async () => {
+          const { code, userId, courseId } = await refundedBeforePaymentOrder();
+          const before = snapshot(code);
+          expect(before.order).toMatchObject({ status: 'needs_attention', attention_reason: 'refunded_before_payment' });
+          expect(await resolve(state.d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded', message: expect.stringMatching(/cannot be granted/) });
+          expect(snapshot(code)).toEqual(before);
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        });
+
+        it(`through ${surface} still dismisses an order flagged refunded_before_payment`, async () => {
+          const { code, userId, courseId } = await refundedBeforePaymentOrder();
+          expect(await resolve(state.d1, code, 'dismiss')).toEqual({ status: 200 });
+          expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'cancelled', attention_reason: 'dismissed:admin note' });
+          expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+        });
+      }
+
+      it('refuses a grant of a pending order flagged refunded_before_payment meanwhile', async () => {
+        const { course } = await publishedCourse();
+        const lan = await member('lan@example.com');
+        const code = String(field((await read(await checkout(lan, { provider: 'dodo', accept_terms: true }))).data, 'code'));
+        const { userId } = lan;
+        const courseId = course.id;
+        const amount = (await getCourseOrderByCode(state.d1, code))?.amount_usd_cents ?? 0;
+        const d1 = landingBefore(/^UPDATE course_orders SET status = 'paid'/, async () => {
+          expect(await dodo('evt_refund_first', 'refund.succeeded', { payment_id: `pay_${code}`, amount, currency: 'USD' })).toBeNull();
+          expect(await dodo('evt_pay_late', 'payment.succeeded', { payment_id: `pay_${code}`, total_amount: amount, currency: 'USD', metadata: { course_order: code, user_id: userId } })).toMatchObject({ outcome: 'needs_attention' });
+        });
+        expect(await surfaces.REST(d1, code, 'grant')).toMatchObject({ status: 409, code: 'order_refunded' });
+        expect(await getCourseOrderByCode(state.d1, code)).toMatchObject({ status: 'needs_attention', attention_reason: 'refunded_before_payment' });
+        expect(await ownsCourse(state.d1, userId, courseId)).toBe(false);
+      });
+
       it('refuses a grant of a flagged order that an admin refund refunded meanwhile', async () => {
         const { code, userId, courseId } = await flaggedCardOrder();
         const d1 = landingBefore(/^UPDATE course_orders SET status = 'paid'/, () => resolveCourseOrder(state.d1, env(), code, 'refund', 'underpaid'));

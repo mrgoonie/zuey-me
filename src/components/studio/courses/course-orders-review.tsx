@@ -21,11 +21,12 @@ const CONFIRM_DISPUTED_REFUND = 'Record a manual refund of this disputed order? 
  * open; after a lost dispute the chargeback already returned the money, so nothing is offered. A refunded order is
  * final: its money went back, so it is neither granted nor dismissed.
  */
-export function orderActions(status: string, disputeLost: boolean): Partial<Record<Action, string>> {
+export function orderActions(status: string, disputeLost: boolean, attentionReason: string | null = null): Partial<Record<Action, string>> {
   if (status === 'charged_back') return disputeLost ? {} : { refund: CONFIRM_DISPUTED_REFUND };
   if (status === 'refunded') return {};
   const actions: Partial<Record<Action, string>> = {};
-  if (status !== 'paid') actions.grant = CONFIRM.grant;
+  // Flagged as refunded before its payment arrived: the money is already back, so no grant (a dismiss closes it).
+  if (status !== 'paid' && attentionReason !== 'refunded_before_payment') actions.grant = CONFIRM.grant;
   if (status !== 'paid' && status !== 'cancelled') actions.dismiss = CONFIRM.dismiss;
   if (status === 'paid' || status === 'needs_attention') actions.refund = CONFIRM.refund;
   return actions;
@@ -48,7 +49,7 @@ function toRow(o: Obj): OrderRow {
 
 function OrderCard({ order, busy, onResolve }: { order: OrderRow; busy: boolean; onResolve: (action: Action, reason: string) => void }) {
   const [reason, setReason] = useState('');
-  const actions = orderActions(order.status, order.dispute_lost);
+  const actions = orderActions(order.status, order.dispute_lost, order.attention_reason);
   const canGrant = actions.grant !== undefined;
   const canDismiss = actions.dismiss !== undefined;
   const canRefund = actions.refund !== undefined;
