@@ -145,7 +145,12 @@ export async function applyCourseSepayPayment(d1: D1DatabaseLike, env: RuntimeEn
     // The order changed since it was read; the payment batch wrote nothing, its record included.
     const current = await getCourseOrderByCode(d1, order.code);
     if (current?.status === 'paid') {
-      await gate().run();
+      // A second payment on a paid order, as on the other paid branches: the order says so, an earlier reason stays.
+      await d1.batch([
+        gate(),
+        d1.prepare("UPDATE course_orders SET attention_reason = COALESCE(attention_reason, 'duplicate_payment'), updated_at = ? WHERE id = ? AND status = 'paid'")
+          .bind(iso(membersRuntime.now()), current.id),
+      ]);
       return 'already_paid';
     }
     if (!current) {

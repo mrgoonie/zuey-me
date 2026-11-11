@@ -60,7 +60,10 @@ function formatAmount(amount: number | null, currency: string): string {
   return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount / 100)} ${cur}`;
 }
 
-const SECOND_PAYMENT_NOTE = 'Đơn đã thanh toán trước đó; số tiền trên là khoản thanh toán lần hai, cần hoàn tiền hoặc xử lý';
+/** Neutral on purpose: an admin may have settled the order by hand before this real transfer arrived. */
+function secondPaymentNote(n: OrderNotice): string {
+  return `Cần đối soát: đơn đã được ghi nhận thanh toán, có thêm một giao dịch SePay ${formatAmount(n.amount, n.currency)} (mã giao dịch ${n.paymentRef ?? 'không có'}, mã đơn ${n.code}); kiểm tra xem đây là thanh toán trùng hay đơn đã được xử lý thủ công trước khi hoàn tiền`;
+}
 
 export function formatOrderNotice(n: OrderNotice): string {
   const head = PAID_OUTCOMES.has(n.outcome) ? '💰 Đơn hàng mới đã thanh toán' : '⚠️ Thanh toán cần kiểm tra';
@@ -71,7 +74,7 @@ export function formatOrderNotice(n: OrderNotice): string {
     `Số tiền: ${formatAmount(n.amount, n.currency)}`,
     `Kênh: ${SOURCE_LABELS[n.source]}`,
     `Mã giao dịch: ${n.paymentRef ?? 'không có'}`,
-    ...(n.note ? [`Ghi chú: ${n.note}`] : isSecondCoursePayment(n.outcome, n) ? [SECOND_PAYMENT_NOTE] : []),
+    ...(n.note ? [`Ghi chú: ${n.note}`] : isSecondCoursePayment(n.outcome, n) ? [secondPaymentNote(n)] : []),
   ].join('\n');
 }
 

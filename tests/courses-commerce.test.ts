@@ -127,7 +127,10 @@ describe('course checkout and SePay', () => {
     expect(shouldNotifyOrder('already_paid', notice)).toBe(true);
     expect(formatOrderNotice(notice)).toContain('Thanh toán cần kiểm tra');
     expect(formatOrderNotice(notice)).toContain(`Mã đơn: ${code}`);
-    expect(formatOrderNotice(notice)).toContain('lần hai');
+    expect(formatOrderNotice(notice)).toContain('Cần đối soát');
+    expect(formatOrderNotice(notice)).toContain('xử lý thủ công trước khi hoàn tiền');
+    expect(formatOrderNotice(notice)).toContain('mã giao dịch FT2');
+    expect(formatOrderNotice(notice)).not.toContain('lần hai');
     // Redelivered under the same transaction id: a duplicate, never announced.
     const again = await payTransfer(code, amount + 5000, 2);
     expect(again).toMatchObject({ outcome: 'duplicate_event' });
@@ -2208,6 +2211,25 @@ describe('Dodo course payments, refunds and disputes', () => {
         expect(attentionKeys()).toEqual([]);
         expect(activities('courses.order_attention')).toBe(0);
       });
+
+      for (const [label, reason, expected] of [['no reason', null, 'duplicate_payment'], ['an earlier reason', 'already_owned', 'already_owned']] as const) {
+        it(`marks the order duplicate_payment when a racing payment paid it before the payment batch (${label})`, async () => {
+          const p = await pendingPayment('sepay');
+          const isPay = sqlPoint(/^UPDATE course_orders SET status = 'paid'/);
+          let raced = false;
+          const spy = crashingD1(sql => {
+            if (!raced && isPay(sql)) {
+              raced = true;
+              state.d1.raw.query("UPDATE course_orders SET status = 'paid', paid_at = ?, attention_reason = ? WHERE code = ?").run(new Date(state.now).toISOString(), reason, p.code);
+            }
+            return false;
+          });
+          expect(await p.deliver(spy.d1)).toMatchObject({ outcome: 'already_paid' });
+          expect(await getCourseOrderByCode(state.d1, p.code)).toMatchObject({ status: 'paid', attention_reason: expected, amount_paid: null });
+          expect(events(p.eventId)).toBe(1);
+          expect(await p.deliver(state.d1)).toMatchObject({ outcome: 'duplicate_event' });
+        });
+      }
 
       it('flags a SePay transfer as late_payment when the order was cancelled between the read and the payment batch', async () => {
         const p = await pendingPayment('sepay');
