@@ -20,6 +20,7 @@ import type { ArticleDocument } from './schema';
 import { describeBlockSchema } from './schema-view';
 import { READ_MODES, documentReceipt, parseReadOptions, parseResponseMode, projectView } from './read-modes';
 import { verifyPublicArticle } from './verify-public';
+import { setArticleNotification } from '../notifications/article-notification-action';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
 
@@ -202,7 +203,7 @@ export const articlesMcpModule: McpToolModule = {
       inputSchema: { type: 'object', properties: { ...slugProp, new_slug: { type: 'string' }, ...metaProps, ...documentProp, ...responseModeProp, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision'] },
     },
     {
-      name: 'article_publish', description: `Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email). email_notification.reason "notification_update_failed" means the edition is published but the email step failed; republish with an explicit notify to apply it again. With that reason the returned status is what is stored (e.g. still "scheduled" after a failed notify: false), or "failed" when nothing could be read back, so check it before assuming no email will be sent. ${RECEIPT_NOTE} ${READ_BACK_NOTE}`,
+      name: 'article_publish', description: `Admin: publish one edition draft (locale, default primary). Requires confirm: true and expected_revision. published_at backdates archive imports. The first publish emails verified members 30 minutes later unless notify: false (backdated publishes default to no email). email_notification.reason "notification_update_failed" means the edition is published but the email step failed; call article_notification_set to apply the email decision again without republishing. With that reason the returned status is what is stored (e.g. still "scheduled" after a failed notify: false), or "failed" when nothing could be read back, so check it before assuming no email will be sent. ${RECEIPT_NOTE} ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, ...localeProp, expected_revision: { type: 'integer' }, confirm: { type: 'boolean' }, published_at: { type: 'string', description: 'Optional ISO date (not in the future) to record as the publish time, e.g. when importing older posts' }, summary_only: { type: 'boolean', description: 'Return document_blocks instead of echoing the published document (bulk publishing)' }, ...responseModeProp, notify: { type: 'boolean', description: 'Email verified members 30 minutes after the first publish (default true; false when published_at backdates). false cancels a pending email; true schedules a previously skipped one.' }, ...idempotencyKeyProp }, required: ['slug', 'expected_revision', 'confirm'] },
     },
     {
@@ -228,6 +229,11 @@ export const articlesMcpModule: McpToolModule = {
     {
       name: 'article_tags_set', description: `Admin: replace the topic tags of an article with existing tags (ids, slugs, aliases or names). Requires expected_revision. ${RECEIPT_NOTE} Tags are public at once; the receipt describes the primary edition. ${READ_BACK_NOTE}`,
       inputSchema: { type: 'object', properties: { ...slugProp, tags: { type: 'array', items: { type: 'string' } }, expected_revision: { type: 'integer' }, ...idempotencyKeyProp }, required: ['slug', 'tags', 'expected_revision'] },
+    },
+    {
+      name: 'article_notification_set',
+      description: 'Admin: schedule, cancel or retry only the new-article email to members for the current published edition, without republishing (no revision bump, reindex or share-image refresh). notify: true schedules it 30 minutes out when it was skipped, cancelled or never recorded (use it after email_notification.reason "notification_update_failed"); notify: false cancels a scheduled or in-progress send. Idempotent against the single notification row: an email that is already scheduled, sending or sent stays as is (changed: false), so it never sends twice. 409 not_published when no edition is published.',
+      inputSchema: { type: 'object', properties: { ...slugProp, notify: { type: 'boolean', description: 'true schedules or retries the email; false cancels it' } }, required: ['slug', 'notify'] },
     },
     {
       name: 'article_verify_public',
@@ -343,6 +349,10 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
       const actor = await mcpAdminActor(ctx);
       const rec = await setTagsForArticle(d1, requireSlug(args), args.tags, args.expected_revision, { actor, env: ctx.env, waitUntil: ctx.waitUntil });
       return { ...toSummary(rec), receipt: toWriteReceipt(rec, 'tags_set', ['tags']) };
+    }
+    case 'article_notification_set': {
+      const actor = await mcpAdminActor(ctx);
+      return setArticleNotification(d1,requireSlug(args), args.notify, { actor });
     }
     case 'article_verify_public': {
       await ctx.requireAdmin();

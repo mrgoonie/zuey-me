@@ -1011,11 +1011,14 @@ interface Editing {
   restored: RestoredRevision | null;
 }
 
-interface EmailNotification { status: string; sendAfter: string; sentCount: number }
+interface EmailNotification { status: string; sendAfter: string; sentCount: number; reason: string | null }
+
+/** Reason of a publish response whose email step failed after the edition was published. */
+const EMAIL_UPDATE_FAILED = 'notification_update_failed';
 
 function parseEmailNotification(v: unknown): EmailNotification | null {
   if (!isObj(v) || typeof v.status !== 'string') return null;
-  return { status: v.status, sendAfter: str(v, 'send_after'), sentCount: typeof v.sent_count === 'number' ? v.sent_count : 0 };
+  return { status: v.status, sendAfter: str(v, 'send_after'), sentCount: typeof v.sent_count === 'number' ? v.sent_count : 0, reason: typeof v.reason === 'string' ? v.reason : null };
 }
 
 const fmtSaigon = (iso: string): string => {
@@ -1212,6 +1215,8 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
   /** "Email members" switch of the publish dialog; reset whenever the dialog opens. */
   const [notifyMembers, setNotifyMembers] = useState(true);
   const [conflict, setConflict] = useState<{ current: number | null } | null>(null);
+  /** Slug whose last publish reported that the member-email step failed; offers the retry action. */
+  const [emailFailedSlug, setEmailFailedSlug] = useState<string | null>(null);
 
   const dirty = editing !== null && snapshot(editing.draft) !== editing.saved;
 
@@ -1339,13 +1344,35 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
     if (res.ok) {
       await load(editing.originalSlug, editing.draft.locale);
       const email = isObj(res.data) ? parseEmailNotification(res.data.email_notification) : null;
-      const emailNote = email?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(email.sendAfter)}.`
-        : email?.status === 'failed' ? ' Không cập nhật được email cho thành viên; xuất bản lại để thử lại.' : '';
+      const emailFailed = email?.status === 'failed' || email?.reason === EMAIL_UPDATE_FAILED;
+      setEmailFailedSlug(emailFailed ? editing.originalSlug : null);
+      const emailNote = emailFailed ? ' Không cập nhật được email cho thành viên; dùng nút bên dưới để thử lại.'
+        : email?.status === 'scheduled' ? ` Email cho thành viên sẽ gửi lúc ${fmtSaigon(email.sendAfter)}.` : '';
       setStatus({ text: `Đã xuất bản bản ${editing.draft.locale}.${emailNote}`, error: false });
       onListChanged();
     } else if (res.code === 'revision_conflict') {
       setConflict({ current: typeof res.error.current_revision === 'number' ? res.error.current_revision : null });
       setStatus({ text: 'Xung đột phiên bản; tải lại bài trước khi xuất bản.', error: true });
+    } else {
+      setStatus({ text: res.message, error: true });
+    }
+  };
+
+  /** Schedules, retries or cancels only the member email; never republishes the edition. */
+  const setEmail = async (notify: boolean) => {
+    if (!editing?.originalSlug) return;
+    setBusy(true);
+    const res = await api(`/api/v1/articles/${encodeURIComponent(editing.originalSlug)}/notification`, { method: 'POST', body: { notify } });
+    setBusy(false);
+    if (res.ok) {
+      const email = isObj(res.data) ? parseEmailNotification(res.data.email_notification) : null;
+      setEmailFailedSlug(null);
+      await load(editing.originalSlug, editing.draft.locale);
+      setStatus({
+        text: email?.status === 'scheduled' ? `Email cho thành viên sẽ gửi lúc ${fmtSaigon(email.sendAfter)}.`
+          : email?.status === 'sent' || email?.status === 'sending' ? 'Email cho thành viên đã được gửi, không gửi thêm.' : 'Đã huỷ email cho thành viên.',
+        error: false,
+      });
     } else {
       setStatus({ text: res.message, error: true });
     }
@@ -1511,6 +1538,14 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
         <ul className="rounded-xl border border-rose-900 bg-rose-950/40 p-3 text-[11px] text-rose-300 space-y-0.5 font-mono" aria-live="polite">
           {errors.slice(0, 20).map((e, i) => <li key={i}>{e.path}: {e.message}</li>)}
         </ul>
+      )}
+
+      {emailFailedSlug !== null && emailFailedSlug === editing.originalSlug && (
+        <div className="rounded-xl border border-amber-900 bg-amber-950/40 p-3 text-xs text-amber-200 flex flex-wrap items-center gap-2" role="alert">
+          <span className="flex-1 min-w-[12rem]">Bản đã xuất bản nhưng cập nhật email cho thành viên thất bại. Trạng thái email có thể chưa đúng ý bạn.</span>
+          <button type="button" className={btnCls} disabled={busy} onClick={() => void setEmail(true)}>Gửi lại email</button>
+          <button type="button" className={btnCls} disabled={busy} onClick={() => void setEmail(false)}>Không gửi email</button>
+        </div>
       )}
 
       <div className="flex flex-wrap gap-2 items-center border-t border-stone-800 pt-3">
