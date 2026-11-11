@@ -17,7 +17,7 @@ import type { CourseEventGate, CoursePaymentEvent, CoursePaymentOutcome } from '
 import {
   chargeBackLostCourseOrder, courseDisputeResolvedEarly, courseDisputesPaired, coursePaymentEventRecorded, coursePaymentEventStatement, fulfilCourseOrder,
   isPartialCourseReversal, isPaymentEventConflict, REFUND_BEFORE_PAYMENT_PREFIX,
-  markCourseOrderAttention, recordCoursePaymentEvent, refundCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
+  markCourseOrderAttention, recordCoursePaymentEvent, isAccessKeepingCourseRefund, recordPartialCourseRefund, refundCourseOrder, restoreCourseOrder, resumeCourseOrderFollowUps, reverseCourseOrder,
 } from './course-order-payments';
 
 export interface CourseTransferNotice {
@@ -235,7 +235,7 @@ export async function applyDodoCourseWebhook(d1: D1DatabaseLike, env: RuntimeEnv
 
   if (order && (type === 'refund.succeeded' || DISPUTE_REVOKE.has(type) || DODO_DISPUTE_FUNDS_KEPT.has(type))) {
     const disputeId = type.startsWith('dispute.') ? text(d, 'dispute_id') : null;
-    return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type, disputeId });
+    return applyGatedDodoCourseEvent(d1, env, order, { provider: 'dodo', eventId, orderId: order.id, amount, currency, rawType: type, disputeId, refundId: type === 'refund.succeeded' ? text(d, 'refund_id') : null });
   }
   const event: CoursePaymentEvent = { provider: 'dodo', eventId, orderId: order?.id ?? null, amount, currency, rawType: type };
   return applyCoursePaymentEvent(d1, env, order, event, null, async gate => {
@@ -267,10 +267,22 @@ async function applyGatedDodoCourseEvent(d1: D1DatabaseLike, env: RuntimeEnv, or
   const moneyBack = { amountMinor: amount, currency };
   try {
     if (type === 'refund.succeeded') {
-      // Any refund, even a partial one, revokes access for good; the reason records whether it was partial, so a later
-      // chargeback is still counted. A refund while a dispute is open moves the charged-back order to refunded, so a won
-      // or cancelled dispute no longer restores it.
-      const reason = isPartialCourseReversal(order, amount) ? 'dodo_partial_refund' : 'dodo_refund';
+      // A partial refund of a paid order keeps access and leaves the order paid. A full refund, or one that completes the
+      // price together with earlier partial refunds, revokes access for good. A refund while a dispute is open moves the
+      // charged-back order to refunded, so a won or cancelled dispute no longer restores it.
+      if (await isAccessKeepingCourseRefund(d1, order, amount, currency, event.eventId, event.refundId ?? null)) {
+        const kept = await recordPartialCourseRefund(d1, order, moneyBack, event, gate);
+        if (kept === 'applied') return result('ignored');
+        // The same refund id was already kept under another webhook id: only this webhook is recorded.
+        if (kept === 'duplicate') {
+          await recordCoursePaymentEvent(d1, 'dodo', event.eventId, event.orderId, amount, currency, type, null);
+          return result('duplicate_event');
+        }
+      }
+      // The order may have changed while the batch ran (a dispute opened): the label follows its current status, so a
+      // partial refund of a charged-back order keeps the chargeback counted.
+      const current = (await getCourseOrderByCode(d1, order.code)) ?? order;
+      const reason = current.status !== 'paid' && isPartialCourseReversal(current, amount) ? 'dodo_partial_refund' : 'dodo_refund';
       if (await refundCourseOrder(d1, order, reason, 'system', moneyBack, gate)) return result('reversed');
     } else if (DODO_DISPUTE_FUNDS_KEPT.has(type)) {
       // Only a charged-back order is restored; one refunded meanwhile stays revoked. Before its opened event the order

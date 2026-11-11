@@ -76,7 +76,8 @@ function field(v: unknown, key: string): unknown {
   return isRecord(v) ? v[key] : undefined;
 }
 
-async function fakeFetch(input: string): Promise<Response> {
+async function fakeFetch(input: string, init?: RequestInit): Promise<Response> {
+  if (input.startsWith(`${DODO_BASE}/subscriptions/`) && init?.method === 'PATCH') return json({ subscription_id: 'sub_1', status: 'active' });
   if (input === 'https://api.resend.com/emails') return json({ id: 'email_1' });
   if (input.startsWith('https://my.sepay.vn/userapi/transactions/list')) {
     return json({ status: 200, error: null, messages: { success: true }, transactions: sepayTransactions });

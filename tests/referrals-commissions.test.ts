@@ -53,7 +53,8 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** Mocked provider APIs; unknown URLs fail loudly so no request leaves the process. */
-async function fakeFetch(input: string): Promise<Response> {
+async function fakeFetch(input: string, init?: RequestInit): Promise<Response> {
+  if (input.startsWith(`${DODO_BASE}/subscriptions/`) && init?.method === 'PATCH') return json({ subscription_id: 'sub_1', status: 'active' });
   if (input === `${DODO_BASE}/discounts`) return json({ discount_id: 'dsc_1', code: 'REFCODE1' });
   if (input === `${DODO_BASE}/checkouts`) return json({ session_id: 'cks_1', checkout_url: 'https://test.checkout.dodopayments.com/session/cks_1' });
   if (input === `${PAYPAL_BASE}/v1/oauth2/token`) return json({ access_token: 'pp_access', expires_in: 32400 });
@@ -503,8 +504,8 @@ describe('Dodo commission and refunds', () => {
   it('matches a signed dispute of an unrecorded renewal through the Dodo payment lookup, and answers 409 before the first charge', async () => {
     await paidCard();
     const lookups: string[] = [];
-    membersRuntime.fetch = async (input: string) => {
-      if (!input.startsWith(`${DODO_BASE}/payments/`)) return fakeFetch(input);
+    membersRuntime.fetch = async (input: string, init?: RequestInit) => {
+      if (!input.startsWith(`${DODO_BASE}/payments/`)) return fakeFetch(input, init);
       lookups.push(input);
       return input.endsWith('/pay_next') ? json({ payment_id: 'pay_next', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' } })
         : input.endsWith('/pay_pending') ? json({ payment_id: 'pay_pending', subscription_id: 'sub_pending', customer: { customer_id: 'cus_2' } })
@@ -539,11 +540,11 @@ describe('Dodo commission and refunds', () => {
     const cardId = String(field(await dataOf(res), 'id'));
     const metadata = { user_id: m.userId, plan: 'combo', card_ref: cardId };
     // Dodo's payment object echoes the checkout metadata; no card webhook has stored `sub_1` yet.
-    membersRuntime.fetch = async (input: string) => input === `${DODO_BASE}/payments/pay_first`
+    membersRuntime.fetch = async (input: string, init?: RequestInit) => input === `${DODO_BASE}/payments/pay_first`
       ? json({ payment_id: 'pay_first', subscription_id: 'sub_1', customer: { customer_id: 'cus_1' }, metadata })
       : input === `${DODO_BASE}/payments/pay_other`
         ? json({ payment_id: 'pay_other', subscription_id: 'sub_other', customer: { customer_id: 'cus_9' }, metadata })
-        : fakeFetch(input);
+        : fakeFetch(input, init);
     const refund = { payload_type: 'Refund', refund_id: 'rfd_first', payment_id: 'pay_first', amount: 1777, currency: 'USD' };
     const early = await signedDodo('msg_rfd_first', 'refund.succeeded', refund);
     expect(early.status).toBe(409);
@@ -574,10 +575,10 @@ describe('Dodo commission and refunds', () => {
       pay_user: { user_id: 'usr_someone_else', plan: 'combo', card_ref: cardId },
       pay_plan: { user_id: m.userId, plan: 'ai', card_ref: cardId },
     };
-    membersRuntime.fetch = async (input: string) => {
+    membersRuntime.fetch = async (input: string, init?: RequestInit) => {
       const paymentId = input.startsWith(`${DODO_BASE}/payments/`) ? input.slice(`${DODO_BASE}/payments/`.length) : '';
       const metadata = mismatched[paymentId];
-      return metadata ? json({ payment_id: paymentId, subscription_id: 'sub_new', customer: { customer_id: 'cus_1' }, metadata }) : fakeFetch(input);
+      return metadata ? json({ payment_id: paymentId, subscription_id: 'sub_new', customer: { customer_id: 'cus_1' }, metadata }) : fakeFetch(input, init);
     };
     for (const paymentId of Object.keys(mismatched)) {
       const res = await signedDodo(`msg_${paymentId}`, 'refund.succeeded', { payload_type: 'Refund', refund_id: `rfd_${paymentId}`, payment_id: paymentId, amount: 1900, currency: 'USD' });

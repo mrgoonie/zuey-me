@@ -241,7 +241,10 @@ export async function createDodoPortalLink(env: RuntimeEnv, customerId: string, 
   return body.link;
 }
 
-/** Schedules cancellation at the end of the paid period; access continues until then. */
+/**
+ * Stops a subscription renewing: Dodo cancels it at the next billing date. A member's own cancellation keeps access until
+ * then; a refund or lost dispute revokes access on our side at once (`finishMoneyBackRevoke`) and uses this only to stop billing.
+ */
 export async function cancelDodoSubscription(env: RuntimeEnv, subscriptionId: string, fetchImpl: FetchLike): Promise<DodoSubscriptionData | null> {
   const body = await dodoRequest(env, `/subscriptions/${encodeURIComponent(subscriptionId)}`, {
     method: 'PATCH', body: { cancel_at_next_billing_date: true },
