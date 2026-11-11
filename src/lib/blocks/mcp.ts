@@ -20,6 +20,7 @@ import type { ArticleDocument } from './schema';
 import { describeBlockSchema } from './schema-view';
 import { READ_MODES, documentReceipt, parseReadOptions, parseResponseMode, projectView } from './read-modes';
 import { verifyPublicArticle } from './verify-public';
+import { parseNotifyFlag } from '../notifications/article-notification-schedule';
 import { setArticleNotification } from '../notifications/article-notification-action';
 import { articleUrl } from './seo';
 import { locateSurvey, surveyResults } from './survey';
@@ -352,7 +353,9 @@ async function callArticleTool(name: string, args: Record<string, unknown>, ctx:
     }
     case 'article_notification_set': {
       const actor = await mcpAdminActor(ctx);
-      return setArticleNotification(d1,requireSlug(args), args.notify, { actor });
+      const notify = parseNotifyFlag(args.notify);
+      if (notify === undefined) throw new AppError(400, 'invalid_field', 'notify is required', { field: 'notify' });
+      return setArticleNotification(d1, requireSlug(args), notify, { actor });
     }
     case 'article_verify_public': {
       await ctx.requireAdmin();

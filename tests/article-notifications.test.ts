@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import type { APIContext } from 'astro';
 import { createTestD1 } from './helpers/d1';
+import { createApiKey } from '../src/db/store';
+import type { D1PreparedStatementLike } from '../src/db/store';
+import { POST as mcpApi } from '../src/pages/api/mcp';
 import type { D1DatabaseLike } from '../src/db/store';
 import type { RuntimeEnv } from '../src/env';
 import { createArticle, deleteArticle, getArticleView, publishArticle, updateArticle } from '../src/lib/blocks/articles';
@@ -245,6 +248,65 @@ describe('notification action without republishing', () => {
     await publishNew(d1, 'action-bad');
     await expect(setArticleNotification(d1, 'action-bad', 'yes', actor)).rejects.toMatchObject({ code: 'invalid_field' });
     await expect(setArticleNotification(undefined, 'action-bad', true, actor)).rejects.toMatchObject({ status: 503 });
+  });
+
+  it('reports changed: false when the sender claims the row between the read and the cancel', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-race');
+    const racing: typeof d1 = {
+      ...d1,
+      prepare(sql: string): D1PreparedStatementLike {
+        const st = d1.prepare(sql);
+        if (!sql.includes('SET status = CASE')) return st;
+        // The dispatcher finishes (scheduled to sent) just before the cancel statement runs.
+        return { ...st, bind: (...values: unknown[]) => ({ ...st.bind(...values), run: async () => {
+          await d1.prepare("UPDATE article_notifications SET status = 'sent', sent_count = 3").run();
+          return st.bind(...values).run();
+        } }) };
+      },
+    };
+    const res = await setArticleNotification(racing, 'action-race', false, actor);
+    expect(res).toMatchObject({ changed: false, email_notification: { status: 'sent', sent_count: 3 } });
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('sent');
+  });
+
+  it('cancelling a partly sent email and retrying never emails a member twice', async () => {
+    const d1 = createTestD1();
+    const env = baseEnv(d1);
+    await member(d1, 'first@example.com');
+    const rec = await publishNew(d1, 'action-partial');
+    afterDelay();
+    await dispatchArticleNotifications(d1, env);
+    expect(sent.map(e => e.to[0])).toEqual(['first@example.com']);
+    // The run was interrupted after the first batch: the row is back in progress with one member emailed.
+    await d1.prepare("UPDATE article_notifications SET status = 'sending', locked_until = NULL WHERE article_id = ?").bind(rec.id).run();
+    expect((await setArticleNotification(d1, 'action-partial', false, actor)).email_notification.status).toBe('cancelled');
+    membersRuntime.now = () => Date.now();
+    await member(d1, 'second@example.com');
+    expect((await setArticleNotification(d1, 'action-partial', true, actor)).email_notification.status).toBe('scheduled');
+    membersRuntime.now = () => Date.now() + ARTICLE_EMAIL_DELAY_MS + 120_000;
+    await dispatchArticleNotifications(d1, env);
+    expect(sent.map(e => e.to[0]).sort()).toEqual(['first@example.com', 'second@example.com']);
+  });
+
+  it('refuses read-only API keys over REST and MCP', async () => {
+    const d1 = createTestD1();
+    const rec = await publishNew(d1, 'action-readonly');
+    const readKey = (await createApiKey('viewer', 'read', d1)).key;
+    const env = baseEnv(d1);
+    const rest = await notificationApi({
+      ...ctx(new Request('https://zuey.me/api/v1/articles/action-readonly/notification', {
+        method: 'POST', headers: { Authorization: `Bearer ${readKey}`, 'Content-Type': 'application/json' }, body: '{"notify":false}',
+      }), env),
+      params: { slug: 'action-readonly' },
+    } as unknown as APIContext);
+    expect(rest.status).toBe(403);
+    const mcpRequest = new Request('https://zuey.me/api/mcp', {
+      method: 'POST', headers: { Authorization: `Bearer ${readKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'article_notification_set', arguments: { slug: 'action-readonly', notify: false } } }),
+    });
+    expect((await mcpApi(ctx(mcpRequest, env))).status).toBe(403);
+    expect((await getArticleNotification(d1, rec.id))?.status).toBe('scheduled');
   });
 
   it('is admin only over REST and MCP', async () => {

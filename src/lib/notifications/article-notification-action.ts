@@ -32,26 +32,33 @@ export async function setArticleNotification(
   const nowMs = opts.nowMs ?? Date.now();
   const now = new Date(nowMs).toISOString();
   const sendAfter = new Date(nowMs + ARTICLE_EMAIL_DELAY_MS).toISOString();
-  const before = await getArticleNotification(db, art.id);
-
-  if (!before) {
-    await db.prepare(`
-      INSERT OR IGNORE INTO article_notifications (article_id, status, send_after, reason, actor, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(art.id, notify ? 'scheduled' : 'skipped', sendAfter, notify ? null : 'publisher_opted_out', opts.actor, now, now).run();
-  } else if (notify && (before.status === 'skipped' || before.status === 'cancelled')) {
-    await db.prepare("UPDATE article_notifications SET status = 'scheduled', send_after = ?, audience_cutoff = NULL, reason = NULL, actor = ?, updated_at = ? WHERE article_id = ? AND status = ?")
-      .bind(sendAfter, opts.actor, now, art.id, before.status).run();
-  } else if (!notify && (before.status === 'scheduled' || before.status === 'sending')) {
-    await db.prepare("UPDATE article_notifications SET status = ?, reason = 'publisher_opted_out', actor = ?, updated_at = ? WHERE article_id = ? AND status = ?")
-      .bind(before.status === 'scheduled' ? 'skipped' : 'cancelled', opts.actor, now, art.id, before.status).run();
+  // One atomic UPDATE per direction, so `changed` reflects what this call really wrote even when the
+  // dispatcher claims the row (scheduled to sending) between a read and the write.
+  let changes: number;
+  if (notify) {
+    const upd = await db.prepare("UPDATE article_notifications SET status = 'scheduled', send_after = ?, audience_cutoff = NULL, reason = NULL, actor = ?, updated_at = ? WHERE article_id = ? AND status IN ('skipped', 'cancelled')")
+      .bind(sendAfter, opts.actor, now, art.id).run();
+    changes = upd.meta?.changes ?? 0;
+    if (changes === 0) changes = await insertMissing(db, art.id, 'scheduled', null, sendAfter, opts.actor, now);
+  } else {
+    const upd = await db.prepare("UPDATE article_notifications SET status = CASE status WHEN 'scheduled' THEN 'skipped' ELSE 'cancelled' END, reason = 'publisher_opted_out', actor = ?, updated_at = ? WHERE article_id = ? AND status IN ('scheduled', 'sending')")
+      .bind(opts.actor, now, art.id).run();
+    changes = upd.meta?.changes ?? 0;
+    if (changes === 0) changes = await insertMissing(db, art.id, 'skipped', 'publisher_opted_out', sendAfter, opts.actor, now);
   }
 
   const after = await getArticleNotification(db, art.id);
   if (!after) throw new AppError(500, 'notification_update_failed', 'The email state could not be read back');
-  return {
-    slug,
-    email_notification: after,
-    changed: !before || before.status !== after.status || before.send_after !== after.send_after,
-  };
+  return { slug, email_notification: after, changed: changes > 0 };
+}
+
+/** Records the first state of an article that has no email row yet; 0 changes when a row already exists. */
+async function insertMissing(
+  db: D1DatabaseLike, articleId: string, status: 'scheduled' | 'skipped', reason: string | null, sendAfter: string, actor: string, now: string,
+): Promise<number> {
+  const res = await db.prepare(`
+    INSERT OR IGNORE INTO article_notifications (article_id, status, send_after, reason, actor, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(articleId, status, sendAfter, reason, actor, now, now).run();
+  return res.meta?.changes ?? 0;
 }

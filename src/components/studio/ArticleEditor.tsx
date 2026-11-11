@@ -1370,7 +1370,8 @@ function ArticleEditorPane({ categories, tagOptions, onListChanged, onClosed, in
       await load(editing.originalSlug, editing.draft.locale);
       setStatus({
         text: email?.status === 'scheduled' ? `Email cho thành viên sẽ gửi lúc ${fmtSaigon(email.sendAfter)}.`
-          : email?.status === 'sent' || email?.status === 'sending' ? 'Email cho thành viên đã được gửi, không gửi thêm.' : 'Đã huỷ email cho thành viên.',
+          : email?.status === 'sending' ? 'Email cho thành viên đang được gửi; không thể thay đổi lúc này.'
+            : email?.status === 'sent' ? 'Email cho thành viên đã được gửi, không gửi thêm.' : 'Đã huỷ email cho thành viên.',
         error: false,
       });
     } else {
