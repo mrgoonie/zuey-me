@@ -21,7 +21,7 @@ ${zueyOsAgentGuideMarkdown()}
 - Website: https://zuey.me
 - Email: ${profile.email}
 - Avatar: ${profile.avatar_url}
-- X (Twitter): https://x.com/goon_nguyen
+- X (Twitter): https://x.com/zueydotme
 - GitHub: https://github.com/mrgoonie
 - Facebook: https://fb.com/mrgoonie
 - Instagram: https://www.instagram.com/imzuey

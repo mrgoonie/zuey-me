@@ -17,7 +17,7 @@ ${profile.intro_vi}
 - Email: ${profile.email}
 - Website: https://zuey.me
 - Avatar: ${profile.avatar_url}
-- X: https://x.com/goon_nguyen
+- X: https://x.com/zueydotme
 - GitHub: https://github.com/mrgoonie
 - Substack: https://faafospecialist.substack.com/
 `;

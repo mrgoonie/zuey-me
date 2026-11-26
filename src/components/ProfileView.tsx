@@ -37,15 +37,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const introText = lang === 'vi' ? initialProfile.intro_vi : initialProfile.intro_en;
 
-  const socialLinks = [
-    { name: 'ig', url: 'https://www.instagram.com/imzuey', label: 'Instagram' },
-    { name: 'tiktok', url: 'https://www.tiktok.com/@mrgoonvn', label: 'TikTok' },
-    { name: 'whatsapp', url: 'https://wa.me/imzuey', label: 'WhatsApp (@imzuey)' },
-    { name: 'youtube', url: 'https://youtube.com/@imzuey', label: 'YouTube' },
-    { name: 'fb', url: 'https://fb.com/mrgoonie', label: 'Facebook' },
-    { name: 'threads', url: 'https://www.threads.com/@imzuey', label: 'Threads' },
-    { name: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },
-  ];
+  const socialLinks = initialLinks
+    .filter(l => l.section === 'socials' && l.is_active)
+    .sort((a, b) => a.order_index - b.order_index)
+    .map(l => ({ id: l.id, name: l.icon || 'link', url: l.url, label: (lang === 'vi' ? l.title_vi : l.title_en) || l.title_en }));
 
   const exploreLinks = [
     { href: '/articles', en: 'Articles', vi: 'Bài viết', descEn: 'Notes, charts and surveys', descVi: 'Ghi chép, biểu đồ, khảo sát' },
@@ -126,7 +121,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <nav className="flex items-center justify-center gap-1.5 sm:gap-3 md:gap-3.5 mt-5 flex-wrap max-w-full" aria-label="Social links">
             {socialLinks.map((item) => (
               <a
-                key={item.name}
+                key={item.id}
                 href={item.url}
                 target="_blank"
                 rel="noopener noreferrer"
