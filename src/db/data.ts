@@ -18,11 +18,19 @@ export const initialSocials: SocialLink[] = [
   { id: 'whatsapp', platform: 'whatsapp', url: 'https://wa.me/imzuey', label: 'WhatsApp (@imzuey)' },
   { id: 'youtube', platform: 'youtube', url: 'https://youtube.com/@imzuey', label: 'YouTube' },
   { id: 'fb', platform: 'facebook', url: 'https://fb.com/mrgoonie', label: 'Facebook' },
-  { id: 'x', platform: 'x', url: 'https://x.com/goon_nguyen', label: 'X (Twitter)' },
+  { id: 'x', platform: 'x', url: 'https://x.com/zueydotme', label: 'X (Twitter)' },
   { id: 'email', platform: 'email', url: 'mailto:hi@zuey.me', label: 'Email' },
 ];
 
 export const initialLinks: LinkItem[] = [
+  // Socials (icon row under the bio)
+  { id: 'social-ig', section: 'socials', title_en: 'Instagram', title_vi: 'Instagram', url: 'https://www.instagram.com/imzuey', icon: 'instagram', order_index: 1, is_active: true },
+  { id: 'social-tiktok', section: 'socials', title_en: 'TikTok', title_vi: 'TikTok', url: 'https://www.tiktok.com/@mrgoonvn', icon: 'tiktok', order_index: 2, is_active: true },
+  { id: 'social-whatsapp', section: 'socials', title_en: 'WhatsApp (@imzuey)', title_vi: 'WhatsApp (@imzuey)', url: 'https://wa.me/imzuey', icon: 'whatsapp', order_index: 3, is_active: true },
+  { id: 'social-youtube', section: 'socials', title_en: 'YouTube', title_vi: 'YouTube', url: 'https://youtube.com/@imzuey', icon: 'youtube', order_index: 4, is_active: true },
+  { id: 'social-fb', section: 'socials', title_en: 'Facebook', title_vi: 'Facebook', url: 'https://fb.com/mrgoonie', icon: 'facebook', order_index: 5, is_active: true },
+  { id: 'social-threads', section: 'socials', title_en: 'Threads', title_vi: 'Threads', url: 'https://www.threads.com/@imzuey', icon: 'threads', order_index: 6, is_active: true },
+  { id: 'social-x', section: 'socials', title_en: 'X (Twitter)', title_vi: 'X (Twitter)', url: 'https://x.com/zueydotme', icon: 'x', order_index: 7, is_active: true },
   // Blogs
   {
     id: 'blog-en',

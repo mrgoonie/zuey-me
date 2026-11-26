@@ -84,7 +84,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
 
   // Link Form Modal state
   const [editingLink, setEditingLink] = useState<Partial<LinkItem> | null>(null);
-  const [filterSection, setFilterSection] = useState<'all' | 'blogs' | 'companies' | 'products'>('all');
+  const [filterSection, setFilterSection] = useState<'all' | 'blogs' | 'companies' | 'products' | 'socials'>('all');
 
   // Login form state
   const [loginToken, setLoginToken] = useState('');
@@ -569,7 +569,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
 
               {/* Filter Tabs */}
               <div className="flex gap-2 border-b border-stone-800/80 pb-3 text-xs overflow-x-auto">
-                {(['all', 'blogs', 'companies', 'products'] as const).map((sec) => (
+                {(['all', 'blogs', 'companies', 'products', 'socials'] as const).map((sec) => (
                   <button
                     key={sec}
                     onClick={() => setFilterSection(sec)}
@@ -833,6 +833,7 @@ export const StudioApp: React.FC<StudioAppProps> = ({
                   <option value="blogs">Blogs</option>
                   <option value="companies">Companies (Found by me!)</option>
                   <option value="products">Products & Tools</option>
+                  <option value="socials">Socials (icon row)</option>
                 </select>
               </div>
 
