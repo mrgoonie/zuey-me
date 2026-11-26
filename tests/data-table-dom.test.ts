@@ -16,6 +16,8 @@ let renderer: typeof import('../src/components/blocks/BlockRenderer');
 const mounted: Array<{ root: Root; container: HTMLElement }> = [];
 const blobs: Blob[] = [];
 const savedNames: string[] = [];
+// happy-dom's element classes outlive register/unregister in one bun process, so a patched prototype must be restored.
+let originalAnchorClick: typeof HTMLAnchorElement.prototype.click | undefined;
 
 const TABLE: TableBlock = {
   id: 'prices', type: 'table', title: 'Bảng giá',
@@ -89,6 +91,7 @@ beforeAll(async () => {
     return 'blob:test';
   };
   URL.revokeObjectURL = () => {};
+  originalAnchorClick = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) { savedNames.push(this.download); };
   React = await import('react');
   client = await import('react-dom/client');
@@ -105,6 +108,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  if (originalAnchorClick) HTMLAnchorElement.prototype.click = originalAnchorClick;
   await GlobalRegistrator.unregister();
 });
 
